@@ -1,0 +1,9 @@
+apiVersion: v2
+name: ambit-crds
+description: CRDs for Ambit. Install before the ambit chart.
+type: application
+version: 0.0.1
+dependencies:
+  - name: agentgateway-crds
+    version: v1.5.0
+    repository: oci://cr.agentgateway.dev/charts

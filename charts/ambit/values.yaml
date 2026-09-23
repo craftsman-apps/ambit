@@ -1,0 +1,10 @@
+gateway:
+  # Listener port of the Ambit Gateway. Also the port of the generated Service.
+  port: 8080
+  service:
+    # LoadBalancer on EKS; values-kind.yaml switches to NodePort.
+    type: LoadBalancer
+    nodePort: null
+
+# Passed to the agentgateway subchart. Set agentgateway.image.registry for a private registry.
+agentgateway: {}

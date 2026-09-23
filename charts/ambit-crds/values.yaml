@@ -1,0 +1,3 @@
+gatewayAPI:
+  # Install Gateway API v1.6.0 standard CRDs. Set false if the cluster already manages them.
+  install: true

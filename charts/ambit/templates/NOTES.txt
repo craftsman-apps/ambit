@@ -1,0 +1,4 @@
+Ambit is installed in namespace {{ .Release.Namespace }}.
+
+Check the gateway:
+  kubectl -n {{ .Release.Namespace }} get gateway ambit

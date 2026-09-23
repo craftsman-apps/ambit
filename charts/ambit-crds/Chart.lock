@@ -1,0 +1,6 @@
+dependencies:
+- name: agentgateway-crds
+  repository: oci://cr.agentgateway.dev/charts
+  version: v1.5.0
+digest: sha256:38aad0b68557f97ec4947a2b6f2b37c17cb81a3464610a8d8c3b9b8bd69f5836
+generated: "2026-09-24T00:15:55.095673+09:00"

@@ -1,0 +1,32 @@
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayParameters
+metadata:
+  name: ambit
+spec:
+  service:
+    spec:
+      type: {{ .Values.gateway.service.type }}
+      {{- with .Values.gateway.service.nodePort }}
+      ports:
+        - port: {{ $.Values.gateway.port }}
+          nodePort: {{ . }}
+      {{- end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ambit
+spec:
+  gatewayClassName: agentgateway
+  infrastructure:
+    parametersRef:
+      group: agentgateway.dev
+      kind: AgentgatewayParameters
+      name: ambit
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: {{ .Values.gateway.port }}
+      allowedRoutes:
+        namespaces:
+          from: Same

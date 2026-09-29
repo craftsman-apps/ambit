@@ -31,7 +31,7 @@ The LLM tests call OpenRouter free models when `~/.config/ambit/openrouter-api-k
 
 | Path | Contents |
 |---|---|
-| `api/v1alpha1` | Ambit API types (`ambit.craftsmanapps.com`) |
+| `api/v1alpha1` | Ambit API types (`ambitproject.dev`) |
 | `cmd/ambit-console`, `internal/console` | Console back end (Go) |
 | `cmd/ambit-controller`, `internal/controller` | Controller: Ambit objects → agentgateway objects |
 | `web/` | Console front end (Vite, React, TanStack, shadcn-style components) |

@@ -1,6 +1,6 @@
 // Package v1alpha1 holds Ambit's API: the objects people write (in the console or in Git).
 // +kubebuilder:object:generate=true
-// +groupName=ambit.craftsmanapps.com
+// +groupName=ambitproject.dev
 package v1alpha1
 
 import (
@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	GroupVersion  = schema.GroupVersion{Group: "ambit.craftsmanapps.com", Version: "v1alpha1"}
+	GroupVersion  = schema.GroupVersion{Group: "ambitproject.dev", Version: "v1alpha1"}
 	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion}
 	AddToScheme   = SchemeBuilder.AddToScheme
 )

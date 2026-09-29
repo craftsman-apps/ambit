@@ -95,7 +95,7 @@ func TestUpdateRecordsWhoChangedIt(t *testing.T) {
 	}
 	var got v1.AccessRule
 	c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "everyone-gemma"}, &got)
-	if got.Annotations["ambit.craftsmanapps.com/updated-by"] != "admin@acme.test" {
+	if got.Annotations["ambitproject.dev/updated-by"] != "admin@acme.test" {
 		t.Fatalf("updated-by not recorded: %v", got.Annotations)
 	}
 }

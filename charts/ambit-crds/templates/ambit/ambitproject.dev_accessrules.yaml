@@ -5,22 +5,25 @@ metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.22.0
     helm.sh/resource-policy: keep
-  name: models.ambit.craftsmanapps.com
+  name: accessrules.ambitproject.dev
 spec:
-  group: ambit.craftsmanapps.com
+  group: ambitproject.dev
   names:
-    kind: Model
-    listKind: ModelList
-    plural: models
-    singular: model
+    kind: AccessRule
+    listKind: AccessRuleList
+    plural: accessrules
+    singular: accessrule
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.model
-      name: Model
+    - jsonPath: .spec.groups
+      name: Groups
       type: string
-    - jsonPath: .spec.provider
-      name: Provider
+    - jsonPath: .spec.allSignedIn
+      name: All signed in
+      type: boolean
+    - jsonPath: .spec.models
+      name: Models
       type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
@@ -28,7 +31,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Model is a model in the Ambit catalog. Nobody may use it until an AccessRule names it.
+        description: AccessRule grants groups (or everyone signed in) the use of models.
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation of an object.
@@ -53,56 +56,31 @@ spec:
           metadata:
             type: object
           spec:
-            description: 'ModelSpec is one entry in the model catalog: a model clients may request through the gateway.'
+            description: AccessRuleSpec says who may use which models. Rules only grant access; nothing is allowed by default.
             properties:
-              credentialsRef:
-                description: 'CredentialsRef names a Secret in this namespace with the provider key in its "Authorization" entry.
-
-                  The key itself never appears in this object, so the object is safe to keep in Git. Only Secrets
-
-                  named ambit-llm-* may be used, so a Model cannot send another Secret (e.g. console keys) to a provider.'
-                properties:
-                  name:
-                    minLength: 1
-                    type: string
-                required:
-                - name
-                type: object
-                x-kubernetes-validations:
-                - message: credentialsRef must name a Secret called ambit-llm-<something>
-                  rule: self.name.startsWith('ambit-llm-')
-              displayName:
-                description: DisplayName is shown in the console.
-                type: string
-              model:
-                description: Model is the exact name clients send in the request, e.g. "google/gemma-4-31b-it:free".
-                minLength: 1
-                type: string
-              provider:
-                description: Provider serving the model. Values follow agentgateway's AgentgatewayModel providers.
-                enum:
-                - Anthropic
-                - Azure
-                - Bedrock
-                - Gemini
-                - OpenAI
-                - Openrouter
-                - VertexAI
-                type: string
-            required:
-            - credentialsRef
-            - model
-            - provider
-            type: object
-          status:
-            properties:
-              allowAllSignedIn:
+              allSignedIn:
+                description: AllSignedIn allows everyone with a valid token.
                 type: boolean
-              allowedGroups:
-                description: Who may use this model, compiled from every AccessRule that names it. Empty means nobody.
+              groups:
+                description: Groups from the identity provider's "groups" claim. A member of any listed group is allowed.
                 items:
+                  pattern: ^[A-Za-z0-9][A-Za-z0-9._@/-]*$
                   type: string
                 type: array
+              models:
+                description: Models lists Model object names in this namespace.
+                items:
+                  type: string
+                minItems: 1
+                type: array
+            required:
+            - models
+            type: object
+            x-kubernetes-validations:
+            - message: 'set either groups or allSignedIn: true, not both'
+              rule: (has(self.groups) && size(self.groups) > 0) != (has(self.allSignedIn) && self.allSignedIn)
+          status:
+            properties:
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current state of this API Resource.

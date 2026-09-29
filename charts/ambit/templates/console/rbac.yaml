@@ -21,10 +21,10 @@ rules:
     resourceNames: [ambit-initial-admin]
     verbs: [get, update, delete]
   # Catalog screens: everyone signed in reads; admins change access rules (Direct mode).
-  - apiGroups: [ambit.craftsmanapps.com]
+  - apiGroups: [ambitproject.dev]
     resources: [models, accessrules]
     verbs: [get, list, watch]
-  - apiGroups: [ambit.craftsmanapps.com]
+  - apiGroups: [ambitproject.dev]
     resources: [accessrules]
     verbs: [create, update, delete]
 ---

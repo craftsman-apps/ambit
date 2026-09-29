@@ -9,7 +9,7 @@ KC=http://keycloak.localtest.me:8080
 LLM=http://llm.localtest.me:8080/v1/chat/completions
 KEYFILE=${OPENROUTER_KEY_FILE:-$HOME/.config/ambit/openrouter-api-key}
 NEMO=nvidia/nemotron-3-super-120b-a12b:free
-G=ambit.craftsmanapps.com
+G=ambitproject.dev
 
 token() { command curl -s -d grant_type=password -d client_id=ambit-cli-test -d username="$1" -d password="$1-test-pass" \
   "$KC/realms/acme/protocol/openid-connect/token" | uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)["access_token"])'; }
@@ -44,7 +44,7 @@ sign_in keycloak priya priya-test-pass || fail "2 priya sign-in"
 c=$(api POST /api/access-rules '{"name":"eng-nemotron","groups":["eng"],"models":["nemotron-3-super"]}')
 [[ "$c" == 201 ]] || fail "2 create: $c $(cat "$W/api")"
 wait_expr nemotron-3-super 'jwt.groups.exists(g, g in ["eng", "ml-research"])'
-[[ $(kubectl -n "$NS" get "accessrules.$G" eng-nemotron -o jsonpath='{.metadata.annotations.ambit\.craftsmanapps\.com/created-by}') == priya@acme.test ]] \
+[[ $(kubectl -n "$NS" get "accessrules.$G" eng-nemotron -o jsonpath='{.metadata.annotations.ambitproject\.dev/created-by}') == priya@acme.test ]] \
   || fail "2 creator not recorded"
 if [[ -s "$KEYFILE" ]]; then
   c=$(llm "$(token alice)" "$NEMO"); [[ "$c" == 200 ]] || fail "2 alice still denied after the rule: $c $(head -c 200 "$W/llm")"

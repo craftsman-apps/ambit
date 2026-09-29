@@ -70,8 +70,8 @@ type RuleInput struct {
 }
 
 const (
-	createdByKey = "ambit.craftsmanapps.com/created-by"
-	updatedByKey = "ambit.craftsmanapps.com/updated-by"
+	createdByKey = "ambitproject.dev/created-by"
+	updatedByKey = "ambitproject.dev/updated-by"
 )
 
 var (

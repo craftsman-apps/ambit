@@ -4,7 +4,7 @@ set -euo pipefail
 NS=${1:-ambit-system}
 cd "$(dirname "$0")/.."
 source test/lib.sh
-G=ambit.craftsmanapps.com
+G=ambitproject.dev
 LLM_VALUES=(-f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml)
 ensure_llm_setup "$NS"
 kubectl -n "$NS" rollout status deploy/ambit-console --timeout=180s >/dev/null
@@ -17,7 +17,7 @@ for c in json.load(sys.stdin)["items"]:
     g=c["spec"]["group"]; md=c["metadata"]
     helm_owned=md.get("labels",{}).get("app.kubernetes.io/managed-by")=="Helm"
     keep=md.get("annotations",{}).get("helm.sh/resource-policy")=="keep"
-    if g=="ambit.craftsmanapps.com" and not keep: out.append(md["name"]+"(not kept)")
+    if g=="ambitproject.dev" and not keep: out.append(md["name"]+"(not kept)")
     if g in ("agentgateway.dev","gateway.networking.k8s.io") and helm_owned: out.append(md["name"]+"(Helm-owned)")
 print(" ".join(out))')
 [[ -z "$bad" ]] || fail "1 CRDs that helm uninstall would delete: $bad"
@@ -45,7 +45,7 @@ sign_in local admin@ambit.local "$PW"
 c=$(curl -s -o /dev/null -w '%{http_code}' -X PUT -b "$W/jar" -H 'Content-Type: application/json' \
   -d '{"allSignedIn":true,"models":["gemma-4-31b"]}' "$BASE/api/access-rules/everyone-gemma")
 [[ "$c" == 200 ]] || fail "4 update: $c"
-[[ $(kubectl -n "$NS" get "accessrules.$G" everyone-gemma -o jsonpath='{.metadata.annotations.ambit\.craftsmanapps\.com/updated-by}') == admin@ambit.local ]] \
+[[ $(kubectl -n "$NS" get "accessrules.$G" everyone-gemma -o jsonpath='{.metadata.annotations.ambitproject\.dev/updated-by}') == admin@ambit.local ]] \
   || fail "4 updated-by not recorded"
 pass "4 console edit records updated-by=admin@ambit.local"
 

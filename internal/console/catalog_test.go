@@ -29,7 +29,7 @@ func catalogFixture(t *testing.T) (http.Handler, client.Client, *Auth) {
 			Status: v1.ModelStatus{AllowedGroups: groups, AllowAllSignedIn: all, Conditions: []metav1.Condition{{Type: "Ready", Status: "True", Reason: "Accepted", Message: "served by the gateway"}}}}
 	}
 	git := &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "ml-research-nemotron", Namespace: testNS,
-		Annotations: map[string]string{"argocd.argoproj.io/tracking-id": "ambit-config:ambit.craftsmanapps.com/AccessRule:ambit-system/ml-research-nemotron"}},
+		Annotations: map[string]string{"argocd.argoproj.io/tracking-id": "ambit-config:ambitproject.dev/AccessRule:ambit-system/ml-research-nemotron"}},
 		Spec: v1.AccessRuleSpec{Groups: []string{"ml-research"}, Models: []string{"nemotron-3-super"}}}
 	console := &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "everyone-gemma", Namespace: testNS},
 		Spec:   v1.AccessRuleSpec{AllSignedIn: true, Models: []string{"gemma-4-31b"}},
@@ -136,7 +136,7 @@ func TestAdminCreatesUpdatesDeletesRule(t *testing.T) {
 	if err := c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "eng-nemotron"}, &got); err != nil || got.Spec.Groups[0] != "eng" {
 		t.Fatalf("not created: %v %+v", err, got.Spec)
 	}
-	if got.Annotations["ambit.craftsmanapps.com/created-by"] != "admin@acme.test" {
+	if got.Annotations["ambitproject.dev/created-by"] != "admin@acme.test" {
 		t.Fatalf("creator not recorded: %v", got.Annotations)
 	}
 	if r := do(t, h, "POST", "/api/access-rules", admin, RuleInput{Name: "eng-nemotron", AllSignedIn: true, Models: []string{"gemma-4-31b"}}); r.Code != http.StatusConflict {

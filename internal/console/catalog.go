@@ -69,7 +69,10 @@ type RuleInput struct {
 	Models      []string `json:"models"`
 }
 
-const createdByKey = "ambit.craftsmanapps.com/created-by"
+const (
+	createdByKey = "ambit.craftsmanapps.com/created-by"
+	updatedByKey = "ambit.craftsmanapps.com/updated-by"
+)
 
 var (
 	nameRE  = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
@@ -285,6 +288,10 @@ func (c *Catalog) updateRule(w http.ResponseWriter, r *http.Request, s Session) 
 		return
 	}
 	ar.Spec = v1.AccessRuleSpec{Groups: in.Groups, AllSignedIn: in.AllSignedIn, Models: in.Models}
+	if ar.Annotations == nil {
+		ar.Annotations = map[string]string{}
+	}
+	ar.Annotations[updatedByKey] = s.Email
 	if err := c.Client.Update(r.Context(), ar); err != nil {
 		apiErr(w, err)
 		return

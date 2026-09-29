@@ -21,9 +21,11 @@ type AuthConfig struct {
 	PublicURL    string // console URL; the callback is PublicURL + /auth/callback
 	SessionKey   []byte
 	SessionTTL   time.Duration
+	Sessions     *SessionStore // optional; a new one is created when nil
 }
 
 type Auth struct {
+	Sessions *SessionStore
 	oauth    oauth2.Config
 	verifier *oidc.IDTokenVerifier
 	codec    Codec
@@ -42,7 +44,12 @@ func NewAuth(ctx context.Context, c AuthConfig) (*Auth, error) {
 	if err != nil {
 		return nil, fmt.Errorf("oidc discovery at %s: %w", c.Issuer, err)
 	}
+	store := c.Sessions
+	if store == nil {
+		store = NewSessionStore()
+	}
 	return &Auth{
+		Sessions: store,
 		oauth: oauth2.Config{
 			ClientID: c.ClientID, ClientSecret: c.ClientSecret, Endpoint: p.Endpoint(),
 			RedirectURL: strings.TrimSuffix(c.PublicURL, "/") + "/auth/callback",
@@ -130,8 +137,9 @@ func (a *Auth) Callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	boot := cl.Federated.ConnectorID == "local" && cl.Email == BootstrapEmail
-	s := Session{Sub: idt.Subject, Email: cl.Email, Name: cl.Name, Groups: cl.Groups, Bootstrap: boot,
+	s := Session{ID: randomString(), Sub: idt.Subject, Email: cl.Email, Name: cl.Name, Groups: cl.Groups, Bootstrap: boot,
 		Role: roleFor(cl.Federated.ConnectorID, cl.Email, cl.Groups), Exp: time.Now().Add(a.ttl).Unix()}
+	a.Sessions.Add(s.ID, s.Email, s.Exp)
 	http.SetCookie(w, a.cookie(SessionCookie, a.codec.Encode(s), int(a.ttl.Seconds()), "/"))
 	slog.Info("signed in", "email", s.Email, "role", s.Role, "connector", cl.Federated.ConnectorID)
 	http.Redirect(w, r, "/", http.StatusFound)
@@ -143,6 +151,9 @@ func (a *Auth) Logout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Use POST to sign out.", http.StatusMethodNotAllowed)
 		return
 	}
+	if s, ok := a.Current(r); ok {
+		a.Sessions.Remove(s.ID)
+	}
 	http.SetCookie(w, a.cookie(SessionCookie, "", -1, "/"))
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
@@ -151,7 +162,7 @@ func (a *Auth) Logout(w http.ResponseWriter, r *http.Request) {
 func (a *Auth) Current(r *http.Request) (Session, bool) {
 	var s Session
 	ck, err := r.Cookie(SessionCookie)
-	if err != nil || a.codec.Decode(ck.Value, &s) != nil || time.Now().Unix() > s.Exp {
+	if err != nil || a.codec.Decode(ck.Value, &s) != nil || time.Now().Unix() > s.Exp || !a.Sessions.Valid(s.ID) {
 		return Session{}, false
 	}
 	return s, true

@@ -59,7 +59,7 @@ func main() {
 func run(ctx context.Context) error {
 	publicURL := env("AMBIT_PUBLIC_URL", "http://console.localtest.me:8080")
 	ns := env("AMBIT_NAMESPACE", "ambit-system")
-	hours, err := strconv.Atoi(env("AMBIT_SESSION_HOURS", "8"))
+	hours, err := strconv.Atoi(env("AMBIT_SESSION_HOURS", "1"))
 	if err != nil || hours < 1 {
 		return errors.New("AMBIT_SESSION_HOURS must be a positive whole number")
 	}

@@ -6,5 +6,28 @@ gateway:
     type: LoadBalancer
     nodePort: null
 
+console:
+  # Public URL of the console. Dex's issuer is this URL + /dex.
+  url: https://console.example.com
+  # Hostname matched by the HTTPRoute. Must match the host in console.url.
+  host: console.example.com
+  image:
+    repository: ghcr.io/craftsman-apps/ambit-console
+    tag: 0.0.1
+    pullPolicy: IfNotPresent
+  # Hours before a console session expires.
+  sessionHours: 8
+
 # Passed to the agentgateway subchart. Set agentgateway.image.registry for a private registry.
 agentgateway: {}
+
+# Passed to the Dex subchart. Ambit renders Dex's config itself (templates/dex-config.yaml).
+dex:
+  fullnameOverride: ambit-dex
+  image:
+    tag: v2.45.1
+  grpc:
+    enabled: true
+  configSecret:
+    create: false
+    name: ambit-dex-config

@@ -2,3 +2,11 @@ gateway:
   service:
     type: NodePort
     nodePort: 30080
+
+console:
+  url: http://console.localtest.me:8080
+  host: console.localtest.me
+  image:
+    repository: ambit-console
+    tag: dev
+    pullPolicy: Never

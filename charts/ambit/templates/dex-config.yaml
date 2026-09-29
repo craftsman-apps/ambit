@@ -1,0 +1,20 @@
+# Rendered identically on every run (GitOps rule 6): no random values, no lookup, no bcrypt.
+# The console creates the OAuth client and the bootstrap password through Dex's gRPC API.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ambit-dex-config
+stringData:
+  config.yaml: |
+    issuer: {{ .Values.console.url }}/dex
+    storage:
+      type: kubernetes
+      config:
+        inCluster: true
+    web:
+      http: 0.0.0.0:5556
+    grpc:
+      addr: 0.0.0.0:5557
+    oauth2:
+      skipApprovalScreen: true
+    enablePasswordDB: true

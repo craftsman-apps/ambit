@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ambit-console
+  labels: { app.kubernetes.io/name: ambit-console }
+spec:
+  replicas: 1  # ponytail: bootstrap has no leader election; add it before running 2+ replicas
+  selector:
+    matchLabels: { app.kubernetes.io/name: ambit-console }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: ambit-console }
+    spec:
+      serviceAccountName: ambit-console
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: console
+          image: "{{ .Values.console.image.repository }}:{{ .Values.console.image.tag }}"
+          imagePullPolicy: {{ .Values.console.image.pullPolicy }}
+          ports: [{ name: http, containerPort: 8080 }]
+          env:
+            - { name: AMBIT_PUBLIC_URL, value: {{ .Values.console.url | quote }} }
+            - { name: AMBIT_DEX_GRPC, value: "ambit-dex:5557" }
+            - { name: AMBIT_SESSION_HOURS, value: {{ .Values.console.sessionHours | quote }} }
+            - name: AMBIT_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { memory: 128Mi }

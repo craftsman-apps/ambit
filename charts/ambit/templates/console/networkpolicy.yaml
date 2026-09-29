@@ -1,0 +1,14 @@
+# Dex's gRPC API can create users and clients, so only the console may reach it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ambit-dex
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: dex }
+  policyTypes: [Ingress]
+  ingress:
+    - ports: [{ port: 5556 }]
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-console } }
+      ports: [{ port: 5557 }]

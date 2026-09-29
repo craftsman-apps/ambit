@@ -1,9 +1,10 @@
----
+# Generated; see hack/keep_crds.py. Do not edit by hand.
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.22.0
+    helm.sh/resource-policy: keep
   name: models.ambit.craftsmanapps.com
 spec:
   group: ambit.craftsmanapps.com
@@ -27,34 +28,39 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Model is a model in the Ambit catalog. Nobody may use it until
-          an AccessRule names it.
+        description: Model is a model in the Ambit catalog. Nobody may use it until an AccessRule names it.
         properties:
           apiVersion:
-            description: |-
-              APIVersion defines the versioned schema of this representation of an object.
+            description: 'APIVersion defines the versioned schema of this representation of an object.
+
               Servers should convert recognized schemas to the latest internal value, and
+
               may reject unrecognized values.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
             type: string
           kind:
-            description: |-
-              Kind is a string value representing the REST resource this object represents.
+            description: 'Kind is a string value representing the REST resource this object represents.
+
               Servers may infer this from the endpoint the client submits requests to.
+
               Cannot be updated.
+
               In CamelCase.
-              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
             type: string
           metadata:
             type: object
           spec:
-            description: 'ModelSpec is one entry in the model catalog: a model clients
-              may request through the gateway.'
+            description: 'ModelSpec is one entry in the model catalog: a model clients may request through the gateway.'
             properties:
               credentialsRef:
-                description: |-
-                  CredentialsRef names a Secret in this namespace with the provider key in its "Authorization" entry.
-                  The key itself never appears in this object, so the object is safe to keep in Git.
+                description: 'CredentialsRef names a Secret in this namespace with the provider key in its "Authorization" entry.
+
+                  The key itself never appears in this object, so the object is safe to keep in Git. Only Secrets
+
+                  named ambit-llm-* may be used, so a Model cannot send another Secret (e.g. console keys) to a provider.'
                 properties:
                   name:
                     minLength: 1
@@ -62,17 +68,18 @@ spec:
                 required:
                 - name
                 type: object
+                x-kubernetes-validations:
+                - message: credentialsRef must name a Secret called ambit-llm-<something>
+                  rule: self.name.startsWith('ambit-llm-')
               displayName:
                 description: DisplayName is shown in the console.
                 type: string
               model:
-                description: Model is the exact name clients send in the request,
-                  e.g. "google/gemma-4-31b-it:free".
+                description: Model is the exact name clients send in the request, e.g. "google/gemma-4-31b-it:free".
                 minLength: 1
                 type: string
               provider:
-                description: Provider serving the model. Values follow agentgateway's
-                  AgentgatewayModel providers.
+                description: Provider serving the model. Values follow agentgateway's AgentgatewayModel providers.
                 enum:
                 - Anthropic
                 - Azure
@@ -92,43 +99,45 @@ spec:
               allowAllSignedIn:
                 type: boolean
               allowedGroups:
-                description: Who may use this model, compiled from every AccessRule
-                  that names it. Empty means nobody.
+                description: Who may use this model, compiled from every AccessRule that names it. Empty means nobody.
                 items:
                   type: string
                 type: array
               conditions:
                 items:
-                  description: Condition contains details for one aspect of the current
-                    state of this API Resource.
+                  description: Condition contains details for one aspect of the current state of this API Resource.
                   properties:
                     lastTransitionTime:
-                      description: |-
-                        lastTransitionTime is the last time the condition transitioned from one status to another.
-                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      description: 'lastTransitionTime is the last time the condition transitioned from one status to another.
+
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.'
                       format: date-time
                       type: string
                     message:
-                      description: |-
-                        message is a human readable message indicating details about the transition.
-                        This may be an empty string.
+                      description: 'message is a human readable message indicating details about the transition.
+
+                        This may be an empty string.'
                       maxLength: 32768
                       type: string
                     observedGeneration:
-                      description: |-
-                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                      description: 'observedGeneration represents the .metadata.generation that the condition was set based upon.
+
                         For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
-                        with respect to the current state of the instance.
+
+                        with respect to the current state of the instance.'
                       format: int64
                       minimum: 0
                       type: integer
                     reason:
-                      description: |-
-                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                      description: 'reason contains a programmatic identifier indicating the reason for the condition''s last transition.
+
                         Producers of specific condition types may define expected values and meanings for this field,
+
                         and whether the values are considered a guaranteed API.
+
                         The value should be a CamelCase string.
-                        This field may not be empty.
+
+                        This field may not be empty.'
                       maxLength: 1024
                       minLength: 1
                       pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
@@ -136,8 +145,8 @@ spec:
                     status:
                       description: status of the condition, one of True, False, Unknown.
                       enum:
-                      - "True"
-                      - "False"
+                      - 'True'
+                      - 'False'
                       - Unknown
                       type: string
                     type:

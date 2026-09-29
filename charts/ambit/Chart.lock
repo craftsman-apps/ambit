@@ -1,9 +1,0 @@
-dependencies:
-- name: agentgateway
-  repository: oci://cr.agentgateway.dev/charts
-  version: v1.5.0
-- name: dex
-  repository: https://charts.dexidp.io
-  version: 0.24.1
-digest: sha256:1e4cdfd3a9fe144050b7650fc670239f74642f471c12f062c72f726d1bfe10dc
-generated: "2026-09-29T14:52:41.799582+09:00"

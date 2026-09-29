@@ -1,8 +1,30 @@
 NS ?= ambit-system
+CONTROLLER_GEN_VERSION ?= v0.22.0
+GATEWAY_API_VERSION ?= v1.6.2
+AGENTGATEWAY_VERSION ?= v1.5.0
+CRDS := charts/ambit-crds
 KIND_CLUSTER ?= ambit
 IMAGE ?= ambit-console:dev
 
-.PHONY: kind-up kind-down deps lint web test-go image install test
+.PHONY: kind-up kind-down deps lint web test-go image install install-crds test test-ui generate vendor-crds
+
+# Browser tests (Playwright) against the running kind install; needs the LLM test catalog (make test STEPS=3).
+test-ui:
+	cd web && AMBIT_ADMIN_PASSWORD=$$(kubectl -n $(NS) get secret ambit-initial-admin -o jsonpath='{.data.password}' | base64 -d) npx playwright test
+
+# Ambit's own CRDs and deepcopy code, from api/v1alpha1.
+generate:
+	go run sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_GEN_VERSION) object paths=./api/... crd:crdVersions=v1 output:crd:dir=$(CRDS)/templates/ambit
+	uv run --no-project --with pyyaml python hack/keep_crds.py $(CRDS)/templates/ambit/*.yaml
+
+# Third-party CRDs, vendored at pinned versions and applied outside Helm (see deploy/crds/README.md).
+vendor-crds:
+	rm -f deploy/crds/*.yaml
+	curl -sSfL -o deploy/crds/gateway-api-standard-$(GATEWAY_API_VERSION).yaml https://github.com/kubernetes-sigs/gateway-api/releases/download/$(GATEWAY_API_VERSION)/standard-install.yaml
+	helm template agentgateway-crds oci://cr.agentgateway.dev/charts/agentgateway-crds --version $(AGENTGATEWAY_VERSION) > deploy/crds/agentgateway-crds-$(AGENTGATEWAY_VERSION).yaml
+
+install-crds:
+	kubectl apply --server-side --force-conflicts -f deploy/crds/ >/dev/null
 kind-up:
 	kind get clusters | grep -qx $(KIND_CLUSTER) || kind create cluster --config kind/cluster.yaml --wait 120s
 	./kind/coredns-rewrite.sh $(NS)
@@ -11,7 +33,6 @@ kind-down:
 	kind delete cluster --name $(KIND_CLUSTER)
 
 deps:
-	helm dependency update charts/ambit-crds
 	helm dependency update charts/ambit
 
 lint: deps
@@ -28,13 +49,11 @@ image:
 	docker build -t $(IMAGE) .
 	kind load docker-image $(IMAGE) --name $(KIND_CLUSTER)
 
-install: deps
+install: deps install-crds
 	helm upgrade --install ambit-crds charts/ambit-crds -n $(NS) --create-namespace --wait
 	helm upgrade --install ambit charts/ambit -n $(NS) -f charts/ambit/values-kind.yaml --wait --timeout 5m
 
+STEPS ?= 0 1 2 3 3b 3c
+# make test            -> every step; make test STEPS=3b -> one step (each sets up what it needs)
 test:
-	./test/step0.sh $(NS)
-	./test/step1.sh $(NS)
-	./test/step2.sh $(NS)
-	./test/step3.sh $(NS)
-	./test/step3b.sh $(NS)
+	@for s in $(STEPS); do ./test/step$$s.sh $(NS) || exit 1; done

@@ -14,7 +14,7 @@ upgrade() {
 }
 kc_admin() { # kc_admin METHOD PATH: call the Keycloak admin API
   local tok; tok=$(curl -s -d grant_type=password -d client_id=admin-cli -d username=admin -d password=admin \
-    "$KC/realms/master/protocol/openid-connect/token" | python3 -c 'import json,sys;print(json.load(sys.stdin)["access_token"])')
+    "$KC/realms/master/protocol/openid-connect/token" | uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)["access_token"])')
   curl -s -X "$1" -H "Authorization: Bearer $tok" "$KC/admin/realms/acme$2"
 }
 signed_in_as() { # signed_in_as USER PASSWORD ROLE
@@ -40,8 +40,8 @@ signed_in_as sam sam-test-pass approver;     pass "3 sam (ambit-approvers) is ap
 signed_in_as alice alice-test-pass viewer;   pass "4 alice (eng) is viewer"
 
 # 5 · a group change in the IdP changes the role at the next sign-in
-uid=$(kc_admin GET "/users?username=priya&exact=true" | python3 -c 'import json,sys;print(json.load(sys.stdin)[0]["id"])')
-gid=$(kc_admin GET "/groups?search=ambit-admins" | python3 -c 'import json,sys;print([g["id"] for g in json.load(sys.stdin) if g["name"]=="ambit-admins"][0])')
+uid=$(kc_admin GET "/users?username=priya&exact=true" | uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)[0]["id"])')
+gid=$(kc_admin GET "/groups?search=ambit-admins" | uv run --no-project python -c 'import json,sys;print([g["id"] for g in json.load(sys.stdin) if g["name"]=="ambit-admins"][0])')
 kc_admin DELETE "/users/$uid/groups/$gid" >/dev/null
 signed_in_as priya priya-test-pass viewer
 kc_admin PUT "/users/$uid/groups/$gid" >/dev/null

@@ -1,6 +1,7 @@
 # Test identity provider for step 2. NOT part of the Ambit package; stands in for a customer's Okta.
 # Test-only credentials: priya/priya-test-pass (ambit-admins), sam/sam-test-pass (ambit-approvers),
-# alice/alice-test-pass (eng). Keycloak admin: admin/admin.
+# alice/alice-test-pass (eng), mira/mira-test-pass (ml-research). Keycloak admin: admin/admin.
+# Client ambit-cli-test: password grant for tests only; access tokens carry groups and aud=ambit-gateway.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -20,6 +21,9 @@ data:
         },
         {
           "name": "eng"
+        },
+        {
+          "name": "ml-research"
         }
       ],
       "clients": [
@@ -44,6 +48,37 @@ data:
                 "id.token.claim": "true",
                 "access.token.claim": "true",
                 "userinfo.token.claim": "true"
+              }
+            }
+          ]
+        },
+        {
+          "clientId": "ambit-cli-test",
+          "enabled": true,
+          "publicClient": true,
+          "standardFlowEnabled": false,
+          "directAccessGrantsEnabled": true,
+          "protocolMappers": [
+            {
+              "name": "groups",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-group-membership-mapper",
+              "config": {
+                "claim.name": "groups",
+                "full.path": "false",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "userinfo.token.claim": "true"
+              }
+            },
+            {
+              "name": "gateway-audience",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "config": {
+                "included.custom.audience": "ambit-gateway",
+                "access.token.claim": "true",
+                "id.token.claim": "false"
               }
             }
           ]
@@ -102,6 +137,24 @@ data:
           ],
           "groups": [
             "/eng"
+          ]
+        },
+        {
+          "username": "mira",
+          "email": "mira@acme.test",
+          "emailVerified": true,
+          "firstName": "Mira",
+          "lastName": "Test",
+          "enabled": true,
+          "credentials": [
+            {
+              "type": "password",
+              "value": "mira-test-pass",
+              "temporary": false
+            }
+          ],
+          "groups": [
+            "/ml-research"
           ]
         }
       ]

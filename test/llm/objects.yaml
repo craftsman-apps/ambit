@@ -1,0 +1,32 @@
+# Step 3 test catalog: two free OpenRouter models, and who may use them.
+apiVersion: ambit.craftsman-apps.github.io/v1alpha1
+kind: Model
+metadata: { name: gemma-4-31b }
+spec:
+  displayName: Gemma 4 31B (free)
+  provider: Openrouter
+  model: google/gemma-4-31b-it:free
+  credentialsRef: { name: ambit-llm-openrouter }
+---
+apiVersion: ambit.craftsman-apps.github.io/v1alpha1
+kind: Model
+metadata: { name: nemotron-3-super }
+spec:
+  displayName: Nemotron 3 Super 120B (free; treated as the "expensive" model)
+  provider: Openrouter
+  model: nvidia/nemotron-3-super-120b-a12b:free
+  credentialsRef: { name: ambit-llm-openrouter }
+---
+apiVersion: ambit.craftsman-apps.github.io/v1alpha1
+kind: AccessRule
+metadata: { name: everyone-gemma }
+spec:
+  allSignedIn: true
+  models: [gemma-4-31b]
+---
+apiVersion: ambit.craftsman-apps.github.io/v1alpha1
+kind: AccessRule
+metadata: { name: ml-research-nemotron }
+spec:
+  groups: [ml-research]
+  models: [nemotron-3-super]

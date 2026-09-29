@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ambit-controller
+---
+# Namespace-scoped: Ambit objects are read and only their status is written (GitOps rule 2);
+# generated AgentgatewayModels are fully managed.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ambit-controller
+rules:
+  - apiGroups: [ambit.craftsman-apps.github.io]
+    resources: [models, accessrules]
+    verbs: [get, list, watch]
+  - apiGroups: [ambit.craftsman-apps.github.io]
+    resources: [models/status, accessrules/status]
+    verbs: [get, update, patch]
+  - apiGroups: [agentgateway.dev]
+    resources: [agentgatewaymodels]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ambit-controller
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: ambit-controller }
+subjects: [{ kind: ServiceAccount, name: ambit-controller }]

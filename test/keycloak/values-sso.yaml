@@ -16,3 +16,12 @@ dex:
     - name: KEYCLOAK_CLIENT_SECRET
       valueFrom:
         secretKeyRef: { name: keycloak-dex-client, key: secret }
+
+# Step 3: LLM traffic with tokens from the same Keycloak test realm (client ambit-cli-test, aud ambit-gateway).
+llm:
+  enabled: true
+  host: llm.localtest.me
+  jwt:
+    issuer: http://keycloak.localtest.me:8080/realms/acme
+    audiences: [ambit-gateway]
+    jwksURL: http://keycloak.localtest.me:8080/realms/acme/protocol/openid-connect/certs

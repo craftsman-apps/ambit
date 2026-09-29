@@ -34,4 +34,4 @@ sign_in() {
   follow
 }
 me_status() { curl -s -o "$W/me" -w '%{http_code}' -b "$W/jar" "$BASE/api/me"; }
-me_field() { python3 -c "import json,sys;v=json.load(open('$W/me')).get('$1');print(json.dumps(v))"; }
+me_field() { uv run --no-project python -c "import json,sys;v=json.load(open('$W/me')).get('$1');print(json.dumps(v))"; }

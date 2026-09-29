@@ -28,8 +28,23 @@ sso:
   # Never put a secret value here: write "$ENV_NAME" and supply it through dex.envVars from a Secret.
   connectors: []
 
+llm:
+  # Serve OpenAI-compatible LLM traffic at <host>/v1. Models and access come from Model and AccessRule objects.
+  enabled: false
+  host: llm.example.com
+  # Tokens from the customer's identity provider (not Dex). Required when llm.enabled is true.
+  jwt:
+    issuer: ""
+    audiences: []
+    jwksURL: ""
+
 # Passed to the agentgateway subchart. Set agentgateway.image.registry for a private registry.
-agentgateway: {}
+agentgateway:
+  # AgentgatewayModel is experimental and off by default in v1.5.0 (on by default after upstream PR #3492).
+  # Ambit needs it: per-model authorization only works on AgentgatewayModel, because route-level
+  # authorization runs before the gateway reads the requested model.
+  agentgatewayModels:
+    enabled: true
 
 # Passed to the Dex subchart. Ambit renders Dex's config itself (templates/dex-config.yaml).
 dex:

@@ -36,3 +36,4 @@ test:
 	./test/step0.sh $(NS)
 	./test/step1.sh $(NS)
 	./test/step2.sh $(NS)
+	./test/step3.sh $(NS)

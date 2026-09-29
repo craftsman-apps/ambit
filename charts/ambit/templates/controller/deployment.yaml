@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ambit-controller
+  labels: { app.kubernetes.io/name: ambit-controller }
+spec:
+  replicas: 1  # ponytail: no leader election yet; add it before running 2+ replicas
+  selector:
+    matchLabels: { app.kubernetes.io/name: ambit-controller }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: ambit-controller }
+    spec:
+      serviceAccountName: ambit-controller
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: controller
+          image: "{{ .Values.console.image.repository }}:{{ .Values.console.image.tag }}"
+          imagePullPolicy: {{ .Values.console.image.pullPolicy }}
+          command: ["/ambit-controller", "--llm-route=ambit-llm"]
+          env:
+            - name: AMBIT_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+          ports: [{ name: probes, containerPort: 8081 }, { name: metrics, containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /readyz, port: probes } }
+          livenessProbe: { httpGet: { path: /healthz, port: probes } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            requests: { cpu: 20m, memory: 48Mi }
+            limits: { memory: 192Mi }

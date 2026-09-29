@@ -130,10 +130,17 @@ pass "9 MCPServer owned by its Server; shared backend and policy owned by every 
 
 # 10 · only the gateway reaches MCP servers. The same probe with the gateway's label is the control:
 # it must get an HTTP answer, so the blocked case is the NetworkPolicy and not DNS or the image.
-probe() { # probe NAME [LABELS]: HTTP status from a pod calling the ToolHive proxy directly
-  kubectl -n "$NS" run "$1" --rm -i --restart=Never --quiet --image="$CURL_IMAGE" ${2:+--labels="$2"} --command -- \
+# probe NAME [LABELS]: HTTP status from a pod calling the ToolHive proxy directly. Runs to completion and
+# reads the log: attaching with "kubectl run -i" loses the output when the pod finishes first.
+probe() {
+  kubectl -n "$NS" delete pod "$1" --ignore-not-found >/dev/null
+  kubectl -n "$NS" run "$1" --restart=Never --image="$CURL_IMAGE" ${2:+--labels="$2"} --command -- \
     curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "http://mcp-time-proxy.$NS.svc:8080/mcp" 2>/dev/null | head -c 3 || true
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "http://mcp-time-proxy.$NS.svc:8080/mcp" >/dev/null
+  kubectl -n "$NS" wait pod "$1" --for=jsonpath='{.status.phase}'=Succeeded --timeout=120s >/dev/null 2>&1 ||
+    kubectl -n "$NS" wait pod "$1" --for=jsonpath='{.status.phase}'=Failed --timeout=5s >/dev/null 2>&1 || true
+  kubectl -n "$NS" logs "$1" 2>/dev/null | head -c 3
+  kubectl -n "$NS" delete pod "$1" --wait=false >/dev/null
 }
 allowed=$(probe mcp-probe-gw gateway.networking.k8s.io/gateway-name=ambit)
 blocked=$(probe mcp-probe)

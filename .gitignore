@@ -1,4 +1,5 @@
 charts/*/charts/
 web/node_modules/
-web/dist/*
-!web/dist/.gitkeep
+web/dist/
+web/test-results/
+web/playwright-report/

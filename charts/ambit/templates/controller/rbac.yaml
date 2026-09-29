@@ -10,10 +10,10 @@ kind: Role
 metadata:
   name: ambit-controller
 rules:
-  - apiGroups: [ambit.craftsmanapps.com]
+  - apiGroups: [ambitproject.dev]
     resources: [models, accessrules]
     verbs: [get, list, watch]
-  - apiGroups: [ambit.craftsmanapps.com]
+  - apiGroups: [ambitproject.dev]
     resources: [models/status, accessrules/status]
     verbs: [get, update, patch]
   - apiGroups: [agentgateway.dev]

@@ -1,3 +1,0 @@
-{{- if .Values.gatewayAPI.install }}
-{{ .Files.Get "files/gateway-api-standard-v1.6.2.yaml" }}
-{{- end }}

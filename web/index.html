@@ -5,13 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>Ambit</title>
-    <script>
-      // Apply the saved System/Light/Dark choice before the first paint, so there is no white flash.
-      try {
-        var t = localStorage.getItem("ambit-theme");
-        if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
-      } catch (e) {}
-    </script>
+    <!-- Blocking on purpose: applies the saved theme before first paint. External so the CSP can forbid inline script. -->
+    <script src="/theme.js"></script>
   </head>
   <body>
     <div id="root"></div>

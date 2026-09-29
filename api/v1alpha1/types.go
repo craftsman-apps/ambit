@@ -11,7 +11,9 @@ type ModelSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	Model string `json:"model"`
 	// CredentialsRef names a Secret in this namespace with the provider key in its "Authorization" entry.
-	// The key itself never appears in this object, so the object is safe to keep in Git.
+	// The key itself never appears in this object, so the object is safe to keep in Git. Only Secrets
+	// named ambit-llm-* may be used, so a Model cannot send another Secret (e.g. console keys) to a provider.
+	// +kubebuilder:validation:XValidation:rule="self.name.startsWith('ambit-llm-')",message="credentialsRef must name a Secret called ambit-llm-<something>"
 	CredentialsRef SecretRef `json:"credentialsRef"`
 	// DisplayName is shown in the console.
 	// +optional

@@ -11,7 +11,7 @@ LLM=http://llm.localtest.me:8080/v1/chat/completions
 KEYFILE=${OPENROUTER_KEY_FILE:-$HOME/.config/ambit/openrouter-api-key}
 GEMMA=google/gemma-4-31b-it:free
 NEMO=nvidia/nemotron-3-super-120b-a12b:free
-G=ambit.craftsmanapps.com
+G=ambitproject.dev
 
 token() { command curl -s -d grant_type=password -d client_id=ambit-cli-test -d username="$1" -d password="$1-test-pass" \
   "$KC/realms/acme/protocol/openid-connect/token" | uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)["access_token"])'; }
@@ -38,18 +38,7 @@ wait_expr() { # wait_expr MODEL EXPECTED
   fail "$1: expression is '$(expr_of "$1")', expected '$2'"
 }
 
-# Setup: test IdP with LLM settings, the provider key as a Secret, and the test catalog.
-kubectl -n "$NS" apply -f test/keycloak/keycloak.yaml >/dev/null
-kubectl -n "$NS" rollout status deploy/keycloak --timeout=300s >/dev/null
-helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --wait --timeout 5m >/dev/null
-HAVE_KEY=false
-if [[ -s "$KEYFILE" ]]; then
-  kubectl -n "$NS" create secret generic ambit-llm-openrouter --from-file=Authorization="$KEYFILE" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-  HAVE_KEY=true
-else
-  kubectl -n "$NS" create secret generic ambit-llm-openrouter --from-literal=Authorization=no-key --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-fi
-kubectl -n "$NS" apply -f test/llm/objects.yaml >/dev/null
+ensure_llm_setup "$NS"
 
 # 1 · controller running, models accepted by agentgateway, rules compiled
 kubectl -n "$NS" rollout status deploy/ambit-controller --timeout=120s >/dev/null

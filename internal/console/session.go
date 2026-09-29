@@ -22,6 +22,7 @@ const (
 
 // Session is what the console remembers about a signed-in person. It lives in a signed cookie.
 type Session struct {
+	ID        string   `json:"id"`
 	Sub       string   `json:"sub"`
 	Email     string   `json:"email"`
 	Name      string   `json:"name"`

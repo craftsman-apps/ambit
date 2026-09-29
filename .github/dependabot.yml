@@ -1,0 +1,16 @@
+# Pins (Go modules, npm lockfile, base image digests, action SHAs) stay current through reviewed PRs.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule: { interval: weekly }
+    groups: { kubernetes: { patterns: ["k8s.io/*", "sigs.k8s.io/*"] } }
+  - package-ecosystem: npm
+    directory: /web
+    schedule: { interval: weekly }
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }

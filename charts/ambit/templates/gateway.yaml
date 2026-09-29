@@ -6,10 +6,16 @@ spec:
   service:
     spec:
       type: {{ .Values.gateway.service.type }}
-      {{- with .Values.gateway.service.nodePort }}
+      {{- if or .Values.gateway.service.nodePort .Values.gateway.tls.nodePort }}
       ports:
+        {{- with .Values.gateway.service.nodePort }}
         - port: {{ $.Values.gateway.port }}
           nodePort: {{ . }}
+        {{- end }}
+        {{- if and .Values.gateway.tls.enabled .Values.gateway.tls.nodePort }}
+        - port: {{ .Values.gateway.tls.port }}
+          nodePort: {{ .Values.gateway.tls.nodePort }}
+        {{- end }}
       {{- end }}
 ---
 apiVersion: gateway.networking.k8s.io/v1
@@ -30,3 +36,17 @@ spec:
       allowedRoutes:
         namespaces:
           from: Same
+    {{- if .Values.gateway.tls.enabled }}
+    {{- if not .Values.gateway.tls.certificateSecret }}
+    {{- fail "gateway.tls.enabled=true needs gateway.tls.certificateSecret" }}
+    {{- end }}
+    - name: https
+      protocol: HTTPS
+      port: {{ .Values.gateway.tls.port }}
+      tls:
+        mode: Terminate
+        certificateRefs: [{ name: {{ .Values.gateway.tls.certificateSecret | quote }} }]
+      allowedRoutes:
+        namespaces:
+          from: Same
+    {{- end }}

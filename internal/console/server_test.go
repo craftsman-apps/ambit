@@ -88,6 +88,8 @@ func (f *fakeIssuer) sign(t *testing.T, claims map[string]any) string {
 	return s
 }
 
+var testAuth *Auth // the Auth behind the most recent newTestServer
+
 var testSPA = fstest.MapFS{
 	"index.html":    {Data: []byte("<!doctype html><title>Ambit</title>")},
 	"assets/app.js": {Data: []byte("console.log(1)")},
@@ -105,6 +107,7 @@ func newTestServer(t *testing.T, f *fakeIssuer) (*httptest.Server, *http.Client)
 	if err != nil {
 		t.Fatal(err)
 	}
+	testAuth = auth
 	ts.Config.Handler = NewServer(auth, testSPA, LoginOptions{Bootstrap: true}, nil)
 	t.Cleanup(ts.Close)
 	jar, _ := cookiejar.New(nil)

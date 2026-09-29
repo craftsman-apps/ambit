@@ -1,3 +1,3 @@
-gatewayAPI:
-  # Install Gateway API v1.6.2 standard CRDs. Set false if the cluster already manages them.
-  install: true
+# Ambit's own CRDs only. Gateway API and agentgateway CRDs are too large for a Helm release (1 MiB limit),
+# so they are applied from deploy/crds with `kubectl apply --server-side` (make install-crds) and never owned by Helm.
+{}

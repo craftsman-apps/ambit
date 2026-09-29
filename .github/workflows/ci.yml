@@ -1,0 +1,64 @@
+name: ci
+on:
+  push: { branches: [main, "step-*"] }
+  pull_request:
+permissions: { contents: read }
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 26, cache: npm, cache-dependency-path: web/package-lock.json }
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      # The console binary embeds web/dist, so the front end must be built before Go compiles.
+      - name: Front end type-check and build
+        run: cd web && npm ci --no-fund --no-audit && npm run build
+      - name: Go vet and unit tests
+        run: go vet ./... && go test -count=1 ./...
+      - name: Generated CRDs and deepcopy code are up to date
+        run: make generate && git diff --exit-code -- api charts/ambit-crds
+      - name: Helm lint and deterministic render
+        run: |
+          make lint
+          helm template ambit charts/ambit -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml > /tmp/r1
+          helm template ambit charts/ambit -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml > /tmp/r2
+          cmp /tmp/r1 /tmp/r2
+
+  e2e:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 26, cache: npm, cache-dependency-path: web/package-lock.json }
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with: { config: kind/cluster.yaml, cluster_name: ambit, wait: 120s }
+      - name: Install Ambit on kind
+        run: make kind-up image install
+      - name: OpenRouter key (optional repository secret; free models only)
+        env: { OPENROUTER_API_KEY: "${{ secrets.OPENROUTER_API_KEY }}" }
+        run: |
+          if [ -n "$OPENROUTER_API_KEY" ]; then mkdir -p ~/.config/ambit && printf '%s' "$OPENROUTER_API_KEY" > ~/.config/ambit/openrouter-api-key; fi
+      - name: Acceptance tests (every step)
+        run: make test
+      - name: UI tests (Playwright)
+        run: |
+          cd web && npm ci --no-fund --no-audit && npx playwright install --with-deps chromium
+          cd .. && CI=true make test-ui
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -A
+          kubectl -n ambit-system logs deploy/ambit-console --tail=100 || true
+          kubectl -n ambit-system logs deploy/ambit-controller --tail=100 || true

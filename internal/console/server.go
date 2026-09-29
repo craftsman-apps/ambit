@@ -93,5 +93,23 @@ func NewServer(a *Auth, spa fs.FS, opts LoginOptions, catalog *Catalog) http.Han
 		}
 		index(w, r)
 	})
-	return mux
+	return securityHeaders(mux, a.secure)
+}
+
+// securityHeaders applies to every console response. The CSP allows no inline script,
+// and frame-ancestors 'none' stops other sites from framing the console (clickjacking).
+func securityHeaders(next http.Handler, https bool) http.Handler {
+	const csp = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; " +
+		"connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", csp)
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+		if https {
+			h.Set("Strict-Transport-Security", "max-age=31536000")
+		}
+		next.ServeHTTP(w, r)
+	})
 }

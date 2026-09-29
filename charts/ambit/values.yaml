@@ -5,6 +5,13 @@ gateway:
     # LoadBalancer on EKS; values-kind.yaml switches to NodePort.
     type: LoadBalancer
     nodePort: null
+  tls:
+    # Serve the console and LLM traffic over HTTPS on tls.port; plain HTTP then redirects to HTTPS.
+    enabled: false
+    port: 8443
+    # A kubernetes.io/tls Secret whose certificate covers console.host and llm.host (e.g. from cert-manager).
+    certificateSecret: ""
+    nodePort: null
 
 console:
   # Public URL of the console. Dex's issuer is this URL + /dex.
@@ -13,10 +20,15 @@ console:
   host: console.example.com
   image:
     repository: ghcr.io/craftsman-apps/ambit-console
-    tag: 0.0.1
+    # Empty: the chart's appVersion, which the release workflow sets to the release version.
+    tag: ""
     pullPolicy: IfNotPresent
-  # Hours before a console session expires.
-  sessionHours: 8
+  # Secret with a ca.crt entry the console should trust in addition to the system CAs, for an internal CA
+  # in front of Dex (the console fetches Dex at console.url). Empty means system CAs only.
+  caBundleSecret: ""
+  # Hours before a console session expires. Group changes in the IdP reach the console at the next
+  # sign-in, so keep this short; sign-out and offboarding end sessions immediately regardless.
+  sessionHours: 1
 
 bootstrapAdmin:
   # Local password sign-in (admin@ambit.local) for first setup. Set false once SSO works:
@@ -46,13 +58,13 @@ agentgateway:
   agentgatewayModels:
     enabled: true
 
-# Passed to the Dex subchart. Ambit renders Dex's config itself (templates/dex-config.yaml).
+# Dex, rendered by this chart (templates/dex/). Its config is generated from console, sso and bootstrapAdmin.
 dex:
-  fullnameOverride: ambit-dex
   image:
+    repository: ghcr.io/dexidp/dex
     tag: v2.45.1
-  grpc:
-    enabled: true
-  configSecret:
-    create: false
-    name: ambit-dex-config
+  # Environment variables for secrets referenced as $NAME in sso.connectors (from Secrets, never literal values).
+  envVars: []
+  resources:
+    requests: { cpu: 20m, memory: 32Mi }
+    limits: { memory: 128Mi }

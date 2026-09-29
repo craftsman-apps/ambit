@@ -25,3 +25,12 @@ llm:
     issuer: http://keycloak.localtest.me:8080/realms/acme
     audiences: [ambit-gateway]
     jwksURL: http://keycloak.localtest.me:8080/realms/acme/protocol/openid-connect/certs
+
+# Step 4a: MCP traffic with tokens from the same realm and audience.
+mcp:
+  enabled: true
+  host: mcp.localtest.me
+  jwt:
+    issuer: http://keycloak.localtest.me:8080/realms/acme
+    audiences: [ambit-gateway]
+    jwksURL: http://keycloak.localtest.me:8080/realms/acme/protocol/openid-connect/certs

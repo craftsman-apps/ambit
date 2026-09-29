@@ -34,6 +34,9 @@ sign_in() {
   fi
   follow
 }
+# token USER: an access token from the Keycloak test realm (password grant, client ambit-cli-test).
+token() { command curl -s -d grant_type=password -d client_id=ambit-cli-test -d username="$1" -d password="$1-test-pass" \
+  "http://keycloak.localtest.me:8080/realms/acme/protocol/openid-connect/token" | uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)["access_token"])'; }
 me_status() { curl -s ${CURL_CA:+--cacert "$CURL_CA"} -o "$W/me" -w '%{http_code}' -b "$W/jar" "$BASE/api/me"; }
 
 # ensure_llm_setup NS: Keycloak test IdP, SSO + LLM chart values, provider key Secret, test catalog.

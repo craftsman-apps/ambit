@@ -10,7 +10,8 @@
   --color-ink: #15191d;
   --color-muted: #66707a;
   --color-line: #dfe3e7;
-  --color-accent: #1f5f8b;
+  --color-accent: #2563eb;        /* Ambit main color */
+  --color-accent-text: #2563eb;
   --color-accent-ink: #ffffff;
   --color-warn: #8a5a06;
   --color-warn-soft: #fbf0dc;
@@ -24,8 +25,9 @@
     --color-ink: #e7ebef;
     --color-muted: #8b959f;
     --color-line: #29303a;
-    --color-accent: #6fb2df;
-    --color-accent-ink: #0f1215;
+    --color-accent: #2563eb;
+    --color-accent-ink: #ffffff;
+    --color-accent-text: #5b8def; /* #2563EB is 3.5:1 on dark; text needs 4.5:1 */
     --color-warn: #dca43f;
     --color-warn-soft: #2a2113;
   }

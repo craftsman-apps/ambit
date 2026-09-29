@@ -4,25 +4,22 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.22.0
-  name: accessrules.ambit.craftsman-apps.github.io
+  name: models.ambit.craftsmanapps.com
 spec:
-  group: ambit.craftsman-apps.github.io
+  group: ambit.craftsmanapps.com
   names:
-    kind: AccessRule
-    listKind: AccessRuleList
-    plural: accessrules
-    singular: accessrule
+    kind: Model
+    listKind: ModelList
+    plural: models
+    singular: model
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.groups
-      name: Groups
+    - jsonPath: .spec.model
+      name: Model
       type: string
-    - jsonPath: .spec.allSignedIn
-      name: All signed in
-      type: boolean
-    - jsonPath: .spec.models
-      name: Models
+    - jsonPath: .spec.provider
+      name: Provider
       type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
@@ -30,7 +27,8 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: AccessRule grants groups (or everyone signed in) the use of models.
+        description: Model is a model in the Ambit catalog. Nobody may use it until
+          an AccessRule names it.
         properties:
           apiVersion:
             description: |-
@@ -50,34 +48,55 @@ spec:
           metadata:
             type: object
           spec:
-            description: AccessRuleSpec says who may use which models. Rules only
-              grant access; nothing is allowed by default.
+            description: 'ModelSpec is one entry in the model catalog: a model clients
+              may request through the gateway.'
             properties:
-              allSignedIn:
-                description: AllSignedIn allows everyone with a valid token.
-                type: boolean
-              groups:
-                description: Groups from the identity provider's "groups" claim. A
-                  member of any listed group is allowed.
-                items:
-                  pattern: ^[A-Za-z0-9][A-Za-z0-9._@/-]*$
-                  type: string
-                type: array
-              models:
-                description: Models lists Model object names in this namespace.
-                items:
-                  type: string
-                minItems: 1
-                type: array
+              credentialsRef:
+                description: |-
+                  CredentialsRef names a Secret in this namespace with the provider key in its "Authorization" entry.
+                  The key itself never appears in this object, so the object is safe to keep in Git.
+                properties:
+                  name:
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              displayName:
+                description: DisplayName is shown in the console.
+                type: string
+              model:
+                description: Model is the exact name clients send in the request,
+                  e.g. "google/gemma-4-31b-it:free".
+                minLength: 1
+                type: string
+              provider:
+                description: Provider serving the model. Values follow agentgateway's
+                  AgentgatewayModel providers.
+                enum:
+                - Anthropic
+                - Azure
+                - Bedrock
+                - Gemini
+                - OpenAI
+                - Openrouter
+                - VertexAI
+                type: string
             required:
-            - models
+            - credentialsRef
+            - model
+            - provider
             type: object
-            x-kubernetes-validations:
-            - message: 'set either groups or allSignedIn: true, not both'
-              rule: (has(self.groups) && size(self.groups) > 0) != (has(self.allSignedIn)
-                && self.allSignedIn)
           status:
             properties:
+              allowAllSignedIn:
+                type: boolean
+              allowedGroups:
+                description: Who may use this model, compiled from every AccessRule
+                  that names it. Empty means nobody.
+                items:
+                  type: string
+                type: array
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current

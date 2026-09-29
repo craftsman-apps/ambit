@@ -19,6 +19,7 @@ a console, access rules by identity-provider group, and (in progress) approvals,
 Requires Docker, kind, kubectl, Helm and uv.
 
 ```sh
+make web                     # build the front end once (the Go binary embeds it)
 make kind-up image install   # kind cluster + Ambit
 make test                    # acceptance tests for every step
 ```

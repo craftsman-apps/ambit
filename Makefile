@@ -42,7 +42,8 @@ lint: deps
 web:
 	cd web && npm ci --no-fund --no-audit && npm run build
 
-test-go:
+# The console embeds web/dist, so Go builds need the front end built first.
+test-go: web
 	go vet ./... && go test ./...
 
 image:

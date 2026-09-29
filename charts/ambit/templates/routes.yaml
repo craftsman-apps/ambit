@@ -5,6 +5,9 @@ metadata:
 spec:
   parentRefs:
     - name: ambit
+      {{- if .Values.gateway.tls.enabled }}
+      sectionName: https
+      {{- end }}
   hostnames:
     - {{ .Values.console.host | quote }}
   rules:

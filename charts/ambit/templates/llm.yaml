@@ -10,7 +10,7 @@ kind: HTTPRoute
 metadata:
   name: ambit-llm
 spec:
-  parentRefs: [{ name: ambit }]
+  parentRefs: [{ name: ambit{{ if .Values.gateway.tls.enabled }}, sectionName: https{{ end }} }]
   hostnames: [{{ .Values.llm.host | quote }}]
   rules:
     - name: models

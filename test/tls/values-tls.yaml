@@ -1,0 +1,21 @@
+# Step 3c test: HTTPS on kind with a local CA (see test/step3c.sh). Layer on values-kind + values-sso.
+gateway:
+  tls:
+    enabled: true
+    certificateSecret: ambit-tls
+    nodePort: 30443
+console:
+  url: https://console.localtest.me:8443
+  caBundleSecret: ambit-test-ca
+sso:
+  connectors:
+    - type: oidc
+      id: keycloak
+      name: Acme (Keycloak)
+      config:
+        issuer: http://keycloak.localtest.me:8080/realms/acme
+        clientID: ambit-dex
+        clientSecret: $KEYCLOAK_CLIENT_SECRET
+        redirectURI: https://console.localtest.me:8443/dex/callback
+        scopes: [profile, email]
+        insecureEnableGroups: true

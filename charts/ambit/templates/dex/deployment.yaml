@@ -1,0 +1,60 @@
+# Dex, rendered by Ambit instead of the Dex chart so that a config change (console.url, SSO connectors,
+# bootstrap admin) restarts Dex: the Dex chart only adds its config checksum when it creates the config itself.
+# Adapted from the Dex Helm chart (Apache-2.0).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ambit-dex
+  labels: { app.kubernetes.io/name: dex, app.kubernetes.io/part-of: ambit }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: dex }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: dex, app.kubernetes.io/part-of: ambit }
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/dex/config.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: ambit-dex
+      # The Dex image names its user ("dex", UID 1001); runAsNonRoot needs the number to verify it.
+      securityContext: { runAsNonRoot: true, runAsUser: 1001, runAsGroup: 1001, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: dex
+          image: "{{ .Values.dex.image.repository }}:{{ .Values.dex.image.tag }}"
+          imagePullPolicy: IfNotPresent
+          args: [dex, serve, --web-http-addr, "0.0.0.0:5556", --grpc-addr, "0.0.0.0:5557", --telemetry-addr, "0.0.0.0:5558", /etc/dex/config.yaml]
+          {{- with .Values.dex.envVars }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - { name: http, containerPort: 5556 }
+            - { name: grpc, containerPort: 5557 }
+            - { name: telemetry, containerPort: 5558 }
+          livenessProbe: { httpGet: { path: /healthz/live, port: telemetry } }
+          readinessProbe: { httpGet: { path: /healthz/ready, port: telemetry } }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources:
+            {{- toYaml .Values.dex.resources | nindent 12 }}
+          # Dex writes the env-expanded config to /tmp; the root filesystem stays read-only.
+          volumeMounts: [{ name: config, mountPath: /etc/dex, readOnly: true }, { name: tmp, mountPath: /tmp }]
+      volumes:
+        - name: config
+          secret: { secretName: ambit-dex-config }
+        - name: tmp
+          emptyDir: { sizeLimit: 16Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ambit-dex
+  labels: { app.kubernetes.io/name: dex, app.kubernetes.io/part-of: ambit }
+spec:
+  selector: { app.kubernetes.io/name: dex }
+  ports:
+    - { name: http, port: 5556, targetPort: http }
+    - { name: grpc, port: 5557, targetPort: grpc }

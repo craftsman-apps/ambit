@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ambit-dex
+---
+# Dex's Kubernetes storage creates its own CRDs (dex.coreos.com) on first start.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Namespace }}-ambit-dex
+rules:
+  - apiGroups: [apiextensions.k8s.io]
+    resources: [customresourcedefinitions]
+    verbs: [list, create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Namespace }}-ambit-dex
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ .Release.Namespace }}-ambit-dex }
+subjects: [{ kind: ServiceAccount, name: ambit-dex, namespace: {{ .Release.Namespace }} }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ambit-dex
+rules:
+  - apiGroups: [dex.coreos.com]
+    resources: ["*"]
+    verbs: ["*"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ambit-dex
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: ambit-dex }
+subjects: [{ kind: ServiceAccount, name: ambit-dex }]

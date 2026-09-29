@@ -15,7 +15,7 @@ spec:
       securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
       containers:
         - name: console
-          image: "{{ .Values.console.image.repository }}:{{ .Values.console.image.tag }}"
+          image: "{{ .Values.console.image.repository }}:{{ .Values.console.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.console.image.pullPolicy }}
           ports: [{ name: http, containerPort: 8080 }]
           env:
@@ -30,6 +30,13 @@ spec:
             - { name: AMBIT_SSO_CONNECTORS, value: {{ $opts | toJson | quote }} }
             - name: AMBIT_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            {{- if .Values.console.caBundleSecret }}
+            # Go reads every directory in SSL_CERT_DIR: system CAs plus the extra one.
+            - { name: SSL_CERT_DIR, value: "/etc/ssl/certs:/etc/ambit/ca" }
+            {{- end }}
+          {{- if .Values.console.caBundleSecret }}
+          volumeMounts: [{ name: extra-ca, mountPath: /etc/ambit/ca, readOnly: true }]
+          {{- end }}
           readinessProbe:
             httpGet: { path: /healthz, port: http }
           securityContext:
@@ -39,3 +46,8 @@ spec:
           resources:
             requests: { cpu: 20m, memory: 32Mi }
             limits: { memory: 128Mi }
+      {{- with .Values.console.caBundleSecret }}
+      volumes:
+        - name: extra-ca
+          secret: { secretName: {{ . | quote }}, items: [{ key: ca.crt, path: ca.crt }] }
+      {{- end }}

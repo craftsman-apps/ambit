@@ -198,3 +198,29 @@ func TestWritesNeedJSON(t *testing.T) {
 		t.Fatalf("got %d, want 415", rec.Code)
 	}
 }
+
+// The console form edits groups and models only (servers come in step 4b); saving must not drop tool access.
+func TestUpdateKeepsServerAccess(t *testing.T) {
+	h, c, a := catalogFixture(t)
+	admin := as(a, RoleAdmin)
+	withTools := &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "eng-tools", Namespace: testNS},
+		Spec: v1.AccessRuleSpec{Groups: []string{"eng"}, Servers: []v1.ServerAccess{{Name: "time", Tools: []string{"get_current_time"}}}}}
+	if err := c.Create(t.Context(), withTools); err != nil {
+		t.Fatal(err)
+	}
+	// A server-only rule may be saved without models.
+	if r := do(t, h, "PUT", "/api/access-rules/eng-tools", admin, RuleInput{Groups: []string{"eng", "finance"}}); r.Code != 200 {
+		t.Fatalf("update: %d %s", r.Code, r.Body)
+	}
+	var got v1.AccessRule
+	if err := c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "eng-tools"}, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Spec.Servers) != 1 || got.Spec.Servers[0].Tools[0] != "get_current_time" || len(got.Spec.Groups) != 2 {
+		t.Fatalf("spec after update: %+v", got.Spec)
+	}
+	// A rule with neither models nor servers is still refused.
+	if r := do(t, h, "PUT", "/api/access-rules/everyone-gemma", admin, RuleInput{AllSignedIn: true}); r.Code != http.StatusBadRequest {
+		t.Fatalf("empty rule: %d %s", r.Code, r.Body)
+	}
+}

@@ -105,7 +105,7 @@ func newTestServer(t *testing.T, f *fakeIssuer) (*httptest.Server, *http.Client)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts.Config.Handler = NewServer(auth, testSPA, LoginOptions{Bootstrap: true})
+	ts.Config.Handler = NewServer(auth, testSPA, LoginOptions{Bootstrap: true}, nil)
 	t.Cleanup(ts.Close)
 	jar, _ := cookiejar.New(nil)
 	return ts, &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -291,7 +291,7 @@ func TestLoginOptionsArePublic(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts := LoginOptions{Bootstrap: false, SSO: []Connector{{ID: "keycloak", Name: "Acme (Keycloak)"}}}
-	ts.Config.Handler = NewServer(auth, testSPA, opts)
+	ts.Config.Handler = NewServer(auth, testSPA, opts, nil)
 	resp, err := http.Get(ts.URL + "/api/login-options")
 	if err != nil {
 		t.Fatal(err)

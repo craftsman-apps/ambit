@@ -12,13 +12,16 @@ import (
 	"syscall"
 	"time"
 
+	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/console"
 	"github.com/craftsman-apps/ambit/web"
 	"github.com/dexidp/dex/api/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func env(k, def string) string {
@@ -75,6 +78,14 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	scheme := runtime.NewScheme()
+	if err := v1.AddToScheme(scheme); err != nil {
+		return err
+	}
+	objects, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		return err
+	}
 	// ponytail: plaintext gRPC inside the cluster, limited by NetworkPolicy; add mTLS for EKS.
 	conn, err := grpc.NewClient(env("AMBIT_DEX_GRPC", "ambit-dex:5557"), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -100,7 +111,8 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), console.LoginOptions{Bootstrap: bootstrapAdmin, SSO: sso}), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), console.LoginOptions{Bootstrap: bootstrapAdmin, SSO: sso},
+		&console.Catalog{Client: objects, Namespace: ns}), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)

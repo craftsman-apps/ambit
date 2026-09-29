@@ -38,7 +38,7 @@ func ParseConnectors(s string) ([]Connector, error) {
 }
 
 // NewServer routes the console. spa holds the built React app (index.html, assets/).
-func NewServer(a *Auth, spa fs.FS, opts LoginOptions) http.Handler {
+func NewServer(a *Auth, spa fs.FS, opts LoginOptions, catalog *Catalog) http.Handler {
 	mux := http.NewServeMux()
 	static := http.FileServerFS(spa)
 	index := func(w http.ResponseWriter, r *http.Request) {
@@ -57,6 +57,9 @@ func NewServer(a *Auth, spa fs.FS, opts LoginOptions) http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(opts)
 	})
+	if catalog != nil {
+		catalog.register(mux, a)
+	}
 	mux.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
 		s, ok := a.Current(r)
 		if !ok {

@@ -20,6 +20,13 @@ rules:
     resources: [secrets]
     resourceNames: [ambit-initial-admin]
     verbs: [get, update, delete]
+  # Catalog screens: everyone signed in reads; admins change access rules (Direct mode).
+  - apiGroups: [ambit.craftsmanapps.com]
+    resources: [models, accessrules]
+    verbs: [get, list, watch]
+  - apiGroups: [ambit.craftsmanapps.com]
+    resources: [accessrules]
+    verbs: [create, update, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

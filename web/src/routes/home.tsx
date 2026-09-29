@@ -1,39 +1,37 @@
-import { Navigate } from "@tanstack/react-router";
-import { useMe } from "@/api";
-import { Button } from "@/components/ui/button";
+import { Link } from "@tanstack/react-router";
+import { useMe, useModels, useRules } from "@/api";
 import { Card } from "@/components/ui/card";
-import { Wordmark } from "@/components/wordmark";
-import { ThemeSwitch } from "@/components/theme-switch";
+import { Shell } from "@/components/shell";
 
 export function HomePage() {
   const me = useMe();
-  if (me.isPending) return null;
-  if (me.isError) return <p className="p-8 text-sm">Could not load your session: {me.error.message}</p>;
-  if (!me.data) return <Navigate to="/login" />;
+  const rules = useRules();
+  const models = useModels();
   const u = me.data;
+  const attention = (rules.data ?? []).filter((r) => r.ready !== "True").length;
+  const closed = (models.data ?? []).filter((m) => !m.allSignedIn && m.allowedGroups.length === 0).length;
   return (
-    <div className="min-h-screen">
-      <header className="flex items-center justify-between border-b border-line bg-surface px-4 py-2.5">
-        <Wordmark />
-        <div className="flex items-center gap-3 text-[13px]">
-          <ThemeSwitch />
-          <span className="text-muted">{u.email}</span>
-          <span className="rounded-md border border-line px-1.5 py-0.5 font-mono text-[11px]">{u.role}</span>
-          <form method="post" action="/auth/logout">
-            <Button variant="outline" type="submit" className="w-auto py-1.5">Sign out</Button>
-          </form>
-        </div>
-      </header>
-      <main className="mx-auto max-w-3xl space-y-4 px-4 py-8">
+    <Shell crumb="Govern / Overview">
+      <section className="max-w-4xl space-y-4 p-5">
         <h1 className="text-xl font-semibold tracking-tight" data-testid="signed-in-as">
-          Signed in as {u.bootstrap ? "admin (bootstrap)" : u.name || u.email}
+          Signed in as {u?.bootstrap ? "admin (bootstrap)" : u?.name || u?.email}
         </h1>
-        {u.bootstrap && (
-          <Card className="border-warn bg-warn-soft text-sm">
-            You are using the bootstrap admin. Connect your company identity provider, then turn this account off.
-          </Card>
+        {u?.bootstrap && (
+          <Card className="border-warn bg-warn-soft">You are using the bootstrap admin. Connect your company identity provider, then turn this account off.</Card>
         )}
-      </main>
-    </div>
+        <div className="grid grid-cols-3 gap-3">
+          <Link to="/models" className="rounded-md border border-line p-4 hover:bg-sunken">
+            <div className="font-mono text-[10.5px] uppercase tracking-[.12em] text-muted">Models</div>
+            <div className="mt-1 text-2xl font-semibold tabular-nums">{models.data?.length ?? "–"}</div>
+            <div className="text-[12.5px] text-muted">{closed} closed to everyone</div>
+          </Link>
+          <Link to="/access-rules" className="rounded-md border border-line p-4 hover:bg-sunken">
+            <div className="font-mono text-[10.5px] uppercase tracking-[.12em] text-muted">Access rules</div>
+            <div className="mt-1 text-2xl font-semibold tabular-nums">{rules.data?.length ?? "–"}</div>
+            <div className={attention ? "text-[12.5px] text-bad" : "text-[12.5px] text-muted"}>{attention} need attention</div>
+          </Link>
+        </div>
+      </section>
+    </Shell>
   );
 }

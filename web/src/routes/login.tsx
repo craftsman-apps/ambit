@@ -3,6 +3,7 @@ import { useLoginOptions, useMe } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Wordmark } from "@/components/wordmark";
+import { ThemeSwitch } from "@/components/theme-switch";
 
 export function LoginPage() {
   const me = useMe();
@@ -10,7 +11,7 @@ export function LoginPage() {
   if (me.data) return <Navigate to="/" />;
   const sso = opts.data?.sso ?? [];
   return (
-    <main className="grid min-h-screen place-items-center px-4">
+    <main className="flex min-h-screen flex-col items-center justify-center px-4">
       <Card className="w-full max-w-sm">
         <Wordmark />
         <h1 className="mt-6 text-lg font-semibold">Sign in</h1>
@@ -44,6 +45,7 @@ export function LoginPage() {
           </>
         )}
       </Card>
+      <div className="mt-4"><ThemeSwitch /></div>
     </main>
   );
 }

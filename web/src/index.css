@@ -1,41 +1,68 @@
 @import "tailwindcss";
 
-/* Every style value of the console lives here. The visual style is chosen before step 3;
-   until then these are neutral placeholders. */
+/* Ambit console style A "Instrument", decided 2026-09-29. Every style value lives in this file.
+   Main color #2563EB. Fonts are bundled (no external requests), so air-gapped clusters work. */
 @theme {
-  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
-  --color-bg: #f6f7f8;
+  --font-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --color-bg: #f4f6f7;
   --color-surface: #ffffff;
-  --color-ink: #15191d;
-  --color-muted: #66707a;
-  --color-line: #dfe3e7;
-  --color-accent: #2563eb;        /* Ambit main color */
-  --color-accent-text: #2563eb;
-  --color-accent-ink: #ffffff;
+  --color-sunken: #fafbfc;
+  --color-ink: #16191d;
+  --color-muted: #606a74;
+  --color-line: #dce1e5;
+  --color-line-soft: #eceff2;
+  --color-accent: #2563eb;       /* Ambit main color: fills and markers */
+  --color-accent-ink: #ffffff;   /* text on the main color: 5.17:1 */
+  --color-accent-text: #2563eb;  /* blue text on light surfaces: 5.17:1 */
+  --color-selected: #eef3fd;
+  --color-ok: #1e7a55;
   --color-warn: #8a5a06;
   --color-warn-soft: #fbf0dc;
-  --radius-md: 7px;
+  --color-bad: #a7392f;
+  --radius-md: 4px;
 }
 
+/* Dark: the same tokens, redefined. data-theme is set by the System/Light/Dark switch. */
 @media (prefers-color-scheme: dark) {
-  :root {
-    --color-bg: #0f1215;
-    --color-surface: #171b20;
-    --color-ink: #e7ebef;
-    --color-muted: #8b959f;
-    --color-line: #29303a;
-    --color-accent: #2563eb;
-    --color-accent-ink: #ffffff;
-    --color-accent-text: #5b8def; /* #2563EB is 3.5:1 on dark; text needs 4.5:1 */
-    --color-warn: #dca43f;
+  :root:not([data-theme="light"]) {
+    --color-bg: #0d1114;
+    --color-surface: #111519;
+    --color-sunken: #14191e;
+    --color-ink: #e4e9ee;
+    --color-muted: #8e99a4;
+    --color-line: #2a323b;
+    --color-line-soft: #1e252c;
+    --color-accent-text: #5b8def; /* #2563EB is 3.5:1 on this background; text needs 4.5:1 */
+    --color-selected: #16212b;
+    --color-ok: #4dbb8a;
+    --color-warn: #e0a845;
     --color-warn-soft: #2a2113;
+    --color-bad: #ef8578;
+    color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --color-bg: #0d1114;
+  --color-surface: #111519;
+  --color-sunken: #14191e;
+  --color-ink: #e4e9ee;
+  --color-muted: #8e99a4;
+  --color-line: #2a323b;
+  --color-line-soft: #1e252c;
+  --color-accent-text: #5b8def;
+  --color-selected: #16212b;
+  --color-ok: #4dbb8a;
+  --color-warn: #e0a845;
+  --color-warn-soft: #2a2113;
+  --color-bad: #ef8578;
+  color-scheme: dark;
 }
 
 body {
   background: var(--color-bg);
   color: var(--color-ink);
   font-family: var(--font-sans);
+  font-size: 14px;
   -webkit-font-smoothing: antialiased;
 }

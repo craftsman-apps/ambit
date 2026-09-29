@@ -17,6 +17,9 @@ stringData:
       addr: 0.0.0.0:5557
     oauth2:
       skipApprovalScreen: true
+    frontend:
+      issuer: Ambit
+      logoURL: {{ .Values.console.url }}/favicon.svg
     enablePasswordDB: {{ .Values.bootstrapAdmin.enabled }}
     {{- with .Values.sso.connectors }}
     connectors:

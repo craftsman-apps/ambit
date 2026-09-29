@@ -4,20 +4,23 @@ metadata:
   name: ambit-controller
 ---
 # Namespace-scoped: Ambit objects are read and only their status is written (GitOps rule 2);
-# generated AgentgatewayModels are fully managed.
+# generated agentgateway and ToolHive objects are fully managed.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: ambit-controller
 rules:
   - apiGroups: [ambitproject.dev]
-    resources: [models, accessrules]
+    resources: [models, servers, accessrules]
     verbs: [get, list, watch]
   - apiGroups: [ambitproject.dev]
-    resources: [models/status, accessrules/status]
+    resources: [models/status, servers/status, accessrules/status]
     verbs: [get, update, patch]
   - apiGroups: [agentgateway.dev]
-    resources: [agentgatewaymodels]
+    resources: [agentgatewaymodels, agentgatewaybackends, agentgatewaypolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [toolhive.stacklok.dev]
+    resources: [mcpservers]
     verbs: [get, list, watch, create, update, patch, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

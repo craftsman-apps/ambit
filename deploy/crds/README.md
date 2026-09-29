@@ -1,6 +1,6 @@
 # Third-party CRDs
 
-Gateway API (standard channel) and agentgateway CRDs, vendored at pinned versions by `make vendor-crds`.
+Gateway API (standard channel), agentgateway and ToolHive CRDs, vendored at pinned versions by `make vendor-crds`.
 
 They are applied with server-side apply, not through Helm:
 

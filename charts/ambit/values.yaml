@@ -50,6 +50,28 @@ llm:
     audiences: []
     jwksURL: ""
 
+mcp:
+  # Serve MCP at <host>/mcp. Servers and tool access come from Server and AccessRule objects;
+  # ToolHive runs each server in a pod that only the gateway can reach.
+  enabled: false
+  host: mcp.example.com
+  # Tokens from the customer's identity provider (not Dex). Required when mcp.enabled is true.
+  jwt:
+    issuer: ""
+    audiences: []
+    jwksURL: ""
+
+# Passed to the ToolHive operator subchart (installed when mcp.enabled). Its CRDs are in deploy/crds.
+toolhive-operator:
+  operator:
+    features:
+      # Needs cluster-wide RBAC; Ambit keeps the operator inside its own namespace.
+      storageVersionMigrator: false
+    rbac:
+      scope: namespace
+      # Must be the namespace Ambit is installed in; the chart refuses to render otherwise.
+      allowedNamespaces: [ambit-system]
+
 # Passed to the agentgateway subchart. Set agentgateway.image.registry for a private registry.
 agentgateway:
   # AgentgatewayModel is experimental and off by default in v1.5.0 (on by default after upstream PR #3492).

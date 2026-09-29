@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Step 3b acceptance: an admin changes access rules in the console (Direct mode) and the gateway follows.
-# Runs after step3.sh (Keycloak, LLM route, test models and rules in place).
+# Runs on its own after `make install`: ensure_llm_setup provides Keycloak, the LLM route and the test catalog.
 set -euo pipefail
 NS=${1:-ambit-system}
 cd "$(dirname "$0")/.."
@@ -30,6 +30,8 @@ api() {
 expr_of() { kubectl -n "$NS" get agentgatewaymodel "$1" -o jsonpath='{.spec.policies.authorization.policy.matchExpressions[0]}'; }
 wait_expr() { for _ in $(seq 1 30); do [[ "$(expr_of "$1")" == "$2" ]] && return 0; sleep 1; done; fail "$1: '$(expr_of "$1")' != '$2'"; }
 ORIG='jwt.groups.exists(g, g in ["ml-research"])'
+ensure_llm_setup "$NS"
+kubectl -n "$NS" delete "accessrules.$G" eng-nemotron --ignore-not-found >/dev/null
 
 # 1 · a viewer reads the catalog but cannot change it
 sign_in keycloak alice alice-test-pass || fail "1 alice sign-in"

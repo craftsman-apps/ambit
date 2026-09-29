@@ -38,18 +38,7 @@ wait_expr() { # wait_expr MODEL EXPECTED
   fail "$1: expression is '$(expr_of "$1")', expected '$2'"
 }
 
-# Setup: test IdP with LLM settings, the provider key as a Secret, and the test catalog.
-kubectl -n "$NS" apply -f test/keycloak/keycloak.yaml >/dev/null
-kubectl -n "$NS" rollout status deploy/keycloak --timeout=300s >/dev/null
-helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --wait --timeout 5m >/dev/null
-HAVE_KEY=false
-if [[ -s "$KEYFILE" ]]; then
-  kubectl -n "$NS" create secret generic ambit-llm-openrouter --from-file=Authorization="$KEYFILE" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-  HAVE_KEY=true
-else
-  kubectl -n "$NS" create secret generic ambit-llm-openrouter --from-literal=Authorization=no-key --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-fi
-kubectl -n "$NS" apply -f test/llm/objects.yaml >/dev/null
+ensure_llm_setup "$NS"
 
 # 1 · controller running, models accepted by agentgateway, rules compiled
 kubectl -n "$NS" rollout status deploy/ambit-controller --timeout=120s >/dev/null

@@ -61,6 +61,12 @@ func run(ctx context.Context) error {
 		return errors.New("AMBIT_SESSION_HOURS must be a positive whole number")
 	}
 
+	bootstrapAdmin := env("AMBIT_BOOTSTRAP_ENABLED", "true") == "true"
+	sso, err := console.ParseConnectors(os.Getenv("AMBIT_SSO_CONNECTORS"))
+	if err != nil {
+		return err
+	}
+
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
 		return err
@@ -78,7 +84,7 @@ func run(ctx context.Context) error {
 
 	var keys console.Keys
 	if err := retry(ctx, "bootstrap", func() (e error) {
-		keys, e = console.Bootstrap(ctx, kube, api.NewDexClient(conn), ns, publicURL)
+		keys, e = console.Bootstrap(ctx, kube, api.NewDexClient(conn), ns, publicURL, bootstrapAdmin)
 		return e
 	}); err != nil {
 		return err
@@ -94,7 +100,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS()), ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), console.LoginOptions{Bootstrap: bootstrapAdmin, SSO: sso}), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)

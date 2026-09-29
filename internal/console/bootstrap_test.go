@@ -64,7 +64,7 @@ const pub = "http://console.localtest.me:8080"
 
 func TestBootstrapFirstStart(t *testing.T) {
 	kube, dex := fake.NewClientset(), newFakeDex()
-	keys, err := Bootstrap(t.Context(), kube, dex, ns, pub)
+	keys, err := Bootstrap(t.Context(), kube, dex, ns, pub, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,10 +90,10 @@ func TestBootstrapFirstStart(t *testing.T) {
 
 func TestBootstrapIsIdempotent(t *testing.T) {
 	kube, dex := fake.NewClientset(), newFakeDex()
-	k1, _ := Bootstrap(t.Context(), kube, dex, ns, pub)
+	k1, _ := Bootstrap(t.Context(), kube, dex, ns, pub, true)
 	hash1 := string(dex.passwords[BootstrapEmail])
 	dex.calls = nil
-	k2, err := Bootstrap(t.Context(), kube, dex, ns, pub)
+	k2, err := Bootstrap(t.Context(), kube, dex, ns, pub, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,9 +112,9 @@ func TestBootstrapIsIdempotent(t *testing.T) {
 
 func TestBootstrapRecreatesClientWhenKeysSecretLost(t *testing.T) {
 	kube, dex := fake.NewClientset(), newFakeDex()
-	Bootstrap(t.Context(), kube, dex, ns, pub)
+	Bootstrap(t.Context(), kube, dex, ns, pub, true)
 	kube.CoreV1().Secrets(ns).Delete(t.Context(), KeysSecret, metav1.DeleteOptions{})
-	k, err := Bootstrap(t.Context(), kube, dex, ns, pub)
+	k, err := Bootstrap(t.Context(), kube, dex, ns, pub, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,9 +125,9 @@ func TestBootstrapRecreatesClientWhenKeysSecretLost(t *testing.T) {
 
 func TestBootstrapResetsDexPasswordWhenAdminSecretLost(t *testing.T) {
 	kube, dex := fake.NewClientset(), newFakeDex()
-	Bootstrap(t.Context(), kube, dex, ns, pub)
+	Bootstrap(t.Context(), kube, dex, ns, pub, true)
 	kube.CoreV1().Secrets(ns).Delete(t.Context(), AdminSecret, metav1.DeleteOptions{})
-	if _, err := Bootstrap(t.Context(), kube, dex, ns, pub); err != nil {
+	if _, err := Bootstrap(t.Context(), kube, dex, ns, pub, true); err != nil {
 		t.Fatal(err)
 	}
 	admin, _ := kube.CoreV1().Secrets(ns).Get(t.Context(), AdminSecret, metav1.GetOptions{})
@@ -138,11 +138,53 @@ func TestBootstrapResetsDexPasswordWhenAdminSecretLost(t *testing.T) {
 
 func TestBootstrapUpdatesRedirectWhenURLChanges(t *testing.T) {
 	kube, dex := fake.NewClientset(), newFakeDex()
-	Bootstrap(t.Context(), kube, dex, ns, pub)
-	if _, err := Bootstrap(t.Context(), kube, dex, ns, "https://ambit.acme.com"); err != nil {
+	Bootstrap(t.Context(), kube, dex, ns, pub, true)
+	if _, err := Bootstrap(t.Context(), kube, dex, ns, "https://ambit.acme.com", true); err != nil {
 		t.Fatal(err)
 	}
 	if got := dex.clients[ClientID].RedirectUris[0]; got != "https://ambit.acme.com/auth/callback" {
 		t.Fatalf("redirect not updated: %s", got)
+	}
+}
+
+func (f *fakeDex) DeletePassword(_ context.Context, in *api.DeletePasswordReq, _ ...grpc.CallOption) (*api.DeletePasswordResp, error) {
+	f.calls = append(f.calls, "DeletePassword")
+	if _, ok := f.passwords[in.Email]; !ok {
+		return &api.DeletePasswordResp{NotFound: true}, nil
+	}
+	delete(f.passwords, in.Email)
+	return &api.DeletePasswordResp{}, nil
+}
+
+func TestBootstrapDisabledRemovesAdmin(t *testing.T) {
+	kube, dex := fake.NewClientset(), newFakeDex()
+	if _, err := Bootstrap(t.Context(), kube, dex, ns, pub, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Bootstrap(t.Context(), kube, dex, ns, pub, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := dex.passwords[BootstrapEmail]; ok {
+		t.Fatal("bootstrap password still in Dex after disabling")
+	}
+	if _, err := kube.CoreV1().Secrets(ns).Get(t.Context(), AdminSecret, metav1.GetOptions{}); err == nil {
+		t.Fatal("stale admin password Secret left behind")
+	}
+	if dex.clients[ClientID] == nil {
+		t.Fatal("disabling the bootstrap admin must not remove the console's Dex client")
+	}
+}
+
+func TestBootstrapDisabledOnFirstStartCreatesNoAdmin(t *testing.T) {
+	kube, dex := fake.NewClientset(), newFakeDex()
+	if _, err := Bootstrap(t.Context(), kube, dex, ns, pub, false); err != nil {
+		t.Fatal(err)
+	}
+	if len(dex.passwords) != 0 {
+		t.Fatal("admin created although disabled")
+	}
+	// Running again stays quiet: DeletePassword on a missing entry is not an error.
+	if _, err := Bootstrap(t.Context(), kube, dex, ns, pub, false); err != nil {
+		t.Fatal(err)
 	}
 }

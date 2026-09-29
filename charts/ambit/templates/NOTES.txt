@@ -1,6 +1,10 @@
 Ambit is installed in namespace {{ .Release.Namespace }}.
 
 Console: {{ .Values.console.url }}
+{{- if .Values.bootstrapAdmin.enabled }}
 Bootstrap admin: admin@ambit.local
 Password (created by the console at first start):
   kubectl -n {{ .Release.Namespace }} get secret ambit-initial-admin -o jsonpath='{.data.password}' | base64 -d
+{{- else }}
+Bootstrap admin: turned off. Sign in with: {{ range .Values.sso.connectors }}{{ .name | default .id }} {{ end }}
+{{- end }}

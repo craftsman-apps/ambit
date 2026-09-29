@@ -105,7 +105,7 @@ func newTestServer(t *testing.T, f *fakeIssuer) (*httptest.Server, *http.Client)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ts.Config.Handler = NewServer(auth, testSPA)
+	ts.Config.Handler = NewServer(auth, testSPA, LoginOptions{Bootstrap: true})
 	t.Cleanup(ts.Close)
 	jar, _ := cookiejar.New(nil)
 	return ts, &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -278,5 +278,44 @@ func TestExpiredSessionIsRejected(t *testing.T) {
 	c.Jar.SetCookies(u, []*http.Cookie{{Name: SessionCookie, Value: old, Path: "/"}})
 	if r := get(t, c, ts.URL+"/api/me"); r.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("got %d, want 401", r.StatusCode)
+	}
+}
+
+func TestLoginOptionsArePublic(t *testing.T) {
+	f := newFakeIssuer(t)
+	ts := httptest.NewServer(nil)
+	defer ts.Close()
+	auth, err := NewAuth(t.Context(), AuthConfig{Issuer: f.srv.URL, ClientID: "ambit-console", ClientSecret: "s",
+		PublicURL: ts.URL, SessionKey: []byte("0123456789abcdef0123456789abcdef"), SessionTTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := LoginOptions{Bootstrap: false, SSO: []Connector{{ID: "keycloak", Name: "Acme (Keycloak)"}}}
+	ts.Config.Handler = NewServer(auth, testSPA, opts)
+	resp, err := http.Get(ts.URL + "/api/login-options")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var got LoginOptions
+	json.NewDecoder(resp.Body).Decode(&got)
+	if resp.StatusCode != 200 || got.Bootstrap || len(got.SSO) != 1 || got.SSO[0].ID != "keycloak" {
+		t.Fatalf("got %d %+v", resp.StatusCode, got)
+	}
+}
+
+func TestParseConnectors(t *testing.T) {
+	got, err := ParseConnectors(`[{"id":"keycloak","name":"Acme"},{"id":"okta","name":"Okta"}]`)
+	if err != nil || len(got) != 2 || got[1].ID != "okta" {
+		t.Fatalf("got %+v %v", got, err)
+	}
+	if got, err := ParseConnectors(""); err != nil || len(got) != 0 {
+		t.Fatalf("empty: got %+v %v", got, err)
+	}
+	if _, err := ParseConnectors(`[{"id":""}]`); err == nil {
+		t.Fatal("connector without id accepted")
+	}
+	if _, err := ParseConnectors(`{not json`); err == nil {
+		t.Fatal("bad JSON accepted")
 	}
 }

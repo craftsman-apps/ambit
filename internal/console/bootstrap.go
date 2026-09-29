@@ -29,7 +29,8 @@ type Keys struct {
 // Bootstrap prepares everything the chart deliberately does not generate (GitOps rule 6):
 // the session key, the Dex OAuth client and the bootstrap admin. Safe to run on every start.
 // ponytail: assumes one console replica; add leader election before scaling out.
-func Bootstrap(ctx context.Context, kube kubernetes.Interface, dex api.DexClient, ns, publicURL string) (Keys, error) {
+// With bootstrapAdmin false it removes the bootstrap admin from Dex and deletes its password Secret.
+func Bootstrap(ctx context.Context, kube kubernetes.Interface, dex api.DexClient, ns, publicURL string, bootstrapAdmin bool) (Keys, error) {
 	secrets := kube.CoreV1().Secrets(ns)
 	redirect := strings.TrimSuffix(publicURL, "/") + "/auth/callback"
 
@@ -64,6 +65,16 @@ func Bootstrap(ctx context.Context, kube kubernetes.Interface, dex api.DexClient
 		} else if _, err := dex.UpdateClient(ctx, &api.UpdateClientReq{Id: ClientID, Name: "Ambit", RedirectUris: []string{redirect}}); err != nil {
 			return Keys{}, fmt.Errorf("dex UpdateClient: %w", err)
 		}
+	}
+
+	if !bootstrapAdmin {
+		if _, err := dex.DeletePassword(ctx, &api.DeletePasswordReq{Email: BootstrapEmail}); err != nil {
+			return Keys{}, fmt.Errorf("dex DeletePassword: %w", err)
+		}
+		if err := secrets.Delete(ctx, AdminSecret, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return Keys{}, fmt.Errorf("delete %s: %w", AdminSecret, err)
+		}
+		return keys, nil
 	}
 
 	_, err = secrets.Get(ctx, AdminSecret, metav1.GetOptions{})

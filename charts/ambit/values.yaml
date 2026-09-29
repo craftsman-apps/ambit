@@ -18,6 +18,16 @@ console:
   # Hours before a console session expires.
   sessionHours: 8
 
+bootstrapAdmin:
+  # Local password sign-in (admin@ambit.local) for first setup. Set false once SSO works:
+  # the console then deletes the account from Dex and removes its password Secret.
+  enabled: true
+
+sso:
+  # Dex connectors shown as "Continue with ..." on the login page. See https://dexidp.io/docs/connectors/
+  # Never put a secret value here: write "$ENV_NAME" and supply it through dex.envVars from a Secret.
+  connectors: []
+
 # Passed to the agentgateway subchart. Set agentgateway.image.registry for a private registry.
 agentgateway: {}
 

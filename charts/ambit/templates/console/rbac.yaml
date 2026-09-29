@@ -14,8 +14,12 @@ rules:
     verbs: [create]
   - apiGroups: [""]
     resources: [secrets]
-    resourceNames: [ambit-initial-admin, ambit-console-keys]
+    resourceNames: [ambit-console-keys]
     verbs: [get, update]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [ambit-initial-admin]
+    verbs: [get, update, delete]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

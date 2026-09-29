@@ -1,0 +1,161 @@
+# Test identity provider for step 2. NOT part of the Ambit package; stands in for a customer's Okta.
+# Test-only credentials: priya/priya-test-pass (ambit-admins), sam/sam-test-pass (ambit-approvers),
+# alice/alice-test-pass (eng). Keycloak admin: admin/admin.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-realm
+data:
+  acme-realm.json: |
+    {
+      "realm": "acme",
+      "enabled": true,
+      "sslRequired": "none",
+      "groups": [
+        {
+          "name": "ambit-admins"
+        },
+        {
+          "name": "ambit-approvers"
+        },
+        {
+          "name": "eng"
+        }
+      ],
+      "clients": [
+        {
+          "clientId": "ambit-dex",
+          "enabled": true,
+          "publicClient": false,
+          "secret": "keycloak-test-client-secret",
+          "standardFlowEnabled": true,
+          "directAccessGrantsEnabled": false,
+          "redirectUris": [
+            "http://console.localtest.me:8080/dex/callback"
+          ],
+          "protocolMappers": [
+            {
+              "name": "groups",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-group-membership-mapper",
+              "config": {
+                "claim.name": "groups",
+                "full.path": "false",
+                "id.token.claim": "true",
+                "access.token.claim": "true",
+                "userinfo.token.claim": "true"
+              }
+            }
+          ]
+        }
+      ],
+      "users": [
+        {
+          "username": "priya",
+          "email": "priya@acme.test",
+          "emailVerified": true,
+          "firstName": "Priya",
+          "lastName": "Test",
+          "enabled": true,
+          "credentials": [
+            {
+              "type": "password",
+              "value": "priya-test-pass",
+              "temporary": false
+            }
+          ],
+          "groups": [
+            "/ambit-admins"
+          ]
+        },
+        {
+          "username": "sam",
+          "email": "sam@acme.test",
+          "emailVerified": true,
+          "firstName": "Sam",
+          "lastName": "Test",
+          "enabled": true,
+          "credentials": [
+            {
+              "type": "password",
+              "value": "sam-test-pass",
+              "temporary": false
+            }
+          ],
+          "groups": [
+            "/ambit-approvers"
+          ]
+        },
+        {
+          "username": "alice",
+          "email": "alice@acme.test",
+          "emailVerified": true,
+          "firstName": "Alice",
+          "lastName": "Test",
+          "enabled": true,
+          "credentials": [
+            {
+              "type": "password",
+              "value": "alice-test-pass",
+              "temporary": false
+            }
+          ],
+          "groups": [
+            "/eng"
+          ]
+        }
+      ]
+    }
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-dex-client
+stringData:
+  secret: keycloak-test-client-secret
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  labels: { app.kubernetes.io/name: keycloak }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app.kubernetes.io/name: keycloak } }
+  template:
+    metadata: { labels: { app.kubernetes.io/name: keycloak } }
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.7.4
+          args: [start-dev, --import-realm, --hostname=http://keycloak.localtest.me:8080, --health-enabled=true]
+          env:
+            - { name: KC_BOOTSTRAP_ADMIN_USERNAME, value: admin }
+            - { name: KC_BOOTSTRAP_ADMIN_PASSWORD, value: admin }
+          ports: [{ name: http, containerPort: 8080 }, { name: mgmt, containerPort: 9000 }]
+          readinessProbe:
+            httpGet: { path: /health/ready, port: mgmt }
+            periodSeconds: 5
+          volumeMounts: [{ name: realm, mountPath: /opt/keycloak/data/import }]
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { memory: 1Gi }
+      volumes: [{ name: realm, configMap: { name: keycloak-realm } }]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+spec:
+  selector: { app.kubernetes.io/name: keycloak }
+  ports: [{ name: http, port: 8080, targetPort: http }]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: keycloak
+spec:
+  parentRefs: [{ name: ambit }]
+  hostnames: [keycloak.localtest.me]
+  rules:
+    - backendRefs: [{ name: keycloak, port: 8080 }]

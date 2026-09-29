@@ -17,4 +17,8 @@ stringData:
       addr: 0.0.0.0:5557
     oauth2:
       skipApprovalScreen: true
-    enablePasswordDB: true
+    enablePasswordDB: {{ .Values.bootstrapAdmin.enabled }}
+    {{- with .Values.sso.connectors }}
+    connectors:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}

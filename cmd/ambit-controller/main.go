@@ -44,7 +44,7 @@ func main() {
 		log.Error(err, "create manager")
 		os.Exit(1)
 	}
-	if err := (&controller.Reconciler{Client: mgr.GetClient(), Namespace: ns, Route: controller.RouteRef{Name: *route}}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.Reconciler{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: ns, Route: controller.RouteRef{Name: *route}}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "set up controller")
 		os.Exit(1)
 	}

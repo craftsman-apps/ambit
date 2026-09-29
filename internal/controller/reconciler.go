@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -39,6 +40,9 @@ const fieldOwner = client.FieldOwner("ambit-controller")
 // models, servers and rules; switch to per-object keys if a namespace ever holds thousands.
 type Reconciler struct {
 	client.Client
+	// Live reads Ambit objects from the API server, not the cache. Status writes are skipped when
+	// nothing changed, and a stale cached status once made that skip keep a wrong Pending forever.
+	Live      client.Reader
 	Namespace string
 	Route     RouteRef
 }
@@ -67,7 +71,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	var servers v1.ServerList
 	var rules v1.AccessRuleList
 	for _, l := range []client.ObjectList{&models, &servers, &rules} {
-		if err := r.List(ctx, l, client.InNamespace(r.Namespace)); err != nil {
+		if err := r.Live.List(ctx, l, client.InNamespace(r.Namespace)); err != nil {
 			return reconcile.Result{}, err
 		}
 	}
@@ -109,6 +113,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			conds[owner] = mcpServerCondition(current)
 		}
 	}
+	// Look again while agentgateway or ToolHive has not decided yet: their status events can race
+	// with our own apply (seen when the route's listener changed), and a missed one would leave
+	// a Model or Server Pending for good.
+	result := reconcile.Result{}
+	for _, c := range conds {
+		if c.Status == metav1.ConditionUnknown {
+			result.RequeueAfter = 5 * time.Second
+		}
+	}
 
 	for i := range models.Items {
 		m := &models.Items[i]
@@ -136,7 +149,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			return reconcile.Result{}, err
 		}
 	}
-	return reconcile.Result{}, nil
+	return result, nil
 }
 
 func setReady(conds *[]metav1.Condition, c metav1.Condition, generation int64) {
@@ -149,7 +162,22 @@ func (r *Reconciler) updateStatus(ctx context.Context, before, after any, obj cl
 	if equality.Semantic.DeepEqual(before, after) {
 		return nil
 	}
+	if c := meta.FindStatusCondition(conditionsOf(obj), "Ready"); c != nil {
+		log.FromContext(ctx).Info("status", "kind", fmt.Sprintf("%T", obj), "name", obj.GetName(), "ready", c.Status, "reason", c.Reason)
+	}
 	return r.Status().Update(ctx, obj)
+}
+
+func conditionsOf(obj client.Object) []metav1.Condition {
+	switch o := obj.(type) {
+	case *v1.Model:
+		return o.Status.Conditions
+	case *v1.Server:
+		return o.Status.Conditions
+	case *v1.AccessRule:
+		return o.Status.Conditions
+	}
+	return nil
 }
 
 // controllerOwner returns "Kind/name" of the Ambit object that controls o, or "" if none does.

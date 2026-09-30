@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Shell, Status } from "@/components/shell";
+import { csvRow } from "@/lib/csv";
 
 type Call = { time: string; email: string; route: string; method: string; server: string; tool: string; model: string; status: string; error: string; inputTokens: number; outputTokens: number };
 type Usage = { day: string; group: string; requests: number; inputTokens: number; outputTokens: number };
@@ -15,47 +16,89 @@ const field = "rounded-md border border-line bg-surface px-2.5 py-1.5 font-mono 
 const th = "px-3 py-2 text-left font-mono text-[10.5px] font-medium uppercase tracking-[.1em] text-muted";
 const today = () => new Date().toISOString().slice(0, 10);
 const monthAgo = () => new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
-const denied = (c: Call) => c.error !== "" || Number(c.status) >= 400;
+// A refusal by policy: no or bad token, a rule or offboarding said no, over budget, or a tool the
+// person may not use (the gateway calls it unknown) or that changed since it was approved.
+// A 429 is a refusal only when the gateway's budget said so ("rate limit exceeded"); without that
+// reason it came from the model provider (its own limit), which is a failure, not a policy decision.
+const refused = (c: Call) => ["401", "403"].includes(c.status) || (c.status === "429" && /rate limit/i.test(c.error))
+  || /Unknown tool|changed since it was approved/.test(c.error);
+const failed = (c: Call) => !refused(c) && (c.error !== "" || Number(c.status) >= 400);
+// What an auditor asks about: tool calls, model requests, and refusals before the MCP method is known.
+const isCall = (c: Call) => c.method === "tools/call" || c.method === "";
+const utc = (t: string) => new Date(t).toISOString().replace("T", " ").slice(0, 19);
+const what = (c: Call) => c.method ? `${c.method}${c.tool ? ` · ${c.tool}` : ""}` : c.model || /llm$/.test(c.route) ? "LLM request" : c.route;
+const outcome = (c: Call) => refused(c) ? "Refused by policy" : failed(c) ? "Failed" : "OK";
 
-// Audit (journey A5): every gateway call one person made in a period, denied ones included.
+function csv(calls: Call[]) {
+  const rows = calls.map((c) => csvRow([utc(c.time), c.email, what(c), c.server || c.model, outcome(c), c.status, c.error, c.inputTokens, c.outputTokens]));
+  return ["time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens", ...rows].join("\n") + "\n";
+}
+function download(name: string, text: string) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+// Audit (journey A5): every gateway call one person made in a period, refused ones included.
 export function AuditPage() {
   const [form, setForm] = useState({ email: "", from: monthAgo(), to: today() });
   const [q, setQ] = useState<typeof form | null>(null);
+  const [protocol, setProtocol] = useState(false);
   const res = useQuery({
-    queryKey: ["audit", q], enabled: !!q,
+    queryKey: ["audit", q], enabled: !!q, retry: false,
     queryFn: () => get<{ calls: Call[]; limited: boolean }>(`/api/audit?${new URLSearchParams({ email: q!.email, from: q!.from, to: nextDay(q!.to) })}`),
   });
+  const all = res.data?.calls ?? [];
+  const shown = protocol ? all : all.filter(isCall);
+  const search = (e: React.FormEvent) => {
+    e.preventDefault();
+    // The same search again must ask again (after an error, or for new calls), not reuse the answer.
+    if (JSON.stringify(form) === JSON.stringify(q)) res.refetch(); else setQ({ ...form });
+  };
   return (
     <Shell crumb="Evidence / Audit">
       <section className="space-y-4 p-5">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Audit</h1>
-          <p className="text-muted">Every call a person made through the gateway, including the ones it refused. Kept for a year.</p>
+          <p className="text-muted">Every call a person made through the gateway, including the ones it refused. Kept for a year. Dates and times are UTC.</p>
         </div>
-        <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); setQ(form); }}>
+        <form className="flex flex-wrap items-end gap-2" onSubmit={search}>
           <label><span className="mb-1 block text-muted">Email</span><input id="audit-email" className={field} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="alice@acme.com" required /></label>
-          <label><span className="mb-1 block text-muted">From</span><input id="audit-from" type="date" className={field} value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} /></label>
-          <label><span className="mb-1 block text-muted">To (inclusive)</span><input id="audit-to" type="date" className={field} value={form.to} onChange={(e) => setForm({ ...form, to: e.target.value })} /></label>
-          <Button type="submit" className="w-auto">Search</Button>
+          <label><span className="mb-1 block text-muted">From (UTC)</span><input id="audit-from" type="date" className={field} value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} /></label>
+          <label><span className="mb-1 block text-muted">To (UTC, inclusive)</span><input id="audit-to" type="date" className={field} value={form.to} onChange={(e) => setForm({ ...form, to: e.target.value })} /></label>
+          <Button type="submit" className="w-auto" disabled={res.isFetching}>{res.isFetching ? "Searching…" : "Search"}</Button>
         </form>
-        {res.isError && <p className="text-bad">{res.error.message}</p>}
-        {res.data && (
+        {res.isError && !res.isFetching && <p className="text-bad" role="alert">{res.error.message}</p>}
+        {res.data && !res.isError && (
           <>
-            <p className="text-[12.5px] text-muted">{res.data.calls.length} calls, {res.data.calls.filter(denied).length} refused{res.data.limited && " — showing the newest 1,000; narrow the period"}.</p>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[12.5px] text-muted">
+              <span>
+                {all.filter(isCall).length} tool and model calls: {all.filter((c) => isCall(c) && refused(c)).length} refused by policy, {all.filter((c) => isCall(c) && failed(c)).length} failed
+                {res.data.limited && " — showing the newest 1,000; narrow the period"}.
+              </span>
+              <label className="inline-flex items-center gap-1.5"><input id="audit-protocol" type="checkbox" checked={protocol} onChange={(e) => setProtocol(e.target.checked)} />
+                Show protocol messages ({all.length - all.filter(isCall).length})</label>
+              <Button variant="outline" className="ml-auto w-auto" disabled={all.length === 0}
+                onClick={() => download(`audit-${q!.email}-${q!.from}-${q!.to}.csv`, csv(all))}>Export CSV</Button>
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full border-collapse text-[13px]">
-                <thead><tr className="border-b border-line"><th className={th}>Time</th><th className={th}>What</th><th className={th}>Server / model</th><th className={th}>Outcome</th><th className={th}>Tokens</th></tr></thead>
+                <thead><tr className="border-b border-line"><th className={th}>Time (UTC)</th><th className={th}>What</th><th className={th}>Server / model</th><th className={th}>Outcome</th><th className={th}>Tokens</th></tr></thead>
                 <tbody>
-                  {res.data.calls.map((c, i) => (
+                  {shown.map((c, i) => (
                     <tr key={i} className="border-b border-line-soft align-top">
-                      <td className="whitespace-nowrap px-3 py-2 font-mono text-[12px]">{new Date(c.time).toLocaleString()}</td>
-                      <td className="px-3 py-2">{c.method ? <><span className="font-mono">{c.method}</span>{c.tool && <> · <span className="font-mono">{c.tool}</span></>}</> : c.model ? "LLM request" : c.route}</td>
+                      <td className="whitespace-nowrap px-3 py-2 font-mono text-[12px]">{utc(c.time)}</td>
+                      <td className="px-3 py-2 font-mono">{what(c)}</td>
                       <td className="px-3 py-2 font-mono text-[12px]">{c.server || c.model}</td>
-                      <td className="px-3 py-2">{denied(c) ? <Status ready="False" text={`Denied (${c.status})`} /> : <Status ready="True" text={`OK (${c.status})`} />}
+                      <td className="px-3 py-2">{refused(c) ? <Status ready="False" text={`Refused by policy (${c.status})`} />
+                        : failed(c) ? <Status ready="Unknown" text={`Failed (${c.status})`} /> : <Status ready="True" text={`OK (${c.status})`} />}
                         {c.error && <span className="block text-[12px] text-muted">{c.error}</span>}</td>
                       <td className="px-3 py-2 font-mono text-[12px] tabular-nums">{c.inputTokens || c.outputTokens ? `${c.inputTokens} in / ${c.outputTokens} out` : ""}</td>
                     </tr>
                   ))}
+                  {shown.length === 0 && <tr><td colSpan={5} className="px-3 py-6 text-muted">No calls by {q!.email} in this period.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -68,30 +111,37 @@ export function AuditPage() {
 
 function nextDay(d: string) { const t = new Date(d + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() + 1); return t.toISOString().slice(0, 10); }
 
-// Usage (journey A3): LLM tokens per group per day — budgets in step 8 build on this.
+// Usage (journey A3): LLM requests (and tokens, once the gateway reports them) per group per day.
 export function UsagePage() {
   const res = useQuery({ queryKey: ["usage"], queryFn: () => get<{ usage: Usage[] }>("/api/usage") });
+  const usage = res.data?.usage ?? [];
+  const tokens = usage.some((u) => u.inputTokens || u.outputTokens);
   return (
     <Shell crumb="Evidence / Usage">
       <section className="max-w-4xl space-y-4 p-5">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Usage</h1>
-          <p className="text-muted">LLM requests and tokens per group per day, last 30 days. Someone in two groups counts toward both.</p>
-          <p className="text-[12.5px] text-muted">Token counts show once the gateway reports them: agentgateway v1.5.0 does not log tokens for model routes yet. Request counts are exact.</p>
+          <p className="text-muted">LLM requests per group per day (UTC), last 30 days. Someone in two groups counts toward both.</p>
+          {!tokens && <p className="text-[12.5px] text-muted">Token counts appear here once the gateway reports them: agentgateway v1.5.0 does not log tokens for model routes yet. Request counts are exact.</p>}
         </div>
-        {res.isError && <p className="text-bad">{res.error.message}</p>}
-        <table className="w-full border-collapse text-[13px]">
-          <thead><tr className="border-b border-line"><th className={th}>Day</th><th className={th}>Group</th><th className={th}>Requests</th><th className={th}>Input tokens</th><th className={th}>Output tokens</th></tr></thead>
-          <tbody>
-            {res.data?.usage.map((u) => (
-              <tr key={u.day + u.group} className="border-b border-line-soft">
-                <td className="px-3 py-2 font-mono">{u.day}</td><td className="px-3 py-2">{u.group}</td>
-                <td className="px-3 py-2 tabular-nums">{u.requests}</td><td className="px-3 py-2 tabular-nums">{u.inputTokens}</td><td className="px-3 py-2 tabular-nums">{u.outputTokens}</td>
-              </tr>
-            ))}
-            {res.data?.usage.length === 0 && <tr><td colSpan={5} className="px-3 py-6 text-muted">No LLM requests in the last 30 days.</td></tr>}
-          </tbody>
-        </table>
+        {res.isLoading && <p className="text-muted">Loading…</p>}
+        {res.isError && <p className="text-bad" role="alert">{res.error.message}</p>}
+        {res.data && (
+          <table className="w-full border-collapse text-[13px]">
+            <thead><tr className="border-b border-line"><th className={th}>Day</th><th className={th}>Group</th><th className={th}>Requests</th>
+              {tokens && <><th className={th}>Input tokens</th><th className={th}>Output tokens</th></>}</tr></thead>
+            <tbody>
+              {usage.map((u) => (
+                <tr key={u.day + u.group} className="border-b border-line-soft">
+                  <td className="px-3 py-2 font-mono">{u.day}</td><td className="px-3 py-2">{u.group}</td>
+                  <td className="px-3 py-2 tabular-nums">{u.requests}</td>
+                  {tokens && <><td className="px-3 py-2 tabular-nums">{u.inputTokens}</td><td className="px-3 py-2 tabular-nums">{u.outputTokens}</td></>}
+                </tr>
+              ))}
+              {usage.length === 0 && <tr><td colSpan={5} className="px-3 py-6 text-muted">No LLM requests in the last 30 days.</td></tr>}
+            </tbody>
+          </table>
+        )}
       </section>
     </Shell>
   );

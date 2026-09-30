@@ -15,6 +15,7 @@ import (
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"golang.org/x/oauth2"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -276,6 +277,12 @@ func (c *Connections) disconnect(w http.ResponseWriter, r *http.Request, s Sessi
 func (c *Connections) Token(ctx context.Context, email, connName string) (string, *Grant, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// A removed app hands out nothing, even while a stored token has not expired.
+	if _, err := c.connection(ctx, connName); apierrors.IsNotFound(err) {
+		return "", nil, nil
+	} else if err != nil {
+		return "", nil, err
+	}
 	g, err := c.Store.Get(ctx, email, connName)
 	if err != nil || g == nil || g.State == grantBrokenState {
 		return "", g, err

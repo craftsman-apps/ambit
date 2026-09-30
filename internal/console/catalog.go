@@ -1,6 +1,7 @@
 package console
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -157,6 +158,12 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	mux.HandleFunc("POST /api/access-rules", write(c.createRule))
 	mux.HandleFunc("PUT /api/access-rules/{name}", write(c.updateRule))
 	mux.HandleFunc("DELETE /api/access-rules/{name}", write(c.deleteRule))
+	budget := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
+		return allow("only admins can change budgets", h, RoleAdmin)
+	}
+	mux.HandleFunc("POST /api/budgets", budget(c.createBudget))
+	mux.HandleFunc("PUT /api/budgets/{name}", budget(c.updateBudget))
+	mux.HandleFunc("DELETE /api/budgets/{name}", budget(c.deleteBudget))
 	mux.HandleFunc("GET /api/servers", read(c.listServers))
 	mux.HandleFunc("POST /api/servers/{name}/approve-tools", write(c.approveTools))
 	mux.HandleFunc("GET /api/server-requests", read(c.listRequests))
@@ -170,6 +177,18 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	mux.HandleFunc("POST /api/sso/connectors", allow("only admins can connect sign-in providers", c.connectSSO, RoleAdmin))
 	if c.Conns != nil {
 		c.Conns.register(mux, auth)
+		apps := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
+			return allow("only admins can manage apps", h, RoleAdmin)
+		}
+		mux.HandleFunc("GET /api/apps", read(func(w http.ResponseWriter, r *http.Request, s Session) {
+			if s.Role != RoleAdmin {
+				writeErr(w, http.StatusForbidden, "only admins can manage apps")
+				return
+			}
+			c.listApps(w, r, s)
+		}))
+		mux.HandleFunc("POST /api/apps", apps(c.createApp))
+		mux.HandleFunc("DELETE /api/apps/{name}", apps(c.deleteApp))
 	}
 	admin := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
 		return read(func(w http.ResponseWriter, r *http.Request, s Session) {
@@ -540,6 +559,9 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 }
 
 func serverErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, context.Canceled) {
+		return // the browser left the page; nobody reads this answer
+	}
 	slog.Error("catalog", "err", err)
 	writeErr(w, http.StatusInternalServerError, "the console could not reach Kubernetes; try again")
 }

@@ -48,7 +48,7 @@ export function ConnectionsPage() {
                 </td>
               </tr>
             ))}
-            {q.data?.length === 0 && <tr><td colSpan={4} className="px-3 py-6 text-muted">No apps to connect yet. An admin adds them as Connections.</td></tr>}
+            {q.data?.length === 0 && <tr><td colSpan={4} className="px-3 py-6 text-muted">No apps to connect yet. An admin adds them under Settings, Apps.</td></tr>}
           </tbody>
         </table>
         {disconnect.isError && <p className="text-bad">{disconnect.error.message}</p>}

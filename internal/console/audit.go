@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -184,7 +185,7 @@ func (a *Audit) register(mux *http.ServeMux, admin func(func(http.ResponseWriter
 		}
 		calls, err := a.Calls(r.Context(), email, from, to, 1000)
 		if err != nil {
-			serverErr(w, err)
+			storeErr(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"email": email, "from": from, "to": to, "calls": calls, "limited": len(calls) == 1000})
@@ -197,9 +198,16 @@ func (a *Audit) register(mux *http.ServeMux, admin func(func(http.ResponseWriter
 		}
 		u, err := a.Usage(r.Context(), from, to)
 		if err != nil {
-			serverErr(w, err)
+			storeErr(w, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"from": from, "to": to, "usage": u})
 	}))
+}
+
+// storeErr reports a failed ClickHouse query with its cause (admins only see these pages), so an
+// empty page is never mistaken for "no calls".
+func storeErr(w http.ResponseWriter, err error) {
+	slog.Error("audit store", "err", err)
+	writeErr(w, http.StatusBadGateway, "the audit store (ClickHouse) did not answer, so no results are shown: "+err.Error())
 }

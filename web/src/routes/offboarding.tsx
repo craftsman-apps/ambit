@@ -14,7 +14,7 @@ async function get<T>(url: string): Promise<T> {
 }
 
 // Offboarding (journey A4): the identity provider deactivates someone over SCIM; Ambit revokes every
-// grant they authorised at its provider, ends their sessions, blocks their tokens, and keeps this record.
+// grant they authorized at its provider, ends their sessions, blocks their tokens, and keeps this record.
 export function OffboardingPage() {
   const q = useQuery({ queryKey: ["offboarding"], queryFn: () => get<Offboarding>("/api/offboarding") });
   const [token, setToken] = useState<string | null>(null);
@@ -23,7 +23,7 @@ export function OffboardingPage() {
       <section className="max-w-4xl space-y-5 p-5">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Offboarding</h1>
-          <p className="text-muted">When your identity provider deactivates someone, Ambit revokes every app grant they authorised at the app itself, ends their console sessions, and blocks their gateway tokens at once.</p>
+          <p className="text-muted">When your identity provider deactivates someone, Ambit revokes every app grant they authorized at the app itself, ends their console sessions, and blocks their gateway tokens at once.</p>
         </div>
         {q.isError && <p className="text-bad">{q.error.message}</p>}
         {q.data && (

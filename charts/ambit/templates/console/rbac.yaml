@@ -44,7 +44,7 @@ rules:
     verbs: [create]
   {{- else }}
   - apiGroups: [ambitproject.dev]
-    resources: [accessrules]
+    resources: [accessrules, budgets, connections]
     verbs: [create, update, delete]
   # Anyone signed in may request a server; approving one creates the Server. The console never
   # updates or deletes Servers, and records a decision only in the request's status.

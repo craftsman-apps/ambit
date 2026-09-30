@@ -204,3 +204,68 @@ func TestMyAccessExplainsWhatAUserMayUse(t *testing.T) {
 		t.Fatalf("mira: %+v", none)
 	}
 }
+
+// A vendor-hosted MCP server is requested by URL, optionally with a Connection so each call carries
+// the caller's own token; approval creates the Server as asked.
+func TestRemoteServerRequest(t *testing.T) {
+	h, c, a := serversFixture(t)
+	if err := c.Create(t.Context(), &v1.Connection{ObjectMeta: metav1.ObjectMeta{Name: "jira", Namespace: testNS},
+		Spec: v1.ConnectionSpec{DisplayName: "Jira", AuthorizationURL: "https://auth.example.com/authorize", TokenURL: "https://auth.example.com/token",
+			ClientID: "ambit", ClientSecretRef: v1.SecretRef{Name: "ambit-conn-jira"}}}); err != nil {
+		t.Fatal(err)
+	}
+	alice := user(a, "alice@acme.test", RoleViewer, "eng")
+	sam := user(a, "sam@acme.test", RoleApprover)
+	for _, tc := range []struct {
+		in   RequestInput
+		want string
+	}{
+		{RequestInput{ServerName: "jira", URL: "https://mcp.atlassian.example/v1/mcp", Image: echoDigest}, "either an image or a URL"},
+		{RequestInput{ServerName: "jira"}, "either an image or a URL"},
+		{RequestInput{ServerName: "jira", URL: "http://mcp.atlassian.example/v1/mcp"}, "https"},
+		{RequestInput{ServerName: "jira", URL: "https://mcp.atlassian.example/v1/mcp?token=x"}, "URL"},
+		{RequestInput{ServerName: "jira", URL: "https://mcp.atlassian.example/v1/mcp", Transport: "stdio"}, "streamable-http or sse"},
+		{RequestInput{ServerName: "jira", URL: "https://mcp.atlassian.example/v1/mcp", Connection: "confluence"}, "no connection named"},
+		{RequestInput{ServerName: "tool", Image: echoDigest, Connection: "jira"}, "only for servers reached by URL"},
+	} {
+		if r := do(t, h, "POST", "/api/server-requests", alice, tc.in); r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), tc.want) {
+			t.Errorf("%+v: %d %s", tc.in, r.Code, r.Body)
+		}
+	}
+	// In-cluster services may use plain HTTP.
+	if r := do(t, h, "POST", "/api/server-requests", alice, RequestInput{ServerName: "crm", URL: "http://crm.tools.svc:8080/mcp"}); r.Code != http.StatusCreated {
+		t.Fatalf("in-cluster: %d %s", r.Code, r.Body)
+	}
+	r := do(t, h, "POST", "/api/server-requests", alice, RequestInput{ServerName: "jira", DisplayName: "Jira", URL: "https://mcp.atlassian.example/v1/mcp", Connection: "jira"})
+	if r.Code != http.StatusCreated {
+		t.Fatalf("request: %d %s", r.Code, r.Body)
+	}
+	req := decodeAs[RequestView](t, r.Body.String())
+	if req.URL != "https://mcp.atlassian.example/v1/mcp" || req.Connection != "jira" || req.Transport != "streamable-http" || req.Image != "" {
+		t.Fatalf("request view %+v", req)
+	}
+	if r := do(t, h, "POST", "/api/server-requests/"+req.Name+"/approve", sam, DecisionInput{}); r.Code != 200 {
+		t.Fatalf("approve: %d %s", r.Code, r.Body)
+	}
+	var srv v1.Server
+	if err := c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "jira"}, &srv); err != nil || srv.Spec.URL != req.URL || srv.Spec.Connection != "jira" {
+		t.Fatalf("server %+v %v", srv.Spec, err)
+	}
+	var list []ServerView
+	list = decodeAs[[]ServerView](t, do(t, h, "GET", "/api/servers", alice, nil).Body.String())
+	for _, s := range list {
+		if s.Name == "jira" && (s.URL != req.URL || s.Connection != "jira") {
+			t.Fatalf("server view %+v", s)
+		}
+	}
+}
+
+func TestRemoteServerURLMustParse(t *testing.T) {
+	h, _, a := serversFixture(t)
+	alice := user(a, "alice@acme.test", RoleViewer)
+	for _, u := range []string{"https://example.com:bad/mcp", "https://example.com/%zz", "https://:443/mcp"} {
+		if r := do(t, h, "POST", "/api/server-requests", alice, RequestInput{ServerName: "x", URL: u}); r.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s", u, r.Code, r.Body)
+		}
+	}
+}

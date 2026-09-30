@@ -1,0 +1,25 @@
+<!-- Ambit's ClickHouse holds only the gateway's access logs. Its own diagnostics tables are switched off:
+     on a 1.5 GiB pod they grew until every audit query failed with MEMORY_LIMIT_EXCEEDED (console review,
+     2026-10-01: asynchronous_metric_log alone had 14 million rows). Caches are sized for a small pod.
+     Upgrading from a chart without this file: the old tables stay on disk until dropped
+     (DROP TABLE system.trace_log etc.); new installations never create them. -->
+<clickhouse>
+    <asynchronous_metric_log remove="1"/>
+    <metric_log remove="1"/>
+    <trace_log remove="1"/>
+    <text_log remove="1"/>
+    <part_log remove="1"/>
+    <processors_profile_log remove="1"/>
+    <query_thread_log remove="1"/>
+    <query_views_log remove="1"/>
+    <latency_log remove="1"/>
+    <error_log remove="1"/>
+    <query_metric_log remove="1"/>
+    <background_schedule_pool_log remove="1"/>
+    <asynchronous_insert_log remove="1"/>
+    <mark_cache_size>268435456</mark_cache_size>
+    <index_mark_cache_size>67108864</index_mark_cache_size>
+    <uncompressed_cache_size>16777216</uncompressed_cache_size>
+    <max_server_memory_usage_to_ram_ratio>0.8</max_server_memory_usage_to_ram_ratio>
+    <concurrent_threads_soft_limit_num>4</concurrent_threads_soft_limit_num>
+</clickhouse>

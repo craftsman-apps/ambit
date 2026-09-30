@@ -46,7 +46,11 @@ func compileServers(servers []v1.Server, rules []v1.AccessRule) []*unstructured.
 	var clauses []string
 	for _, s := range sorted {
 		refs = append(refs, metav1.OwnerReference{APIVersion: v1.GroupVersion.String(), Kind: "Server", Name: s.Name, UID: s.UID})
-		targets = append(targets, map[string]any{"name": s.Name, "static": target(s)})
+		t, ok := target(s)
+		if !ok {
+			continue // a URL that does not parse (the console refuses these; kubectl can still write one): left out
+		}
+		targets = append(targets, map[string]any{"name": s.Name, "static": t})
 		if s.Spec.URL == "" {
 			out = append(out, mcpServer(s))
 		}
@@ -120,16 +124,23 @@ func ServerCEL(servers []v1.Server, rules []v1.AccessRule, name string) string {
 }
 
 // target is where the gateway sends one server's MCP traffic: ToolHive's proxy, or the remote URL.
-func target(s v1.Server) map[string]any {
+func target(s v1.Server) (map[string]any, bool) {
 	protocol, path := "StreamableHTTP", "/mcp"
 	if s.Spec.Transport == "sse" {
 		protocol, path = "SSE", "/sse"
 	}
 	if s.Spec.URL == "" {
-		return map[string]any{"backendRef": map[string]any{"name": "mcp-" + s.Name + "-proxy"}, "port": int64(proxyPort), "path": path, "protocol": protocol}
+		return map[string]any{"backendRef": map[string]any{"name": "mcp-" + s.Name + "-proxy"}, "port": int64(proxyPort), "path": path, "protocol": protocol}, true
 	}
-	u, _ := url.Parse(s.Spec.URL) // the CRD pattern guarantees scheme://host[/path]
-	port, _ := strconv.ParseInt(u.Port(), 10, 64)
+	// The CRD pattern still lets through a bad port ("host:bad") or escape ("%zz").
+	u, err := url.Parse(s.Spec.URL)
+	if err != nil || u.Hostname() == "" {
+		return nil, false
+	}
+	port, err := strconv.ParseInt(u.Port(), 10, 64)
+	if err != nil && u.Port() != "" {
+		return nil, false
+	}
 	t := map[string]any{"host": u.Hostname(), "protocol": protocol, "path": u.Path}
 	if u.Path == "" {
 		t["path"] = "/"
@@ -143,7 +154,7 @@ func target(s v1.Server) map[string]any {
 		port = 80
 	}
 	t["port"] = port
-	return t
+	return t, true
 }
 
 // connectionPolicy makes the gateway ask the console's broker (extAuth) for the calling user's own

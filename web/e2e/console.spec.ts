@@ -83,6 +83,23 @@ test("MCP servers: tools are listed, and a request waits for another approver", 
   await expect(card.getByRole("button", { name: /^Approve/ })).toHaveCount(0);
 });
 
+test("MCP servers: a server already running elsewhere is requested by URL", async ({ page }) => {
+  await signInAsBootstrapAdmin(page);
+  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: /MCP servers/ }).click();
+  const name = `ui-remote-${Date.now().toString(36)}`;
+  await page.getByRole("button", { name: "Request a server" }).click();
+  await page.getByLabel("Name", { exact: true }).fill(name);
+  await page.getByLabel("Already running elsewhere, reached by URL").check();
+  await page.getByLabel("Server URL").fill("http://mcp.example.com/mcp");
+  await page.getByRole("button", { name: "Send request" }).click();
+  await expect(page.getByText(/use https for a server outside the cluster/)).toBeVisible();
+  await page.getByLabel("Server URL").fill("https://mcp.example.com/mcp");
+  await page.getByRole("button", { name: "Send request" }).click();
+  const card = page.getByTestId(`request-${name}`);
+  await expect(card.getByText("https://mcp.example.com/mcp")).toBeVisible();
+  await expect(card.getByText(/streamable-http/)).toBeVisible();
+});
+
 test("rules form offers each server's tools", async ({ page }) => {
   await signInAsBootstrapAdmin(page);
   await page.goto("/access-rules?edit=new");
@@ -124,11 +141,46 @@ test("Audit page searches one person's calls", async ({ page }) => {
   await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Audit" }).click();
   await page.getByLabel("Email").fill("alice@acme.test");
   await page.getByRole("button", { name: "Search" }).click();
-  await expect(page.getByText(/\d+ calls, \d+ refused/)).toBeVisible();
+  await expect(page.getByText(/\d+ tool and model calls: \d+ refused by policy, \d+ failed/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Export CSV" })).toBeVisible();
 });
 
-test("Budgets page lists group budgets", async ({ page }) => {
+test("Budgets page adds, changes and removes a group budget", async ({ page }) => {
   await signInAsBootstrapAdmin(page);
   await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Budgets" }).click();
   await expect(page.getByRole("heading", { name: "Budgets" })).toBeVisible();
+  await page.getByRole("button", { name: "New budget" }).click();
+  await page.getByLabel("Group (as your identity provider names it)").fill("ui-test-group");
+  await page.getByLabel("Each person, requests per day").fill("25");
+  await page.getByRole("button", { name: "Add budget" }).click();
+  const card = page.getByTestId("budget-ui-test-group");
+  await expect(card.getByText("25 per day")).toBeVisible();
+  await card.getByRole("button", { name: "Edit" }).click();
+  await page.getByLabel("Each person, requests per day").fill("40");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(card.getByText("40 per day")).toBeVisible();
+  await card.getByRole("button", { name: "Delete" }).click();
+  await card.getByRole("button", { name: "Remove budget" }).click();
+  await expect(card).toHaveCount(0);
+});
+
+test("Apps page adds an app for per-user sign-in and removes it", async ({ page }) => {
+  await signInAsBootstrapAdmin(page);
+  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Apps" }).click();
+  await page.getByRole("button", { name: "Add an app" }).click();
+  await expect(page.getByText(/\/connections\/callback/)).toBeVisible();
+  const name = `ui-app-${Date.now().toString(36)}`;
+  await page.getByLabel("Name", { exact: true }).fill(name);
+  await page.getByLabel("Name users see").fill("UI Test App");
+  await page.getByLabel("Authorization URL").fill("https://auth.example.com/authorize");
+  await page.getByLabel("Token URL").fill("https://auth.example.com/token");
+  await page.getByLabel("Client ID").fill("ui-client");
+  await page.getByLabel("Client secret").fill("ui-secret-not-shown");
+  await page.getByRole("button", { name: "Add app" }).click();
+  const row = page.getByTestId(`app-${name}`);
+  await expect(row.getByText("UI Test App")).toBeVisible();
+  await expect(page.getByText("ui-secret-not-shown")).toHaveCount(0);
+  await row.getByRole("button", { name: "Remove" }).click();
+  await row.getByRole("button", { name: "Remove app" }).click();
+  await expect(row).toHaveCount(0);
 });

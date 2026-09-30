@@ -1,0 +1,8 @@
+<!-- Queries from the console are small; fewer threads keep each query's memory small. -->
+<clickhouse>
+    <profiles>
+        <default>
+            <max_threads>2</max_threads>
+        </default>
+    </profiles>
+</clickhouse>

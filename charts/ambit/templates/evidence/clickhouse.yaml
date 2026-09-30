@@ -2,6 +2,14 @@
 # ClickHouse keeps the gateway's access logs (journey A5: "every call Alice made in March").
 # The ambit user's password is created by the console at first start (Secret ambit-clickhouse), so the
 # chart renders the same on every run; this pod starts once that Secret exists.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ambit-clickhouse-config
+data:
+  ambit-low-memory.xml: {{ .Files.Get "files/clickhouse-low-memory.xml" | quote }}
+  ambit-users.xml: {{ .Files.Get "files/clickhouse-users.xml" | quote }}
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -15,6 +23,8 @@ spec:
   template:
     metadata:
       labels: { app.kubernetes.io/name: ambit-clickhouse }
+      annotations:
+        checksum/config: {{ printf "%s%s" (.Files.Get "files/clickhouse-low-memory.xml") (.Files.Get "files/clickhouse-users.xml") | sha256sum }}
     spec:
       securityContext: { runAsNonRoot: true, runAsUser: 101, runAsGroup: 101, fsGroup: 101, seccompProfile: { type: RuntimeDefault } }
       containers:
@@ -30,7 +40,13 @@ spec:
           readinessProbe: { httpGet: { path: /ping, port: http } }
           securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
           resources: {{ toJson .Values.evidence.clickhouse.resources }}
-          volumeMounts: [{ name: data, mountPath: /var/lib/clickhouse }]
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/clickhouse }
+            - { name: config, mountPath: /etc/clickhouse-server/config.d/ambit-low-memory.xml, subPath: ambit-low-memory.xml }
+            - { name: config, mountPath: /etc/clickhouse-server/users.d/ambit-users.xml, subPath: ambit-users.xml }
+      volumes:
+        - name: config
+          configMap: { name: ambit-clickhouse-config }
   volumeClaimTemplates:
     - metadata: { name: data }
       spec:

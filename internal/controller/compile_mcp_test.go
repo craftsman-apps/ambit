@@ -194,3 +194,17 @@ func TestRemoteServersAndPerUserTokens(t *testing.T) {
 		}
 	}
 }
+
+// Review finding (Codex): a URL that passes the CRD pattern but does not parse ("host:bad") must not
+// crash the controller; the server is left out of the gateway's targets.
+func TestMalformedRemoteURLIsSkipped(t *testing.T) {
+	bad := server("bad", "streamable-http")
+	bad.Spec.Image, bad.Spec.URL = "", "https://example.com:bad/mcp"
+	good := server("time", "stdio")
+	r := Compile(nil, []v1.Server{bad, good}, nil, route)
+	b := find(t, r.Objects, "AgentgatewayBackend", MCPBackendName)
+	targets, _, _ := unstructured.NestedSlice(b.Object, "spec", "mcp", "targets")
+	if len(targets) != 1 || targets[0].(map[string]any)["name"] != "time" {
+		t.Fatalf("targets %v", targets)
+	}
+}

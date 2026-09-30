@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { useConnections, useMe, useModels, useMyAccess, useRequests, useRules, useServers } from "@/api";
 import { Card } from "@/components/ui/card";
 import { Shell } from "@/components/shell";
@@ -16,12 +17,38 @@ export function HomePage() {
   const waiting = (requests.data ?? []).filter((q) => !q.decision).length;
   const attention = (rules.data ?? []).filter((r) => r.ready !== "True").length;
   const closed = (models.data ?? []).filter((m) => !m.allSignedIn && m.allowedGroups.length === 0).length;
+  const admin = u?.role === "admin";
+  // Admins see budgets at 80% or more today; the budgets endpoint is admin-only.
+  const budgets = useQuery({
+    queryKey: ["budgets"], enabled: admin,
+    queryFn: async () => { const r = await fetch("/api/budgets", { credentials: "same-origin" }); return r.ok ? r.json() as Promise<{ group: string; groupLimit: number | null; groupUsed: number; userLimit: number | null; users: { used: number }[] }[]> : []; },
+  });
+  const nearLimit = (budgets.data ?? []).filter((b) =>
+    (b.groupLimit && b.groupUsed >= 0.8 * b.groupLimit) || (b.userLimit && b.users.some((x) => x.used >= 0.8 * b.userLimit!)));
+  const changed = (servers.data ?? []).filter((s) => s.changedTools.length > 0);
+  const todo = [
+    changed.length > 0 && { to: "/servers", text: `${changed.map((s) => s.name).join(", ")}: tools changed since approval; the gateway hides them until an admin approves them again` },
+    waiting > 0 && { to: "/servers", text: `${waiting} server request${waiting === 1 ? "" : "s"} waiting for an approver` },
+    nearLimit.length > 0 && { to: "/budgets", text: `${nearLimit.map((b) => b.group).join(", ")}: at 80% or more of today's budget` },
+    attention > 0 && { to: "/access-rules", text: `${attention} access rule${attention === 1 ? "" : "s"} not applied; open them to see why` },
+  ].filter(Boolean) as { to: string; text: string }[];
   return (
     <Shell crumb="Govern / Overview">
       <section className="max-w-4xl space-y-4 p-5">
-        <h1 className="text-xl font-semibold tracking-tight" data-testid="signed-in-as">
-          Signed in as {u?.bootstrap ? "admin (bootstrap)" : u?.name || u?.email}
-        </h1>
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Overview</h1>
+          <p className="text-muted" data-testid="signed-in-as">Signed in as {u?.bootstrap ? "admin (bootstrap)" : u?.name || u?.email}</p>
+        </div>
+        {admin && (
+          <Card data-testid="attention" className={todo.length ? "border-warn" : undefined}>
+            <h2 className="mb-1 font-semibold">Needs your attention</h2>
+            {todo.length === 0 ? <p className="text-muted">Nothing. Every rule is applied, no tool changed, and no budget is near its limit.</p> : (
+              <ul className="space-y-1">
+                {todo.map((t) => <li key={t.text}><Link to={t.to} className="text-accent-text underline">{t.text}</Link></li>)}
+              </ul>
+            )}
+          </Card>
+        )}
         {broken.length > 0 && (
           <Card className="border-bad" data-testid="broken-connections">
             <b>Reconnect needed:</b> {broken.map((c) => c.displayName).join(", ")}. Your agent cannot use {broken.length === 1 ? "it" : "them"} until you reconnect.{" "}

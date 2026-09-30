@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"sort"
@@ -14,7 +15,9 @@ import (
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -46,6 +49,7 @@ type BudgetView struct {
 	Message       string    `json:"message"`
 	ResetsAt      time.Time `json:"resetsAt"`
 	CountsMissing bool      `json:"countsMissing,omitempty"` // Valkey unreachable
+	GitManaged    bool      `json:"gitManaged"`
 }
 
 func (b *Budgets) register(mux *http.ServeMux, admin func(func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc) {
@@ -73,7 +77,7 @@ func (b *Budgets) views(ctx context.Context) ([]BudgetView, error) {
 	out := []BudgetView{}
 	for _, bu := range l.Items {
 		v := BudgetView{Name: bu.Name, Group: bu.Spec.Group, GroupLimit: bu.Spec.GroupRequestsPerDay, UserLimit: bu.Spec.UserRequestsPerDay,
-			Users: []UserUse{}, Ready: "Unknown", ResetsAt: day.Add(24 * time.Hour)}
+			Users: []UserUse{}, Ready: "Unknown", ResetsAt: day.Add(24 * time.Hour), GitManaged: gitManaged(bu.Annotations)}
 		if c := meta.FindStatusCondition(bu.Status.Conditions, "Ready"); c != nil {
 			v.Ready, v.Message = string(c.Status), c.Message
 		}
@@ -203,4 +207,144 @@ func valkeyCounts(ctx context.Context, addr, pattern string) (map[string]int64, 
 			return out, nil
 		}
 	}
+}
+
+// BudgetInput is the Budgets form. Name is ignored on update (the path names the budget).
+type BudgetInput struct {
+	Name                string `json:"name"`
+	Group               string `json:"group"`
+	GroupRequestsPerDay *int64 `json:"groupRequestsPerDay"`
+	UserRequestsPerDay  *int64 `json:"userRequestsPerDay"`
+}
+
+// checkBudget validates the form; self is the budget being edited ("" when creating). A second
+// budget for the same group would be refused by the controller, so it is refused here first.
+func (c *Catalog) checkBudget(r *http.Request, in BudgetInput, self string) (int, error) {
+	switch {
+	case !groupRE.MatchString(in.Group):
+		return http.StatusBadRequest, fmt.Errorf("group %q may only contain letters, digits and . _ @ / -", in.Group)
+	case in.GroupRequestsPerDay == nil && in.UserRequestsPerDay == nil:
+		return http.StatusBadRequest, errors.New("set a limit for the whole group, for each person, or both")
+	case (in.GroupRequestsPerDay != nil && *in.GroupRequestsPerDay < 1) || (in.UserRequestsPerDay != nil && *in.UserRequestsPerDay < 1):
+		return http.StatusBadRequest, errors.New("a limit must be at least 1 request per day")
+	}
+	var l v1.BudgetList
+	if err := c.Client.List(r.Context(), &l, client.InNamespace(c.Namespace)); err != nil {
+		return http.StatusInternalServerError, err
+	}
+	for _, b := range l.Items {
+		if b.Spec.Group == in.Group && b.Name != self {
+			return http.StatusConflict, fmt.Errorf("group %s already has a budget (%s); change that one", in.Group, b.Name)
+		}
+	}
+	return 0, nil
+}
+
+func (c *Catalog) createBudget(w http.ResponseWriter, r *http.Request, s Session) {
+	var in BudgetInput
+	if !decodeInto(w, r, &in) {
+		return
+	}
+	if !nameRE.MatchString(in.Name) {
+		writeErr(w, http.StatusBadRequest, "name must be lowercase letters, digits and dashes, starting and ending with a letter or digit")
+		return
+	}
+	if code, err := c.checkBudget(r, in, ""); err != nil {
+		if code == http.StatusInternalServerError {
+			serverErr(w, err)
+		} else {
+			writeErr(w, code, err.Error())
+		}
+		return
+	}
+	b := &v1.Budget{ObjectMeta: metav1.ObjectMeta{Name: in.Name, Namespace: c.Namespace, Annotations: map[string]string{createdByKey: s.Email}},
+		Spec: v1.BudgetSpec{Group: in.Group, GroupRequestsPerDay: in.GroupRequestsPerDay, UserRequestsPerDay: in.UserRequestsPerDay}}
+	if c.GitOps != nil {
+		// A pull request for an existing file would replace that budget, not add one.
+		var existing v1.Budget
+		if err := c.Client.Get(r.Context(), client.ObjectKeyFromObject(b), &existing); err == nil {
+			writeErr(w, http.StatusConflict, "a budget named "+in.Name+" already exists")
+			return
+		}
+		c.propose(w, r, s, "create", "Budget", "budgets", in.Name, b.Spec, b.Annotations)
+		return
+	}
+	if err := c.Client.Create(r.Context(), b); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			writeErr(w, http.StatusConflict, "a budget named "+in.Name+" already exists")
+			return
+		}
+		apiErr(w, err)
+		return
+	}
+	slog.Info("budget created", "budget", in.Name, "group", in.Group, "by", s.Email)
+	writeJSON(w, http.StatusCreated, map[string]string{"name": in.Name})
+}
+
+func (c *Catalog) editableBudget(w http.ResponseWriter, r *http.Request) (*v1.Budget, bool) {
+	var b v1.Budget
+	if err := c.Client.Get(r.Context(), client.ObjectKey{Namespace: c.Namespace, Name: r.PathValue("name")}, &b); err != nil {
+		if apierrors.IsNotFound(err) {
+			writeErr(w, http.StatusNotFound, "no budget named "+r.PathValue("name"))
+		} else {
+			serverErr(w, err)
+		}
+		return nil, false
+	}
+	if c.GitOps == nil && gitManaged(b.Annotations) {
+		writeErr(w, http.StatusConflict, "this budget is managed in Git; change it with a pull request")
+		return nil, false
+	}
+	return &b, true
+}
+
+func (c *Catalog) updateBudget(w http.ResponseWriter, r *http.Request, s Session) {
+	var in BudgetInput
+	if !decodeInto(w, r, &in) {
+		return
+	}
+	b, ok := c.editableBudget(w, r)
+	if !ok {
+		return
+	}
+	if code, err := c.checkBudget(r, in, b.Name); err != nil {
+		if code == http.StatusInternalServerError {
+			serverErr(w, err)
+		} else {
+			writeErr(w, code, err.Error())
+		}
+		return
+	}
+	b.Spec = v1.BudgetSpec{Group: in.Group, GroupRequestsPerDay: in.GroupRequestsPerDay, UserRequestsPerDay: in.UserRequestsPerDay}
+	if c.GitOps != nil {
+		c.propose(w, r, s, "update", "Budget", "budgets", b.Name, b.Spec, consoleAnnotations(b.Annotations))
+		return
+	}
+	if b.Annotations == nil {
+		b.Annotations = map[string]string{}
+	}
+	b.Annotations[updatedByKey] = s.Email
+	if err := c.Client.Update(r.Context(), b); err != nil {
+		apiErr(w, err)
+		return
+	}
+	slog.Info("budget updated", "budget", b.Name, "group", in.Group, "by", s.Email)
+	writeJSON(w, http.StatusOK, map[string]string{"name": b.Name})
+}
+
+func (c *Catalog) deleteBudget(w http.ResponseWriter, r *http.Request, s Session) {
+	b, ok := c.editableBudget(w, r)
+	if !ok {
+		return
+	}
+	if c.GitOps != nil {
+		c.propose(w, r, s, "delete", "Budget", "budgets", b.Name, nil, nil)
+		return
+	}
+	if err := c.Client.Delete(r.Context(), b); err != nil && !apierrors.IsNotFound(err) {
+		apiErr(w, err)
+		return
+	}
+	slog.Info("budget deleted", "budget", b.Name, "by", s.Email)
+	w.WriteHeader(http.StatusNoContent)
 }

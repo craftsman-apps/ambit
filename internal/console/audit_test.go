@@ -1,8 +1,10 @@
 package console
 
 import (
+	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -29,5 +31,22 @@ func TestArrayLiteralEscapes(t *testing.T) {
 	}
 	if got := arrayLiteral(nil); got != "[]" {
 		t.Fatalf("%s", got)
+	}
+}
+
+// A failing audit store is reported as such, not as a Kubernetes problem (seen in the console review:
+// ClickHouse ran out of memory and the page said "could not reach Kubernetes").
+func TestAuditStoreFailureNamesClickHouse(t *testing.T) {
+	a := OpenAudit("127.0.0.1:1", "x") // nothing listens here
+	mux := http.NewServeMux()
+	a.register(mux, func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) { h(w, r, Session{Email: "priya@acme.test", Role: RoleAdmin}) }
+	})
+	for _, u := range []string{"/api/audit?email=alice%40acme.test", "/api/usage"} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("GET", u, nil))
+		if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "ClickHouse") || strings.Contains(rec.Body.String(), "Kubernetes") {
+			t.Errorf("%s: %d %s", u, rec.Code, rec.Body.String())
+		}
 	}
 }

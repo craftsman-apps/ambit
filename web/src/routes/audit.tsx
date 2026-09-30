@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Shell, Status } from "@/components/shell";
+import { csvRow } from "@/lib/csv";
 
 type Call = { time: string; email: string; route: string; method: string; server: string; tool: string; model: string; status: string; error: string; inputTokens: number; outputTokens: number };
 type Usage = { day: string; group: string; requests: number; inputTokens: number; outputTokens: number };
@@ -26,8 +27,7 @@ const what = (c: Call) => c.method ? `${c.method}${c.tool ? ` · ${c.tool}` : ""
 const outcome = (c: Call) => refused(c) ? "Refused by policy" : failed(c) ? "Failed" : "OK";
 
 function csv(calls: Call[]) {
-  const q = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
-  const rows = calls.map((c) => [utc(c.time), c.email, what(c), c.server || c.model, outcome(c), c.status, c.error, c.inputTokens, c.outputTokens].map(q).join(","));
+  const rows = calls.map((c) => csvRow([utc(c.time), c.email, what(c), c.server || c.model, outcome(c), c.status, c.error, c.inputTokens, c.outputTokens]));
   return ["time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens", ...rows].join("\n") + "\n";
 }
 function download(name: string, text: string) {

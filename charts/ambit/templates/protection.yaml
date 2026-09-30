@@ -1,0 +1,90 @@
+{{- if and .Values.mcp.enabled .Values.protection.enabled }}
+# ambit-guard: MCP guardrails (journeys U6, A6). Hides and refuses tools changed since approval, and masks
+# personal data in tool results. FailClosed: if the guard is down, tool calls fail rather than pass
+# unchecked definitions or unmasked data.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: ambit-guard }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: ambit-guard }
+rules:
+  - apiGroups: [ambitproject.dev]
+    resources: [servers]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: ambit-guard }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: ambit-guard }
+subjects: [{ kind: ServiceAccount, name: ambit-guard }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ambit-guard
+  labels: { app.kubernetes.io/name: ambit-guard }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: ambit-guard }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: ambit-guard }
+    spec:
+      serviceAccountName: ambit-guard
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: guard
+          image: "{{ .Values.console.image.repository }}:{{ .Values.console.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.console.image.pullPolicy }}
+          command: [/ambit-guard]
+          env:
+            - name: AMBIT_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            {{- with .Values.protection.presidio }}{{ if .analyzerURL }}
+            - { name: AMBIT_PRESIDIO_ANALYZER_URL, value: {{ .analyzerURL | quote }} }
+            - { name: AMBIT_PRESIDIO_ANONYMIZER_URL, value: {{ .anonymizerURL | quote }} }
+            - { name: AMBIT_PRESIDIO_LANGUAGE, value: {{ .language | quote }} }
+            {{- end }}{{ end }}
+          ports: [{ name: grpc, containerPort: 9090 }, { name: health, containerPort: 8081 }]
+          readinessProbe: { httpGet: { path: /, port: health } }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+          resources: { requests: { cpu: 20m, memory: 32Mi }, limits: { memory: 128Mi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: ambit-guard }
+spec:
+  selector: { app.kubernetes.io/name: ambit-guard }
+  ports: [{ name: grpc, port: 9090, appProtocol: grpc }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: ambit-guard }
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: ambit-guard }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit } } }]
+      ports: [{ port: 9090 }]
+    - ports: [{ port: 8081 }]
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata: { name: ambit-mcp-guard }
+spec:
+  targetRefs: [{ group: agentgateway.dev, kind: AgentgatewayBackend, name: ambit-mcp }]
+  backend:
+    mcp:
+      guardrails:
+        processors:
+          - remote:
+              backendRef: { name: ambit-guard, port: 9090 }
+              failureMode: FailClosed
+            methods:
+              tools/list: Response
+              tools/call: Full
+{{- end }}

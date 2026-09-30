@@ -55,6 +55,10 @@ rules:
   - apiGroups: [ambitproject.dev]
     resources: [serverrequests/status]
     verbs: [update]
+  # Approving changed tool definitions (journey A6) writes Server status.
+  - apiGroups: [ambitproject.dev]
+    resources: [servers/status]
+    verbs: [update]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

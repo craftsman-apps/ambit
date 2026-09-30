@@ -87,6 +87,19 @@ evidence:
     image: otel/opentelemetry-collector-contrib:0.161.0@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
     resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 256Mi } }
 
+protection:
+  # MCP guardrails (ambit-guard): tool pinning and masking of personal data in tool results.
+  enabled: false
+  # How often each server's tools are read again; a changed definition is hidden at once, and calls to it
+  # are refused from the next read.
+  toolsRefresh: 10m
+  # Leave empty for the built-in masks (national ID numbers, card numbers, emails). Set both to use
+  # Microsoft Presidio (names, addresses, more languages).
+  presidio:
+    analyzerURL: ""
+    anonymizerURL: ""
+    language: en
+
 limits:
   # Budgets: daily LLM request limits per group and per user (Budget objects), shared by every replica.
   enabled: false

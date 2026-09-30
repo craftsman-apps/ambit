@@ -140,3 +140,20 @@ func TestGeneratedMCPObjects(t *testing.T) {
 		}
 	}
 }
+
+func TestServerCELIsThePartForOneServer(t *testing.T) {
+	servers := []v1.Server{server("time", "stdio"), server("everything", "stdio")}
+	rules := []v1.AccessRule{
+		toolRule("eng-time", []string{"eng"}, false, v1.ServerAccess{Name: "time", Tools: []string{"get_current_time"}}),
+		toolRule("ml-all", []string{"ml-research"}, false, v1.ServerAccess{Name: "everything"}),
+	}
+	if got := ServerCEL(servers, rules, "time"); got != `mcp.tool.target == "time" && mcp.tool.name == "get_current_time" && jwt.groups.exists(g, g in ["eng"])` {
+		t.Fatalf("time: %s", got)
+	}
+	if got := ServerCEL(servers, nil, "time"); got != "false" {
+		t.Fatalf("no rules: %s", got)
+	}
+	if got := ServerCEL(servers, rules, "missing"); got != "false" {
+		t.Fatalf("unknown server: %s", got)
+	}
+}

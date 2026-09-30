@@ -40,6 +40,9 @@ spec:
             {{- if .Values.evidence.enabled }}
             - { name: AMBIT_CLICKHOUSE_ADDR, value: "ambit-clickhouse:8123" }
             {{- end }}
+            {{- if .Values.limits.enabled }}
+            - { name: AMBIT_VALKEY_ADDR, value: "ambit-valkey:6379" }
+            {{- end }}
             {{- with .Values.gitops }}{{ if .enabled }}
             - { name: AMBIT_GITOPS_REPOSITORY, value: {{ required "gitops.repository is required (owner/name)" .repository | quote }} }
             - { name: AMBIT_GITOPS_BRANCH, value: {{ .branch | quote }} }

@@ -27,7 +27,7 @@ rules:
     verbs: [get]
   # Catalog screens: everyone signed in reads; admins change access rules (Direct mode).
   - apiGroups: [ambitproject.dev]
-    resources: [models, accessrules, servers, serverrequests, connections]
+    resources: [models, accessrules, servers, serverrequests, connections, budgets]
     verbs: [get, list, watch]
   # Offboarding (SCIM): the list of deactivated users that the controller blocks at the gateway.
   - apiGroups: [""]

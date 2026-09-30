@@ -11,10 +11,10 @@ metadata:
   name: ambit-controller
 rules:
   - apiGroups: [ambitproject.dev]
-    resources: [models, servers, accessrules]
+    resources: [models, servers, accessrules, budgets]
     verbs: [get, list, watch]
   - apiGroups: [ambitproject.dev]
-    resources: [models/status, servers/status, accessrules/status]
+    resources: [models/status, servers/status, accessrules/status, budgets/status]
     verbs: [get, update, patch]
   - apiGroups: [agentgateway.dev]
     resources: [agentgatewaymodels, agentgatewaybackends, agentgatewaypolicies]
@@ -23,6 +23,14 @@ rules:
   - apiGroups: [""]
     resources: [configmaps]
     verbs: [get, list, watch]
+  # Budgets: the ratelimit service's config, generated from Budget objects.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [ambit-ratelimit-config]
+    verbs: [update, patch]
   - apiGroups: [toolhive.stacklok.dev]
     resources: [mcpservers]
     verbs: [get, list, watch, create, update, patch, delete]

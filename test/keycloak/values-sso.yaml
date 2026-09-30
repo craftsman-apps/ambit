@@ -38,3 +38,7 @@ mcp:
 # Step 7: audit trail (gateway access logs -> collector -> ClickHouse).
 evidence:
   enabled: true
+
+# Step 8: budgets (ratelimit + Valkey).
+limits:
+  enabled: true

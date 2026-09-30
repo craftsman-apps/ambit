@@ -232,6 +232,49 @@ type ConnectionList struct {
 	Items           []Connection `json:"items"`
 }
 
+// BudgetSpec limits LLM requests per day for one group from the identity provider. Limits are shared
+// across every gateway replica. A member of several budgeted groups is counted against each of them.
+// +kubebuilder:validation:XValidation:rule="has(self.groupRequestsPerDay) || has(self.userRequestsPerDay)",message="set groupRequestsPerDay, userRequestsPerDay, or both"
+type BudgetSpec struct {
+	// Group from the identity provider's "groups" claim.
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._@/-]*$`
+	Group string `json:"group"`
+	// GroupRequestsPerDay is shared by everyone in the group (UTC days).
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	GroupRequestsPerDay *int64 `json:"groupRequestsPerDay,omitempty"`
+	// UserRequestsPerDay applies to each member separately (UTC days).
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	UserRequestsPerDay *int64 `json:"userRequestsPerDay,omitempty"`
+}
+
+type BudgetStatus struct {
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Group",type=string,JSONPath=`.spec.group`
+// +kubebuilder:printcolumn:name="Group/day",type=integer,JSONPath=`.spec.groupRequestsPerDay`
+// +kubebuilder:printcolumn:name="User/day",type=integer,JSONPath=`.spec.userRequestsPerDay`
+
+// Budget caps a group's LLM requests per day. Over the limit the gateway answers 429.
+type Budget struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              BudgetSpec   `json:"spec"`
+	Status            BudgetStatus `json:"status,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+type BudgetList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Budget `json:"items"`
+}
+
 // ServerRequestSpec asks for a new MCP server. It cannot change after it is made, so what was
 // approved is exactly what was asked for.
 // +kubebuilder:validation:XValidation:rule="self == oldSelf",message="a server request cannot be changed; make a new one"
@@ -295,5 +338,5 @@ type ServerRequestList struct {
 
 func init() {
 	SchemeBuilder.Register(&Model{}, &ModelList{}, &AccessRule{}, &AccessRuleList{}, &Server{}, &ServerList{},
-		&ServerRequest{}, &ServerRequestList{}, &Connection{}, &ConnectionList{})
+		&ServerRequest{}, &ServerRequestList{}, &Connection{}, &ConnectionList{}, &Budget{}, &BudgetList{})
 }

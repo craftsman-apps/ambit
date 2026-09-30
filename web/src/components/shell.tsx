@@ -47,6 +47,7 @@ export function Shell({ crumb, children }: { crumb: string; children: ReactNode 
             </span>
           )}
         </NavLink>
+        {u.role === "admin" && <NavLink to="/budgets">Budgets</NavLink>}
         {u.role === "admin" && <><Section>Evidence</Section><NavLink to="/audit">Audit</NavLink><NavLink to="/usage">Usage</NavLink></>}
         <Section>You</Section>
         <NavLink to="/connections">My connections</NavLink>

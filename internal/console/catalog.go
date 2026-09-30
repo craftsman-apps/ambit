@@ -37,6 +37,8 @@ type Catalog struct {
 	SCIM *SCIM
 	// Audit searches the gateway's access logs; nil when evidence is off.
 	Audit *Audit
+	// Budgets shows today's use of each Budget; nil when limits are off.
+	Budgets *Budgets
 }
 
 // Config tells the console UI how changes are applied.
@@ -179,6 +181,9 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	}
 	if c.Audit != nil {
 		c.Audit.register(mux, admin)
+	}
+	if c.Budgets != nil {
+		c.Budgets.register(mux, admin)
 	}
 	if c.SCIM != nil {
 		c.SCIM.register(mux)

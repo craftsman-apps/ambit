@@ -1,0 +1,38 @@
+# Step 9 test catalog: a remote MCP server whose tool returns personal data, and a rule for eng.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: crm, labels: { app: crm } }
+spec:
+  selector: { matchLabels: { app: crm } }
+  template:
+    metadata: { labels: { app: crm } }
+    spec:
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: crm
+          image: ambit-whoami:dev
+          imagePullPolicy: Never
+          command: [/crm]
+          ports: [{ containerPort: 8080 }]
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: crm }
+spec:
+  selector: { app: crm }
+  ports: [{ port: 8080 }]
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: Server
+metadata: { name: crm }
+spec:
+  displayName: CRM (test)
+  url: http://crm.ambit-system.svc:8080/mcp
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: AccessRule
+metadata: { name: crm-users }
+spec:
+  groups: [eng]
+  servers: [{ name: crm }]

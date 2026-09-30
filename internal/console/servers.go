@@ -43,6 +43,8 @@ type ServerView struct {
 	GitManaged  bool      `json:"gitManaged"`
 	// Rules that name this server.
 	Rules []string `json:"rules"`
+	// ChangedTools changed since approval (or are new); the gateway hides and refuses them.
+	ChangedTools []string `json:"changedTools"`
 }
 
 type RequestView struct {
@@ -111,7 +113,7 @@ func (c *Catalog) listServers(w http.ResponseWriter, r *http.Request, _ Session)
 	for _, s := range servers {
 		v := ServerView{Name: s.Name, DisplayName: s.Spec.DisplayName, Image: s.Spec.Image, Transport: s.Spec.Transport,
 			Ready: "Unknown", Tools: s.Status.Tools, RequestedBy: s.Annotations[requestedByKey], ApprovedBy: s.Annotations[approvedByKey],
-			GitManaged: gitManaged(s.Annotations), Rules: []string{}}
+			GitManaged: gitManaged(s.Annotations), Rules: []string{}, ChangedTools: changedTools(s)}
 		if v.Tools == nil {
 			v.Tools = []v1.Tool{}
 		}
@@ -126,6 +128,48 @@ func (c *Catalog) listServers(w http.ResponseWriter, r *http.Request, _ Session)
 		out = append(out, v)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func changedTools(s v1.Server) []string {
+	out := []string{}
+	if len(s.Status.ApprovedTools) == 0 {
+		return out
+	}
+	pinned := map[string]string{}
+	for _, p := range s.Status.ApprovedTools {
+		pinned[p.Name] = p.Fingerprint
+	}
+	for _, t := range s.Status.Tools {
+		if pinned[t.Name] != t.Fingerprint {
+			out = append(out, t.Name)
+		}
+	}
+	return out
+}
+
+// approveTools re-pins a server's tools to their current definitions (journey A6), after an admin has
+// read the changed descriptions. It writes status, like the controller: this is a decision, not config.
+func (c *Catalog) approveTools(w http.ResponseWriter, r *http.Request, s Session) {
+	var srv v1.Server
+	if err := c.Client.Get(r.Context(), client.ObjectKey{Namespace: c.Namespace, Name: r.PathValue("name")}, &srv); err != nil {
+		writeErr(w, http.StatusNotFound, "no server named "+r.PathValue("name"))
+		return
+	}
+	changed := changedTools(srv)
+	if len(changed) == 0 {
+		writeErr(w, http.StatusConflict, "no tool of "+srv.Name+" is waiting for approval")
+		return
+	}
+	srv.Status.ApprovedTools = nil
+	for _, t := range srv.Status.Tools {
+		srv.Status.ApprovedTools = append(srv.Status.ApprovedTools, v1.ToolPin{Name: t.Name, Fingerprint: t.Fingerprint})
+	}
+	if err := c.Client.Status().Update(r.Context(), &srv); err != nil {
+		apiErr(w, err)
+		return
+	}
+	slog.Info("tool definitions approved", "server", srv.Name, "tools", changed, "by", s.Email)
+	writeJSON(w, http.StatusOK, map[string]any{"approved": changed})
 }
 
 func requestView(q v1.ServerRequest) RequestView {

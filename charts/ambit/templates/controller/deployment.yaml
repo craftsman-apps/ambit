@@ -20,6 +20,7 @@ spec:
           command:
             - /ambit-controller
             - --llm-route=ambit-llm
+            - --tools-refresh={{ .Values.protection.toolsRefresh }}
             {{- if .Values.limits.enabled }}
             - --ratelimit-service=ambit-ratelimit
             - --ratelimit-failure-mode={{ .Values.limits.failureMode }}

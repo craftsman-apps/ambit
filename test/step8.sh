@@ -16,10 +16,17 @@ outcome() {
     -d "{\"model\":\"$GEMMA\",\"max_tokens\":4,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" "$LLM")
   if [[ "$code" == 429 ]] && grep -qi '^x-ratelimit-remaining: 0' "$W/h" && ! grep -q 'Provider returned error' "$W/llm"; then echo blocked; else echo "passed:$code"; fi
 }
+# idp down|up: the identity provider becomes unreachable (its Service selects no pod) or reachable.
+# Keycloak is not stopped: in dev mode a restart creates new signing keys, which a real IdP does not
+# do, and the gateway would refuse new tokens until its JWKS cache (5 minutes at least) refreshes.
+idp() {
+  local sel=keycloak; [[ "$1" == down ]] && sel=nothing
+  kubectl -n "$NS" patch svc keycloak -p "{\"spec\":{\"selector\":{\"app.kubernetes.io/name\":\"$sel\"}}}" >/dev/null 2>&1 || true
+}
 flush() { kubectl -n "$NS" exec deploy/ambit-valkey -- sh -c "valkey-cli --scan --pattern 'ambit-llm*' | xargs -r valkey-cli del" >/dev/null 2>&1 || true; }
 restore() {
   kubectl -n "$NS" scale deploy/ambit-ratelimit statefulset/ambit-clickhouse --replicas=1 >/dev/null 2>&1 || true
-  kubectl -n "$NS" scale deploy/keycloak --replicas=1 >/dev/null 2>&1 || true
+  idp up
   kubectl -n "$NS" delete "budgets.$G" eng --ignore-not-found >/dev/null 2>&1 || true
   flush
 }
@@ -88,11 +95,16 @@ kubectl -n "$NS" wait pod ambit-clickhouse-0 --for=delete --timeout=120s >/dev/n
 tools "$A"
 [[ -n "$TOOLS" ]] || fail "5 MCP failed with ClickHouse down"
 kubectl -n "$NS" scale statefulset/ambit-clickhouse --replicas=1 >/dev/null
-kubectl -n "$NS" scale deploy/keycloak --replicas=0 >/dev/null
-kubectl -n "$NS" wait pod -l app.kubernetes.io/name=keycloak --for=delete --timeout=120s >/dev/null 2>&1 || true
+idp down
+for _ in $(seq 1 30); do # the gateway sees the empty endpoints after a few seconds
+  [[ $(command curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://keycloak.localtest.me:8080/realms/acme/.well-known/openid-configuration) != 200 ]] && break
+  sleep 2
+done
+[[ $(command curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://keycloak.localtest.me:8080/realms/acme/.well-known/openid-configuration) != 200 ]] ||
+  fail "5 the identity provider is still reachable after 60 seconds"
 tools "$A"
 [[ -n "$TOOLS" ]] || fail "5 alice's existing token stopped working with the identity provider down"
-kubectl -n "$NS" scale deploy/keycloak --replicas=1 >/dev/null && kubectl -n "$NS" rollout status deploy/keycloak --timeout=300s >/dev/null
+idp up
 kubectl -n "$NS" rollout status statefulset/ambit-clickhouse --timeout=300s >/dev/null
 pass "5 ClickHouse down: MCP still works (logs are not on the request path); identity provider down: existing tokens still work"
 done_step 8

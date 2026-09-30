@@ -11,7 +11,7 @@ CRDS := charts/ambit-crds
 KIND_CLUSTER ?= ambit
 IMAGE ?= ambit-console:dev
 
-.PHONY: kind-up kind-down deps lint web test-go envtest-assets argocd image install install-crds test test-ui generate vendor-crds
+.PHONY: kind-up kind-down deps lint web test-go envtest-assets argocd proto image install install-crds test test-ui generate vendor-crds
 
 # Browser tests (Playwright) against the running kind install; needs the LLM test catalog (make test STEPS=3).
 test-ui:
@@ -35,6 +35,13 @@ install-crds:
 kind-up:
 	kind get clusters | grep -qx $(KIND_CLUSTER) || kind create cluster --config kind/cluster.yaml --wait 120s
 	./kind/coredns-rewrite.sh $(NS)
+
+# Go code for agentgateway's ExtMcp guardrail protocol (proto/ext_mcp.proto, from agentgateway v1.5.0).
+PROTO_BIN := $(CURDIR)/bin
+proto:
+	GOBIN=$(PROTO_BIN) go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
+	GOBIN=$(PROTO_BIN) go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
+	PATH=$(PROTO_BIN):$$PATH go run github.com/bufbuild/buf/cmd/buf@v1.73.0 generate
 
 # Argo CD v3.5.3 with Ambit's health check, for GitOps mode (step 4c).
 argocd:
@@ -73,7 +80,7 @@ install: deps install-crds
 	helm upgrade --install ambit-crds charts/ambit-crds -n $(NS) --create-namespace --wait
 	helm upgrade --install ambit charts/ambit -n $(NS) -f charts/ambit/values-kind.yaml --wait --timeout 5m
 
-STEPS ?= 0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 8
+STEPS ?= 0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 8 9
 # make test            -> every step; make test STEPS=3b -> one step (each sets up what it needs)
 test:
 	@for s in $(STEPS); do ./test/step$$s.sh $(NS) || exit 1; done

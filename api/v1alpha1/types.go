@@ -153,6 +153,10 @@ type ServerStatus struct {
 	// Read by ambit-controller through ToolHive's proxy; empty until the server is running.
 	// +optional
 	Tools []Tool `json:"tools,omitempty"`
+	// ApprovedTools are the pinned tool definitions (journey A6). Pinned when first seen; a tool whose
+	// definition differs, or a new tool, is hidden and refused until an admin approves it again.
+	// +optional
+	ApprovedTools []ToolPin `json:"approvedTools,omitempty"`
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
@@ -161,6 +165,14 @@ type Tool struct {
 	Name string `json:"name"`
 	// +optional
 	Description string `json:"description,omitempty"`
+	// Fingerprint is sha256 over the name, description and input schema.
+	// +optional
+	Fingerprint string `json:"fingerprint,omitempty"`
+}
+
+type ToolPin struct {
+	Name        string `json:"name"`
+	Fingerprint string `json:"fingerprint"`
 }
 
 // +kubebuilder:object:root=true

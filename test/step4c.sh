@@ -51,7 +51,9 @@ trap 'rc=$?; cleanup; on_exit $rc' EXIT
 ensure_llm_setup "$NS"
 kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
 make -s argocd >/dev/null
-TOKEN=$(app)
+# GitHub occasionally fails a token request; a bad token then surfaces as "Repository not found" on clone.
+for _ in 1 2 3; do TOKEN=$(app 2>/dev/null || true); [[ "$TOKEN" == ghs_* ]] && break; sleep 3; done
+[[ "$TOKEN" == ghs_* ]] || fail "0 no GitHub App installation token (check the App ID, key and installation)"
 INSTALLATION=$(app --installation-id)
 
 # Credentials: the console's key Secret and Argo CD's repository credentials, both from the same App.
@@ -67,7 +69,8 @@ for n in $(field "$W/gh" '" ".join(str(p["number"]) for p in d if p["head"]["ref
   gh_api PATCH "/repos/$REPO/pulls/$n" '{"state":"closed"}' >/dev/null
 done
 rm -rf "$W/repo"
-git clone -q "https://x-access-token:$TOKEN@github.com/$REPO.git" "$W/repo" 2>/dev/null
+for _ in 1 2 3; do git clone -q "https://x-access-token:$TOKEN@github.com/$REPO.git" "$W/repo" 2>/dev/null && break; rm -rf "$W/repo"; sleep 3; done
+[[ -d "$W/repo/.git" ]] || fail "0 could not clone $REPO"
 ( cd "$W/repo" && git checkout -q -B main && rm -rf ambit )
 uv run --no-project --with pyyaml python test/gitops/seed.py "$W/repo"
 ( cd "$W/repo" && git add -A && { git diff --cached --quiet || git -c user.name=ambit-test -c user.email=ambit-test@users.noreply.github.com commit -qm "Seed the step 4c test catalog"; } && git push -q origin main )

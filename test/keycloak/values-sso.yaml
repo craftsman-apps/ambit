@@ -42,3 +42,8 @@ evidence:
 # Step 8: budgets (ratelimit + Valkey).
 limits:
   enabled: true
+
+# Step 9: MCP guardrails (tool pinning, masking); fast tool refresh for tests.
+protection:
+  enabled: true
+  toolsRefresh: 20s

@@ -61,7 +61,8 @@ export function ServersPage() {
                     <tr key={q.name} className="border-b border-line-soft align-top">
                       <td className="px-3 py-2 font-mono">{q.serverName}</td>
                       <td className={cn("px-3 py-2", q.decision === "Denied" && "text-bad")}>{q.decision}</td>
-                      <td className="px-3 py-2 text-muted">asked by {q.requestedBy}, {q.decision.toLowerCase()} by {q.decidedBy}{q.comment && `: “${q.comment}”`}</td>
+                      <td className="px-3 py-2 text-muted">asked by {q.requestedBy}, {q.decision.toLowerCase()} by {q.decidedBy}{q.comment && `: “${q.comment}”`}
+                        {q.pullRequest && <> · <a className="text-accent-text underline" href={q.pullRequest} target="_blank" rel="noopener noreferrer">pull request</a></>}</td>
                       <td className="px-3 py-2 font-mono text-[12px] text-muted" title={q.image}>{shortImage(q.image)}</td>
                     </tr>
                   ))}

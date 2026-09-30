@@ -2,7 +2,8 @@ import { useMemo, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createColumnHelper, createSortedRowModel, rowSortingFeature, sortFn_text, tableFeatures, useTable } from "@tanstack/react-table";
-import { sendJSON, useMe, useModels, useRule, useRules, useServers, type RuleInput, type RuleView, type ServerAccess } from "@/api";
+import { isProposed, sendJSON, useChanges, useConfig, useMe, useModels, useRule, useRules, useServers, type PullRequest, type RuleInput, type RuleView, type ServerAccess } from "@/api";
+import { PullRequestNotice } from "@/components/pull-request";
 import { Button } from "@/components/ui/button";
 import { Shell, Status } from "@/components/shell";
 import { cn } from "@/lib/utils";
@@ -22,6 +23,9 @@ export function AccessRulesPage() {
   const navigate = useNavigate({ from: "/access-rules" });
   const me = useMe();
   const rules = useRules();
+  const config = useConfig();
+  const gitops = config.data?.mode === "gitops";
+  const changes = useChanges(gitops);
   const [filter, setFilter] = useState<"all" | "attention">("all");
   const isAdmin = me.data?.role === "admin";
 
@@ -47,6 +51,7 @@ export function AccessRulesPage() {
             <div>
               <h1 className="text-xl font-semibold tracking-tight">Access rules</h1>
               <p className="text-muted">Who may use which models and MCP tools. Anything no rule names is closed to everyone.</p>
+              {gitops && <p className="text-[12.5px] text-muted">GitOps mode: changes open pull requests in <span className="font-mono">{config.data?.repository}</span>.</p>}
             </div>
             {isAdmin && <Button className="w-auto" onClick={() => navigate({ search: { edit: "new" } })}>New rule</Button>}
           </div>
@@ -56,6 +61,16 @@ export function AccessRulesPage() {
                 className={cn("rounded-md border px-2.5 py-0.5", filter === k ? "border-ink text-ink" : "border-line text-muted")}>{label}</button>
             ))}
           </div>
+          {gitops && !!changes.data?.length && (
+            <div className="mb-4 rounded-md border border-line p-3" data-testid="pending-changes">
+              <p className="mb-1 font-mono text-[10.5px] uppercase tracking-[.12em] text-muted">Waiting for review in Git</p>
+              {changes.data.map((pr) => (
+                <p key={pr.number}><a className="text-accent-text underline" href={pr.url} target="_blank" rel="noopener noreferrer">#{pr.number}</a> {pr.title}
+                  {pr.author && <span className="text-[12px] text-muted"> · by {pr.author}</span>}</p>
+              ))}
+            </div>
+          )}
+          {changes.isError && <p className="mb-3 text-bad">{changes.error.message}</p>}
           {rules.isError && <p className="text-bad">{rules.error.message}</p>}
           <table className="w-full border-collapse">
             <thead>
@@ -87,9 +102,9 @@ export function AccessRulesPage() {
           </table>
         </section>
         <aside className="border-l border-line bg-sunken p-5">
-          {edit ? <RuleForm name={edit === "new" ? undefined : edit} onDone={(n) => navigate({ search: n ? { rule: n } : {} })} />
-            : selected ? <RuleDetailPanel name={selected} isAdmin={isAdmin} onEdit={() => navigate({ search: { edit: selected } })}
-                onDeleted={() => navigate({ search: {} })} />
+          {edit ? <RuleForm name={edit === "new" ? undefined : edit} repository={config.data?.repository} onDone={(n) => navigate({ search: n ? { rule: n } : {} })} />
+            : selected ? <RuleDetailPanel name={selected} isAdmin={isAdmin} gitops={gitops} repository={config.data?.repository}
+                onEdit={() => navigate({ search: { edit: selected } })} onDeleted={() => navigate({ search: {} })} />
             : <p className="text-muted">Select a rule to see who it lets in and the policy the gateway enforces.</p>}
         </aside>
       </div>
@@ -97,13 +112,15 @@ export function AccessRulesPage() {
   );
 }
 
-function RuleDetailPanel({ name, isAdmin, onEdit, onDeleted }: { name: string; isAdmin: boolean; onEdit: () => void; onDeleted: () => void }) {
+function RuleDetailPanel({ name, isAdmin, gitops, repository, onEdit, onDeleted }:
+  { name: string; isAdmin: boolean; gitops: boolean; repository?: string; onEdit: () => void; onDeleted: () => void }) {
   const q = useRule(name);
   const qc = useQueryClient();
   const [confirm, setConfirm] = useState(false);
+  const [pr, setPR] = useState<PullRequest | null>(null);
   const del = useMutation({
     mutationFn: () => sendJSON("DELETE", `/api/access-rules/${encodeURIComponent(name)}`),
-    onSuccess: () => { qc.invalidateQueries(); onDeleted(); },
+    onSuccess: (res) => { qc.invalidateQueries(); if (isProposed(res)) setPR(res.pullRequest); else onDeleted(); },
   });
   if (q.isPending) return null;
   if (q.isError) return <p className="text-bad">{q.error.message}</p>;
@@ -136,7 +153,8 @@ function RuleDetailPanel({ name, isAdmin, onEdit, onDeleted }: { name: string; i
         ))}
         <p className="text-[12px] text-muted">Merged from every rule that names the model or server.</p>
       </div>
-      {isAdmin && !r.gitManaged && (
+      {pr && <PullRequestNotice pr={pr} repository={repository} onDone={() => { setPR(null); setConfirm(false); }} />}
+      {isAdmin && (!r.gitManaged || gitops) && !pr && (
         <div className="flex gap-2">
           <Button variant="outline" className="w-auto" onClick={onEdit}>Edit</Button>
           {confirm
@@ -144,13 +162,14 @@ function RuleDetailPanel({ name, isAdmin, onEdit, onDeleted }: { name: string; i
             : <Button variant="outline" className="w-auto" onClick={() => setConfirm(true)}>Delete</Button>}
         </div>
       )}
-      {r.gitManaged && <p className="text-[12.5px] text-muted">Change this rule with a pull request to your configuration repository.</p>}
+      {r.gitManaged && !gitops && <p className="text-[12.5px] text-muted">Change this rule with a pull request to your configuration repository.</p>}
       {del.isError && <p className="text-bad">{del.error.message}</p>}
     </div>
   );
 }
 
-function RuleForm({ name, onDone }: { name?: string; onDone: (name?: string) => void }) {
+function RuleForm({ name, repository, onDone }: { name?: string; repository?: string; onDone: (name?: string) => void }) {
+  const [pr, setPR] = useState<PullRequest | null>(null);
   const models = useModels();
   const servers = useServers();
   const existing = useRule(name);
@@ -172,9 +191,10 @@ function RuleForm({ name, onDone }: { name?: string; onDone: (name?: string) => 
   const save = useMutation({
     mutationFn: (body: RuleInput) =>
       name ? sendJSON("PUT", `/api/access-rules/${encodeURIComponent(name)}`, body) : sendJSON("POST", "/api/access-rules", body),
-    onSuccess: () => { qc.invalidateQueries(); onDone(name ?? ruleName); },
+    onSuccess: (res) => { qc.invalidateQueries(); if (isProposed(res)) setPR(res.pullRequest); else onDone(name ?? ruleName); },
   });
   if (name && existing.isPending) return null;
+  if (pr) return <PullRequestNotice pr={pr} repository={repository} onDone={() => onDone(name)} />;
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     save.mutate({ ...(name ? {} : { name: ruleName }), allSignedIn,
@@ -243,7 +263,7 @@ function RuleForm({ name, onDone }: { name?: string; onDone: (name?: string) => 
         <Button type="submit" className="w-auto" disabled={save.isPending}>{name ? "Save changes" : "Create rule"}</Button>
         <Button type="button" variant="outline" className="w-auto" onClick={() => onDone(name)}>Cancel</Button>
       </div>
-      <p className="text-[12px] text-muted">The change reaches the gateway within seconds.</p>
+      <p className="text-[12px] text-muted">{repository ? "Saving opens a pull request; the change applies once it is merged." : "The change reaches the gateway within seconds."}</p>
     </form>
   );
 }

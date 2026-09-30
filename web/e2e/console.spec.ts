@@ -118,3 +118,11 @@ test("Offboarding page shows the SCIM endpoint and reveals the token on request"
   await page.getByRole("button", { name: "Show token" }).click();
   await expect(page.getByRole("button", { name: "Show token" })).toHaveCount(0);
 });
+
+test("Audit page searches one person's calls", async ({ page }) => {
+  await signInAsBootstrapAdmin(page);
+  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Audit" }).click();
+  await page.getByLabel("Email").fill("alice@acme.test");
+  await page.getByRole("button", { name: "Search" }).click();
+  await expect(page.getByText(/\d+ calls, \d+ refused/)).toBeVisible();
+});

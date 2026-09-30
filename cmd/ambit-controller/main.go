@@ -19,6 +19,9 @@ import (
 func main() {
 	ns := os.Getenv("AMBIT_NAMESPACE")
 	route := flag.String("llm-route", "ambit-llm", "HTTPRoute that every model attaches to")
+	rlService := flag.String("ratelimit-service", "", "Service of envoy's ratelimit for Budgets; empty turns budgets off")
+	rlPort := flag.Int64("ratelimit-port", 8081, "gRPC port of the ratelimit service")
+	rlFailure := flag.String("ratelimit-failure-mode", "FailOpen", "FailOpen or FailClosed when the ratelimit service is down")
 	flag.Parse()
 	ctrl.SetLogger(zap.New())
 	log := ctrl.Log.WithName("setup")
@@ -44,7 +47,8 @@ func main() {
 		log.Error(err, "create manager")
 		os.Exit(1)
 	}
-	if err := (&controller.Reconciler{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), ListTools: controller.ListTools, Namespace: ns, Route: controller.RouteRef{Name: *route}}).SetupWithManager(mgr); err != nil {
+	if err := (&controller.Reconciler{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), ListTools: controller.ListTools, Namespace: ns, Route: controller.RouteRef{Name: *route},
+		RateLimit: controller.RateLimit{Service: *rlService, Port: *rlPort, FailureMode: *rlFailure}}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "set up controller")
 		os.Exit(1)
 	}

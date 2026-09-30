@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -48,6 +49,8 @@ type Reconciler struct {
 	Route     RouteRef
 	// ListTools reads a running server's tools into Server.status.tools; nil turns this off.
 	ListTools ToolLister
+	// RateLimit is where Budgets are enforced; an empty Service turns budgets off.
+	RateLimit RateLimit
 
 	toolsRead map[types.UID]time.Time // when each Server's tools were last read (single worker, no lock)
 }
@@ -65,7 +68,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Only spec changes of Ambit objects: our own status writes must not trigger another pass.
 		Watches(&v1.Model{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1.Server{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Watches(&v1.AccessRule{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{}))
+		Watches(&v1.AccessRule{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Watches(&v1.Budget{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{}))
 	// Generated objects: status changes (agentgateway or ToolHive accepting them) and manual edits both matter.
 	for _, gvk := range generatedGVKs {
 		u := &unstructured.Unstructured{}
@@ -86,6 +90,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		}
 	}
 	res := Compile(models.Items, servers.Items, rules.Items, r.Route)
+	var budgets v1.BudgetList
+	if err := r.Live.List(ctx, &budgets, client.InNamespace(r.Namespace)); err != nil {
+		return reconcile.Result{}, err
+	}
+	budgetPolicy := false
+	if r.RateLimit.Service != "" {
+		cfg, p := compileBudgets(budgets.Items, r.Namespace, r.RateLimit, r.Route.Name)
+		res.Objects = append(res.Objects, rateLimitConfigMap(r.Namespace, cfg))
+		if p != nil {
+			res.Objects = append(res.Objects, p)
+			budgetPolicy = true
+		}
+	}
 	var cm corev1.ConfigMap
 	switch err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: OffboardedConfigMap}, &cm); {
 	case err == nil:
@@ -134,6 +151,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			conds[owner] = mcpServerCondition(current)
 		}
 	}
+	if !budgetPolicy { // no budgets (or budgets off): stop asking the ratelimit service on every request
+		stale := &unstructured.Unstructured{}
+		stale.SetGroupVersionKind(AgentgatewayPolicyGVK)
+		if err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: BudgetPolicyName}, stale); err == nil && ownedByAmbit(stale) {
+			if err := r.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
+				return reconcile.Result{}, err
+			}
+		}
+	}
 	// Look again while agentgateway or ToolHive has not decided yet: their status events can race
 	// with our own apply (seen when the route's listener changed), and a missed one would leave
 	// a Model or Server Pending for good.
@@ -169,6 +195,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			}
 		}
 		if err := r.updateStatus(ctx, s.Status, next.Status, next); err != nil {
+			return reconcile.Result{}, err
+		}
+	}
+	first := map[string]string{} // group -> the Budget that governs it (first by name)
+	sort.Slice(budgets.Items, func(i, j int) bool { return budgets.Items[i].Name < budgets.Items[j].Name })
+	for i := range budgets.Items {
+		b := &budgets.Items[i]
+		next := b.DeepCopy()
+		c := cond(metav1.ConditionTrue, "Enforced", "shared across every gateway replica")
+		switch {
+		case r.RateLimit.Service == "":
+			c = cond(metav1.ConditionFalse, "LimitsOff", "budgets are off in this install (limits.enabled=false)")
+		case first[b.Spec.Group] != "":
+			c = cond(metav1.ConditionFalse, "DuplicateGroup", "Budget "+first[b.Spec.Group]+" already covers group "+b.Spec.Group+"; this one is ignored")
+		default:
+			first[b.Spec.Group] = b.Name
+		}
+		setReady(&next.Status.Conditions, c, b.Generation)
+		if err := r.updateStatus(ctx, b.Status, next.Status, next); err != nil {
 			return reconcile.Result{}, err
 		}
 	}

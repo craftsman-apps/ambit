@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -32,10 +34,16 @@ func ListTools(ctx context.Context, s v1.Server) ([]v1.Tool, error) {
 		endpoint = strings.TrimSuffix(endpoint, "/mcp") + "/sse"
 	}
 	if s.Spec.Transport == "sse" {
-		return listTools(ctx, &mcp.SSEClientTransport{Endpoint: endpoint})
+		return listTools(ctx, &mcp.SSEClientTransport{Endpoint: endpoint, HTTPClient: noRedirects})
 	}
-	return listTools(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint, MaxRetries: -1, DisableStandaloneSSE: true})
+	return listTools(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint, MaxRetries: -1, DisableStandaloneSSE: true, HTTPClient: noRedirects})
 }
+
+// noRedirects keeps tool discovery at the approved URL: a redirect could otherwise send the
+// controller to an address nobody approved, such as a cloud metadata service.
+var noRedirects = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+	return errors.New("redirects are not followed: approve the final URL instead")
+}}
 
 // Fingerprint identifies a tool definition: what a model reads (name, description) and what it may
 // send (input schema). The schema is decoded and re-encoded, so key order does not change it.

@@ -82,3 +82,18 @@ func readyOfType(conds []metav1.Condition, typ string) string {
 	}
 	return ""
 }
+
+// Review finding (Codex): an approved https server must not steer tool discovery elsewhere, such as a
+// cloud metadata address, with a redirect.
+func TestListToolsRefusesRedirects(t *testing.T) {
+	target := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return testServer() }, nil))
+	defer target.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+	s := v1.Server{Spec: v1.ServerSpec{URL: redirect.URL, Transport: "streamable-http"}}
+	if tools, err := ListTools(t.Context(), s); err == nil || len(tools) > 0 {
+		t.Fatalf("followed the redirect: %v %v", tools, err)
+	}
+}

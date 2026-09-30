@@ -8,6 +8,7 @@ import (
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -58,7 +59,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	all := handler.EnqueueRequestsFromMapFunc(func(context.Context, client.Object) []reconcile.Request {
 		return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: r.Namespace, Name: "all"}}}
 	})
+	offboarded := predicate.NewPredicateFuncs(func(o client.Object) bool { return o.GetName() == OffboardedConfigMap })
 	b := ctrl.NewControllerManagedBy(mgr).Named("ambit").
+		Watches(&corev1.ConfigMap{}, all, builder.WithPredicates(offboarded)).
 		// Only spec changes of Ambit objects: our own status writes must not trigger another pass.
 		Watches(&v1.Model{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1.Server{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
@@ -83,6 +86,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		}
 	}
 	res := Compile(models.Items, servers.Items, rules.Items, r.Route)
+	var cm corev1.ConfigMap
+	switch err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: OffboardedConfigMap}, &cm); {
+	case err == nil:
+		emails, rejected := OffboardedEmails(&cm)
+		if len(rejected) > 0 {
+			logger.Error(nil, "offboarded list has entries that are not plain emails; they are not blocked", "entries", rejected)
+		}
+		res.Objects = append(res.Objects, offboardedPolicy(&cm, emails, []string{"ambit-mcp", r.Route.Name}))
+	case !apierrors.IsNotFound(err):
+		return reconcile.Result{}, err
+	}
 
 	// Ready condition per Ambit object that controls a generated object, keyed "Kind/name".
 	conds := map[string]metav1.Condition{}
@@ -226,6 +240,9 @@ func controllerOwner(o *unstructured.Unstructured) string {
 }
 
 func ownedByAmbit(o *unstructured.Unstructured) bool {
+	if o.GetLabels()["app.kubernetes.io/managed-by"] == "ambit" {
+		return true
+	}
 	return slices.ContainsFunc(o.GetOwnerReferences(), func(ref metav1.OwnerReference) bool {
 		return ref.APIVersion == v1.GroupVersion.String()
 	})

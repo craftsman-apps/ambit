@@ -19,6 +19,10 @@ rules:
   - apiGroups: [agentgateway.dev]
     resources: [agentgatewaymodels, agentgatewaybackends, agentgatewaypolicies]
     verbs: [get, list, watch, create, update, patch, delete]
+  # The console's list of offboarded users (ambit-offboarded), turned into a gateway Deny rule.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, watch]
   - apiGroups: [toolhive.stacklok.dev]
     resources: [mcpservers]
     verbs: [get, list, watch, create, update, patch, delete]

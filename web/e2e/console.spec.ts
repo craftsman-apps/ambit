@@ -126,3 +126,9 @@ test("Audit page searches one person's calls", async ({ page }) => {
   await page.getByRole("button", { name: "Search" }).click();
   await expect(page.getByText(/\d+ calls, \d+ refused/)).toBeVisible();
 });
+
+test("Budgets page lists group budgets", async ({ page }) => {
+  await signInAsBootstrapAdmin(page);
+  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Budgets" }).click();
+  await expect(page.getByRole("heading", { name: "Budgets" })).toBeVisible();
+});

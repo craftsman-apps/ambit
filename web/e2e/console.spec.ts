@@ -124,7 +124,8 @@ test("Audit page searches one person's calls", async ({ page }) => {
   await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Audit" }).click();
   await page.getByLabel("Email").fill("alice@acme.test");
   await page.getByRole("button", { name: "Search" }).click();
-  await expect(page.getByText(/\d+ calls, \d+ refused/)).toBeVisible();
+  await expect(page.getByText(/\d+ tool and model calls: \d+ refused by policy, \d+ failed/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Export CSV" })).toBeVisible();
 });
 
 test("Budgets page lists group budgets", async ({ page }) => {

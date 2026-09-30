@@ -73,4 +73,4 @@ pass "6 Git-managed rule -> delete refused (409)"
 [[ $(api DELETE /api/access-rules/eng-nemotron) == 204 ]] || fail "7 delete: $(cat "$W/api")"
 wait_expr nemotron-3-super "$ORIG"
 pass "7 delete eng-nemotron -> policy back to ml-research only"
-echo "PASS: step 3b"
+done_step 3b

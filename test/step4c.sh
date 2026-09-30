@@ -15,7 +15,7 @@ KEY=${AMBIT_GITHUB_APP_KEY:-$HOME/.config/ambit/github-app.pem}
 SOAK_SECONDS=${SOAK_SECONDS:-600}
 IMAGE=ghcr.io/stacklok/dockyard/uvx/mcp-server-time@sha256:ab8255cf7bf2bdad14086b356790d2d61d06cab221b85950805427be9d06d949
 if [[ -z "$APP_ID" || ! -s "$KEY" ]]; then
-  echo "SKIP: step 4c needs the GitHub App (AMBIT_GITHUB_APP_ID and $KEY)"; exit 0
+  FINISHED=1; echo "SKIP: step 4c needs the GitHub App (AMBIT_GITHUB_APP_ID and $KEY)"; exit 0
 fi
 app() { uv run --no-project --with 'pyjwt[crypto]' python test/gitops/github_app.py "$APP_ID" "$KEY" "$REPO" "$@"; }
 gh_api() { # gh_api METHOD PATH [JSON]: GitHub REST as the App; body in $W/gh
@@ -46,7 +46,7 @@ cleanup() {
   done
   kubectl -n "$NS" apply -f test/llm/objects.yaml -f test/mcp/objects.yaml >/dev/null
 }
-trap 'cleanup; rm -rf "$W"' EXIT
+trap 'rc=$?; cleanup; on_exit $rc' EXIT
 
 ensure_llm_setup "$NS"
 kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
@@ -134,4 +134,4 @@ while (( SECONDS < end )); do
 done
 [[ $(hist) == "$h0" ]] || fail "6 Argo CD synced $(( $(hist) - h0 )) more times with no new commit (a sync loop)"
 pass "6 soak ${SOAK_SECONDS} s: Synced/Healthy throughout, prune and self-heal on, $g0 generated objects kept, no extra syncs"
-echo "PASS: step 4c"
+done_step 4c

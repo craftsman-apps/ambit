@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"k8s.io/client-go/kubernetes"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -103,6 +104,10 @@ func run(ctx context.Context) error {
 		return err
 	}
 	scheme := runtime.NewScheme()
+	// Core types for the Secrets the Connect SSO page creates; Ambit types for the catalog.
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		return err
+	}
 	if err := v1.AddToScheme(scheme); err != nil {
 		return err
 	}
@@ -143,7 +148,7 @@ func run(ctx context.Context) error {
 		slog.Info("GitOps mode: changes become pull requests", "repository", gitops.Repository, "branch", gitops.Branch, "path", gitops.Dir)
 	}
 	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), console.LoginOptions{Bootstrap: bootstrapAdmin, SSO: sso},
-		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops}), ReadHeaderTimeout: 10 * time.Second}
+		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, PublicURL: publicURL, Connectors: sso}), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)

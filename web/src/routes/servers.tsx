@@ -87,6 +87,12 @@ export function ServersPage() {
 }
 
 function ServerRow({ s, open, onToggle }: { s: ServerView; open: boolean; onToggle: () => void }) {
+  const me = useMe();
+  const qc = useQueryClient();
+  const approve = useMutation({
+    mutationFn: () => sendJSON("POST", `/api/servers/${encodeURIComponent(s.name)}/approve-tools`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["servers"] }),
+  });
   return (
     <>
       <tr onClick={onToggle} aria-expanded={open} className={cn("cursor-pointer border-b border-line-soft align-top hover:bg-sunken", open && "bg-selected")}>
@@ -95,8 +101,21 @@ function ServerRow({ s, open, onToggle }: { s: ServerView; open: boolean; onTogg
         <td className="px-3 py-2.5 tabular-nums">{s.tools.length || <span className="text-muted">–</span>}</td>
         <td className="px-3 py-2.5">{s.rules.length ? s.rules.join(", ") : <span className="text-muted">None: closed to everyone</span>}</td>
         <td className="px-3 py-2.5">{s.approvedBy || <span className="text-muted">{s.gitManaged ? "pull request" : "added directly"}</span>}</td>
-        <td className="px-3 py-2.5"><Status ready={s.ready} text={s.ready === "True" ? "Running" : undefined} /></td>
+        <td className="px-3 py-2.5"><Status ready={s.ready} text={s.ready === "True" ? "Running" : undefined} />
+          {s.changedTools.length > 0 && <span className="block text-[12px] text-bad">{s.changedTools.length} tool(s) changed</span>}</td>
       </tr>
+      {s.changedTools.length > 0 && (
+        <tr className="border-b border-line-soft bg-warn-soft">
+          <td colSpan={6} className="px-3 py-2.5" data-testid={`changed-${s.name}`}>
+            <b>Changed since approval:</b> <span className="font-mono">{s.changedTools.join(", ")}</span>. The gateway hides these tools and refuses calls to them.
+            Read the new descriptions below before approving.
+            {me.data?.role === "admin" && (
+              <Button className="ml-3 w-auto" disabled={approve.isPending} onClick={(e) => { e.stopPropagation(); approve.mutate(); }}>Approve new definitions</Button>
+            )}
+            {approve.isError && <span className="block text-bad">{approve.error.message}</span>}
+          </td>
+        </tr>
+      )}
       {open && (
         <tr className="border-b border-line-soft bg-sunken">
           <td colSpan={6} className="px-3 py-3">

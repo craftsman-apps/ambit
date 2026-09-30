@@ -1,4 +1,5 @@
 gateway:
+  replicas: 1
   service:
     type: NodePort
     nodePort: 30080

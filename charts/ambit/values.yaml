@@ -1,4 +1,7 @@
 gateway:
+  # Gateway pods. They share budgets (ratelimit + Valkey) and MCP sessions (a session key in a Secret),
+  # so any replica can answer any request. Two or more also get a PodDisruptionBudget (minAvailable 1).
+  replicas: 2
   # Listener port of the Ambit Gateway. Also the port of the generated Service.
   port: 8080
   service:

@@ -33,6 +33,8 @@ type Catalog struct {
 	HTTP       *http.Client // for reaching identity providers; nil uses a 10-second client
 	// Conns serves "My connections" and the connect flow; nil when no grants namespace is configured.
 	Conns *Connections
+	// SCIM receives users from the identity provider and offboards deactivated ones; nil without Conns.
+	SCIM *SCIM
 }
 
 // Config tells the console UI how changes are applied.
@@ -163,6 +165,30 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	mux.HandleFunc("POST /api/sso/connectors", allow("only admins can connect sign-in providers", c.connectSSO, RoleAdmin))
 	if c.Conns != nil {
 		c.Conns.register(mux, auth)
+	}
+	if c.SCIM != nil {
+		c.SCIM.register(mux)
+		admin := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
+			return read(func(w http.ResponseWriter, r *http.Request, s Session) {
+				if s.Role != RoleAdmin {
+					writeErr(w, http.StatusForbidden, "only admins can see offboarding")
+					return
+				}
+				h(w, r, s)
+			})
+		}
+		mux.HandleFunc("GET /api/offboarding", admin(func(w http.ResponseWriter, r *http.Request, _ Session) {
+			recs, err := c.SCIM.Records(r.Context())
+			if err != nil {
+				serverErr(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"scimURL": strings.TrimSuffix(c.PublicURL, "/") + "/scim/v2", "records": recs})
+		}))
+		mux.HandleFunc("GET /api/offboarding/token", admin(func(w http.ResponseWriter, _ *http.Request, s Session) {
+			slog.Info("SCIM token shown", "to", s.Email)
+			writeJSON(w, http.StatusOK, map[string]string{"token": c.SCIM.Token})
+		}))
 	}
 }
 

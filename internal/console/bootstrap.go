@@ -25,6 +25,7 @@ type Keys struct {
 	SessionKey   []byte
 	ClientSecret string
 	GrantKey     []byte // AES-256 key for users' SaaS tokens (Connections); added on upgrade if missing
+	SCIMToken    string // bearer token the identity provider uses for SCIM offboarding
 }
 
 // Bootstrap prepares everything the chart deliberately does not generate (GitOps rule 6):
@@ -48,13 +49,19 @@ func Bootstrap(ctx context.Context, kube kubernetes.Interface, dex api.DexClient
 			return Keys{}, fmt.Errorf("create %s: %w", KeysSecret, err)
 		}
 	}
-	if len(keysSec.Data["grant-key"]) != 32 { // installs from before step 5
-		keysSec.Data["grant-key"] = randomBytes(32)
+	if len(keysSec.Data["grant-key"]) != 32 || len(keysSec.Data["scim-token"]) == 0 { // installs from before steps 5 and 6
+		if len(keysSec.Data["grant-key"]) != 32 {
+			keysSec.Data["grant-key"] = randomBytes(32)
+		}
+		if len(keysSec.Data["scim-token"]) == 0 {
+			keysSec.Data["scim-token"] = []byte(randomPassword(48))
+		}
 		if keysSec, err = secrets.Update(ctx, keysSec, metav1.UpdateOptions{}); err != nil {
-			return Keys{}, fmt.Errorf("add grant key to %s: %w", KeysSecret, err)
+			return Keys{}, fmt.Errorf("add keys to %s: %w", KeysSecret, err)
 		}
 	}
-	keys := Keys{SessionKey: keysSec.Data["session-key"], ClientSecret: string(keysSec.Data["client-secret"]), GrantKey: keysSec.Data["grant-key"]}
+	keys := Keys{SessionKey: keysSec.Data["session-key"], ClientSecret: string(keysSec.Data["client-secret"]),
+		GrantKey: keysSec.Data["grant-key"], SCIMToken: string(keysSec.Data["scim-token"])}
 
 	client := &api.Client{Id: ClientID, Name: "Ambit", Secret: keys.ClientSecret, RedirectUris: []string{redirect}}
 	resp, err := dex.CreateClient(ctx, &api.CreateClientReq{Client: client})

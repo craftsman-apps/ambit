@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Link, Navigate } from "@tanstack/react-router";
-import { useMe, useModels, useRules } from "@/api";
+import { useMe, useModels, useRequests, useRules, useServers } from "@/api";
 import { Button } from "@/components/ui/button";
 import { ThemeSwitch } from "@/components/theme-switch";
 
@@ -23,6 +23,8 @@ export function Shell({ crumb, children }: { crumb: string; children: ReactNode 
   const me = useMe();
   const rules = useRules();
   const models = useModels();
+  const servers = useServers();
+  const requests = useRequests();
   if (me.isPending) return null;
   if (!me.data) return <Navigate to="/login" />;
   const u = me.data;
@@ -37,6 +39,14 @@ export function Shell({ crumb, children }: { crumb: string; children: ReactNode 
         <NavLink to="/">Overview</NavLink>
         <NavLink to="/access-rules" count={rules.data?.length}>Access rules</NavLink>
         <NavLink to="/models" count={models.data?.length}>Models</NavLink>
+        <NavLink to="/servers" count={servers.data?.length}>
+          MCP servers
+          {!!requests.data?.filter((q) => !q.decision).length && (
+            <span className="ml-1.5 rounded bg-warn-soft px-1 font-mono text-[11px]" title="Requests waiting for an approver">
+              {requests.data.filter((q) => !q.decision).length} waiting
+            </span>
+          )}
+        </NavLink>
       </nav>
       <div className="grid grid-rows-[auto_1fr]">
         <header className="flex items-center justify-between border-b border-line bg-surface px-4 py-2">

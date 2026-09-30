@@ -59,3 +59,35 @@ test("admin creates a rule in the form, sees the merged policy, and deletes it",
   await page.getByRole("button", { name: "Delete ui-test-finance" }).click();
   await expect(page.getByRole("cell", { name: "ui-test-finance" })).toHaveCount(0);
 });
+
+test("MCP servers: tools are listed, and a request waits for another approver", async ({ page }) => {
+  await signInAsBootstrapAdmin(page);
+  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: /MCP servers/ }).click();
+  await expect(page.getByRole("heading", { name: "MCP servers" })).toBeVisible();
+  const time = page.getByRole("row", { name: /^time\b/ }).first();
+  await expect(time.getByText("Running")).toBeVisible();
+  await time.click();
+  await expect(page.getByText("get_current_time", { exact: true })).toBeVisible();
+
+  const name = `ui-${Date.now().toString(36)}`; // unique per run; step 4b's cleanup removes requests
+  await page.getByRole("button", { name: "Request a server" }).click();
+  await page.getByLabel("Name", { exact: true }).fill(name);
+  await page.getByLabel("Image, pinned by digest").fill("ghcr.io/stacklok/dockyard/uvx/mcp-server-time:2026.8.18");
+  await page.getByRole("button", { name: "Send request" }).click();
+  await expect(page.getByText(/pin the image by digest/)).toBeVisible();
+  await page.getByLabel("Image, pinned by digest").fill(
+    "ghcr.io/stacklok/dockyard/uvx/mcp-server-time@sha256:ab8255cf7bf2bdad14086b356790d2d61d06cab221b85950805427be9d06d949");
+  await page.getByRole("button", { name: "Send request" }).click();
+  const card = page.getByTestId(`request-${name}`);
+  await expect(card.getByText("You asked for this, so another approver decides.")).toBeVisible();
+  await expect(card.getByRole("button", { name: /^Approve/ })).toHaveCount(0);
+});
+
+test("rules form offers each server's tools", async ({ page }) => {
+  await signInAsBootstrapAdmin(page);
+  await page.goto("/access-rules?edit=new");
+  await page.getByLabel(/^time\b/).check();
+  await page.getByLabel("Only these tools").check();
+  await expect(page.getByLabel("convert_time")).toBeVisible();
+  await expect(page.getByLabel("get_current_time")).toBeVisible();
+});

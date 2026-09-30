@@ -19,12 +19,6 @@ llm() { # llm TOKEN MODEL -> status (retries free-tier 429)
     [[ "$code" == 429 && $i -lt 4 ]] || break; sleep 20
   done; echo "$code"
 }
-# api METHOD PATH [JSON]: console API call with the signed-in cookie jar; body in $W/api
-api() {
-  local -a a=(-s -o "$W/api" -w '%{http_code}' -X "$1" -b "$W/jar")
-  [[ $# -ge 3 ]] && a+=(-H 'Content-Type: application/json' -d "$3")
-  command curl "${a[@]}" "$BASE$2"
-}
 expr_of() { kubectl -n "$NS" get agentgatewaymodel "$1" -o jsonpath='{.spec.policies.authorization.policy.matchExpressions[0]}'; }
 wait_expr() { for _ in $(seq 1 30); do [[ "$(expr_of "$1")" == "$2" ]] && return 0; sleep 1; done; fail "$1: '$(expr_of "$1")' != '$2'"; }
 ORIG='jwt.groups.exists(g, g in ["ml-research"])'
@@ -45,8 +39,8 @@ wait_expr nemotron-3-super 'jwt.groups.exists(g, g in ["eng", "ml-research"])'
 [[ $(kubectl -n "$NS" get "accessrules.$G" eng-nemotron -o jsonpath='{.metadata.annotations.ambitproject\.dev/created-by}') == priya@acme.test ]] \
   || fail "2 creator not recorded"
 if [[ -s "$KEYFILE" ]]; then
-  c=$(llm "$(token alice)" "$NEMO"); [[ "$c" == 200 ]] || fail "2 alice still denied after the rule: $c $(head -c 200 "$W/llm")"
-  pass "2 priya (admin) creates eng-nemotron in the console -> alice gets 200 from nemotron-super"
+  c=$(llm "$(token alice)" "$NEMO"); reached_provider "$c" || fail "2 alice still denied after the rule: $c $(head -c 200 "$W/llm")"
+  pass "2 priya (admin) creates eng-nemotron in the console -> alice reaches nemotron-super: $VIA"
 else
   pass "2 priya creates eng-nemotron -> gateway policy now includes eng (SKIP the OpenRouter call: no key)"
 fi

@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createColumnHelper, createSortedRowModel, rowSortingFeature, sortFn_text, tableFeatures, useTable } from "@tanstack/react-table";
-import { sendJSON, useMe, useModels, useRule, useRules, type RuleInput, type RuleView } from "@/api";
+import { sendJSON, useMe, useModels, useRule, useRules, useServers, type RuleInput, type RuleView, type ServerAccess } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Shell, Status } from "@/components/shell";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,11 @@ import { cn } from "@/lib/utils";
 const features = tableFeatures({ rowSortingFeature, sortedRowModel: createSortedRowModel(), sortFns: { text: sortFn_text } });
 const col = createColumnHelper<typeof features, RuleView>();
 const who = (r: RuleView) => (r.allSignedIn ? "Everyone signed in" : r.groups.join(", "));
+// "time: get_current_time" or "everything: all tools"
+const serverText = (sa: ServerAccess) => `${sa.name}: ${sa.tools?.length ? sa.tools.join(", ") : "all tools"}`;
+const canUse = (r: RuleView) => [...r.models, ...r.servers.map(serverText)].join("; ");
+// A client works best with about 40 tools or fewer (journey U5).
+const TOOL_BUDGET = 40;
 
 export function AccessRulesPage() {
   const { rule: selected, edit } = useSearch({ from: "/access-rules" });
@@ -25,7 +30,7 @@ export function AccessRulesPage() {
       <><span className="whitespace-nowrap font-mono">{c.getValue()}</span>
         {c.row.original.ready === "False" && <span className="block text-[12px] text-muted">{c.row.original.message}</span>}</>) }),
     col.accessor(who, { id: "who", header: "Who" }),
-    col.accessor((r) => r.models.join(", "), { id: "models", header: "Can use" }),
+    col.accessor(canUse, { id: "models", header: "Can use" }),
     col.accessor((r) => (r.gitManaged ? "Git" : r.createdBy ? "Console" : "Cluster"), { id: "source", header: "Source",
       cell: (c) => <span className="font-mono text-[12.5px]">{c.getValue()}</span> }),
     col.accessor("ready", { header: "Status", cell: (c) => <Status ready={c.getValue()} /> }),
@@ -41,7 +46,7 @@ export function AccessRulesPage() {
           <div className="mb-4 flex items-end justify-between gap-3">
             <div>
               <h1 className="text-xl font-semibold tracking-tight">Access rules</h1>
-              <p className="text-muted">Who may use which models. A model no rule names is closed to everyone.</p>
+              <p className="text-muted">Who may use which models and MCP tools. Anything no rule names is closed to everyone.</p>
             </div>
             {isAdmin && <Button className="w-auto" onClick={() => navigate({ search: { edit: "new" } })}>New rule</Button>}
           </div>
@@ -111,7 +116,8 @@ function RuleDetailPanel({ name, isAdmin, onEdit, onDeleted }: { name: string; i
       </div>
       <dl className="grid grid-cols-[76px_1fr] gap-x-3 gap-y-2">
         <dt className="text-muted">Who</dt><dd>{r.allSignedIn ? "Everyone with a valid token" : <>Members of <b>{r.groups.join(", ")}</b></>}</dd>
-        <dt className="text-muted">Can use</dt><dd>{r.models.join(", ")}</dd>
+        <dt className="text-muted">Can use</dt>
+        <dd>{r.models.join(", ")}{r.servers.map((sa) => <span key={sa.name} className="block">MCP {serverText(sa)}</span>)}</dd>
         <dt className="text-muted">Status</dt><dd><Status ready={r.ready} /><span className="block text-[12.5px] text-muted">{r.message}</span></dd>
       </dl>
       <div>
@@ -122,7 +128,13 @@ function RuleDetailPanel({ name, isAdmin, onEdit, onDeleted }: { name: string; i
             <pre className="whitespace-pre-wrap break-all rounded-md border border-line-soft bg-surface p-3 font-mono text-[12.5px] leading-relaxed text-accent-text">{e.cel}</pre>
           </div>
         ))}
-        <p className="text-[12px] text-muted">Merged from every rule that names the model.</p>
+        {r.effectiveServers.map((e) => (
+          <div key={e.server} className="mb-2">
+            <p className="mb-1 text-[12.5px] text-muted">MCP server {e.server}</p>
+            <pre className="whitespace-pre-wrap break-all rounded-md border border-line-soft bg-surface p-3 font-mono text-[12.5px] leading-relaxed text-accent-text">{e.cel}</pre>
+          </div>
+        ))}
+        <p className="text-[12px] text-muted">Merged from every rule that names the model or server.</p>
       </div>
       {isAdmin && !r.gitManaged && (
         <div className="flex gap-2">
@@ -140,6 +152,7 @@ function RuleDetailPanel({ name, isAdmin, onEdit, onDeleted }: { name: string; i
 
 function RuleForm({ name, onDone }: { name?: string; onDone: (name?: string) => void }) {
   const models = useModels();
+  const servers = useServers();
   const existing = useRule(name);
   const qc = useQueryClient();
   const init = existing.data;
@@ -150,6 +163,12 @@ function RuleForm({ name, onDone }: { name?: string; onDone: (name?: string) => 
   const allSignedIn = everyone ?? init?.allSignedIn ?? false;
   const groupText = groups ?? init?.groups.join(", ") ?? "";
   const chosen = picked ?? init?.models ?? [];
+  const [pickedServers, setPickedServers] = useState<ServerAccess[] | null>(null);
+  const chosenServers = pickedServers ?? init?.servers ?? [];
+  const setServer = (name: string, sa: ServerAccess | null) =>
+    setPickedServers([...chosenServers.filter((x) => x.name !== name), ...(sa ? [sa] : [])].sort((a, b) => a.name.localeCompare(b.name)));
+  const toolCount = chosenServers.reduce((n, sa) =>
+    n + (sa.tools?.length ?? servers.data?.find((x) => x.name === sa.name)?.tools.length ?? 0), 0);
   const save = useMutation({
     mutationFn: (body: RuleInput) =>
       name ? sendJSON("PUT", `/api/access-rules/${encodeURIComponent(name)}`, body) : sendJSON("POST", "/api/access-rules", body),
@@ -159,7 +178,7 @@ function RuleForm({ name, onDone }: { name?: string; onDone: (name?: string) => 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     save.mutate({ ...(name ? {} : { name: ruleName }), allSignedIn,
-      groups: allSignedIn ? [] : groupText.split(",").map((g) => g.trim()).filter(Boolean), models: chosen });
+      groups: allSignedIn ? [] : groupText.split(",").map((g) => g.trim()).filter(Boolean), models: chosen, servers: chosenServers });
   };
   const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 font-mono text-[13px] outline-none focus:border-accent";
   return (
@@ -184,6 +203,40 @@ function RuleForm({ name, onDone }: { name?: string; onDone: (name?: string) => 
             <span className="whitespace-nowrap font-mono">{m.name}</span> <span className="text-[12px] text-muted">{m.model}</span>
           </label>
         ))}
+      </fieldset>
+      <fieldset>
+        <legend className="mb-1 text-muted">MCP tools</legend>
+        {servers.data?.length === 0 && <p className="text-[12.5px] text-muted">No MCP servers yet.</p>}
+        {servers.data?.map((srv) => {
+          const sa = chosenServers.find((x) => x.name === srv.name);
+          return (
+            <div key={srv.name} className="py-0.5">
+              <label className="flex items-center gap-2">
+                <input id={`server-${srv.name}`} type="checkbox" checked={!!sa} onChange={(e) => setServer(srv.name, e.target.checked ? { name: srv.name } : null)} />
+                <span className="font-mono">{srv.name}</span> <span className="text-[12px] text-muted">{srv.tools.length} tools</span>
+              </label>
+              {sa && (
+                <div className="ml-6 mt-1 space-y-0.5 text-[13px]">
+                  <label className="flex items-center gap-2"><input id={`server-${srv.name}-all`} type="radio" checked={!sa.tools}
+                    onChange={() => setServer(srv.name, { name: srv.name })} /> All tools, including ones it adds later</label>
+                  <label className="flex items-center gap-2"><input id={`server-${srv.name}-some`} type="radio" checked={!!sa.tools}
+                    onChange={() => setServer(srv.name, { name: srv.name, tools: [] })} /> Only these tools</label>
+                  {sa.tools && srv.tools.map((t) => (
+                    <label key={t.name} className="ml-6 flex items-center gap-2">
+                      <input id={`tool-${srv.name}-${t.name}`} type="checkbox" checked={sa.tools!.includes(t.name)}
+                        onChange={(e) => setServer(srv.name, { name: srv.name, tools: e.target.checked ? [...sa.tools!, t.name] : sa.tools!.filter((x) => x !== t.name) })} />
+                      <span className="font-mono text-[12.5px]">{t.name}</span>
+                    </label>
+                  ))}
+                  {sa.tools && srv.tools.length === 0 && <p className="ml-6 text-muted">Tools appear once the server is running.</p>}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {toolCount > TOOL_BUDGET && (
+          <p className="mt-1 rounded-md border border-warn bg-warn-soft p-2 text-[12.5px]">This rule grants {toolCount} tools. Agents choose tools less reliably above about {TOOL_BUDGET}; consider only the tools this group needs.</p>
+        )}
       </fieldset>
       {save.isError && <p className="rounded-md border border-bad p-2 text-bad">{save.error.message}</p>}
       <div className="flex gap-2">

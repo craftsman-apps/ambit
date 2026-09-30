@@ -41,7 +41,8 @@ spec:
 {{- if .Values.mcp.enabled }}
 ---
 # MCP servers run third-party code: only the gateway may call their proxies, so every call passes
-# token and tool checks. ToolHive's proxy pods may reach the server pods behind them (http transports).
+# token and tool checks. ambit-controller also calls them, only to read their tool lists.
+# ToolHive's proxy pods may reach the server pods behind them (http transports).
 # ponytail: ingress only; add egress limits per Server when a customer needs servers without internet.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -52,7 +53,9 @@ spec:
     matchLabels: { toolhive: "true" }
   policyTypes: [Ingress]
   ingress:
-    - from: [{ podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit } } }]
+    - from:
+        - podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit } }
+        - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-controller } }
       ports: [{ port: 8080 }]
     - from: [{ podSelector: { matchLabels: { app.kubernetes.io/name: mcpserver, toolhive: "true" } } }]
 {{- end }}

@@ -37,6 +37,22 @@ sign_in() {
 # token USER: an access token from the Keycloak test realm (password grant, client ambit-cli-test).
 token() { command curl -s -d grant_type=password -d client_id=ambit-cli-test -d username="$1" -d password="$1-test-pass" \
   "http://keycloak.localtest.me:8080/realms/acme/protocol/openid-connect/token" | uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)["access_token"])'; }
+# api METHOD PATH [JSON]: console API call with the signed-in cookie jar; body in $W/api
+api() {
+  local -a a=(-s -o "$W/api" -w '%{http_code}' -X "$1" -b "$W/jar")
+  [[ $# -ge 3 ]] && a+=(-H 'Content-Type: application/json' -d "$3")
+  command curl "${a[@]}" "$BASE$2"
+}
+# reached_provider CODE: the gateway allowed an LLM request and OpenRouter answered. 200, or OpenRouter's own
+# free-tier 429 ("rate-limited upstream"): both prove the request passed Ambit's checks. Sets VIA for the log.
+reached_provider() {
+  VIA="$1 from OpenRouter"
+  [[ "$1" == 200 ]] && return 0
+  if [[ "$1" == 429 ]] && grep -q '"code":429' "$W/llm" && grep -qi 'rate-limited upstream\|Provider returned error' "$W/llm"; then
+    VIA="429 from OpenRouter (free-tier limit; the gateway allowed the request)"; return 0
+  fi
+  return 1
+}
 me_status() { curl -s ${CURL_CA:+--cacert "$CURL_CA"} -o "$W/me" -w '%{http_code}' -b "$W/jar" "$BASE/api/me"; }
 
 # ensure_llm_setup NS: Keycloak test IdP, SSO + LLM chart values, provider key Secret, test catalog.
@@ -57,3 +73,34 @@ ensure_llm_setup() {
   kubectl -n "$ns" wait models.ambitproject.dev --all --for=condition=Ready --timeout=120s >/dev/null
 }
 me_field() { uv run --no-project python -c "import json,sys;v=json.load(open('$W/me')).get('$1');print(json.dumps(v))"; }
+
+# MCP through the gateway.
+MCP=${MCP:-http://mcp.localtest.me:8080/mcp}
+# mcp_open TOKEN: starts an MCP session; sets TOK and SID.
+mcp_open() {
+  TOK=$1
+  command curl -s -D "$W/mh" -o /dev/null -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"step4a","version":"1"}}}' "$MCP"
+  SID=$(awk 'tolower($1)=="mcp-session-id:"{print $2}' "$W/mh" | tr -d '\r')
+  [[ -n "$SID" ]] || fail "no MCP session: $(head -1 "$W/mh")"
+  mcp_send '{"jsonrpc":"2.0","method":"notifications/initialized"}' >/dev/null
+}
+# mcp_send JSON: one request in the open session; prints the JSON-RPC response (SSE or plain JSON).
+mcp_send() {
+  command curl -s -H "Authorization: Bearer $TOK" -H "Mcp-Session-Id: $SID" -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' -d "$1" "$MCP" | awk '/^data: /{print substr($0, 7); next} /^\{/{print}'
+}
+# tools TOKEN: opens a session and sets TOOLS to the sorted tool names this user sees, space separated.
+tools() {
+  mcp_open "$1"
+  TOOLS=$(mcp_send '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' |
+    uv run --no-project python -c 'import json,sys;print(" ".join(sorted(t["name"] for t in json.loads(sys.stdin.read())["result"]["tools"])))')
+}
+# call NAME ARGS: calls a tool in the open session; prints "ok <text>" or "error <message>".
+call() {
+  mcp_send "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$2}}" |
+    uv run --no-project python -c 'import json,sys
+d=json.loads(sys.stdin.read())
+print("error "+d["error"]["message"] if "error" in d else "ok "+d["result"]["content"][0]["text"].replace("\n"," "))'
+}

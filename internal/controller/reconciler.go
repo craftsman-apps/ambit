@@ -45,7 +45,14 @@ type Reconciler struct {
 	Live      client.Reader
 	Namespace string
 	Route     RouteRef
+	// ListTools reads a running server's tools into Server.status.tools; nil turns this off.
+	ListTools ToolLister
+
+	toolsRead map[types.UID]time.Time // when each Server's tools were last read (single worker, no lock)
 }
+
+// How often the tools of a running server are read again: servers may add or change tools.
+const toolsRefresh = 10 * time.Minute
 
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	all := handler.EnqueueRequestsFromMapFunc(func(context.Context, client.Object) []reconcile.Request {
@@ -136,7 +143,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	for i := range servers.Items {
 		s := &servers.Items[i]
 		next := s.DeepCopy()
-		setReady(&next.Status.Conditions, conds["Server/"+s.Name], s.Generation)
+		c := conds["Server/"+s.Name]
+		setReady(&next.Status.Conditions, c, s.Generation)
+		if c.Status == metav1.ConditionTrue && r.ListTools != nil {
+			next.Status.Tools = r.readTools(ctx, *s)
+			if result.RequeueAfter == 0 {
+				result.RequeueAfter = toolsRefresh
+			}
+		}
 		if err := r.updateStatus(ctx, s.Status, next.Status, next); err != nil {
 			return reconcile.Result{}, err
 		}
@@ -150,6 +164,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		}
 	}
 	return result, nil
+}
+
+// readTools returns the server's tools, reading them again when they are older than toolsRefresh.
+// On failure it keeps the last known list: a slow server must not make its tools vanish from the console.
+func (r *Reconciler) readTools(ctx context.Context, s v1.Server) []v1.Tool {
+	if r.toolsRead == nil {
+		r.toolsRead = map[types.UID]time.Time{}
+	}
+	if t, ok := r.toolsRead[s.UID]; ok && time.Since(t) < toolsRefresh && len(s.Status.Tools) > 0 {
+		return s.Status.Tools
+	}
+	tools, err := r.ListTools(ctx, s)
+	if err != nil {
+		log.FromContext(ctx).Error(err, "read tools", "server", s.Name)
+		return s.Status.Tools
+	}
+	r.toolsRead[s.UID] = time.Now()
+	return tools
 }
 
 func setReady(conds *[]metav1.Condition, c metav1.Condition, generation int64) {

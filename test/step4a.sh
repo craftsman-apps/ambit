@@ -6,38 +6,9 @@ set -euo pipefail
 NS=${1:-ambit-system}
 cd "$(dirname "$0")/.."
 source test/lib.sh
-MCP=http://mcp.localtest.me:8080/mcp
 G=ambitproject.dev
 CURL_IMAGE=curlimages/curl:8.20.0@sha256:b3f1fb2a51d923260350d21b8654bbc607164a987e2f7c84a0ac199a67df812a
 
-# mcp_open TOKEN: starts an MCP session; sets TOK and SID.
-mcp_open() {
-  TOK=$1
-  command curl -s -D "$W/mh" -o /dev/null -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
-    -H 'Accept: application/json, text/event-stream' \
-    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"step4a","version":"1"}}}' "$MCP"
-  SID=$(awk 'tolower($1)=="mcp-session-id:"{print $2}' "$W/mh" | tr -d '\r')
-  [[ -n "$SID" ]] || fail "no MCP session: $(head -1 "$W/mh")"
-  mcp_send '{"jsonrpc":"2.0","method":"notifications/initialized"}' >/dev/null
-}
-# mcp_send JSON: one request in the open session; prints the JSON-RPC response (SSE or plain JSON).
-mcp_send() {
-  command curl -s -H "Authorization: Bearer $TOK" -H "Mcp-Session-Id: $SID" -H 'Content-Type: application/json' \
-    -H 'Accept: application/json, text/event-stream' -d "$1" "$MCP" | awk '/^data: /{print substr($0, 7); next} /^\{/{print}'
-}
-# tools TOKEN: opens a session and sets TOOLS to the sorted tool names this user sees, space separated.
-tools() {
-  mcp_open "$1"
-  TOOLS=$(mcp_send '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' |
-    uv run --no-project python -c 'import json,sys;print(" ".join(sorted(t["name"] for t in json.loads(sys.stdin.read())["result"]["tools"])))')
-}
-# call NAME ARGS: calls a tool in the open session; prints "ok <text>" or "error <message>".
-call() {
-  mcp_send "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$2}}" |
-    uv run --no-project python -c 'import json,sys
-d=json.loads(sys.stdin.read())
-print("error "+d["error"]["message"] if "error" in d else "ok "+d["result"]["content"][0]["text"].replace("\n"," "))'
-}
 policy_expr() { kubectl -n "$NS" get agentgatewaypolicy ambit-mcp-access -o jsonpath='{.spec.backend.mcp.authorization.policy.matchExpressions[0]}'; }
 wait_for() { # wait_for DESCRIPTION CONDITION: evaluates CONDITION every second for 60 s
   for _ in $(seq 1 60); do eval "$2" && return 0; sleep 1; done

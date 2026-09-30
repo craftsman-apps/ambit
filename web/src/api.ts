@@ -39,12 +39,31 @@ export type ModelView = {
   name: string; displayName: string; model: string; provider: string;
   allowedGroups: string[]; allSignedIn: boolean; ready: string; message: string;
 };
+export type ServerAccess = { name: string; tools?: string[] };
 export type RuleView = {
-  name: string; groups: string[]; allSignedIn: boolean; models: string[];
+  name: string; groups: string[]; allSignedIn: boolean; models: string[]; servers: ServerAccess[];
   ready: string; reason: string; message: string; gitManaged: boolean; createdBy: string;
 };
-export type RuleDetail = RuleView & { effective: { model: string; modelName: string; cel: string }[] };
-export type RuleInput = { name?: string; groups: string[]; allSignedIn: boolean; models: string[] };
+export type RuleDetail = RuleView & {
+  effective: { model: string; modelName: string; cel: string }[];
+  effectiveServers: { server: string; cel: string }[];
+};
+export type RuleInput = { name?: string; groups: string[]; allSignedIn: boolean; models: string[]; servers: ServerAccess[] };
+
+export type Tool = { name: string; description?: string };
+export type ServerView = {
+  name: string; displayName: string; image: string; transport: string; ready: string; message: string;
+  tools: Tool[]; requestedBy: string; approvedBy: string; gitManaged: boolean; rules: string[];
+};
+export type RequestView = {
+  name: string; serverName: string; displayName: string; image: string; transport: string; reason: string;
+  requestedBy: string; requestedAt: string; decision: "" | "Approved" | "Denied"; decidedBy: string; decidedAt: string | null; comment: string;
+};
+export type RequestInput = { serverName: string; displayName: string; image: string; transport: string; reason: string };
+export type MyAccess = {
+  groups: string[]; models: string[];
+  servers: { server: string; allTools: boolean; tools: string[]; rules: string[] }[];
+};
 
 async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url, { credentials: "same-origin" });
@@ -67,3 +86,6 @@ export const useModels = () => useQuery({ queryKey: ["models"], queryFn: () => g
 export const useRules = () => useQuery({ queryKey: ["rules"], queryFn: () => getJSON<RuleView[]>("/api/access-rules") });
 export const useRule = (name?: string) =>
   useQuery({ queryKey: ["rule", name], enabled: !!name, queryFn: () => getJSON<RuleDetail>(`/api/access-rules/${encodeURIComponent(name!)}`) });
+export const useServers = () => useQuery({ queryKey: ["servers"], queryFn: () => getJSON<ServerView[]>("/api/servers") });
+export const useRequests = () => useQuery({ queryKey: ["server-requests"], queryFn: () => getJSON<RequestView[]>("/api/server-requests") });
+export const useMyAccess = () => useQuery({ queryKey: ["my-access"], queryFn: () => getJSON<MyAccess>("/api/me/access") });

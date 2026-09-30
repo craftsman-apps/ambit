@@ -39,10 +39,11 @@ type ModelView struct {
 }
 
 type RuleView struct {
-	Name        string   `json:"name"`
-	Groups      []string `json:"groups"`
-	AllSignedIn bool     `json:"allSignedIn"`
-	Models      []string `json:"models"`
+	Name        string            `json:"name"`
+	Groups      []string          `json:"groups"`
+	AllSignedIn bool              `json:"allSignedIn"`
+	Models      []string          `json:"models"`
+	Servers     []v1.ServerAccess `json:"servers"`
 	Ready       string   `json:"ready"`
 	Reason      string   `json:"reason"`
 	Message     string   `json:"message"`
@@ -57,9 +58,16 @@ type Effective struct {
 	CEL       string `json:"cel"`
 }
 
+// EffectiveServer is the part of the MCP policy the gateway enforces for one server.
+type EffectiveServer struct {
+	Server string `json:"server"`
+	CEL    string `json:"cel"`
+}
+
 type RuleDetail struct {
 	RuleView
-	Effective []Effective `json:"effective"`
+	Effective        []Effective       `json:"effective"`
+	EffectiveServers []EffectiveServer `json:"effectiveServers"`
 }
 
 type RuleInput struct {
@@ -67,6 +75,8 @@ type RuleInput struct {
 	Groups      []string `json:"groups"`
 	AllSignedIn bool     `json:"allSignedIn"`
 	Models      []string `json:"models"`
+	// Servers replaces the rule's servers; left out (nil) keeps them, for clients that edit models only.
+	Servers []v1.ServerAccess `json:"servers"`
 }
 
 const (
@@ -77,6 +87,7 @@ const (
 var (
 	nameRE  = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 	groupRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@/-]*$`) // same pattern as the CRD
+	toolRE  = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)       // same pattern as the CRD
 )
 
 func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
@@ -90,10 +101,12 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 			h(w, r, s)
 		}
 	}
-	write := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
+	// allow wraps a change: the caller must hold one of roles (any signed-in user when none are
+	// given) and send JSON.
+	allow := func(denied string, h func(http.ResponseWriter, *http.Request, Session), roles ...string) http.HandlerFunc {
 		return read(func(w http.ResponseWriter, r *http.Request, s Session) {
-			if s.Role != RoleAdmin {
-				writeErr(w, http.StatusForbidden, "only admins can change access rules")
+			if len(roles) > 0 && !slices.Contains(roles, s.Role) {
+				writeErr(w, http.StatusForbidden, denied)
 				return
 			}
 			if r.Method != http.MethodDelete {
@@ -106,12 +119,24 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 			h(w, r, s)
 		})
 	}
+	write := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
+		return allow("only admins can change access rules", h, RoleAdmin)
+	}
+	decide := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
+		return allow("only approvers and admins can decide on server requests", h, RoleApprover, RoleAdmin)
+	}
 	mux.HandleFunc("GET /api/models", read(c.listModels))
 	mux.HandleFunc("GET /api/access-rules", read(c.listRules))
 	mux.HandleFunc("GET /api/access-rules/{name}", read(c.getRule))
 	mux.HandleFunc("POST /api/access-rules", write(c.createRule))
 	mux.HandleFunc("PUT /api/access-rules/{name}", write(c.updateRule))
 	mux.HandleFunc("DELETE /api/access-rules/{name}", write(c.deleteRule))
+	mux.HandleFunc("GET /api/servers", read(c.listServers))
+	mux.HandleFunc("GET /api/server-requests", read(c.listRequests))
+	mux.HandleFunc("POST /api/server-requests", allow("", c.createRequest))
+	mux.HandleFunc("POST /api/server-requests/{name}/approve", decide(c.approveRequest))
+	mux.HandleFunc("POST /api/server-requests/{name}/deny", decide(c.denyRequest))
+	mux.HandleFunc("GET /api/me/access", read(c.myAccess))
 }
 
 func (c *Catalog) load(r *http.Request) ([]v1.Model, []v1.AccessRule, error) {
@@ -149,9 +174,13 @@ func (c *Catalog) listModels(w http.ResponseWriter, r *http.Request, _ Session) 
 
 func ruleView(ar v1.AccessRule) RuleView {
 	v := RuleView{Name: ar.Name, Groups: nonNil(ar.Spec.Groups), AllSignedIn: ar.Spec.AllSignedIn, Models: nonNil(ar.Spec.Models),
+		Servers: ar.Spec.Servers,
 		Ready: "Unknown", GitManaged: gitManaged(ar.Annotations), CreatedBy: ar.Annotations[createdByKey]}
 	if cond := meta.FindStatusCondition(ar.Status.Conditions, "Ready"); cond != nil {
 		v.Ready, v.Reason, v.Message = string(cond.Status), cond.Reason, cond.Message
+	}
+	if v.Servers == nil {
+		v.Servers = []v1.ServerAccess{}
 	}
 	return v
 }
@@ -182,7 +211,17 @@ func (c *Catalog) getRule(w http.ResponseWriter, r *http.Request, _ Session) {
 	}
 	// The same Compile the controller runs, so the console shows exactly what the gateway enforces.
 	res := controller.Compile(ms, nil, rs, controller.RouteRef{Name: "ambit-llm"})
-	d := RuleDetail{RuleView: ruleView(rs[i]), Effective: []Effective{}}
+	d := RuleDetail{RuleView: ruleView(rs[i]), Effective: []Effective{}, EffectiveServers: []EffectiveServer{}}
+	if len(rs[i].Spec.Servers) > 0 {
+		servers, err := c.servers(r)
+		if err != nil {
+			serverErr(w, err)
+			return
+		}
+		for _, sa := range rs[i].Spec.Servers {
+			d.EffectiveServers = append(d.EffectiveServers, EffectiveServer{Server: sa.Name, CEL: controller.ServerCEL(servers, rs, sa.Name)})
+		}
+	}
 	for _, name := range rs[i].Spec.Models {
 		mi := slices.IndexFunc(ms, func(m v1.Model) bool { return m.Name == name })
 		if mi < 0 {
@@ -193,14 +232,32 @@ func (c *Catalog) getRule(w http.ResponseWriter, r *http.Request, _ Session) {
 	writeJSON(w, http.StatusOK, d)
 }
 
-// validate checks a rule from the form. hasServers is true when the rule already grants MCP tools,
-// which the form does not edit yet; such a rule may have no models.
+// validate checks a rule from the form. hasServers is true when the rule will grant MCP tools.
 func (c *Catalog) validate(r *http.Request, in RuleInput, hasServers bool) error {
 	switch {
 	case (len(in.Groups) > 0) == in.AllSignedIn:
 		return errors.New("choose either groups or everyone signed in, not both")
 	case len(in.Models) == 0 && !hasServers:
-		return errors.New("choose at least one model")
+		return errors.New("choose at least one model or server")
+	}
+	if len(in.Servers) > 0 {
+		servers, err := c.servers(r)
+		if err != nil {
+			return err
+		}
+		for _, sa := range in.Servers {
+			if !slices.ContainsFunc(servers, func(x v1.Server) bool { return x.Name == sa.Name }) {
+				return fmt.Errorf("no server named %q", sa.Name)
+			}
+			if sa.Tools != nil && len(sa.Tools) == 0 {
+				return fmt.Errorf("server %q: choose at least one tool, or all tools", sa.Name)
+			}
+			for _, t := range sa.Tools {
+				if !toolRE.MatchString(t) {
+					return fmt.Errorf("server %q: %q is not a valid tool name", sa.Name, t)
+				}
+			}
+		}
 	}
 	for _, g := range in.Groups {
 		if !groupRE.MatchString(g) {
@@ -239,13 +296,13 @@ func (c *Catalog) createRule(w http.ResponseWriter, r *http.Request, s Session) 
 		writeErr(w, http.StatusBadRequest, "name must be lowercase letters, digits and dashes, starting and ending with a letter or digit")
 		return
 	}
-	if err := c.validate(r, in, false); err != nil {
+	if err := c.validate(r, in, len(in.Servers) > 0); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	ar := &v1.AccessRule{
 		ObjectMeta: metav1.ObjectMeta{Name: in.Name, Namespace: c.Namespace, Annotations: map[string]string{createdByKey: s.Email}},
-		Spec:       v1.AccessRuleSpec{Groups: in.Groups, AllSignedIn: in.AllSignedIn, Models: in.Models},
+		Spec:       v1.AccessRuleSpec{Groups: in.Groups, AllSignedIn: in.AllSignedIn, Models: in.Models, Servers: in.Servers},
 	}
 	if err := c.Client.Create(r.Context(), ar); err != nil {
 		if apierrors.IsAlreadyExists(err) {
@@ -255,7 +312,7 @@ func (c *Catalog) createRule(w http.ResponseWriter, r *http.Request, s Session) 
 		apiErr(w, err)
 		return
 	}
-	slog.Info("access rule created", "rule", in.Name, "by", s.Email, "groups", in.Groups, "allSignedIn", in.AllSignedIn, "models", in.Models)
+	slog.Info("access rule created", "rule", in.Name, "by", s.Email, "groups", in.Groups, "allSignedIn", in.AllSignedIn, "models", in.Models, "servers", in.Servers)
 	writeJSON(w, http.StatusCreated, ruleView(*ar))
 }
 
@@ -285,11 +342,15 @@ func (c *Catalog) updateRule(w http.ResponseWriter, r *http.Request, s Session) 
 	if !ok {
 		return
 	}
-	if err := c.validate(r, in, len(ar.Spec.Servers) > 0); err != nil {
+	servers := ar.Spec.Servers
+	if in.Servers != nil {
+		servers = in.Servers
+	}
+	if err := c.validate(r, in, len(servers) > 0); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	ar.Spec = v1.AccessRuleSpec{Groups: in.Groups, AllSignedIn: in.AllSignedIn, Models: in.Models, Servers: ar.Spec.Servers}
+	ar.Spec = v1.AccessRuleSpec{Groups: in.Groups, AllSignedIn: in.AllSignedIn, Models: in.Models, Servers: servers}
 	if ar.Annotations == nil {
 		ar.Annotations = map[string]string{}
 	}
@@ -298,7 +359,7 @@ func (c *Catalog) updateRule(w http.ResponseWriter, r *http.Request, s Session) 
 		apiErr(w, err)
 		return
 	}
-	slog.Info("access rule updated", "rule", ar.Name, "by", s.Email, "groups", in.Groups, "allSignedIn", in.AllSignedIn, "models", in.Models)
+	slog.Info("access rule updated", "rule", ar.Name, "by", s.Email, "groups", in.Groups, "allSignedIn", in.AllSignedIn, "models", in.Models, "servers", servers)
 	writeJSON(w, http.StatusOK, ruleView(*ar))
 }
 

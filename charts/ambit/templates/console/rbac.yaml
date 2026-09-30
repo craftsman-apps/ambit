@@ -22,11 +22,19 @@ rules:
     verbs: [get, update, delete]
   # Catalog screens: everyone signed in reads; admins change access rules (Direct mode).
   - apiGroups: [ambitproject.dev]
-    resources: [models, accessrules]
+    resources: [models, accessrules, servers, serverrequests]
     verbs: [get, list, watch]
   - apiGroups: [ambitproject.dev]
     resources: [accessrules]
     verbs: [create, update, delete]
+  # Anyone signed in may request a server; approving one creates the Server. The console never
+  # updates or deletes Servers, and records a decision only in the request's status.
+  - apiGroups: [ambitproject.dev]
+    resources: [serverrequests, servers]
+    verbs: [create]
+  - apiGroups: [ambitproject.dev]
+    resources: [serverrequests/status]
+    verbs: [update]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

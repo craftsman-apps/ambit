@@ -31,25 +31,8 @@ func compileServers(servers []v1.Server, rules []v1.AccessRule) []*unstructured.
 	}
 	sorted := append([]v1.Server(nil), servers...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
-	access := map[string]*serverAccess{}
-	for _, s := range sorted {
-		access[s.Name] = &serverAccess{tools: map[string]Access{}}
-	}
-	for _, r := range rules {
-		for _, sa := range r.Spec.Servers {
-			a := access[sa.Name]
-			if a == nil {
-				continue // reported as UnknownServer on the rule
-			}
-			if len(sa.Tools) == 0 {
-				a.all = merge(a.all, r.Spec)
-				continue
-			}
-			for _, tool := range sa.Tools {
-				a.tools[tool] = merge(a.tools[tool], r.Spec)
-			}
-		}
-	}
+	access := accessByServer(sorted, rules)
+
 
 	var out, owners []*unstructured.Unstructured
 	var refs []metav1.OwnerReference
@@ -94,6 +77,42 @@ func compileServers(servers []v1.Server, rules []v1.AccessRule) []*unstructured.
 		o.SetOwnerReferences(refs) // not controller refs: garbage-collected only when the last Server is gone
 	}
 	return append(out, owners...)
+}
+
+func accessByServer(servers []v1.Server, rules []v1.AccessRule) map[string]*serverAccess {
+	access := map[string]*serverAccess{}
+	for _, s := range servers {
+		access[s.Name] = &serverAccess{tools: map[string]Access{}}
+	}
+	for _, r := range rules {
+		for _, sa := range r.Spec.Servers {
+			a := access[sa.Name]
+			if a == nil {
+				continue // reported as UnknownServer on the rule
+			}
+			if len(sa.Tools) == 0 {
+				a.all = merge(a.all, r.Spec)
+				continue
+			}
+			for _, tool := range sa.Tools {
+				a.tools[tool] = merge(a.tools[tool], r.Spec)
+			}
+		}
+	}
+	return access
+}
+
+// ServerCEL is the part of the MCP access policy that covers one server, merged from every rule;
+// "false" when nobody may use any of its tools. The console shows it next to a rule.
+func ServerCEL(servers []v1.Server, rules []v1.AccessRule, name string) string {
+	a := accessByServer(servers, rules)[name]
+	if a == nil {
+		return "false"
+	}
+	if c := serverClauses(name, a); len(c) > 0 {
+		return strings.Join(c, " || ")
+	}
+	return "false"
 }
 
 func merge(a Access, spec v1.AccessRuleSpec) Access {

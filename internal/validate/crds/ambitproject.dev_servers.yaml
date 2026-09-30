@@ -94,6 +94,21 @@ spec:
               rule: '!has(self.connection) || has(self.url)'
           status:
             properties:
+              approvedTools:
+                description: 'ApprovedTools are the pinned tool definitions (journey A6). Pinned when first seen; a tool whose
+
+                  definition differs, or a new tool, is hidden and refused until an admin approves it again.'
+                items:
+                  properties:
+                    fingerprint:
+                      type: string
+                    name:
+                      type: string
+                  required:
+                  - fingerprint
+                  - name
+                  type: object
+                type: array
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current state of this API Resource.
@@ -160,6 +175,9 @@ spec:
                 items:
                   properties:
                     description:
+                      type: string
+                    fingerprint:
+                      description: Fingerprint is sha256 over the name, description and input schema.
                       type: string
                     name:
                       type: string

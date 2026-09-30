@@ -49,14 +49,53 @@ type Reconciler struct {
 	Route     RouteRef
 	// ListTools reads a running server's tools into Server.status.tools; nil turns this off.
 	ListTools ToolLister
+	// ToolsRefresh is how often tools are read again (0: 10 minutes).
+	ToolsRefresh time.Duration
 	// RateLimit is where Budgets are enforced; an empty Service turns budgets off.
 	RateLimit RateLimit
 
 	toolsRead map[types.UID]time.Time // when each Server's tools were last read (single worker, no lock)
 }
 
-// How often the tools of a running server are read again: servers may add or change tools.
+// How often the tools of a running server are read again by default: servers may add or change tools.
 const toolsRefresh = 10 * time.Minute
+
+func (r *Reconciler) refresh() time.Duration {
+	if r.ToolsRefresh > 0 {
+		return r.ToolsRefresh
+	}
+	return toolsRefresh
+}
+
+// pinTools pins a server's tools the first time they are read (trust on first use) and reports every
+// tool whose definition no longer matches its pin, or that has none. ambit-guard hides and refuses those.
+func pinTools(s *v1.Server) {
+	if len(s.Status.Tools) == 0 {
+		return
+	}
+	if len(s.Status.ApprovedTools) == 0 {
+		for _, t := range s.Status.Tools {
+			s.Status.ApprovedTools = append(s.Status.ApprovedTools, v1.ToolPin{Name: t.Name, Fingerprint: t.Fingerprint})
+		}
+	}
+	pinned := map[string]string{}
+	for _, p := range s.Status.ApprovedTools {
+		pinned[p.Name] = p.Fingerprint
+	}
+	var changed []string
+	for _, t := range s.Status.Tools {
+		if pinned[t.Name] != t.Fingerprint {
+			changed = append(changed, t.Name)
+		}
+	}
+	c := metav1.Condition{Type: "ToolsPinned", Status: metav1.ConditionTrue, Reason: "Pinned",
+		Message: fmt.Sprintf("%d tools match their approved definitions", len(s.Status.Tools)), ObservedGeneration: s.Generation}
+	if len(changed) > 0 {
+		c.Status, c.Reason = metav1.ConditionFalse, "ToolsChanged"
+		c.Message = "changed or new since approval, hidden until an admin approves: " + strings.Join(changed, ", ")
+	}
+	meta.SetStatusCondition(&s.Status.Conditions, c)
+}
 
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	all := handler.EnqueueRequestsFromMapFunc(func(context.Context, client.Object) []reconcile.Request {
@@ -191,8 +230,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		if c.Status == metav1.ConditionTrue && r.ListTools != nil {
 			next.Status.Tools = r.readTools(ctx, *s)
 			if result.RequeueAfter == 0 {
-				result.RequeueAfter = toolsRefresh
+				result.RequeueAfter = r.refresh()
 			}
+			pinTools(next)
 		}
 		if err := r.updateStatus(ctx, s.Status, next.Status, next); err != nil {
 			return reconcile.Result{}, err
@@ -234,7 +274,7 @@ func (r *Reconciler) readTools(ctx context.Context, s v1.Server) []v1.Tool {
 	if r.toolsRead == nil {
 		r.toolsRead = map[types.UID]time.Time{}
 	}
-	if t, ok := r.toolsRead[s.UID]; ok && time.Since(t) < toolsRefresh && len(s.Status.Tools) > 0 {
+	if t, ok := r.toolsRead[s.UID]; ok && time.Since(t) < r.refresh() && len(s.Status.Tools) > 0 {
 		return s.Status.Tools
 	}
 	tools, err := r.ListTools(ctx, s)

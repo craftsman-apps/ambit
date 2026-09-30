@@ -2,6 +2,9 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -34,6 +37,20 @@ func ListTools(ctx context.Context, s v1.Server) ([]v1.Tool, error) {
 	return listTools(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint, MaxRetries: -1, DisableStandaloneSSE: true})
 }
 
+// Fingerprint identifies a tool definition: what a model reads (name, description) and what it may
+// send (input schema). The schema is decoded and re-encoded, so key order does not change it.
+// ambit-guard computes the same value from the gateway's tools/list response.
+func Fingerprint(name, description string, inputSchema []byte) string {
+	var v any
+	canon := inputSchema
+	if json.Unmarshal(inputSchema, &v) == nil {
+		canon, _ = json.Marshal(v) // Go sorts map keys
+	}
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\n%s\n%s", name, description, canon)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
 func listTools(ctx context.Context, t mcp.Transport) ([]v1.Tool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -48,7 +65,8 @@ func listTools(ctx context.Context, t mcp.Transport) ([]v1.Tool, error) {
 		if err != nil {
 			return nil, fmt.Errorf("tools/list: %w", err)
 		}
-		out = append(out, v1.Tool{Name: tool.Name, Description: tool.Description})
+		schema, _ := json.Marshal(tool.InputSchema)
+		out = append(out, v1.Tool{Name: tool.Name, Description: tool.Description, Fingerprint: Fingerprint(tool.Name, tool.Description, schema)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil

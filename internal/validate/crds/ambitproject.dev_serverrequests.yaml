@@ -1,0 +1,145 @@
+# Generated; see hack/keep_crds.py. Do not edit by hand.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.22.0
+    helm.sh/resource-policy: keep
+  name: serverrequests.ambitproject.dev
+spec:
+  group: ambitproject.dev
+  names:
+    kind: ServerRequest
+    listKind: ServerRequestList
+    plural: serverrequests
+    singular: serverrequest
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.serverName
+      name: Server
+      type: string
+    - jsonPath: .spec.requestedBy
+      name: Requested by
+      type: string
+    - jsonPath: .status.decision
+      name: Decision
+      type: string
+    - jsonPath: .status.decidedBy
+      name: Decided by
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: 'ServerRequest asks an approver to add an MCP server. Approving it in the console creates the
+
+          Server; the request stays as the record of who asked, who approved, and which image digest.'
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation of an object.
+
+              Servers should convert recognized schemas to the latest internal value, and
+
+              may reject unrecognized values.
+
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this object represents.
+
+              Servers may infer this from the endpoint the client submits requests to.
+
+              Cannot be updated.
+
+              In CamelCase.
+
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: 'ServerRequestSpec asks for a new MCP server. It cannot change after it is made, so what was
+
+              approved is exactly what was asked for.'
+            properties:
+              reason:
+                description: Reason the requester gives, shown to the approver.
+                maxLength: 2000
+                type: string
+              requestedBy:
+                description: RequestedBy is the requester's email, set by the console from their sign-in.
+                minLength: 1
+                type: string
+              server:
+                description: Server is what will run, including the image digest.
+                properties:
+                  displayName:
+                    description: DisplayName is shown in the console.
+                    type: string
+                  image:
+                    description: 'Image pinned by digest, e.g. ghcr.io/org/server@sha256:<64 hex>. A tag can later point to
+
+                      different code; a digest cannot, so what was reviewed is what runs.'
+                    pattern: ^[^@\s]+@sha256:[a-f0-9]{64}$
+                    type: string
+                  mcpPort:
+                    description: Port the server listens on, for streamable-http and sse servers.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  transport:
+                    default: stdio
+                    description: How the server itself talks MCP. stdio servers are wrapped by ToolHive's proxy.
+                    enum:
+                    - stdio
+                    - streamable-http
+                    - sse
+                    type: string
+                required:
+                - image
+                type: object
+              serverName:
+                description: ServerName is the name the Server gets when the request is approved.
+                maxLength: 40
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                type: string
+            required:
+            - requestedBy
+            - server
+            - serverName
+            type: object
+            x-kubernetes-validations:
+            - message: a server request cannot be changed; make a new one
+              rule: self == oldSelf
+          status:
+            description: ServerRequestStatus records the decision. Once made, it cannot change.
+            properties:
+              comment:
+                maxLength: 2000
+                type: string
+              decidedAt:
+                format: date-time
+                type: string
+              decidedBy:
+                type: string
+              decision:
+                description: Empty while the request waits for an approver.
+                enum:
+                - Approved
+                - Denied
+                type: string
+              pullRequest:
+                description: 'PullRequest is set in GitOps mode: approval opens it, and the Server appears when it is merged.'
+                type: string
+            type: object
+            x-kubernetes-validations:
+            - message: a decision cannot be changed
+              rule: '!has(oldSelf.decision) || (has(self.decision) && self.decision == oldSelf.decision)'
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

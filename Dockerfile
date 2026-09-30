@@ -19,9 +19,10 @@ COPY --from=web /src/web/dist web/dist
 ARG TARGETOS TARGETARCH
 # Cross-compile on the build machine instead of emulating the target architecture.
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /ambit-console ./cmd/ambit-console \
- && GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /ambit-controller ./cmd/ambit-controller
+ && GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /ambit-controller ./cmd/ambit-controller \
+ && GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /ambit ./cmd/ambit
 
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
-COPY --from=build /ambit-console /ambit-controller /
+COPY --from=build /ambit-console /ambit-controller /ambit /
 USER 65532:65532
 ENTRYPOINT ["/ambit-console"]

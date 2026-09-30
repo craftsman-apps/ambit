@@ -46,7 +46,9 @@ trap 'rc=$?; restore; on_exit $rc' EXIT
 ensure_llm_setup "$NS"
 make -s metrics-server >/dev/null
 kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
-helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --set gateway.replicas=3 --wait --timeout 5m >/dev/null
+# A 4-CPU CI node is nearly full at this point; a small CPU request lets the rollout's extra pod fit.
+helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --set gateway.replicas=3 \
+  --set gateway.resources.requests.cpu=20m --wait --timeout 5m >/dev/null
 for _ in $(seq 1 60); do [[ $(gw_pods | wc -l | tr -d ' ') == 3 ]] && break; sleep 2; done
 [[ $(gw_pods | wc -l | tr -d ' ') == 3 ]] || fail "0 gateway did not scale to 3: $(gw_pods)"
 [[ $(kubectl -n "$NS" get pdb -o jsonpath='{.items[*].spec.minAvailable}') == *1* ]] || fail "0 no PodDisruptionBudget for the gateway"
@@ -138,14 +140,22 @@ A=$(token alice) # tokens last 5 minutes; the soak outlived the earlier one
 mcp_open "$A"; old_sid=$SID
 secret=secret/ambit-session-key # created by the agentgateway controller from the AgentgatewayParameters
 kubectl -n "$NS" get "$secret" >/dev/null 2>&1 || fail "S5 no gateway session-key Secret $secret"
+# agentgateway's controller recreates the Secret and rolls the gateway itself (a checksum of the key is on
+# the pod template). Until every pod has the new key, a session can fail on a pod with the other key.
+gen() { kubectl -n "$NS" get deploy -l gateway.networking.k8s.io/gateway-name=ambit -o jsonpath='{.items[0].metadata.generation}'; }
+g0=$(gen)
 kubectl -n "$NS" delete "$secret" >/dev/null
-kubectl -n "$NS" rollout restart deploy -l gateway.networking.k8s.io/gateway-name=ambit >/dev/null
+for _ in $(seq 1 60); do [[ $(gen) != "$g0" ]] && break; sleep 2; done
+[[ $(gen) != "$g0" ]] || fail "S5 the gateway was not rolled after its session key changed"
 rollout deploy -l gateway.networking.k8s.io/gateway-name=ambit
+for _ in $(seq 1 60); do # old pods (old key) still terminating
+  [[ -z $(kubectl -n "$NS" get pods -l gateway.networking.k8s.io/gateway-name=ambit -o jsonpath='{.items[?(@.metadata.deletionTimestamp)].metadata.name}') ]] && break; sleep 2
+done
 new=$(tools "$A" >/dev/null 2>&1 && echo ok || echo failed)
 SID=$old_sid
 oldres=$(mcp_send '{"jsonrpc":"2.0","id":9,"method":"tools/list"}' | head -c 80)
 [[ "$new" == ok ]] || fail "S5 new sessions fail after rotating the session key"
-pass "S5 session key rotated (${secret#secret/} recreated): new sessions work; a session opened before answers '${oldres:-no response}' (clients reconnect)"
+pass "S5 session key rotated (${secret#secret/} recreated, gateway rolled by its controller): new sessions work; a session opened before answers '${oldres:-no response}' (clients reconnect)"
 
 # S6 · list every running image, and find which contain a named package
 start=$SECONDS

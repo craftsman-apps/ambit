@@ -158,6 +158,7 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	mux.HandleFunc("PUT /api/access-rules/{name}", write(c.updateRule))
 	mux.HandleFunc("DELETE /api/access-rules/{name}", write(c.deleteRule))
 	mux.HandleFunc("GET /api/servers", read(c.listServers))
+	mux.HandleFunc("POST /api/servers/{name}/approve-tools", write(c.approveTools))
 	mux.HandleFunc("GET /api/server-requests", read(c.listRequests))
 	mux.HandleFunc("POST /api/server-requests", allow("", c.createRequest))
 	mux.HandleFunc("POST /api/server-requests/{name}/approve", decide(c.approveRequest))

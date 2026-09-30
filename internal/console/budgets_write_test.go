@@ -59,3 +59,16 @@ func TestBudgetWrites(t *testing.T) {
 		t.Fatalf("git-managed: %d %s", r.Code, r.Body)
 	}
 }
+
+// Review finding (Codex): in GitOps mode a "create" must not replace an existing budget of that name.
+func TestGitOpsBudgetCreateRefusesExistingName(t *testing.T) {
+	h, c, a, repo := gitopsFixture(t)
+	if err := c.Create(t.Context(), &v1.Budget{ObjectMeta: metav1.ObjectMeta{Name: "eng-a", Namespace: testNS},
+		Spec: v1.BudgetSpec{Group: "eng-a", UserRequestsPerDay: ptr.To[int64](5)}}); err != nil {
+		t.Fatal(err)
+	}
+	r := do(t, h, "POST", "/api/budgets", user(a, "priya@acme.test", RoleAdmin), BudgetInput{Name: "eng-a", Group: "eng.a", UserRequestsPerDay: ptr.To[int64](9)})
+	if r.Code != http.StatusConflict || len(repo.files) != 0 {
+		t.Fatalf("%d %s, %d files proposed", r.Code, r.Body, len(repo.files))
+	}
+}

@@ -260,6 +260,12 @@ func (c *Catalog) createBudget(w http.ResponseWriter, r *http.Request, s Session
 	b := &v1.Budget{ObjectMeta: metav1.ObjectMeta{Name: in.Name, Namespace: c.Namespace, Annotations: map[string]string{createdByKey: s.Email}},
 		Spec: v1.BudgetSpec{Group: in.Group, GroupRequestsPerDay: in.GroupRequestsPerDay, UserRequestsPerDay: in.UserRequestsPerDay}}
 	if c.GitOps != nil {
+		// A pull request for an existing file would replace that budget, not add one.
+		var existing v1.Budget
+		if err := c.Client.Get(r.Context(), client.ObjectKeyFromObject(b), &existing); err == nil {
+			writeErr(w, http.StatusConflict, "a budget named "+in.Name+" already exists")
+			return
+		}
 		c.propose(w, r, s, "create", "Budget", "budgets", in.Name, b.Spec, b.Annotations)
 		return
 	}

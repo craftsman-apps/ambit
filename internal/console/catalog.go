@@ -157,6 +157,12 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	mux.HandleFunc("POST /api/access-rules", write(c.createRule))
 	mux.HandleFunc("PUT /api/access-rules/{name}", write(c.updateRule))
 	mux.HandleFunc("DELETE /api/access-rules/{name}", write(c.deleteRule))
+	budget := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
+		return allow("only admins can change budgets", h, RoleAdmin)
+	}
+	mux.HandleFunc("POST /api/budgets", budget(c.createBudget))
+	mux.HandleFunc("PUT /api/budgets/{name}", budget(c.updateBudget))
+	mux.HandleFunc("DELETE /api/budgets/{name}", budget(c.deleteBudget))
 	mux.HandleFunc("GET /api/servers", read(c.listServers))
 	mux.HandleFunc("POST /api/servers/{name}/approve-tools", write(c.approveTools))
 	mux.HandleFunc("GET /api/server-requests", read(c.listRequests))

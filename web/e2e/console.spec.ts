@@ -128,8 +128,21 @@ test("Audit page searches one person's calls", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Export CSV" })).toBeVisible();
 });
 
-test("Budgets page lists group budgets", async ({ page }) => {
+test("Budgets page adds, changes and removes a group budget", async ({ page }) => {
   await signInAsBootstrapAdmin(page);
   await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Budgets" }).click();
   await expect(page.getByRole("heading", { name: "Budgets" })).toBeVisible();
+  await page.getByRole("button", { name: "New budget" }).click();
+  await page.getByLabel("Group (as your identity provider names it)").fill("ui-test-group");
+  await page.getByLabel("Each person, requests per day").fill("25");
+  await page.getByRole("button", { name: "Add budget" }).click();
+  const card = page.getByTestId("budget-ui-test-group");
+  await expect(card.getByText("25 per day")).toBeVisible();
+  await card.getByRole("button", { name: "Edit" }).click();
+  await page.getByLabel("Each person, requests per day").fill("40");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(card.getByText("40 per day")).toBeVisible();
+  await card.getByRole("button", { name: "Delete" }).click();
+  await card.getByRole("button", { name: "Remove budget" }).click();
+  await expect(card).toHaveCount(0);
 });

@@ -143,7 +143,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	for i := range servers.Items {
 		s := &servers.Items[i]
 		next := s.DeepCopy()
-		c := conds["Server/"+s.Name]
+		c, ok := conds["Server/"+s.Name]
+		if !ok && s.Spec.URL != "" { // remote: no ToolHive object to report on
+			c = cond(metav1.ConditionTrue, "Remote", "served from "+s.Spec.URL+" through the gateway")
+		}
 		setReady(&next.Status.Conditions, c, s.Generation)
 		if c.Status == metav1.ConditionTrue && r.ListTools != nil {
 			next.Status.Tools = r.readTools(ctx, *s)

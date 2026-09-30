@@ -157,3 +157,40 @@ func TestServerCELIsThePartForOneServer(t *testing.T) {
 		t.Fatalf("unknown server: %s", got)
 	}
 }
+
+func TestRemoteServersAndPerUserTokens(t *testing.T) {
+	gh := v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "github", Namespace: "ambit-system", UID: "uid-github"},
+		Spec: v1.ServerSpec{URL: "https://api.githubcopilot.com/mcp/", Connection: "github"}}
+	who := v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "whoami", Namespace: "ambit-system", UID: "uid-whoami"},
+		Spec: v1.ServerSpec{URL: "http://whoami.ambit-test.svc:8080/mcp"}}
+	r := Compile(nil, []v1.Server{gh, who}, nil, route)
+	for _, o := range r.Objects {
+		if o.GetKind() == "MCPServer" {
+			t.Fatalf("remote servers need no ToolHive MCPServer, got %s", o.GetName())
+		}
+	}
+	targets, _, _ := unstructured.NestedSlice(find(t, r.Objects, "AgentgatewayBackend", MCPBackendName).Object, "spec", "mcp", "targets")
+	ghT, whoT := targets[0].(map[string]any)["static"].(map[string]any), targets[1].(map[string]any)["static"].(map[string]any)
+	if ghT["host"] != "api.githubcopilot.com" || ghT["port"] != int64(443) || ghT["path"] != "/mcp/" || ghT["policies"] == nil {
+		t.Fatalf("https target %v", ghT)
+	}
+	if whoT["host"] != "whoami.ambit-test.svc" || whoT["port"] != int64(8080) || whoT["path"] != "/mcp" || whoT["policies"] != nil {
+		t.Fatalf("http target %v", whoT)
+	}
+	p := find(t, r.Objects, "AgentgatewayPolicy", "ambit-conn-github")
+	refs, _, _ := unstructured.NestedSlice(p.Object, "spec", "targetRefs")
+	if refs[0].(map[string]any)["sectionName"] != "github" {
+		t.Fatalf("policy must target only the github server: %v", refs)
+	}
+	ea, _, _ := unstructured.NestedMap(p.Object, "spec", "backend", "extAuth")
+	h := ea["http"].(map[string]any)
+	if h["path"] != `"/v1/connection/github"` || h["addRequestHeaders"].(map[string]any)["x-ambit-user"] != "jwt.email" ||
+		ea["failureMode"] != "FailOpen" || ea["backendRef"].(map[string]any)["port"] != int64(BrokerPort) {
+		t.Fatalf("extAuth %v", ea)
+	}
+	for _, o := range r.Objects {
+		if o.GetName() == "ambit-conn-whoami" {
+			t.Fatal("a server without a connection gets no token policy")
+		}
+	}
+}

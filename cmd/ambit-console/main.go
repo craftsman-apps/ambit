@@ -140,6 +140,23 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	var conns *console.Connections
+	if gns := os.Getenv("AMBIT_GRANTS_NAMESPACE"); gns != "" {
+		conns = &console.Connections{Client: objects, Namespace: ns, PublicURL: publicURL, Codec: console.Codec{Key: keys.SessionKey},
+			Store: &console.GrantStore{Client: objects, Namespace: gns, Key: keys.GrantKey}}
+		go conns.RunChecks(ctx)
+		{
+			broker := &console.Broker{Conns: conns}
+			bsrv := &http.Server{Addr: ":8082", Handler: broker.Handler(), ReadHeaderTimeout: 10 * time.Second}
+			go func() {
+				if err := bsrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+					slog.Error("token broker stopped", "err", err)
+				}
+			}()
+			go func() { <-ctx.Done(); bsrv.Close() }()
+			slog.Info("token broker ready", "grants", gns)
+		}
+	}
 	gitops, err := gitopsFromEnv()
 	if err != nil {
 		return err
@@ -148,7 +165,7 @@ func run(ctx context.Context) error {
 		slog.Info("GitOps mode: changes become pull requests", "repository", gitops.Repository, "branch", gitops.Branch, "path", gitops.Dir)
 	}
 	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), console.LoginOptions{Bootstrap: bootstrapAdmin, SSO: sso},
-		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, PublicURL: publicURL, Connectors: sso}), ReadHeaderTimeout: 10 * time.Second}
+		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, PublicURL: publicURL, Connectors: sso, Conns: conns}), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -10,7 +10,9 @@ RUN npm run build
 FROM --platform=$BUILDPLATFORM golang:1.27@sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244 AS build
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+# Cache mounts keep Go's module and build caches out of image layers: rebuilds reuse one cache
+# instead of adding a gigabyte of layers each time.
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY api/ api/
 COPY cmd/ cmd/
 COPY internal/ internal/
@@ -18,7 +20,8 @@ COPY web/embed.go web/embed.go
 COPY --from=web /src/web/dist web/dist
 ARG TARGETOS TARGETARCH
 # Cross-compile on the build machine instead of emulating the target architecture.
-RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /ambit-console ./cmd/ambit-console \
+RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
+    GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /ambit-console ./cmd/ambit-console \
  && GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /ambit-controller ./cmd/ambit-controller \
  && GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /ambit ./cmd/ambit
 

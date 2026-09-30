@@ -8,6 +8,7 @@ import { AccessRulesPage } from "@/routes/access-rules";
 import { ModelsPage } from "@/routes/models";
 import { ServersPage } from "@/routes/servers";
 import { SSOPage } from "@/routes/sso";
+import { ConnectionsPage } from "@/routes/connections";
 import "@fontsource/ibm-plex-sans/400.css";
 import "@fontsource/ibm-plex-sans/500.css";
 import "@fontsource/ibm-plex-sans/600.css";
@@ -29,6 +30,7 @@ const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: "/models", component: ModelsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/servers", component: ServersPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/sign-in", component: SSOPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/connections", component: ConnectionsPage }),
 ]);
 const router = createRouter({ routeTree });
 

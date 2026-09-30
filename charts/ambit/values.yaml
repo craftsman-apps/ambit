@@ -74,6 +74,10 @@ mcp:
     audiences: []
     jwksURL: ""
 
+connections:
+  # Namespace for users' SaaS grants and the Connections' client secrets. Empty: <release namespace>-grants.
+  grantsNamespace: ""
+
 # Passed to the ToolHive operator subchart (installed when mcp.enabled). Its CRDs are in deploy/crds.
 toolhive-operator:
   operator:

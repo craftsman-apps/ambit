@@ -98,3 +98,8 @@ export const useMyAccess = () => useQuery({ queryKey: ["my-access"], queryFn: ()
 export const useConfig = () => useQuery({ queryKey: ["config"], staleTime: Infinity, queryFn: () => getJSON<Config>("/api/config") });
 export const useChanges = (enabled: boolean) =>
   useQuery({ queryKey: ["changes"], enabled, queryFn: () => getJSON<PullRequest[]>("/api/changes") });
+export type ConnectionView = {
+  name: string; displayName: string; state: "not-connected" | "connected" | "broken"; error?: string;
+  connectedAt?: string; checkedAt?: string; revocable: boolean; connectURL: string; servers: string[];
+};
+export const useConnections = () => useQuery({ queryKey: ["connections"], queryFn: () => getJSON<ConnectionView[]>("/api/connections") });

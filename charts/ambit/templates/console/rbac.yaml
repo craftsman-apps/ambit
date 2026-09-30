@@ -22,7 +22,7 @@ rules:
     verbs: [get, update, delete]
   # Catalog screens: everyone signed in reads; admins change access rules (Direct mode).
   - apiGroups: [ambitproject.dev]
-    resources: [models, accessrules, servers, serverrequests]
+    resources: [models, accessrules, servers, serverrequests, connections]
     verbs: [get, list, watch]
   {{- if .Values.gitops.enabled }}
   # GitOps mode: rules and servers change only through pull requests, so the console cannot write them.

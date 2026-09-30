@@ -4,4 +4,9 @@ metadata:
   name: ambit-console
 spec:
   selector: { app.kubernetes.io/name: ambit-console }
-  ports: [{ name: http, port: 8080, targetPort: http }]
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+    {{- if .Values.mcp.enabled }}
+    # Token broker for Connections; the NetworkPolicy lets only the gateway in.
+    - { name: broker, port: 8082, targetPort: broker }
+    {{- end }}

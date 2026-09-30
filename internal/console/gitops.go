@@ -20,7 +20,9 @@ var validator = sync.OnceValues(validate.New)
 // InvalidChange is a change the cluster would refuse; the console answers 400 instead of opening a pull request.
 type InvalidChange struct{ Problems []string }
 
-func (e *InvalidChange) Error() string { return "the cluster would refuse this: " + strings.Join(e.Problems, "; ") }
+func (e *InvalidChange) Error() string {
+	return "the cluster would refuse this: " + strings.Join(e.Problems, "; ")
+}
 
 // PullRequester is the Git host; *GitHub implements it.
 type PullRequester interface {

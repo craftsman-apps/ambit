@@ -13,7 +13,9 @@ type noArgs struct{}
 
 func testServer() *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "time", Version: "1"}, nil)
-	h := func(context.Context, *mcp.CallToolRequest, noArgs) (*mcp.CallToolResult, any, error) { return &mcp.CallToolResult{}, nil, nil }
+	h := func(context.Context, *mcp.CallToolRequest, noArgs) (*mcp.CallToolResult, any, error) {
+		return &mcp.CallToolResult{}, nil, nil
+	}
 	mcp.AddTool(s, &mcp.Tool{Name: "get_current_time", Description: "Current time in a timezone"}, h)
 	mcp.AddTool(s, &mcp.Tool{Name: "convert_time", Description: "Convert between timezones"}, h)
 	return s

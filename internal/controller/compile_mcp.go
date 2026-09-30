@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"net/url"
 	"slices"
 	"sort"
 	"strconv"
@@ -19,6 +20,12 @@ const MCPBackendName = "ambit-mcp"
 // ToolHive's proxy listens here; its Service is mcp-<name>-proxy.
 const proxyPort = 8080
 
+// The console's token broker: the gateway asks it for the calling user's token for a Connection.
+const (
+	BrokerService = "ambit-console"
+	BrokerPort    = 8082
+)
+
 // serverAccess is who may use one server: on all its tools, and per tool.
 type serverAccess struct {
 	all   Access
@@ -33,22 +40,19 @@ func compileServers(servers []v1.Server, rules []v1.AccessRule) []*unstructured.
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	access := accessByServer(sorted, rules)
 
-
 	var out, owners []*unstructured.Unstructured
 	var refs []metav1.OwnerReference
 	var targets []any
 	var clauses []string
 	for _, s := range sorted {
-		out = append(out, mcpServer(s))
 		refs = append(refs, metav1.OwnerReference{APIVersion: v1.GroupVersion.String(), Kind: "Server", Name: s.Name, UID: s.UID})
-		protocol, path := "StreamableHTTP", "/mcp"
-		if s.Spec.Transport == "sse" {
-			protocol, path = "SSE", "/sse"
+		targets = append(targets, map[string]any{"name": s.Name, "static": target(s)})
+		if s.Spec.URL == "" {
+			out = append(out, mcpServer(s))
 		}
-		targets = append(targets, map[string]any{"name": s.Name, "static": map[string]any{
-			"backendRef": map[string]any{"name": "mcp-" + s.Name + "-proxy"},
-			"port":       int64(proxyPort), "path": path, "protocol": protocol,
-		}})
+		if s.Spec.Connection != "" {
+			out = append(out, connectionPolicy(s))
+		}
 		clauses = append(clauses, serverClauses(s.Name, access[s.Name])...)
 	}
 	expr := "false"
@@ -113,6 +117,57 @@ func ServerCEL(servers []v1.Server, rules []v1.AccessRule, name string) string {
 		return strings.Join(c, " || ")
 	}
 	return "false"
+}
+
+// target is where the gateway sends one server's MCP traffic: ToolHive's proxy, or the remote URL.
+func target(s v1.Server) map[string]any {
+	protocol, path := "StreamableHTTP", "/mcp"
+	if s.Spec.Transport == "sse" {
+		protocol, path = "SSE", "/sse"
+	}
+	if s.Spec.URL == "" {
+		return map[string]any{"backendRef": map[string]any{"name": "mcp-" + s.Name + "-proxy"}, "port": int64(proxyPort), "path": path, "protocol": protocol}
+	}
+	u, _ := url.Parse(s.Spec.URL) // the CRD pattern guarantees scheme://host[/path]
+	port, _ := strconv.ParseInt(u.Port(), 10, 64)
+	t := map[string]any{"host": u.Hostname(), "protocol": protocol, "path": u.Path}
+	if u.Path == "" {
+		t["path"] = "/"
+	}
+	if u.Scheme == "https" {
+		if port == 0 {
+			port = 443
+		}
+		t["policies"] = map[string]any{"tls": map[string]any{}} // verify with the system CAs
+	} else if port == 0 {
+		port = 80
+	}
+	t["port"] = port
+	return t
+}
+
+// connectionPolicy makes the gateway ask the console's broker (extAuth) for the calling user's own
+// token for the app, naming the user by the validated jwt.email claim, and send it upstream as
+// Authorization. The user's gateway JWT is never forwarded (the gateway removes it after validation).
+// Without a grant the broker adds no token, so only this server drops out of the user's session.
+// FailOpen: if the broker is down, these servers fail the same way instead of every session failing.
+func connectionPolicy(s v1.Server) *unstructured.Unstructured {
+	o := generated("agentgateway.dev/v1alpha1", "AgentgatewayPolicy", "ambit-conn-"+s.Name, s.Namespace, map[string]any{
+		"targetRefs": []any{map[string]any{"group": "agentgateway.dev", "kind": "AgentgatewayBackend", "name": MCPBackendName, "sectionName": s.Name}},
+		"backend": map[string]any{"extAuth": map[string]any{
+			"backendRef":  map[string]any{"name": BrokerService, "port": int64(BrokerPort)},
+			"failureMode": "FailOpen",
+			"http": map[string]any{
+				"path":                   strconv.Quote("/v1/connection/" + s.Spec.Connection), // a CEL string literal
+				"addRequestHeaders":      map[string]any{"x-ambit-user": "jwt.email"},
+				"allowedRequestHeaders":  []any{},
+				"allowedResponseHeaders": []any{"authorization"},
+			},
+		}},
+	})
+	o.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: v1.GroupVersion.String(), Kind: "Server", Name: s.Name, UID: s.UID,
+		Controller: ptr.To(true), BlockOwnerDeletion: ptr.To(true)}})
+	return o
 }
 
 func merge(a Access, spec v1.AccessRuleSpec) Access {

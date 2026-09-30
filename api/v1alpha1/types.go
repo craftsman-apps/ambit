@@ -138,8 +138,18 @@ type ServerSpec struct {
 }
 
 type ServerStatus struct {
+	// Tools the running server offers, as it names them (clients see "<server>_<tool>").
+	// Read by ambit-controller through ToolHive's proxy; empty until the server is running.
+	// +optional
+	Tools []Tool `json:"tools,omitempty"`
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+type Tool struct {
+	Name string `json:"name"`
+	// +optional
+	Description string `json:"description,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -164,6 +174,65 @@ type ServerList struct {
 	Items           []Server `json:"items"`
 }
 
+// ServerRequestSpec asks for a new MCP server. It cannot change after it is made, so what was
+// approved is exactly what was asked for.
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="a server request cannot be changed; make a new one"
+type ServerRequestSpec struct {
+	// ServerName is the name the Server gets when the request is approved.
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:MaxLength=40
+	ServerName string `json:"serverName"`
+	// Server is what will run, including the image digest.
+	Server ServerSpec `json:"server"`
+	// Reason the requester gives, shown to the approver.
+	// +kubebuilder:validation:MaxLength=2000
+	// +optional
+	Reason string `json:"reason,omitempty"`
+	// RequestedBy is the requester's email, set by the console from their sign-in.
+	// +kubebuilder:validation:MinLength=1
+	RequestedBy string `json:"requestedBy"`
+}
+
+// ServerRequestStatus records the decision. Once made, it cannot change.
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.decision) || (has(self.decision) && self.decision == oldSelf.decision)",message="a decision cannot be changed"
+type ServerRequestStatus struct {
+	// Empty while the request waits for an approver.
+	// +kubebuilder:validation:Enum=Approved;Denied
+	// +optional
+	Decision string `json:"decision,omitempty"`
+	// +optional
+	DecidedBy string `json:"decidedBy,omitempty"`
+	// +optional
+	DecidedAt *metav1.Time `json:"decidedAt,omitempty"`
+	// +kubebuilder:validation:MaxLength=2000
+	// +optional
+	Comment string `json:"comment,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Server",type=string,JSONPath=`.spec.serverName`
+// +kubebuilder:printcolumn:name="Requested by",type=string,JSONPath=`.spec.requestedBy`
+// +kubebuilder:printcolumn:name="Decision",type=string,JSONPath=`.status.decision`
+// +kubebuilder:printcolumn:name="Decided by",type=string,JSONPath=`.status.decidedBy`
+
+// ServerRequest asks an approver to add an MCP server. Approving it in the console creates the
+// Server; the request stays as the record of who asked, who approved, and which image digest.
+type ServerRequest struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              ServerRequestSpec   `json:"spec"`
+	Status            ServerRequestStatus `json:"status,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+type ServerRequestList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []ServerRequest `json:"items"`
+}
+
 func init() {
-	SchemeBuilder.Register(&Model{}, &ModelList{}, &AccessRule{}, &AccessRuleList{}, &Server{}, &ServerList{})
+	SchemeBuilder.Register(&Model{}, &ModelList{}, &AccessRule{}, &AccessRuleList{}, &Server{}, &ServerList{},
+		&ServerRequest{}, &ServerRequestList{})
 }

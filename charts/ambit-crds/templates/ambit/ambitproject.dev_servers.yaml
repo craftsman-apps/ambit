@@ -141,6 +141,20 @@ spec:
                   - type
                   type: object
                 type: array
+              tools:
+                description: 'Tools the running server offers, as it names them (clients see "<server>_<tool>").
+
+                  Read by ambit-controller through ToolHive''s proxy; empty until the server is running.'
+                items:
+                  properties:
+                    description:
+                      type: string
+                    name:
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
             type: object
         required:
         - spec

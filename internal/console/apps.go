@@ -92,7 +92,7 @@ func checkApp(in AppInput) error {
 		if u == "" && label == "revocation URL" {
 			continue
 		}
-		if !remoteURLRE.MatchString(u) {
+		if !validURL(u) {
 			return fmt.Errorf("the %s must look like https://host/path, without a query string or fragment", label)
 		}
 		if strings.HasPrefix(u, "http://") && !plainHTTPOK(u) {
@@ -126,16 +126,15 @@ func (c *Catalog) createApp(w http.ResponseWriter, r *http.Request, s Session) {
 	}
 	secretName := "ambit-conn-" + in.Name
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: c.Conns.Store.Namespace,
-		Labels:      map[string]string{"app.kubernetes.io/managed-by": "ambit-console", "ambitproject.dev/connection": in.Name},
+		// Not grantConnLabel: grant listings select on that label and would try to open this as a grant.
+		Labels:      map[string]string{"app.kubernetes.io/managed-by": "ambit-console", "ambitproject.dev/app-secret": in.Name},
 		Annotations: map[string]string{createdByKey: s.Email}},
 		Type: corev1.SecretTypeOpaque, Data: map[string][]byte{"clientSecret": []byte(in.ClientSecret)}}
-	// Create, or replace a leftover from an app removed earlier: the grants namespace is the console's own.
+	// Create-only: an existing secret belongs to an app still waiting in a pull request (or one removed
+	// by pull request); replacing it would pair that app's client ID with this secret.
 	if err := c.Conns.Store.Client.Create(r.Context(), sec); apierrors.IsAlreadyExists(err) {
-		err = c.Conns.Store.Client.Update(r.Context(), sec)
-		if err != nil {
-			apiErr(w, err)
-			return
-		}
+		writeErr(w, http.StatusConflict, fmt.Sprintf("the secret for an app named %s already exists (an app waiting in a pull request, or one removed earlier); choose another name, or delete Secret %s in namespace %s", in.Name, secretName, c.Conns.Store.Namespace))
+		return
 	} else if err != nil {
 		apiErr(w, err)
 		return
@@ -155,8 +154,8 @@ func (c *Catalog) createApp(w http.ResponseWriter, r *http.Request, s Session) {
 	writeJSON(w, http.StatusCreated, appView(*conn))
 }
 
-// deleteApp removes the Connection and its client secret. Users' grants stay until they disconnect
-// or are offboarded; without the app they are no longer used.
+// deleteApp revokes every user's grant for the app at the provider, then removes the Connection and
+// its client secret.
 func (c *Catalog) deleteApp(w http.ResponseWriter, r *http.Request, s Session) {
 	var conn v1.Connection
 	if err := c.Client.Get(r.Context(), client.ObjectKey{Namespace: c.Namespace, Name: r.PathValue("name")}, &conn); err != nil {
@@ -172,8 +171,30 @@ func (c *Catalog) deleteApp(w http.ResponseWriter, r *http.Request, s Session) {
 		return
 	}
 	if c.GitOps != nil {
+		// ponytail: after the pull request merges, the app's grants and Secret ambit-conn-<name> stay
+		// until someone removes them (Token already refuses a removed app); a controller could clean up.
 		c.propose(w, r, s, "delete", "Connection", "connections", conn.Name, nil, nil)
 		return
+	}
+	// Revoke every user's grant at the provider while the app (its URLs and secret) still exists.
+	grants, err := c.Conns.Store.List(r.Context(), "")
+	if err != nil {
+		serverErr(w, err)
+		return
+	}
+	for _, g := range grants {
+		if g.Connection != conn.Name {
+			continue
+		}
+		if revoked, err := c.Conns.Revoke(r.Context(), g); err != nil {
+			slog.Error("app removal: revoke failed; forgetting the grant anyway", "connection", conn.Name, "err", err)
+			if err := c.Conns.Store.Delete(r.Context(), g.Email, g.Connection); err != nil {
+				serverErr(w, err)
+				return
+			}
+		} else {
+			slog.Info("app removal: grant ended", "connection", conn.Name, "revokedAtProvider", revoked)
+		}
 	}
 	if err := c.Client.Delete(r.Context(), &conn); err != nil && !apierrors.IsNotFound(err) {
 		apiErr(w, err)

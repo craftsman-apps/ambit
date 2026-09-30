@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,6 +84,25 @@ type RequestInput struct {
 
 // remoteURLRE is the CRD's pattern: no query or fragment, where tokens tend to leak.
 var remoteURLRE = regexp.MustCompile(`^https?://[^/?#]+(/[^?#]*)?$`)
+
+// validURL parses a server or app URL fully: the pattern alone lets through a bad port ("host:bad"),
+// a bad escape ("%zz") or an empty host, which later code would trip over.
+func validURL(raw string) bool {
+	if !remoteURLRE.MatchString(raw) {
+		return false
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return false
+	}
+	if p := u.Port(); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 1 || n > 65535 {
+			return false
+		}
+	}
+	return true
+}
 
 // plainHTTPOK is true for hosts where plain HTTP does not cross a network: Kubernetes services
 // inside the cluster, and localhost.
@@ -254,7 +274,7 @@ func (c *Catalog) validateRequest(r *http.Request, in RequestInput) error {
 		return errors.New("give either an image or a URL, not both: an image runs the server in the cluster; a URL reaches one already running elsewhere")
 	case in.Image != "" && !digestRE.MatchString(in.Image):
 		return errors.New("pin the image by digest, like ghcr.io/org/server@sha256:<64 hex characters>; a tag can later point to different code")
-	case in.URL != "" && !remoteURLRE.MatchString(in.URL):
+	case in.URL != "" && !validURL(in.URL):
 		return errors.New("the URL must look like https://host/path, without a query string or fragment")
 	case in.URL != "" && strings.HasPrefix(in.URL, "http://") && !plainHTTPOK(in.URL):
 		return errors.New("use https for a server outside the cluster; plain http is only for in-cluster services (*.svc)")

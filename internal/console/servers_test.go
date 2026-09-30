@@ -259,3 +259,13 @@ func TestRemoteServerRequest(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoteServerURLMustParse(t *testing.T) {
+	h, _, a := serversFixture(t)
+	alice := user(a, "alice@acme.test", RoleViewer)
+	for _, u := range []string{"https://example.com:bad/mcp", "https://example.com/%zz", "https://:443/mcp"} {
+		if r := do(t, h, "POST", "/api/server-requests", alice, RequestInput{ServerName: "x", URL: u}); r.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s", u, r.Code, r.Body)
+		}
+	}
+}

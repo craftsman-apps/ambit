@@ -172,12 +172,16 @@ func run(ctx context.Context) error {
 		}
 		audit = console.OpenAudit(addr, pw)
 	}
+	var budgets *console.Budgets
+	if addr := os.Getenv("AMBIT_VALKEY_ADDR"); addr != "" {
+		budgets = &console.Budgets{Client: objects, Namespace: ns, Valkey: addr}
+	}
 	var scim *console.SCIM
 	if conns != nil {
 		scim = &console.SCIM{Client: objects, Namespace: ns, Token: keys.SCIMToken, Conns: conns, Sessions: auth.Sessions}
 	}
 	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), console.LoginOptions{Bootstrap: bootstrapAdmin, SSO: sso},
-		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit}), ReadHeaderTimeout: 10 * time.Second}
+		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, Budgets: budgets}), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)

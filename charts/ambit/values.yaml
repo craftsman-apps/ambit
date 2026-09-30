@@ -87,6 +87,17 @@ evidence:
     image: otel/opentelemetry-collector-contrib:0.161.0@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
     resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 256Mi } }
 
+limits:
+  # Budgets: daily LLM request limits per group and per user (Budget objects), shared by every replica.
+  enabled: false
+  # When the ratelimit service or Valkey is down: FailOpen lets requests through uncounted (budgets are a
+  # cost control, so an outage should not stop all LLM traffic); FailClosed refuses them.
+  failureMode: FailOpen
+  ratelimit:
+    image: envoyproxy/ratelimit:63c7e9cc@sha256:f10186a0c94f339326015a955bf1ad5f694addef220b86d0f84e330fcc0f4939
+  valkey:
+    image: valkey/valkey:9.1.2@sha256:418652cfb58ef879d4978c33553735d7147016032d5aefaa14c828e611eb9dfd
+
 connections:
   # Namespace for users' SaaS grants and the Connections' client secrets. Empty: <release namespace>-grants.
   grantsNamespace: ""

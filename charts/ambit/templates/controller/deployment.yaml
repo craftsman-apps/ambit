@@ -17,7 +17,13 @@ spec:
         - name: controller
           image: "{{ .Values.console.image.repository }}:{{ .Values.console.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.console.image.pullPolicy }}
-          command: ["/ambit-controller", "--llm-route=ambit-llm"]
+          command:
+            - /ambit-controller
+            - --llm-route=ambit-llm
+            {{- if .Values.limits.enabled }}
+            - --ratelimit-service=ambit-ratelimit
+            - --ratelimit-failure-mode={{ .Values.limits.failureMode }}
+            {{- end }}
           env:
             - name: AMBIT_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }

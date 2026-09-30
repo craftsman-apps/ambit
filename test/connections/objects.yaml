@@ -1,0 +1,51 @@
+# Step 5 test catalog: a SaaS app (Keycloak realm "saas" standing in for Jira) and a remote MCP server
+# that uses each caller's own grant for it. The whoami server only reports whose token reached it.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: whoami, labels: { app: whoami } }
+spec:
+  selector: { matchLabels: { app: whoami } }
+  template:
+    metadata: { labels: { app: whoami } }
+    spec:
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: whoami
+          image: ambit-whoami:dev
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8080 }]
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: whoami }
+spec:
+  selector: { app: whoami }
+  ports: [{ port: 8080 }]
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: Connection
+metadata: { name: saas }
+spec:
+  displayName: SaaS (test)
+  authorizationURL: http://keycloak.localtest.me:8080/realms/saas/protocol/openid-connect/auth
+  tokenURL: http://keycloak.localtest.me:8080/realms/saas/protocol/openid-connect/token
+  revocationURL: http://keycloak.localtest.me:8080/realms/saas/protocol/openid-connect/revoke
+  clientID: ambit-connect
+  clientSecretRef: { name: ambit-conn-saas }
+  scopes: [openid]
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: Server
+metadata: { name: whoami }
+spec:
+  displayName: Who am I (test)
+  url: http://whoami.ambit-system.svc:8080/mcp
+  connection: saas
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: AccessRule
+metadata: { name: whoami-users }
+spec:
+  groups: [eng, ml-research]
+  servers: [{ name: whoami }]

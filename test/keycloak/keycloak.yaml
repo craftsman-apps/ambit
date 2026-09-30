@@ -2,6 +2,8 @@
 # Test-only credentials: priya/priya-test-pass (ambit-admins), sam/sam-test-pass (ambit-approvers),
 # alice/alice-test-pass (eng), mira/mira-test-pass (ml-research). Keycloak admin: admin/admin.
 # Client ambit-cli-test: password grant for tests only; access tokens carry groups and aud=ambit-gateway.
+# Realm saas (step 5) stands in for a SaaS app such as Jira: its own accounts alice/alice-saas-pass and
+# mira/mira-saas-pass, and the confidential client ambit-connect that Ambit's Connection uses.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -157,6 +159,30 @@ data:
             "/ml-research"
           ]
         }
+      ]
+    }
+  saas-realm.json: |
+    {
+      "realm": "saas",
+      "enabled": true,
+      "sslRequired": "none",
+      "clients": [
+        {
+          "clientId": "ambit-connect",
+          "enabled": true,
+          "publicClient": false,
+          "secret": "saas-test-client-secret",
+          "standardFlowEnabled": true,
+          "directAccessGrantsEnabled": false,
+          "attributes": { "pkce.code.challenge.method": "S256" },
+          "redirectUris": ["http://console.localtest.me:8080/connections/callback"]
+        }
+      ],
+      "users": [
+        { "username": "alice", "email": "alice@saas.test", "emailVerified": true, "firstName": "Alice", "lastName": "SaaS", "enabled": true,
+          "credentials": [{ "type": "password", "value": "alice-saas-pass", "temporary": false }] },
+        { "username": "mira", "email": "mira@saas.test", "emailVerified": true, "firstName": "Mira", "lastName": "SaaS", "enabled": true,
+          "credentials": [{ "type": "password", "value": "mira-saas-pass", "temporary": false }] }
       ]
     }
 ---

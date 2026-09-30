@@ -108,6 +108,9 @@ tools() {
   TOOLS=$(mcp_send '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' |
     uv run --no-project python -c 'import json,sys;print(" ".join(sorted(t["name"] for t in json.loads(sys.stdin.read())["result"]["tools"])))')
 }
+# try_tools TOKEN: like tools, but an error (e.g. a 500 while the gateway reloads) sets TOOLS to "<error>"
+# instead of ending the test; for use inside wait_for.
+try_tools() { TOOLS=$( (tools "$1" >/dev/null 2>&1 && echo "$TOOLS") ) || TOOLS="<error>"; }
 # call NAME ARGS: calls a tool in the open session; prints "ok <text>" or "error <message>".
 call() {
   mcp_send "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$2}}" |

@@ -58,7 +58,7 @@ pass "5 mira (ml-research) sees $n tools and calls everything_echo"
 # 6 · deny by default: with no rule for her group, mira sees nothing
 kubectl -n "$NS" delete "accessrules.$G" ml-research-tools >/dev/null
 wait_for "6 policy still names ml-research after the rule was deleted" '[[ $(policy_expr) != *ml-research* ]]'
-wait_for "6 mira still sees tools: $TOOLS" 'tools "$(token mira)"; [[ -z "$TOOLS" ]]'
+wait_for "6 mira still sees tools: $TOOLS" 'try_tools "$(token mira)"; [[ -z "$TOOLS" ]]'
 kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
 wait_for "6 rule not restored" '[[ $(policy_expr) == *ml-research* ]]'
 pass "6 no rule for ml-research -> mira's tools/list is empty; rule restored"
@@ -129,7 +129,7 @@ YAML
 then fail "11 a Server with a tag instead of a digest was accepted"; fi
 kubectl -n "$NS" delete "servers.$G" everything >/dev/null
 wait_for "11 MCPServer everything not garbage-collected" '! kubectl -n "$NS" get mcpserver everything >/dev/null 2>&1'
-wait_for "11 mira still sees everything_* tools: $TOOLS" 'tools "$(token mira)"; [[ $TOOLS != *everything_* && $TOOLS == *time_get_current_time* ]]'
+wait_for "11 mira still sees everything_* tools: $TOOLS" 'try_tools "$(token mira)"; [[ $TOOLS != *everything_* && $TOOLS == *time_get_current_time* ]]'
 kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
 kubectl -n "$NS" wait "servers.$G" --all --for=condition=Ready --timeout=300s >/dev/null || fail "11 everything not Ready again"
 pass "11 tag-only image rejected: $(tr -d '\n' <"$W/err" | sed 's/.*spec.image//' | cut -c1-90); deleted Server's tools gone, restored"

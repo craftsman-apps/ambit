@@ -17,7 +17,7 @@ spec:
         - name: console
           image: "{{ .Values.console.image.repository }}:{{ .Values.console.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.console.image.pullPolicy }}
-          ports: [{ name: http, containerPort: 8080 }]
+          ports: [{ name: http, containerPort: 8080 }, { name: broker, containerPort: 8082 }]
           env:
             - { name: AMBIT_PUBLIC_URL, value: {{ .Values.console.url | quote }} }
             - { name: AMBIT_DEX_GRPC, value: "ambit-dex:5557" }
@@ -33,6 +33,9 @@ spec:
             {{- if .Values.console.caBundleSecret }}
             # Go reads every directory in SSL_CERT_DIR: system CAs plus the extra one.
             - { name: SSL_CERT_DIR, value: "/etc/ssl/certs:/etc/ambit/ca" }
+            {{- end }}
+            {{- if .Values.mcp.enabled }}
+            - { name: AMBIT_GRANTS_NAMESPACE, value: {{ .Values.connections.grantsNamespace | default (printf "%s-grants" .Release.Namespace) | quote }} }
             {{- end }}
             {{- with .Values.gitops }}{{ if .enabled }}
             - { name: AMBIT_GITOPS_REPOSITORY, value: {{ required "gitops.repository is required (owner/name)" .repository | quote }} }

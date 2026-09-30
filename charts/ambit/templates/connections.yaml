@@ -1,0 +1,44 @@
+{{- if .Values.mcp.enabled }}
+{{- $grants := .Values.connections.grantsNamespace | default (printf "%s-grants" .Release.Namespace) }}
+# Users' SaaS grants (Connections) live in their own namespace: the console may do anything with Secrets
+# there and nothing with Secrets elsewhere beyond what console/rbac.yaml lists. Kept on uninstall, so
+# removing Ambit never silently drops users' grants.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $grants }}
+  annotations: { helm.sh/resource-policy: keep }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ambit-console-grants
+  namespace: {{ $grants }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, watch, create, update, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ambit-console-grants
+  namespace: {{ $grants }}
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: ambit-console-grants }
+subjects: [{ kind: ServiceAccount, name: ambit-console, namespace: {{ .Release.Namespace }} }]
+---
+# The token broker (port 8082) hands out users' SaaS tokens and trusts the gateway to name the user,
+# so only the gateway may call it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ambit-console-broker
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: ambit-console }
+  policyTypes: [Ingress]
+  ingress:
+    - ports: [{ port: 8080 }]
+    - from: [{ podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit } } }]
+      ports: [{ port: 8082 }]
+{{- end }}

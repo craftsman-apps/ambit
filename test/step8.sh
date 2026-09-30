@@ -96,8 +96,12 @@ tools "$A"
 [[ -n "$TOOLS" ]] || fail "5 MCP failed with ClickHouse down"
 kubectl -n "$NS" scale statefulset/ambit-clickhouse --replicas=1 >/dev/null
 idp down
-[[ $(command curl -s -o /dev/null -w '%{http_code}' --max-time 10 http://keycloak.localtest.me:8080/realms/acme/.well-known/openid-configuration) != 200 ]] ||
-  fail "5 the identity provider is still reachable"
+for _ in $(seq 1 30); do # the gateway sees the empty endpoints after a few seconds
+  [[ $(command curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://keycloak.localtest.me:8080/realms/acme/.well-known/openid-configuration) != 200 ]] && break
+  sleep 2
+done
+[[ $(command curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://keycloak.localtest.me:8080/realms/acme/.well-known/openid-configuration) != 200 ]] ||
+  fail "5 the identity provider is still reachable after 60 seconds"
 tools "$A"
 [[ -n "$TOOLS" ]] || fail "5 alice's existing token stopped working with the identity provider down"
 idp up

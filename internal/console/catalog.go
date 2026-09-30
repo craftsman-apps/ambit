@@ -181,7 +181,7 @@ func (c *Catalog) getRule(w http.ResponseWriter, r *http.Request, _ Session) {
 		return
 	}
 	// The same Compile the controller runs, so the console shows exactly what the gateway enforces.
-	res := controller.Compile(ms, rs, controller.RouteRef{Name: "ambit-llm"})
+	res := controller.Compile(ms, nil, rs, controller.RouteRef{Name: "ambit-llm"})
 	d := RuleDetail{RuleView: ruleView(rs[i]), Effective: []Effective{}}
 	for _, name := range rs[i].Spec.Models {
 		mi := slices.IndexFunc(ms, func(m v1.Model) bool { return m.Name == name })
@@ -193,11 +193,13 @@ func (c *Catalog) getRule(w http.ResponseWriter, r *http.Request, _ Session) {
 	writeJSON(w, http.StatusOK, d)
 }
 
-func (c *Catalog) validate(r *http.Request, in RuleInput) error {
+// validate checks a rule from the form. hasServers is true when the rule already grants MCP tools,
+// which the form does not edit yet; such a rule may have no models.
+func (c *Catalog) validate(r *http.Request, in RuleInput, hasServers bool) error {
 	switch {
 	case (len(in.Groups) > 0) == in.AllSignedIn:
 		return errors.New("choose either groups or everyone signed in, not both")
-	case len(in.Models) == 0:
+	case len(in.Models) == 0 && !hasServers:
 		return errors.New("choose at least one model")
 	}
 	for _, g := range in.Groups {
@@ -237,7 +239,7 @@ func (c *Catalog) createRule(w http.ResponseWriter, r *http.Request, s Session) 
 		writeErr(w, http.StatusBadRequest, "name must be lowercase letters, digits and dashes, starting and ending with a letter or digit")
 		return
 	}
-	if err := c.validate(r, in); err != nil {
+	if err := c.validate(r, in, false); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -283,11 +285,11 @@ func (c *Catalog) updateRule(w http.ResponseWriter, r *http.Request, s Session) 
 	if !ok {
 		return
 	}
-	if err := c.validate(r, in); err != nil {
+	if err := c.validate(r, in, len(ar.Spec.Servers) > 0); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	ar.Spec = v1.AccessRuleSpec{Groups: in.Groups, AllSignedIn: in.AllSignedIn, Models: in.Models}
+	ar.Spec = v1.AccessRuleSpec{Groups: in.Groups, AllSignedIn: in.AllSignedIn, Models: in.Models, Servers: ar.Spec.Servers}
 	if ar.Annotations == nil {
 		ar.Annotations = map[string]string{}
 	}

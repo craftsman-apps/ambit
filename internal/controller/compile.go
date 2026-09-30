@@ -1,4 +1,4 @@
-// Package controller turns Ambit objects (Model, AccessRule) into agentgateway objects.
+// Package controller turns Ambit objects (Model, Server, AccessRule) into agentgateway and ToolHive objects.
 package controller
 
 import (
@@ -24,22 +24,33 @@ type Access struct {
 }
 
 type Result struct {
-	Objects        []*unstructured.Unstructured // AgentgatewayModel per Model, sorted by name
-	Access         map[string]Access            // by Model name
-	RuleConditions map[string]metav1.Condition  // "Ready" condition by AccessRule name
+	// AgentgatewayModel per Model, then MCPServer per Server, then the shared MCP backend and its
+	// access policy (only when a Server exists); each group sorted by name.
+	Objects        []*unstructured.Unstructured
+	Access         map[string]Access           // by Model name
+	RuleConditions map[string]metav1.Condition // "Ready" condition by AccessRule name
 }
 
 // Compile is a pure function: the same inputs in any order give the same output.
-// A model that no rule names is denied to everyone.
-func Compile(models []v1.Model, rules []v1.AccessRule, route RouteRef) Result {
+// A model, server or tool that no rule names is denied to everyone.
+func Compile(models []v1.Model, servers []v1.Server, rules []v1.AccessRule, route RouteRef) Result {
 	known := map[string]bool{}
 	for _, m := range models {
 		known[m.Name] = true
 	}
+	knownServer := map[string]bool{}
+	for _, s := range servers {
+		knownServer[s.Name] = true
+	}
 	res := Result{Access: map[string]Access{}, RuleConditions: map[string]metav1.Condition{}}
 	groups := map[string]map[string]bool{}
 	for _, r := range rules {
-		var missing []string
+		var missing, missingServers []string
+		for _, sa := range r.Spec.Servers {
+			if !knownServer[sa.Name] {
+				missingServers = append(missingServers, sa.Name)
+			}
+		}
 		for _, name := range r.Spec.Models {
 			if !known[name] {
 				missing = append(missing, name)
@@ -55,7 +66,7 @@ func Compile(models []v1.Model, rules []v1.AccessRule, route RouteRef) Result {
 				groups[name][g] = true
 			}
 		}
-		res.RuleConditions[r.Name] = ruleCondition(r, missing)
+		res.RuleConditions[r.Name] = ruleCondition(r, missing, missingServers)
 	}
 	for name, set := range groups {
 		a := res.Access[name]
@@ -70,17 +81,30 @@ func Compile(models []v1.Model, rules []v1.AccessRule, route RouteRef) Result {
 	for _, m := range sorted {
 		res.Objects = append(res.Objects, agentgatewayModel(m, res.Access[m.Name], route))
 	}
+	res.Objects = append(res.Objects, compileServers(servers, rules)...)
 	return res
 }
 
-func ruleCondition(r v1.AccessRule, missing []string) metav1.Condition {
+func ruleCondition(r v1.AccessRule, missing, missingServers []string) metav1.Condition {
 	c := metav1.Condition{Type: "Ready", ObservedGeneration: r.Generation}
+	var msgs []string
 	if len(missing) > 0 {
-		c.Status, c.Reason = metav1.ConditionFalse, "UnknownModel"
-		c.Message = fmt.Sprintf("no Model named %s in this namespace; the rest of the rule is applied", strings.Join(missing, ", "))
+		c.Reason = "UnknownModel"
+		msgs = append(msgs, "no Model named "+strings.Join(missing, ", "))
+	}
+	if len(missingServers) > 0 {
+		c.Reason = "UnknownServer"
+		msgs = append(msgs, "no Server named "+strings.Join(missingServers, ", "))
+	}
+	if len(msgs) > 0 {
+		if len(msgs) == 2 {
+			c.Reason = "UnknownModelOrServer"
+		}
+		c.Status = metav1.ConditionFalse
+		c.Message = fmt.Sprintf("%s in this namespace; the rest of the rule is applied", strings.Join(msgs, "; "))
 		return c
 	}
-	c.Status, c.Reason, c.Message = metav1.ConditionTrue, "Compiled", "applied to every listed model"
+	c.Status, c.Reason, c.Message = metav1.ConditionTrue, "Compiled", "applied to every listed model and server"
 	return c
 }
 

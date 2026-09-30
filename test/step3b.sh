@@ -11,8 +11,6 @@ KEYFILE=${OPENROUTER_KEY_FILE:-$HOME/.config/ambit/openrouter-api-key}
 NEMO=nvidia/nemotron-3-super-120b-a12b:free
 G=ambitproject.dev
 
-token() { command curl -s -d grant_type=password -d client_id=ambit-cli-test -d username="$1" -d password="$1-test-pass" \
-  "$KC/realms/acme/protocol/openid-connect/token" | uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)["access_token"])'; }
 llm() { # llm TOKEN MODEL -> status (retries free-tier 429)
   local code i
   for i in 1 2 3 4; do

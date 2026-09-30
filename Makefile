@@ -2,6 +2,7 @@ NS ?= ambit-system
 CONTROLLER_GEN_VERSION ?= v0.22.0
 GATEWAY_API_VERSION ?= v1.6.2
 AGENTGATEWAY_VERSION ?= v1.5.0
+TOOLHIVE_VERSION ?= 0.51.4
 CRDS := charts/ambit-crds
 KIND_CLUSTER ?= ambit
 IMAGE ?= ambit-console:dev
@@ -22,6 +23,7 @@ vendor-crds:
 	rm -f deploy/crds/*.yaml
 	curl -sSfL -o deploy/crds/gateway-api-standard-$(GATEWAY_API_VERSION).yaml https://github.com/kubernetes-sigs/gateway-api/releases/download/$(GATEWAY_API_VERSION)/standard-install.yaml
 	helm template agentgateway-crds oci://cr.agentgateway.dev/charts/agentgateway-crds --version $(AGENTGATEWAY_VERSION) > deploy/crds/agentgateway-crds-$(AGENTGATEWAY_VERSION).yaml
+	helm template toolhive-operator-crds oci://ghcr.io/stacklok/toolhive/toolhive-operator-crds --version $(TOOLHIVE_VERSION) > deploy/crds/toolhive-crds-$(TOOLHIVE_VERSION).yaml
 
 install-crds:
 	kubectl apply --server-side --force-conflicts -f deploy/crds/ >/dev/null
@@ -54,7 +56,7 @@ install: deps install-crds
 	helm upgrade --install ambit-crds charts/ambit-crds -n $(NS) --create-namespace --wait
 	helm upgrade --install ambit charts/ambit -n $(NS) -f charts/ambit/values-kind.yaml --wait --timeout 5m
 
-STEPS ?= 0 1 2 3 3b 3c
+STEPS ?= 0 1 2 3 3b 3c 4a
 # make test            -> every step; make test STEPS=3b -> one step (each sets up what it needs)
 test:
 	@for s in $(STEPS); do ./test/step$$s.sh $(NS) || exit 1; done

@@ -1,0 +1,58 @@
+{{- if .Values.mcp.enabled }}
+{{- $jwt := .Values.mcp.jwt }}
+{{- if not (and $jwt.issuer $jwt.jwksURL) }}
+{{- fail "mcp.enabled=true needs mcp.jwt.issuer and mcp.jwt.jwksURL: Ambit never serves MCP traffic without token validation" }}
+{{- end }}
+{{- if not (has .Release.Namespace (index .Values "toolhive-operator" "operator" "rbac" "allowedNamespaces")) }}
+{{- fail (printf "toolhive-operator.operator.rbac.allowedNamespaces must include the release namespace %q, or ToolHive cannot run MCP servers here" .Release.Namespace) }}
+{{- end }}
+# MCP traffic: clients connect to <host>/mcp. ambit-controller generates the backend (one target per
+# Server) and its per-tool access policy from Server and AccessRule objects.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ambit-mcp
+spec:
+  parentRefs: [{ name: ambit{{ if .Values.gateway.tls.enabled }}, sectionName: https{{ end }} }]
+  hostnames: [{{ .Values.mcp.host | quote }}]
+  rules:
+    - name: mcp
+      matches: [{ path: { type: PathPrefix, value: /mcp } }]
+      backendRefs: [{ group: agentgateway.dev, kind: AgentgatewayBackend, name: ambit-mcp }]
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: ambit-mcp-auth
+spec:
+  targetRefs: [{ group: gateway.networking.k8s.io, kind: HTTPRoute, name: ambit-mcp }]
+  traffic:
+    jwtAuthentication:
+      mode: Strict
+      providers:
+        - issuer: {{ $jwt.issuer | quote }}
+          {{- with $jwt.audiences }}
+          audiences: {{ toJson . }}
+          {{- end }}
+          jwks:
+            remote:
+              url: {{ $jwt.jwksURL | quote }}
+{{- end }}
+{{- if .Values.mcp.enabled }}
+---
+# MCP servers run third-party code: only the gateway may call their proxies, so every call passes
+# token and tool checks. ToolHive's proxy pods may reach the server pods behind them (http transports).
+# ponytail: ingress only; add egress limits per Server when a customer needs servers without internet.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ambit-mcp-servers
+spec:
+  podSelector:
+    matchLabels: { toolhive: "true" }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit } } }]
+      ports: [{ port: 8080 }]
+    - from: [{ podSelector: { matchLabels: { app.kubernetes.io/name: mcpserver, toolhive: "true" } } }]
+{{- end }}

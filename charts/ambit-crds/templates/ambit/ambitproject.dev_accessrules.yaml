@@ -25,13 +25,16 @@ spec:
     - jsonPath: .spec.models
       name: Models
       type: string
+    - jsonPath: .spec.servers
+      name: Servers
+      type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: AccessRule grants groups (or everyone signed in) the use of models.
+        description: AccessRule grants groups (or everyone signed in) the use of models and MCP tools.
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation of an object.
@@ -56,7 +59,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: AccessRuleSpec says who may use which models. Rules only grant access; nothing is allowed by default.
+            description: AccessRuleSpec says who may use which models and MCP tools. Rules only grant access; nothing is allowed by default.
             properties:
               allSignedIn:
                 description: AllSignedIn allows everyone with a valid token.
@@ -71,14 +74,34 @@ spec:
                 description: Models lists Model object names in this namespace.
                 items:
                   type: string
-                minItems: 1
                 type: array
-            required:
-            - models
+              servers:
+                description: Servers lists Server objects in this namespace and, optionally, which of their tools are allowed.
+                items:
+                  properties:
+                    name:
+                      description: Name of a Server object in this namespace.
+                      minLength: 1
+                      type: string
+                    tools:
+                      description: 'Tools allowed on this server, by the name the server gives them (without the gateway''s
+
+                        "<server>_" prefix). Omit to allow every tool the server offers, including tools it adds later.'
+                      items:
+                        pattern: ^[A-Za-z0-9_.-]{1,128}$
+                        type: string
+                      minItems: 1
+                      type: array
+                  required:
+                  - name
+                  type: object
+                type: array
             type: object
             x-kubernetes-validations:
             - message: 'set either groups or allSignedIn: true, not both'
               rule: (has(self.groups) && size(self.groups) > 0) != (has(self.allSignedIn) && self.allSignedIn)
+            - message: name at least one model or server
+              rule: (has(self.models) && size(self.models) > 0) || (has(self.servers) && size(self.servers) > 0)
           status:
             properties:
               conditions:

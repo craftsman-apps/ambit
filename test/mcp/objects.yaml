@@ -1,0 +1,40 @@
+# Step 4a test catalog: two MCP servers that need no internet access, pinned by digest.
+apiVersion: ambitproject.dev/v1alpha1
+kind: Server
+metadata:
+  name: time
+spec:
+  displayName: Time
+  image: ghcr.io/stacklok/dockyard/uvx/mcp-server-time@sha256:ab8255cf7bf2bdad14086b356790d2d61d06cab221b85950805427be9d06d949
+  transport: stdio
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: Server
+metadata:
+  name: everything
+spec:
+  displayName: Everything (MCP reference server)
+  image: ghcr.io/stacklok/dockyard/npx/server-everything@sha256:cb2e2287d4b6a7d25affee2cde10265bfbf91f9dc38d5cbc8165c6b23fd0cded
+  transport: stdio
+---
+# eng may read the current time, and nothing else.
+apiVersion: ambitproject.dev/v1alpha1
+kind: AccessRule
+metadata:
+  name: eng-time
+spec:
+  groups: [eng]
+  servers:
+    - name: time
+      tools: [get_current_time]
+---
+# ml-research may use every tool on both servers.
+apiVersion: ambitproject.dev/v1alpha1
+kind: AccessRule
+metadata:
+  name: ml-research-tools
+spec:
+  groups: [ml-research]
+  servers:
+    - name: time
+    - name: everything

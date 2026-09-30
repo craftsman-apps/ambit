@@ -28,8 +28,8 @@ jobs:
       - name: Helm lint and deterministic render
         run: |
           make lint
-          helm template ambit charts/ambit -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml > /tmp/r1
-          helm template ambit charts/ambit -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml > /tmp/r2
+          helm template ambit charts/ambit -n ambit-system -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml > /tmp/r1
+          helm template ambit charts/ambit -n ambit-system -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml > /tmp/r2
           cmp /tmp/r1 /tmp/r2
 
   e2e:

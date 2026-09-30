@@ -13,8 +13,6 @@ GEMMA=google/gemma-4-31b-it:free
 NEMO=nvidia/nemotron-3-super-120b-a12b:free
 G=ambitproject.dev
 
-token() { command curl -s -d grant_type=password -d client_id=ambit-cli-test -d username="$1" -d password="$1-test-pass" \
-  "$KC/realms/acme/protocol/openid-connect/token" | uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)["access_token"])'; }
 # llm TOKEN MODEL: prints the HTTP status; body in $W/llm. Retries OpenRouter's free-tier 429 up to 3 times.
 llm() {
   local -a h=(-H 'Content-Type: application/json'); [[ -n "$1" ]] && h+=(-H "Authorization: Bearer $1")

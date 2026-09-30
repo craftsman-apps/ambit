@@ -47,6 +47,8 @@ export function Shell({ crumb, children }: { crumb: string; children: ReactNode 
             </span>
           )}
         </NavLink>
+        <Section>You</Section>
+        <NavLink to="/connections">My connections</NavLink>
         {u.role === "admin" && <><Section>Settings</Section><NavLink to="/settings/sign-in">Sign-in</NavLink></>}
       </nav>
       <div className="grid grid-rows-[auto_1fr]">

@@ -103,3 +103,10 @@ test("Sign-in settings: Check verifies the provider and shows the callback URL",
   await page.getByRole("button", { name: "Check" }).click();
   await expect(page.getByTestId("sso-check")).toContainText("http://console.localtest.me:8080/dex/callback");
 });
+
+test("My connections page lists the apps you can connect", async ({ page }) => {
+  await signInAsBootstrapAdmin(page);
+  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "My connections" }).click();
+  await expect(page.getByRole("heading", { name: "My connections" })).toBeVisible();
+  await expect(page.getByText("Each call uses your grant, never someone else's.")).toBeVisible();
+});

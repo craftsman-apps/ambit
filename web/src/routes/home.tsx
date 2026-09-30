@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { useMe, useModels, useMyAccess, useRequests, useRules, useServers } from "@/api";
+import { useConnections, useMe, useModels, useMyAccess, useRequests, useRules, useServers } from "@/api";
 import { Card } from "@/components/ui/card";
 import { Shell } from "@/components/shell";
 
@@ -10,6 +10,8 @@ export function HomePage() {
   const servers = useServers();
   const requests = useRequests();
   const access = useMyAccess();
+  const conns = useConnections();
+  const broken = (conns.data ?? []).filter((c) => c.state === "broken");
   const u = me.data;
   const waiting = (requests.data ?? []).filter((q) => !q.decision).length;
   const attention = (rules.data ?? []).filter((r) => r.ready !== "True").length;
@@ -20,6 +22,12 @@ export function HomePage() {
         <h1 className="text-xl font-semibold tracking-tight" data-testid="signed-in-as">
           Signed in as {u?.bootstrap ? "admin (bootstrap)" : u?.name || u?.email}
         </h1>
+        {broken.length > 0 && (
+          <Card className="border-bad" data-testid="broken-connections">
+            <b>Reconnect needed:</b> {broken.map((c) => c.displayName).join(", ")}. Your agent cannot use {broken.length === 1 ? "it" : "them"} until you reconnect.{" "}
+            <Link to="/connections" className="text-accent-text underline">My connections</Link>
+          </Card>
+        )}
         {u?.bootstrap && (
           <Card className="border-warn bg-warn-soft">You are using the bootstrap admin. Connect your company identity provider, then turn this account off.</Card>
         )}

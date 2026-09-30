@@ -246,7 +246,22 @@ func TestReconcilerAgainstAPIServer(t *testing.T) {
 		return nil
 	})
 
+	// A remote server has no ToolHive object; it is Ready as soon as it is compiled.
+	remote := &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "whoami", Namespace: ns}, Spec: v1.ServerSpec{URL: "http://whoami.test.svc:8080/mcp", Connection: "saas"}}
+	if err := envClient.Create(ctx, remote); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "remote Server Ready", func() error {
+		_ = envClient.Get(ctx, client.ObjectKeyFromObject(remote), remote)
+		if readyOf(remote.Status.Conditions) != "Remote" {
+			return fmt.Errorf("reason %s", readyOf(remote.Status.Conditions))
+		}
+		return nil
+	})
+	eventually(t, "per-user token policy", func() error { _, err := get("AgentgatewayPolicy", "ambit-conn-whoami"); return err })
+
 	// Drift: a manual edit that opens every tool is put back.
+	p, _ = get("AgentgatewayPolicy", MCPBackendName+"-access")
 	_ = unstructured.SetNestedStringSlice(p.Object, []string{"true"}, "spec", "backend", "mcp", "authorization", "policy", "matchExpressions")
 	if err := envClient.Update(ctx, p); err != nil {
 		t.Fatal(err)

@@ -115,13 +115,24 @@ type AccessRuleList struct {
 	Items           []AccessRule `json:"items"`
 }
 
-// ServerSpec is an MCP server in the Ambit catalog. ToolHive runs it in a pod; clients reach its
-// tools only through the gateway, as "<server name>_<tool>".
+// ServerSpec is an MCP server in the Ambit catalog: an image that ToolHive runs in a pod, or a remote
+// server at a URL. Clients reach its tools only through the gateway, as "<server name>_<tool>".
+// +kubebuilder:validation:XValidation:rule="has(self.image) != has(self.url)",message="set either image (run by ToolHive) or url (a remote server), not both"
+// +kubebuilder:validation:XValidation:rule="!has(self.connection) || has(self.url)",message="connection needs a remote server (url): a per-user token cannot reach a stdio server"
 type ServerSpec struct {
 	// Image pinned by digest, e.g. ghcr.io/org/server@sha256:<64 hex>. A tag can later point to
 	// different code; a digest cannot, so what was reviewed is what runs.
 	// +kubebuilder:validation:Pattern=`^[^@\s]+@sha256:[a-f0-9]{64}$`
-	Image string `json:"image"`
+	// +optional
+	Image string `json:"image,omitempty"`
+	// URL of a remote MCP server (streamable HTTP or SSE), e.g. https://api.githubcopilot.com/mcp/.
+	// +kubebuilder:validation:Pattern=`^https?://[^/?#]+(/[^?#]*)?$`
+	// +optional
+	URL string `json:"url,omitempty"`
+	// Connection names a Connection: each call then carries the calling user's own token for that
+	// app, and a user without one gets a link to connect it.
+	// +optional
+	Connection string `json:"connection,omitempty"`
 	// How the server itself talks MCP. stdio servers are wrapped by ToolHive's proxy.
 	// +kubebuilder:validation:Enum=stdio;streamable-http;sse
 	// +kubebuilder:default=stdio
@@ -172,6 +183,53 @@ type ServerList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Server `json:"items"`
+}
+
+// ConnectionSpec is a SaaS app users connect with their own account (OAuth 2.0 authorization code).
+// Ambit keeps each user's grant, refreshes it, and revokes it at the provider on disconnect or offboarding.
+type ConnectionSpec struct {
+	// DisplayName is shown on the user's "My connections" page, e.g. "Jira".
+	// +kubebuilder:validation:MinLength=1
+	DisplayName      string `json:"displayName"`
+	AuthorizationURL string `json:"authorizationURL"`
+	TokenURL         string `json:"tokenURL"`
+	// RevocationURL (RFC 7009) lets Ambit revoke a grant at the provider. Without it, disconnecting
+	// only forgets the grant, and the console says so.
+	// +optional
+	RevocationURL string `json:"revocationURL,omitempty"`
+	// +kubebuilder:validation:MinLength=1
+	ClientID string `json:"clientID"`
+	// ClientSecretRef names a Secret in this namespace with key "clientSecret". Only Secrets named
+	// ambit-conn-* may be used.
+	// +kubebuilder:validation:XValidation:rule="self.name.startsWith('ambit-conn-')",message="clientSecretRef must name a Secret called ambit-conn-<something>"
+	ClientSecretRef SecretRef `json:"clientSecretRef"`
+	// +optional
+	Scopes []string `json:"scopes,omitempty"`
+}
+
+type ConnectionStatus struct {
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="App",type=string,JSONPath=`.spec.displayName`
+// +kubebuilder:printcolumn:name="Token URL",type=string,JSONPath=`.spec.tokenURL`
+
+// Connection is a SaaS app whose per-user grants Ambit holds for MCP servers.
+type Connection struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              ConnectionSpec   `json:"spec"`
+	Status            ConnectionStatus `json:"status,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+type ConnectionList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Connection `json:"items"`
 }
 
 // ServerRequestSpec asks for a new MCP server. It cannot change after it is made, so what was
@@ -237,5 +295,5 @@ type ServerRequestList struct {
 
 func init() {
 	SchemeBuilder.Register(&Model{}, &ModelList{}, &AccessRule{}, &AccessRuleList{}, &Server{}, &ServerList{},
-		&ServerRequest{}, &ServerRequestList{})
+		&ServerRequest{}, &ServerRequestList{}, &Connection{}, &ConnectionList{})
 }

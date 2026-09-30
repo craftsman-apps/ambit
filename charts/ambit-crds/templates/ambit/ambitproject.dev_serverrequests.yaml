@@ -73,6 +73,11 @@ spec:
               server:
                 description: Server is what will run, including the image digest.
                 properties:
+                  connection:
+                    description: 'Connection names a Connection: each call then carries the calling user''s own token for that
+
+                      app, and a user without one gets a link to connect it.'
+                    type: string
                   displayName:
                     description: DisplayName is shown in the console.
                     type: string
@@ -96,9 +101,16 @@ spec:
                     - streamable-http
                     - sse
                     type: string
-                required:
-                - image
+                  url:
+                    description: URL of a remote MCP server (streamable HTTP or SSE), e.g. https://api.githubcopilot.com/mcp/.
+                    pattern: ^https?://[^/?#]+(/[^?#]*)?$
+                    type: string
                 type: object
+                x-kubernetes-validations:
+                - message: set either image (run by ToolHive) or url (a remote server), not both
+                  rule: has(self.image) != has(self.url)
+                - message: 'connection needs a remote server (url): a per-user token cannot reach a stdio server'
+                  rule: '!has(self.connection) || has(self.url)'
               serverName:
                 description: ServerName is the name the Server gets when the request is approved.
                 maxLength: 40

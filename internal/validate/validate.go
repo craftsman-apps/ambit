@@ -79,7 +79,9 @@ type Problem struct {
 	Message string
 }
 
-func (p Problem) String() string { return fmt.Sprintf("document %d, %s: %s", p.Doc, p.Object, p.Message) }
+func (p Problem) String() string {
+	return fmt.Sprintf("document %d, %s: %s", p.Doc, p.Object, p.Message)
+}
 
 // ErrNotAmbit marks documents that are not Ambit objects; they are skipped, not failed.
 var ErrNotAmbit = errors.New("not an Ambit object")

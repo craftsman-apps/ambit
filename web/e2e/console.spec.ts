@@ -110,3 +110,11 @@ test("My connections page lists the apps you can connect", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "My connections" })).toBeVisible();
   await expect(page.getByText("Each call uses your grant, never someone else's.")).toBeVisible();
 });
+
+test("Offboarding page shows the SCIM endpoint and reveals the token on request", async ({ page }) => {
+  await signInAsBootstrapAdmin(page);
+  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Offboarding" }).click();
+  await expect(page.getByText("http://console.localtest.me:8080/scim/v2")).toBeVisible();
+  await page.getByRole("button", { name: "Show token" }).click();
+  await expect(page.getByRole("button", { name: "Show token" })).toHaveCount(0);
+});

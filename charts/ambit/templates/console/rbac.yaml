@@ -24,6 +24,14 @@ rules:
   - apiGroups: [ambitproject.dev]
     resources: [models, accessrules, servers, serverrequests, connections]
     verbs: [get, list, watch]
+  # Offboarding (SCIM): the list of deactivated users that the controller blocks at the gateway.
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [ambit-offboarded]
+    verbs: [get, update]
   {{- if .Values.gitops.enabled }}
   # GitOps mode: rules and servers change only through pull requests, so the console cannot write them.
   - apiGroups: [ambitproject.dev]

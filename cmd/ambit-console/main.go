@@ -164,8 +164,12 @@ func run(ctx context.Context) error {
 	if gitops != nil {
 		slog.Info("GitOps mode: changes become pull requests", "repository", gitops.Repository, "branch", gitops.Branch, "path", gitops.Dir)
 	}
+	var scim *console.SCIM
+	if conns != nil {
+		scim = &console.SCIM{Client: objects, Namespace: ns, Token: keys.SCIMToken, Conns: conns, Sessions: auth.Sessions}
+	}
 	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), console.LoginOptions{Bootstrap: bootstrapAdmin, SSO: sso},
-		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, PublicURL: publicURL, Connectors: sso, Conns: conns}), ReadHeaderTimeout: 10 * time.Second}
+		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim}), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)

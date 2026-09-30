@@ -13,7 +13,7 @@ on_exit() {
 }
 trap 'on_exit $?' EXIT
 pass() { echo "PASS $1"; }
-fail() { echo "FAIL $1"; exit 1; }
+fail() { echo "FAIL $1"; [[ -t 1 ]] || echo "FAIL $1" >&2; exit 1; }  # also stderr: stdout may be captured
 
 # hop METHOD URL [curl args]: one request with the shared cookie jar; sets CODE and LOC.
 hop() {

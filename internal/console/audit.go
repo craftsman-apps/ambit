@@ -1,0 +1,205 @@
+package console
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2"
+)
+
+// Audit answers from the gateway's access logs in ClickHouse (journey A5: "every call Alice made in
+// March, including denied ones"; and token usage per group). Every input reaches ClickHouse as a
+// server-side query parameter, never as SQL text.
+type Audit struct {
+	DB *sql.DB
+}
+
+// OpenAudit connects over ClickHouse's HTTP interface.
+func OpenAudit(addr, password string) *Audit {
+	return &Audit{DB: clickhouse.OpenDB(&clickhouse.Options{Protocol: clickhouse.HTTP, Addr: []string{addr},
+		Auth: clickhouse.Auth{Database: "otel", Username: "ambit", Password: password}, DialTimeout: 5 * time.Second})}
+}
+
+// Call is one gateway request as the auditor sees it.
+type Call struct {
+	Time         time.Time `json:"time"`
+	Email        string    `json:"email"`
+	Route        string    `json:"route"`
+	Method       string    `json:"method"` // MCP method, e.g. tools/call; empty for LLM calls
+	Server       string    `json:"server"` // MCP server (mcp.target)
+	Tool         string    `json:"tool"`
+	Model        string    `json:"model"`
+	Status       string    `json:"status"`
+	Error        string    `json:"error"`
+	InputTokens  int64     `json:"inputTokens"`
+	OutputTokens int64     `json:"outputTokens"`
+}
+
+const callsSQL = `
+SELECT Timestamp,
+       {email:String}, LogAttributes['route'], LogAttributes['mcp.method.name'], LogAttributes['mcp.target'],
+       LogAttributes['gen_ai.tool.name'], LogAttributes['gen_ai.request.model'], LogAttributes['http.status'], LogAttributes['error'],
+       toInt64OrZero(LogAttributes['gen_ai.usage.input_tokens']), toInt64OrZero(LogAttributes['gen_ai.usage.output_tokens'])
+FROM otel_logs
+WHERE (LogAttributes['jwt.email'] = {email:String}
+       -- Some refusals (e.g. a model the user may not use) are logged with the token's subject but
+       -- without the email attribute; match them through the subjects seen with this email.
+       OR (LogAttributes['jwt.email'] = '' AND has({subs:Array(String)}, LogAttributes['jwt.sub'])))
+  AND Timestamp >= {from:DateTime64(9)} AND Timestamp < {to:DateTime64(9)}
+ORDER BY Timestamp DESC
+LIMIT {limit:UInt32}`
+
+const subsSQL = `SELECT DISTINCT LogAttributes['jwt.sub'] FROM otel_logs
+WHERE LogAttributes['jwt.email'] = {email:String} AND LogAttributes['jwt.sub'] != '' LIMIT 100`
+
+// Calls lists one user's gateway calls in [from, to), newest first.
+func (a *Audit) Calls(ctx context.Context, email string, from, to time.Time, limit int) ([]Call, error) {
+	// Two steps: ClickHouse 26.3 fails on IN (subquery) inside OR over map keys ("Not-ready Set").
+	var subs []string
+	srows, err := a.DB.QueryContext(clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{"email": email})), subsSQL)
+	if err != nil {
+		return nil, err
+	}
+	for srows.Next() {
+		var s string
+		if err := srows.Scan(&s); err != nil {
+			srows.Close()
+			return nil, err
+		}
+		subs = append(subs, s)
+	}
+	srows.Close()
+	ctx = clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{
+		"email": email, "subs": arrayLiteral(subs),
+		"from": from.UTC().Format("2006-01-02 15:04:05.000000000"), "to": to.UTC().Format("2006-01-02 15:04:05.000000000"),
+		"limit": strconv.Itoa(limit)}))
+	rows, err := a.DB.QueryContext(ctx, callsSQL)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Call{}
+	for rows.Next() {
+		var c Call
+		if err := rows.Scan(&c.Time, &c.Email, &c.Route, &c.Method, &c.Server, &c.Tool, &c.Model, &c.Status, &c.Error, &c.InputTokens, &c.OutputTokens); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// arrayLiteral writes an Array(String) parameter value: quoted, with \ and ' escaped.
+func arrayLiteral(items []string) string {
+	q := make([]string, len(items))
+	for i, it := range items {
+		q[i] = "'" + strings.ReplaceAll(strings.ReplaceAll(it, `\`, `\\`), `'`, `\'`) + "'"
+	}
+	return "[" + strings.Join(q, ",") + "]"
+}
+
+// GroupUsage is LLM requests and tokens per group per day; a user in two groups counts toward both.
+// ponytail: agentgateway v1.5.0 does not log the model or token counts for requests routed to an
+// AgentgatewayModel, so tokens read 0 until it does; request counts are exact.
+type GroupUsage struct {
+	Day          string `json:"day"`
+	Group        string `json:"group"`
+	Requests     uint64 `json:"requests"`
+	InputTokens  int64  `json:"inputTokens"`
+	OutputTokens int64  `json:"outputTokens"`
+}
+
+const usageSQL = `
+SELECT toString(toDate(Timestamp)) AS day,
+       arrayJoin(if(empty(JSONExtract(LogAttributes['jwt.groups'], 'Array(String)')), ['(no group)'], JSONExtract(LogAttributes['jwt.groups'], 'Array(String)'))) AS grp,
+       count(),
+       sum(toInt64OrZero(LogAttributes['gen_ai.usage.input_tokens'])),
+       sum(toInt64OrZero(LogAttributes['gen_ai.usage.output_tokens']))
+FROM otel_logs
+WHERE LogAttributes['protocol'] = 'llm' AND LogAttributes['jwt.groups'] != ''
+  AND Timestamp >= {from:DateTime64(9)} AND Timestamp < {to:DateTime64(9)}
+GROUP BY day, grp
+ORDER BY day DESC, grp`
+
+func (a *Audit) Usage(ctx context.Context, from, to time.Time) ([]GroupUsage, error) {
+	ctx = clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{
+		"from": from.UTC().Format("2006-01-02 15:04:05.000000000"), "to": to.UTC().Format("2006-01-02 15:04:05.000000000")}))
+	rows, err := a.DB.QueryContext(ctx, usageSQL)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []GroupUsage{}
+	for rows.Next() {
+		var u GroupUsage
+		if err := rows.Scan(&u.Day, &u.Group, &u.Requests, &u.InputTokens, &u.OutputTokens); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
+}
+
+// period reads from/to (RFC 3339 or YYYY-MM-DD) with a default of the last 30 days.
+func period(r *http.Request) (time.Time, time.Time, error) {
+	parse := func(v string, def time.Time) (time.Time, error) {
+		if v == "" {
+			return def, nil
+		}
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			return t, nil
+		}
+		return time.Parse("2006-01-02", v)
+	}
+	to, err := parse(r.URL.Query().Get("to"), time.Now().Add(time.Minute))
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("to: use 2026-03-31 or RFC 3339")
+	}
+	from, err := parse(r.URL.Query().Get("from"), to.AddDate(0, 0, -30))
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("from: use 2026-03-01 or RFC 3339")
+	}
+	if !from.Before(to) {
+		return time.Time{}, time.Time{}, fmt.Errorf("from must be before to")
+	}
+	return from, to, nil
+}
+
+func (a *Audit) register(mux *http.ServeMux, admin func(func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc) {
+	mux.HandleFunc("GET /api/audit", admin(func(w http.ResponseWriter, r *http.Request, s Session) {
+		email := r.URL.Query().Get("email")
+		if email == "" {
+			writeErr(w, http.StatusBadRequest, "email is required")
+			return
+		}
+		from, to, err := period(r)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		calls, err := a.Calls(r.Context(), email, from, to, 1000)
+		if err != nil {
+			serverErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"email": email, "from": from, "to": to, "calls": calls, "limited": len(calls) == 1000})
+	}))
+	mux.HandleFunc("GET /api/usage", admin(func(w http.ResponseWriter, r *http.Request, _ Session) {
+		from, to, err := period(r)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		u, err := a.Usage(r.Context(), from, to)
+		if err != nil {
+			serverErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"from": from, "to": to, "usage": u})
+	}))
+}

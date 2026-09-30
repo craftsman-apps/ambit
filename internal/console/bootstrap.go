@@ -24,6 +24,7 @@ const (
 type Keys struct {
 	SessionKey   []byte
 	ClientSecret string
+	GrantKey     []byte // AES-256 key for users' SaaS tokens (Connections); added on upgrade if missing
 }
 
 // Bootstrap prepares everything the chart deliberately does not generate (GitOps rule 6):
@@ -41,13 +42,19 @@ func Bootstrap(ctx context.Context, kube kubernetes.Interface, dex api.DexClient
 	}
 	if newKeys {
 		keysSec = &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: KeysSecret}, Data: map[string][]byte{
-			"session-key": randomBytes(32), "client-secret": []byte(randomPassword(40)),
+			"session-key": randomBytes(32), "client-secret": []byte(randomPassword(40)), "grant-key": randomBytes(32),
 		}}
 		if keysSec, err = secrets.Create(ctx, keysSec, metav1.CreateOptions{}); err != nil {
 			return Keys{}, fmt.Errorf("create %s: %w", KeysSecret, err)
 		}
 	}
-	keys := Keys{SessionKey: keysSec.Data["session-key"], ClientSecret: string(keysSec.Data["client-secret"])}
+	if len(keysSec.Data["grant-key"]) != 32 { // installs from before step 5
+		keysSec.Data["grant-key"] = randomBytes(32)
+		if keysSec, err = secrets.Update(ctx, keysSec, metav1.UpdateOptions{}); err != nil {
+			return Keys{}, fmt.Errorf("add grant key to %s: %w", KeysSecret, err)
+		}
+	}
+	keys := Keys{SessionKey: keysSec.Data["session-key"], ClientSecret: string(keysSec.Data["client-secret"]), GrantKey: keysSec.Data["grant-key"]}
 
 	client := &api.Client{Id: ClientID, Name: "Ambit", Secret: keys.ClientSecret, RedirectUris: []string{redirect}}
 	resp, err := dex.CreateClient(ctx, &api.CreateClientReq{Client: client})

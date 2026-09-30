@@ -31,6 +31,8 @@ type Catalog struct {
 	PublicURL  string
 	Connectors []Connector
 	HTTP       *http.Client // for reaching identity providers; nil uses a 10-second client
+	// Conns serves "My connections" and the connect flow; nil when no grants namespace is configured.
+	Conns *Connections
 }
 
 // Config tells the console UI how changes are applied.
@@ -159,6 +161,9 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	mux.HandleFunc("GET /api/changes", read(c.changes))
 	mux.HandleFunc("POST /api/sso/check", allow("only admins can connect sign-in providers", c.checkSSO, RoleAdmin))
 	mux.HandleFunc("POST /api/sso/connectors", allow("only admins can connect sign-in providers", c.connectSSO, RoleAdmin))
+	if c.Conns != nil {
+		c.Conns.register(mux, auth)
+	}
 }
 
 func (c *Catalog) config(w http.ResponseWriter, _ *http.Request, _ Session) {

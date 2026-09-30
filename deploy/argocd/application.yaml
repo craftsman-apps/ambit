@@ -1,0 +1,21 @@
+# Example Argo CD Application for Ambit objects in GitOps mode. Adjust repoURL, path and namespace.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ambit-config
+  namespace: argocd
+  annotations:
+    # Ambit objects need their CRDs, which come from the ambit-crds chart (sync-wave -2 in its own Application).
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/craftsman-apps/ambit-config-test.git
+    targetRevision: main
+    path: ambit
+    directory: { recurse: true }
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ambit-system
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }

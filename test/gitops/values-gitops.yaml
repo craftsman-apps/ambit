@@ -1,0 +1,6 @@
+# Step 4c: GitOps mode against the private test repository. appID comes from --set (not secret, but per-install).
+gitops:
+  enabled: true
+  repository: craftsman-apps/ambit-config-test
+  branch: main
+  path: ambit

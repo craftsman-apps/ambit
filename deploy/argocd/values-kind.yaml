@@ -1,0 +1,13 @@
+# Argo CD for the step 4c test on kind: no Dex, no notifications, plain HTTP inside the cluster.
+# The Ambit health check is added by `make argocd` from health.lua (--set-file).
+dex: { enabled: false }
+notifications: { enabled: false }
+applicationSet: { replicas: 0 }
+configs:
+  params:
+    server.insecure: true
+    # Reconcile every 30 s instead of 3 minutes, so tests do not wait long after a merge.
+    timeout.reconciliation: 30s
+  cm:
+    # Ambit's own label; never copied onto generated objects (GitOps rule 1).
+    application.resourceTrackingMethod: annotation

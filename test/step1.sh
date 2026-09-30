@@ -53,4 +53,4 @@ helm template ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml > "$W
 helm template ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml > "$W/r2"
 cmp -s "$W/r1" "$W/r2" || fail "8 two renders differ"
 pass "8 chart renders identically"
-echo "PASS: step 1"
+done_step 1

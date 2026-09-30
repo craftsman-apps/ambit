@@ -25,6 +25,20 @@ import (
 type Catalog struct {
 	Client    client.Client
 	Namespace string
+	// GitOps is set in GitOps mode: changes become pull requests instead of cluster writes.
+	GitOps *GitOps
+}
+
+// Config tells the console UI how changes are applied.
+type Config struct {
+	Mode       string `json:"mode"` // "direct" or "gitops"
+	Repository string `json:"repository,omitempty"`
+	Branch     string `json:"branch,omitempty"`
+}
+
+// Proposed is the answer to a change in GitOps mode (HTTP 202): nothing changed yet.
+type Proposed struct {
+	PullRequest PullRequest `json:"pullRequest"`
 }
 
 type ModelView struct {
@@ -44,11 +58,11 @@ type RuleView struct {
 	AllSignedIn bool              `json:"allSignedIn"`
 	Models      []string          `json:"models"`
 	Servers     []v1.ServerAccess `json:"servers"`
-	Ready       string   `json:"ready"`
-	Reason      string   `json:"reason"`
-	Message     string   `json:"message"`
-	GitManaged  bool     `json:"gitManaged"`
-	CreatedBy   string   `json:"createdBy"`
+	Ready       string            `json:"ready"`
+	Reason      string            `json:"reason"`
+	Message     string            `json:"message"`
+	GitManaged  bool              `json:"gitManaged"`
+	CreatedBy   string            `json:"createdBy"`
 }
 
 // Effective is the policy the gateway enforces for one model, after merging every rule.
@@ -87,7 +101,7 @@ const (
 var (
 	nameRE  = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 	groupRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@/-]*$`) // same pattern as the CRD
-	toolRE  = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)       // same pattern as the CRD
+	toolRE  = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)        // same pattern as the CRD
 )
 
 func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
@@ -137,6 +151,56 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	mux.HandleFunc("POST /api/server-requests/{name}/approve", decide(c.approveRequest))
 	mux.HandleFunc("POST /api/server-requests/{name}/deny", decide(c.denyRequest))
 	mux.HandleFunc("GET /api/me/access", read(c.myAccess))
+	mux.HandleFunc("GET /api/config", read(c.config))
+	mux.HandleFunc("GET /api/changes", read(c.changes))
+}
+
+func (c *Catalog) config(w http.ResponseWriter, _ *http.Request, _ Session) {
+	if c.GitOps == nil {
+		writeJSON(w, http.StatusOK, Config{Mode: "direct"})
+		return
+	}
+	writeJSON(w, http.StatusOK, Config{Mode: "gitops", Repository: c.GitOps.Repository, Branch: c.GitOps.Branch})
+}
+
+// changes lists the console's open pull requests, so admins see what is waiting for review.
+func (c *Catalog) changes(w http.ResponseWriter, r *http.Request, _ Session) {
+	if c.GitOps == nil {
+		writeJSON(w, http.StatusOK, []PullRequest{})
+		return
+	}
+	prs, err := c.GitOps.Repo.OpenPullRequests(r.Context())
+	if err != nil {
+		slog.Error("list pull requests", "err", err)
+		writeErr(w, http.StatusBadGateway, "could not read pull requests from "+c.GitOps.Repository+": "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, prs)
+}
+
+// propose opens a pull request for one object and answers 202; manifest nil deletes it.
+func (c *Catalog) propose(w http.ResponseWriter, r *http.Request, s Session, verb, kind, plural, name string, spec any, annotations map[string]string) {
+	var manifest []byte
+	if spec != nil {
+		var err error
+		if manifest, err = Manifest(kind, name, annotations, spec); err != nil {
+			serverErr(w, err)
+			return
+		}
+	}
+	pr, err := c.GitOps.Propose(r.Context(), verb, kind, plural, name, s.Email, manifest)
+	var invalid *InvalidChange
+	if errors.As(err, &invalid) {
+		writeErr(w, http.StatusBadRequest, invalid.Error())
+		return
+	}
+	if err != nil {
+		slog.Error("open pull request", "kind", kind, "name", name, "err", err)
+		writeErr(w, http.StatusBadGateway, "could not open a pull request in "+c.GitOps.Repository+": "+err.Error())
+		return
+	}
+	slog.Info("pull request opened", "kind", kind, "name", name, "verb", verb, "by", s.Email, "url", pr.URL)
+	writeJSON(w, http.StatusAccepted, Proposed{PullRequest: pr})
 }
 
 func (c *Catalog) load(r *http.Request) ([]v1.Model, []v1.AccessRule, error) {
@@ -175,7 +239,7 @@ func (c *Catalog) listModels(w http.ResponseWriter, r *http.Request, _ Session) 
 func ruleView(ar v1.AccessRule) RuleView {
 	v := RuleView{Name: ar.Name, Groups: nonNil(ar.Spec.Groups), AllSignedIn: ar.Spec.AllSignedIn, Models: nonNil(ar.Spec.Models),
 		Servers: ar.Spec.Servers,
-		Ready: "Unknown", GitManaged: gitManaged(ar.Annotations), CreatedBy: ar.Annotations[createdByKey]}
+		Ready:   "Unknown", GitManaged: gitManaged(ar.Annotations), CreatedBy: ar.Annotations[createdByKey]}
 	if cond := meta.FindStatusCondition(ar.Status.Conditions, "Ready"); cond != nil {
 		v.Ready, v.Reason, v.Message = string(cond.Status), cond.Reason, cond.Message
 	}
@@ -304,6 +368,15 @@ func (c *Catalog) createRule(w http.ResponseWriter, r *http.Request, s Session) 
 		ObjectMeta: metav1.ObjectMeta{Name: in.Name, Namespace: c.Namespace, Annotations: map[string]string{createdByKey: s.Email}},
 		Spec:       v1.AccessRuleSpec{Groups: in.Groups, AllSignedIn: in.AllSignedIn, Models: in.Models, Servers: in.Servers},
 	}
+	if c.GitOps != nil {
+		var existing v1.AccessRule
+		if err := c.Client.Get(r.Context(), client.ObjectKeyFromObject(ar), &existing); err == nil {
+			writeErr(w, http.StatusConflict, "an access rule named "+in.Name+" already exists")
+			return
+		}
+		c.propose(w, r, s, "create", "AccessRule", "accessrules", in.Name, ar.Spec, ar.Annotations)
+		return
+	}
 	if err := c.Client.Create(r.Context(), ar); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			writeErr(w, http.StatusConflict, "an access rule named "+in.Name+" already exists")
@@ -326,7 +399,8 @@ func (c *Catalog) editable(w http.ResponseWriter, r *http.Request) (*v1.AccessRu
 		}
 		return nil, false
 	}
-	if gitManaged(ar.Annotations) {
+	// In GitOps mode every change is a pull request, so Git-managed rules are editable here too.
+	if c.GitOps == nil && gitManaged(ar.Annotations) {
 		writeErr(w, http.StatusConflict, "this rule is managed in Git; change it with a pull request")
 		return nil, false
 	}
@@ -351,6 +425,10 @@ func (c *Catalog) updateRule(w http.ResponseWriter, r *http.Request, s Session) 
 		return
 	}
 	ar.Spec = v1.AccessRuleSpec{Groups: in.Groups, AllSignedIn: in.AllSignedIn, Models: in.Models, Servers: servers}
+	if c.GitOps != nil {
+		c.propose(w, r, s, "update", "AccessRule", "accessrules", ar.Name, ar.Spec, consoleAnnotations(ar.Annotations))
+		return
+	}
 	if ar.Annotations == nil {
 		ar.Annotations = map[string]string{}
 	}
@@ -368,12 +446,27 @@ func (c *Catalog) deleteRule(w http.ResponseWriter, r *http.Request, s Session) 
 	if !ok {
 		return
 	}
+	if c.GitOps != nil {
+		c.propose(w, r, s, "delete", "AccessRule", "accessrules", ar.Name, nil, nil)
+		return
+	}
 	if err := c.Client.Delete(r.Context(), ar); err != nil && !apierrors.IsNotFound(err) {
 		apiErr(w, err)
 		return
 	}
 	slog.Info("access rule deleted", "rule", ar.Name, "by", s.Email)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// consoleAnnotations keeps only Ambit's own annotations for Git; Argo CD and kubectl add theirs.
+func consoleAnnotations(in map[string]string) map[string]string {
+	out := map[string]string{}
+	for k, v := range in {
+		if strings.HasPrefix(k, v1.GroupVersion.Group+"/") {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 func gitManaged(annotations map[string]string) bool {
@@ -394,7 +487,9 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-func writeErr(w http.ResponseWriter, code int, msg string) { writeJSON(w, code, map[string]string{"error": msg}) }
+func writeErr(w http.ResponseWriter, code int, msg string) {
+	writeJSON(w, code, map[string]string{"error": msg})
+}
 
 func serverErr(w http.ResponseWriter, err error) {
 	slog.Error("catalog", "err", err)

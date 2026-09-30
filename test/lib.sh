@@ -1,7 +1,17 @@
 # Shared helpers for the step tests. Source after setting NS.
 BASE=${BASE:-http://console.localtest.me:8080}
 CURL_CA=${CURL_CA:-}   # set to a CA file when BASE is https with a private CA
-W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
+W=$(mktemp -d)
+# A step passes only if it reaches done_step. macOS's bash 3.2 exits 0 from an EXIT trap after an
+# unset-variable error, which would turn a failed test green; this catches that on every bash.
+FINISHED=
+done_step() { FINISHED=1; echo "PASS: step $1"; }
+on_exit() {
+  local rc=$1
+  if [[ -z "$FINISHED" && $rc -eq 0 ]]; then echo "FAIL: the script stopped before its last check"; rc=1; fi
+  rm -rf "$W"; exit "$rc"
+}
+trap 'on_exit $?' EXIT
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1"; exit 1; }
 
@@ -76,6 +86,7 @@ me_field() { uv run --no-project python -c "import json,sys;v=json.load(open('$W
 
 # MCP through the gateway.
 MCP=${MCP:-http://mcp.localtest.me:8080/mcp}
+TOOLS=""
 # mcp_open TOKEN: starts an MCP session; sets TOK and SID.
 mcp_open() {
   TOK=$1

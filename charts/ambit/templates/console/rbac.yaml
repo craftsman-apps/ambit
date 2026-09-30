@@ -24,6 +24,12 @@ rules:
   - apiGroups: [ambitproject.dev]
     resources: [models, accessrules, servers, serverrequests]
     verbs: [get, list, watch]
+  {{- if .Values.gitops.enabled }}
+  # GitOps mode: rules and servers change only through pull requests, so the console cannot write them.
+  - apiGroups: [ambitproject.dev]
+    resources: [serverrequests]
+    verbs: [create]
+  {{- else }}
   - apiGroups: [ambitproject.dev]
     resources: [accessrules]
     verbs: [create, update, delete]
@@ -32,6 +38,7 @@ rules:
   - apiGroups: [ambitproject.dev]
     resources: [serverrequests, servers]
     verbs: [create]
+  {{- end }}
   - apiGroups: [ambitproject.dev]
     resources: [serverrequests/status]
     verbs: [update]

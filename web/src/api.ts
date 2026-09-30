@@ -58,7 +58,13 @@ export type ServerView = {
 export type RequestView = {
   name: string; serverName: string; displayName: string; image: string; transport: string; reason: string;
   requestedBy: string; requestedAt: string; decision: "" | "Approved" | "Denied"; decidedBy: string; decidedAt: string | null; comment: string;
+  pullRequest: string;
 };
+export type PullRequest = { number: number; url: string; title: string; branch: string; author?: string };
+// A change in GitOps mode answers 202 with the pull request it opened; nothing changed yet.
+export type Proposed = { pullRequest: PullRequest };
+export const isProposed = (v: unknown): v is Proposed => !!v && typeof v === "object" && "pullRequest" in v;
+export type Config = { mode: "direct" | "gitops"; repository?: string; branch?: string };
 export type RequestInput = { serverName: string; displayName: string; image: string; transport: string; reason: string };
 export type MyAccess = {
   groups: string[]; models: string[];
@@ -89,3 +95,6 @@ export const useRule = (name?: string) =>
 export const useServers = () => useQuery({ queryKey: ["servers"], queryFn: () => getJSON<ServerView[]>("/api/servers") });
 export const useRequests = () => useQuery({ queryKey: ["server-requests"], queryFn: () => getJSON<RequestView[]>("/api/server-requests") });
 export const useMyAccess = () => useQuery({ queryKey: ["my-access"], queryFn: () => getJSON<MyAccess>("/api/me/access") });
+export const useConfig = () => useQuery({ queryKey: ["config"], staleTime: Infinity, queryFn: () => getJSON<Config>("/api/config") });
+export const useChanges = (enabled: boolean) =>
+  useQuery({ queryKey: ["changes"], enabled, queryFn: () => getJSON<PullRequest[]>("/api/changes") });

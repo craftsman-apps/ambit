@@ -50,6 +50,19 @@ llm:
     audiences: []
     jwksURL: ""
 
+gitops:
+  # GitOps mode: the console opens pull requests in your configuration repository instead of changing
+  # the cluster, and Argo CD (or Flux) applies what is merged. See deploy/argocd/.
+  enabled: false
+  repository: ""        # owner/name, e.g. acme/platform-config
+  branch: main          # the branch Argo CD watches
+  path: ambit           # directory of Ambit objects: <path>/accessrules/<name>.yaml, <path>/servers/<name>.yaml
+  github:
+    apiURL: https://api.github.com   # GitHub Enterprise Server: https://<host>/api/v3
+    appID: ""
+    # Secret with key private-key.pem: the GitHub App's key. Create it yourself; the chart never holds it.
+    privateKeySecret: ambit-github-app
+
 mcp:
   # Serve MCP at <host>/mcp. Servers and tool access come from Server and AccessRule objects;
   # ToolHive runs each server in a pod that only the gateway can reach.

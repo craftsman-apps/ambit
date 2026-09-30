@@ -14,4 +14,4 @@ for _ in $(seq 1 15); do
   sleep 2
 done
 [ "$code" = "404" ] || { echo "FAIL: expected 404 from agentgateway on :8080, got $code"; exit 1; }
-echo "PASS: step 0"
+echo "PASS: step 0"  # no lib.sh and no EXIT trap here, so a failure keeps its exit code

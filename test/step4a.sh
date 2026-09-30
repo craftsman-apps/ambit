@@ -139,4 +139,4 @@ helm template ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f te
 helm template ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml > "$W/r2"
 cmp -s "$W/r1" "$W/r2" || fail "12 two renders differ"
 pass "12 chart renders identically"
-echo "PASS: step 4a"
+done_step 4a

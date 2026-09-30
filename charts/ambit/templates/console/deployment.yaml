@@ -34,9 +34,20 @@ spec:
             # Go reads every directory in SSL_CERT_DIR: system CAs plus the extra one.
             - { name: SSL_CERT_DIR, value: "/etc/ssl/certs:/etc/ambit/ca" }
             {{- end }}
-          {{- if .Values.console.caBundleSecret }}
-          volumeMounts: [{ name: extra-ca, mountPath: /etc/ambit/ca, readOnly: true }]
-          {{- end }}
+            {{- with .Values.gitops }}{{ if .enabled }}
+            - { name: AMBIT_GITOPS_REPOSITORY, value: {{ required "gitops.repository is required (owner/name)" .repository | quote }} }
+            - { name: AMBIT_GITOPS_BRANCH, value: {{ .branch | quote }} }
+            - { name: AMBIT_GITOPS_PATH, value: {{ .path | quote }} }
+            - { name: AMBIT_GITHUB_API, value: {{ .github.apiURL | quote }} }
+            - { name: AMBIT_GITHUB_APP_ID, value: {{ required "gitops.github.appID is required" .github.appID | quote }} }
+            {{- end }}{{ end }}
+          volumeMounts:
+            {{- if .Values.console.caBundleSecret }}
+            - { name: extra-ca, mountPath: /etc/ambit/ca, readOnly: true }
+            {{- end }}
+            {{- if .Values.gitops.enabled }}
+            - { name: github-app, mountPath: /etc/ambit/github, readOnly: true }
+            {{- end }}
           readinessProbe:
             httpGet: { path: /healthz, port: http }
           securityContext:
@@ -46,8 +57,13 @@ spec:
           resources:
             requests: { cpu: 20m, memory: 32Mi }
             limits: { memory: 128Mi }
-      {{- with .Values.console.caBundleSecret }}
       volumes:
+        {{- with .Values.console.caBundleSecret }}
         - name: extra-ca
           secret: { secretName: {{ . | quote }}, items: [{ key: ca.crt, path: ca.crt }] }
-      {{- end }}
+        {{- end }}
+        {{- if .Values.gitops.enabled }}
+        # Created by you (kubectl or External Secrets); the chart never holds the key.
+        - name: github-app
+          secret: { secretName: {{ .Values.gitops.github.privateKeySecret | quote }}, items: [{ key: private-key.pem, path: private-key.pem }] }
+        {{- end }}

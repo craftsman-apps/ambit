@@ -14,7 +14,7 @@ cleanup() {
   kubectl -n "$NS" delete "serverrequests.$G" --all >/dev/null
   kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
 }
-trap 'cleanup; rm -rf "$W"' EXIT
+trap 'rc=$?; cleanup; on_exit $rc' EXIT
 
 ensure_llm_setup "$NS"
 cleanup
@@ -85,4 +85,4 @@ code=$(api GET /api/me/access)
 got=$(field '" ".join(s["server"]+":"+",".join(s["tools"])+"@"+",".join(s["rules"]) for s in d["servers"])')
 [[ "$got" == "time:get_current_time@eng-time time-b:convert_time@eng-time" ]] || fail "7 my access: $got"
 pass "7 alice's own access page: $got"
-echo "PASS: step 4b"
+done_step 4b

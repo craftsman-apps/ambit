@@ -69,4 +69,4 @@ pass "7 chart renders identically; the IdP client secret is referenced, never re
 
 # Leave the cluster as step 1 expects it: bootstrap admin on.
 upgrade --set bootstrapAdmin.enabled=true
-echo "PASS: step 2"
+done_step 2

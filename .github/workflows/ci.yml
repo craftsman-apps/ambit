@@ -24,7 +24,7 @@ jobs:
       - name: Go vet, unit and integration tests (envtest API server)
         run: go vet ./... && KUBEBUILDER_ASSETS="$(make -s envtest-assets)" go test -count=1 ./...
       - name: Generated CRDs and deepcopy code are up to date
-        run: make generate && git diff --exit-code -- api charts/ambit-crds
+        run: make generate && git diff --exit-code -- api charts/ambit-crds internal/validate/crds
       - name: Helm lint and deterministic render
         run: |
           make lint

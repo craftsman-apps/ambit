@@ -71,7 +71,7 @@ helm upgrade ambit charts/ambit -n "$NS" "${LLM_VALUES[@]}" -f test/tls/values-t
 kubectl -n "$NS" rollout status deploy/ambit-dex --timeout=180s >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-console --timeout=180s >/dev/null
 restore() { helm upgrade ambit charts/ambit -n "$NS" "${LLM_VALUES[@]}" --wait --timeout 5m >/dev/null; kubectl -n "$NS" rollout status deploy/ambit-console --timeout=180s >/dev/null; }
-trap 'restore; rm -rf "$W"' EXIT
+trap 'rc=$?; restore; on_exit $rc' EXIT
 HTTPS=https://console.localtest.me:8443
 r=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' http://console.localtest.me:8080/login)
 [[ "$r" == "301 $HTTPS/login" ]] || fail "6 http did not redirect to https: $r"
@@ -88,4 +88,4 @@ c=$(curl -s --cacert "$W/ca.crt" -o /dev/null -w '%{http_code}' -H "Authorizatio
   -d '{"model":"nvidia/nemotron-3-super-120b-a12b:free","messages":[{"role":"user","content":"x"}]}' https://llm.localtest.me:8443/v1/chat/completions)
 [[ "$c" == 403 ]] || fail "6 LLM route over https answered $c (want 403 for alice on the restricted model)"
 pass "6 HTTPS: http->https 301, HSTS, Secure cookie, Dex sign-in over https, LLM route policy on https"
-echo "PASS: step 3c"
+done_step 3c

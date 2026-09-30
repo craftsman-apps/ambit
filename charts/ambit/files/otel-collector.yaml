@@ -1,0 +1,20 @@
+receivers:
+  otlp:
+    protocols:
+      grpc: { endpoint: 0.0.0.0:4317 }
+exporters:
+  clickhouse:
+    endpoint: tcp://ambit-clickhouse:9000?dial_timeout=10s
+    database: otel
+    username: ambit
+    password: ${env:CLICKHOUSE_PASSWORD}
+    logs_table_name: otel_logs
+    ttl: {{ .Values.evidence.retention }}
+    create_schema: true
+    sending_queue: { enabled: true }
+    retry_on_failure: { enabled: true }
+processors:
+  batch: { timeout: 2s }
+service:
+  pipelines:
+    logs: { receivers: [otlp], processors: [batch], exporters: [clickhouse] }

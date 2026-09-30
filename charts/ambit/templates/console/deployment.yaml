@@ -37,6 +37,9 @@ spec:
             {{- if .Values.mcp.enabled }}
             - { name: AMBIT_GRANTS_NAMESPACE, value: {{ .Values.connections.grantsNamespace | default (printf "%s-grants" .Release.Namespace) | quote }} }
             {{- end }}
+            {{- if .Values.evidence.enabled }}
+            - { name: AMBIT_CLICKHOUSE_ADDR, value: "ambit-clickhouse:8123" }
+            {{- end }}
             {{- with .Values.gitops }}{{ if .enabled }}
             - { name: AMBIT_GITOPS_REPOSITORY, value: {{ required "gitops.repository is required (owner/name)" .repository | quote }} }
             - { name: AMBIT_GITOPS_BRANCH, value: {{ .branch | quote }} }

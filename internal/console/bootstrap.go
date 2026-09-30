@@ -21,6 +21,24 @@ const (
 	AdminSecret = "ambit-initial-admin"
 )
 
+// EnsureClickHousePassword creates the audit store's password once (Secret ambit-clickhouse, key
+// password), for ClickHouse, the collector and the console. The chart never renders it (GitOps rule 6).
+func EnsureClickHousePassword(ctx context.Context, kube kubernetes.Interface, ns string) (string, error) {
+	secrets := kube.CoreV1().Secrets(ns)
+	sec, err := secrets.Get(ctx, "ambit-clickhouse", metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		sec, err = secrets.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ambit-clickhouse"},
+			Data: map[string][]byte{"password": []byte(randomPassword(40))}}, metav1.CreateOptions{})
+		if apierrors.IsAlreadyExists(err) {
+			sec, err = secrets.Get(ctx, "ambit-clickhouse", metav1.GetOptions{})
+		}
+	}
+	if err != nil {
+		return "", fmt.Errorf("ambit-clickhouse: %w", err)
+	}
+	return string(sec.Data["password"]), nil
+}
+
 type Keys struct {
 	SessionKey   []byte
 	ClientSecret string

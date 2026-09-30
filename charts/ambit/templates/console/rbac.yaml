@@ -20,6 +20,11 @@ rules:
     resources: [secrets]
     resourceNames: [ambit-initial-admin]
     verbs: [get, update, delete]
+  # Audit store password, created by the console at first start (evidence).
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [ambit-clickhouse]
+    verbs: [get]
   # Catalog screens: everyone signed in reads; admins change access rules (Direct mode).
   - apiGroups: [ambitproject.dev]
     resources: [models, accessrules, servers, serverrequests, connections]

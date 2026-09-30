@@ -35,6 +35,8 @@ type Catalog struct {
 	Conns *Connections
 	// SCIM receives users from the identity provider and offboards deactivated ones; nil without Conns.
 	SCIM *SCIM
+	// Audit searches the gateway's access logs; nil when evidence is off.
+	Audit *Audit
 }
 
 // Config tells the console UI how changes are applied.
@@ -166,17 +168,20 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	if c.Conns != nil {
 		c.Conns.register(mux, auth)
 	}
+	admin := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
+		return read(func(w http.ResponseWriter, r *http.Request, s Session) {
+			if s.Role != RoleAdmin {
+				writeErr(w, http.StatusForbidden, "only admins can see this")
+				return
+			}
+			h(w, r, s)
+		})
+	}
+	if c.Audit != nil {
+		c.Audit.register(mux, admin)
+	}
 	if c.SCIM != nil {
 		c.SCIM.register(mux)
-		admin := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
-			return read(func(w http.ResponseWriter, r *http.Request, s Session) {
-				if s.Role != RoleAdmin {
-					writeErr(w, http.StatusForbidden, "only admins can see offboarding")
-					return
-				}
-				h(w, r, s)
-			})
-		}
 		mux.HandleFunc("GET /api/offboarding", admin(func(w http.ResponseWriter, r *http.Request, _ Session) {
 			recs, err := c.SCIM.Records(r.Context())
 			if err != nil {

@@ -1,0 +1,62 @@
+{{- if .Values.evidence.enabled }}
+# ClickHouse keeps the gateway's access logs (journey A5: "every call Alice made in March").
+# The ambit user's password is created by the console at first start (Secret ambit-clickhouse), so the
+# chart renders the same on every run; this pod starts once that Secret exists.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ambit-clickhouse
+  labels: { app.kubernetes.io/name: ambit-clickhouse }
+spec:
+  serviceName: ambit-clickhouse
+  replicas: 1  # ponytail: one node; use ClickHouse Cloud or the Altinity operator for HA
+  selector:
+    matchLabels: { app.kubernetes.io/name: ambit-clickhouse }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: ambit-clickhouse }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 101, runAsGroup: 101, fsGroup: 101, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: clickhouse
+          image: {{ .Values.evidence.clickhouse.image | quote }}
+          env:
+            - { name: CLICKHOUSE_DB, value: otel }
+            - { name: CLICKHOUSE_USER, value: ambit }
+            - { name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT, value: "0" }
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: { secretKeyRef: { name: ambit-clickhouse, key: password } }
+          ports: [{ name: native, containerPort: 9000 }, { name: http, containerPort: 8123 }]
+          readinessProbe: { httpGet: { path: /ping, port: http } }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          resources: {{ toJson .Values.evidence.clickhouse.resources }}
+          volumeMounts: [{ name: data, mountPath: /var/lib/clickhouse }]
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources: { requests: { storage: {{ .Values.evidence.clickhouse.storage | quote }} } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ambit-clickhouse
+spec:
+  selector: { app.kubernetes.io/name: ambit-clickhouse }
+  ports: [{ name: native, port: 9000 }, { name: http, port: 8123 }]
+---
+# Audit data: only the collector (writes) and the console (reads) may reach ClickHouse.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ambit-clickhouse
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: ambit-clickhouse }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-otel-collector } }
+        - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-console } }
+      ports: [{ port: 9000 }, { port: 8123 }]
+{{- end }}

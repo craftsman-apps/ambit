@@ -74,6 +74,19 @@ mcp:
     audiences: []
     jwksURL: ""
 
+evidence:
+  # Audit trail: the gateway's access logs through an OpenTelemetry Collector into ClickHouse, searchable
+  # in the console (Audit, Usage). Every call is kept, denied ones included, for `retention`.
+  enabled: false
+  retention: 8760h  # one year
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.3.36.6@sha256:5b10577fc3382ee6b26c4916a1d915d90543ade66e85fc29e3a78c4ce08daeb3
+    storage: 10Gi
+    resources: { requests: { cpu: 100m, memory: 512Mi }, limits: { memory: 1536Mi } }
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.161.0@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
+    resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 256Mi } }
+
 connections:
   # Namespace for users' SaaS grants and the Connections' client secrets. Empty: <release namespace>-grants.
   grantsNamespace: ""

@@ -34,3 +34,7 @@ mcp:
     issuer: http://keycloak.localtest.me:8080/realms/acme
     audiences: [ambit-gateway]
     jwksURL: http://keycloak.localtest.me:8080/realms/acme/protocol/openid-connect/certs
+
+# Step 7: audit trail (gateway access logs -> collector -> ClickHouse).
+evidence:
+  enabled: true

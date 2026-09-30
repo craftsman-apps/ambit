@@ -1,6 +1,11 @@
 import { useModels } from "@/api";
 import { Shell, Status } from "@/components/shell";
 
+// The Model API spells providers as agentgateway does; people read the vendors' own names.
+const providerName: Record<string, string> = {
+  Anthropic: "Anthropic", Azure: "Azure OpenAI", Bedrock: "Amazon Bedrock", Gemini: "Google Gemini", OpenAI: "OpenAI", Openrouter: "OpenRouter", VertexAI: "Vertex AI",
+};
+
 export function ModelsPage() {
   const q = useModels();
   return (
@@ -22,7 +27,7 @@ export function ModelsPage() {
               <tr key={m.name} className="border-b border-line-soft align-top">
                 <td className="px-3 py-2.5"><span className="font-mono">{m.name}</span><span className="block text-[12px] text-muted">{m.displayName}</span></td>
                 <td className="px-3 py-2.5 font-mono text-[12.5px]">{m.model}</td>
-                <td className="px-3 py-2.5">{m.provider}</td>
+                <td className="px-3 py-2.5">{providerName[m.provider] ?? m.provider}</td>
                 <td className="px-3 py-2.5">{m.allSignedIn ? "Everyone signed in" : m.allowedGroups.length ? m.allowedGroups.join(", ") : <span className="text-muted">Nobody yet</span>}</td>
                 <td className="px-3 py-2.5"><Status ready={m.ready} /></td>
               </tr>

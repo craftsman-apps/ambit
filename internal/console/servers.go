@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
@@ -34,6 +36,8 @@ type ServerView struct {
 	Name        string    `json:"name"`
 	DisplayName string    `json:"displayName"`
 	Image       string    `json:"image"`
+	URL         string    `json:"url"`        // remote server; Image is empty
+	Connection  string    `json:"connection"` // each call carries the caller's own token for this app
 	Transport   string    `json:"transport"`
 	Ready       string    `json:"ready"`
 	Message     string    `json:"message"`
@@ -52,6 +56,8 @@ type RequestView struct {
 	ServerName  string     `json:"serverName"`
 	DisplayName string     `json:"displayName"`
 	Image       string     `json:"image"`
+	URL         string     `json:"url"`
+	Connection  string     `json:"connection"`
 	Transport   string     `json:"transport"`
 	Reason      string     `json:"reason"`
 	RequestedBy string     `json:"requestedBy"`
@@ -63,12 +69,29 @@ type RequestView struct {
 	PullRequest string     `json:"pullRequest"`
 }
 
+// RequestInput asks for a server that runs in the cluster (Image) or one reached by URL, usually
+// vendor-hosted (URL, optionally with a Connection for per-user tokens).
 type RequestInput struct {
 	ServerName  string `json:"serverName"`
 	DisplayName string `json:"displayName"`
 	Image       string `json:"image"`
+	URL         string `json:"url"`
+	Connection  string `json:"connection"`
 	Transport   string `json:"transport"`
 	Reason      string `json:"reason"`
+}
+
+// remoteURLRE is the CRD's pattern: no query or fragment, where tokens tend to leak.
+var remoteURLRE = regexp.MustCompile(`^https?://[^/?#]+(/[^?#]*)?$`)
+
+// inCluster is true for Kubernetes service hosts, which may use plain HTTP inside the cluster.
+func inCluster(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	h := u.Hostname()
+	return strings.HasSuffix(h, ".svc") || strings.HasSuffix(h, ".svc.cluster.local")
 }
 
 type DecisionInput struct {
@@ -111,7 +134,7 @@ func (c *Catalog) listServers(w http.ResponseWriter, r *http.Request, _ Session)
 	}
 	out := []ServerView{}
 	for _, s := range servers {
-		v := ServerView{Name: s.Name, DisplayName: s.Spec.DisplayName, Image: s.Spec.Image, Transport: s.Spec.Transport,
+		v := ServerView{Name: s.Name, DisplayName: s.Spec.DisplayName, Image: s.Spec.Image, URL: s.Spec.URL, Connection: s.Spec.Connection, Transport: s.Spec.Transport,
 			Ready: "Unknown", Tools: s.Status.Tools, RequestedBy: s.Annotations[requestedByKey], ApprovedBy: s.Annotations[approvedByKey],
 			GitManaged: gitManaged(s.Annotations), Rules: []string{}, ChangedTools: changedTools(s)}
 		if v.Tools == nil {
@@ -174,6 +197,7 @@ func (c *Catalog) approveTools(w http.ResponseWriter, r *http.Request, s Session
 
 func requestView(q v1.ServerRequest) RequestView {
 	v := RequestView{Name: q.Name, ServerName: q.Spec.ServerName, DisplayName: q.Spec.Server.DisplayName, Image: q.Spec.Server.Image,
+		URL: q.Spec.Server.URL, Connection: q.Spec.Server.Connection,
 		Transport: q.Spec.Server.Transport, Reason: q.Spec.Reason, RequestedBy: q.Spec.RequestedBy, RequestedAt: q.CreationTimestamp.Time,
 		Decision: q.Status.Decision, DecidedBy: q.Status.DecidedBy, Comment: q.Status.Comment, PullRequest: q.Status.PullRequest}
 	if q.Status.DecidedAt != nil {
@@ -225,12 +249,30 @@ func (c *Catalog) validateRequest(r *http.Request, in RequestInput) error {
 	switch {
 	case !serverNameRE.MatchString(in.ServerName):
 		return errors.New("server name must be lowercase letters, digits and dashes, at most 40 characters")
-	case !digestRE.MatchString(in.Image):
+	case (in.Image == "") == (in.URL == ""):
+		return errors.New("give either an image or a URL, not both: an image runs the server in the cluster; a URL reaches one already running elsewhere")
+	case in.Image != "" && !digestRE.MatchString(in.Image):
 		return errors.New("pin the image by digest, like ghcr.io/org/server@sha256:<64 hex characters>; a tag can later point to different code")
+	case in.URL != "" && !remoteURLRE.MatchString(in.URL):
+		return errors.New("the URL must look like https://host/path, without a query string or fragment")
+	case in.URL != "" && strings.HasPrefix(in.URL, "http://") && !inCluster(in.URL):
+		return errors.New("use https for a server outside the cluster; plain http is only for in-cluster services (*.svc)")
+	case in.URL != "" && in.Transport == "stdio":
+		return errors.New("a server reached by URL speaks streamable-http or sse")
+	case in.Connection != "" && in.URL == "":
+		return errors.New("a connection is only for servers reached by URL")
 	case !slices.Contains([]string{"", "stdio", "streamable-http", "sse"}, in.Transport):
 		return errors.New("transport must be stdio, streamable-http or sse")
 	case len(in.Reason) > 2000 || len(in.DisplayName) > 200:
 		return errors.New("reason or display name is too long")
+	}
+	if in.Connection != "" {
+		var conn v1.Connection
+		if err := c.Client.Get(r.Context(), client.ObjectKey{Namespace: c.Namespace, Name: in.Connection}, &conn); apierrors.IsNotFound(err) {
+			return fmt.Errorf("no connection named %q; an admin adds apps under Settings, Apps", in.Connection)
+		} else if err != nil {
+			return err
+		}
 	}
 	var existing v1.Server
 	err := c.Client.Get(r.Context(), client.ObjectKey{Namespace: c.Namespace, Name: in.ServerName}, &existing)
@@ -261,19 +303,21 @@ func (c *Catalog) createRequest(w http.ResponseWriter, r *http.Request, s Sessio
 		return
 	}
 	transport := in.Transport
-	if transport == "" {
+	if transport == "" && in.URL != "" {
+		transport = "streamable-http"
+	} else if transport == "" {
 		transport = "stdio"
 	}
 	q := &v1.ServerRequest{
 		ObjectMeta: metav1.ObjectMeta{GenerateName: in.ServerName + "-", Namespace: c.Namespace},
 		Spec: v1.ServerRequestSpec{ServerName: in.ServerName, Reason: in.Reason, RequestedBy: s.Email,
-			Server: v1.ServerSpec{Image: in.Image, Transport: transport, DisplayName: in.DisplayName}},
+			Server: v1.ServerSpec{Image: in.Image, URL: in.URL, Connection: in.Connection, Transport: transport, DisplayName: in.DisplayName}},
 	}
 	if err := c.Client.Create(r.Context(), q); err != nil {
 		apiErr(w, err)
 		return
 	}
-	slog.Info("server requested", "request", q.Name, "server", in.ServerName, "image", in.Image, "by", s.Email)
+	slog.Info("server requested", "request", q.Name, "server", in.ServerName, "image", in.Image, "url", in.URL, "connection", in.Connection, "by", s.Email)
 	writeJSON(w, http.StatusCreated, requestView(*q))
 }
 

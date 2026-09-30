@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { sendJSON, useMe, useRequests, useServers, type RequestInput, type RequestView, type ServerView } from "@/api";
+import { sendJSON, useConnections, useMe, useRequests, useServers, type RequestInput, type RequestView, type ServerView } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Shell, Status } from "@/components/shell";
 import { cn } from "@/lib/utils";
@@ -13,6 +13,8 @@ const shortImage = (image: string) => {
   const [repo, digest] = image.split("@sha256:");
   return digest ? `${repo.split("/").slice(-1)[0]}@${digest.slice(0, 12)}` : image;
 };
+// Where a server runs: its image in the cluster, or the host of a server reached by URL.
+const runs = (x: { image: string; url: string }) => x.url ? new URL(x.url).host : shortImage(x.image);
 
 export function ServersPage() {
   const me = useMe();
@@ -31,7 +33,7 @@ export function ServersPage() {
           <div className="flex items-end justify-between gap-3">
             <div>
               <h1 className="text-xl font-semibold tracking-tight">MCP servers</h1>
-              <p className="text-muted">Servers run in their own pods and are reached only through the gateway. Their tools are closed to everyone until an access rule names them.</p>
+              <p className="text-muted">Servers run in their own pods, or elsewhere and are reached by URL; either way, only through the gateway. Their tools are closed to everyone until an access rule names them.</p>
             </div>
             <Button className="w-auto whitespace-nowrap" onClick={() => setAsking(true)}>Request a server</Button>
           </div>
@@ -39,7 +41,7 @@ export function ServersPage() {
           <table className="w-full border-collapse">
             <thead>
               <tr className="border-b border-line">
-                <th className={th}>Server</th><th className={th}>Image</th><th className={th}>Tools</th>
+                <th className={th}>Server</th><th className={th}>Runs</th><th className={th}>Tools</th>
                 <th className={th}>Rules</th><th className={th}>Approved by</th><th className={th}>Status</th>
               </tr>
             </thead>
@@ -63,7 +65,7 @@ export function ServersPage() {
                       <td className={cn("px-3 py-2", q.decision === "Denied" && "text-bad")}>{q.decision}</td>
                       <td className="px-3 py-2 text-muted">asked by {q.requestedBy}, {q.decision.toLowerCase()} by {q.decidedBy}{q.comment && `: “${q.comment}”`}
                         {q.pullRequest && <> · <a className="text-accent-text underline" href={q.pullRequest} target="_blank" rel="noopener noreferrer">pull request</a></>}</td>
-                      <td className="px-3 py-2 font-mono text-[12px] text-muted" title={q.image}>{shortImage(q.image)}</td>
+                      <td className="px-3 py-2 font-mono text-[12px] text-muted" title={q.image || q.url}>{runs(q)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -97,7 +99,8 @@ function ServerRow({ s, open, onToggle }: { s: ServerView; open: boolean; onTogg
     <>
       <tr onClick={onToggle} aria-expanded={open} className={cn("cursor-pointer border-b border-line-soft align-top hover:bg-sunken", open && "bg-selected")}>
         <td className="px-3 py-2.5"><span className="font-mono">{s.name}</span><span className="block text-[12px] text-muted">{s.displayName}</span></td>
-        <td className="px-3 py-2.5 font-mono text-[12.5px]" title={s.image}>{shortImage(s.image)}</td>
+        <td className="whitespace-nowrap px-3 py-2.5 font-mono text-[12.5px]" title={s.image || s.url}>{runs(s)}
+          {s.connection && <span className="block font-sans text-[12px] text-muted">each user's own {s.connection} account</span>}</td>
         <td className="px-3 py-2.5 tabular-nums">{s.tools.length || <span className="text-muted">–</span>}</td>
         <td className="px-3 py-2.5">{s.rules.length ? s.rules.join(", ") : <span className="text-muted">None: closed to everyone</span>}</td>
         <td className="px-3 py-2.5">{s.approvedBy || <span className="text-muted">{s.gitManaged ? "pull request" : "added directly"}</span>}</td>
@@ -120,7 +123,8 @@ function ServerRow({ s, open, onToggle }: { s: ServerView; open: boolean; onTogg
         <tr className="border-b border-line-soft bg-sunken">
           <td colSpan={6} className="px-3 py-3">
             <p className="mb-2 text-[12.5px] text-muted">
-              Clients see these tools as <span className="font-mono">{s.name}_&lt;tool&gt;</span>. Image <span className="font-mono break-all">{s.image}</span>
+              Clients see these tools as <span className="font-mono">{s.name}_&lt;tool&gt;</span>. {s.url ? "URL" : "Image"} <span className="font-mono break-all">{s.url || s.image}</span>
+              {s.connection && <> · each call uses the caller's own <span className="font-mono">{s.connection}</span> grant</>}
               {s.requestedBy && <> · asked for by {s.requestedBy}</>}
             </p>
             {s.tools.length === 0 && <p className="text-muted">{s.ready === "True" ? "Reading tools…" : s.message || "Tools appear once the server is running."}</p>}
@@ -149,7 +153,8 @@ function PendingCard({ q, me, canDecide }: { q: RequestView; me: string; canDeci
     <div className="rounded-md border border-line bg-surface p-3" data-testid={`request-${q.serverName}`}>
       <p className="font-mono font-medium">{q.serverName}</p>
       <p className="text-[12.5px] text-muted">{q.displayName && `${q.displayName} · `}asked by {q.requestedBy} · {q.transport}</p>
-      <p className="mt-1 break-all font-mono text-[12px]">{q.image}</p>
+      <p className="mt-1 break-all font-mono text-[12px]">{q.url || q.image}</p>
+      {q.connection && <p className="text-[12.5px] text-muted">Each user signs in to {q.connection} with their own account.</p>}
       {q.reason && <p className="mt-2">“{q.reason}”</p>}
       {canDecide && !own && (
         <div className="mt-3 space-y-2">
@@ -159,7 +164,7 @@ function PendingCard({ q, me, canDecide }: { q: RequestView; me: string; canDeci
             <Button className="w-auto" disabled={decide.isPending} onClick={() => decide.mutate("approve")}>Approve {q.serverName}</Button>
             <Button variant="outline" className="w-auto" disabled={decide.isPending} onClick={() => decide.mutate("deny")}>Deny</Button>
           </div>
-          <p className="text-[12px] text-muted">Approving starts exactly this image digest. Access still needs a rule.</p>
+          <p className="text-[12px] text-muted">{q.url ? "Approving lets the gateway reach this URL." : "Approving starts exactly this image digest."} Access still needs a rule.</p>
         </div>
       )}
       {own && <p className="mt-2 text-[12.5px] text-muted">You asked for this, so another approver decides.</p>}
@@ -170,8 +175,11 @@ function PendingCard({ q, me, canDecide }: { q: RequestView; me: string; canDeci
 
 function RequestForm({ onDone }: { onDone: () => void }) {
   const qc = useQueryClient();
-  const [f, setF] = useState<RequestInput>({ serverName: "", displayName: "", image: "", transport: "stdio", reason: "" });
+  const conns = useConnections();
+  const [remote, setRemote] = useState(false);
+  const [f, setF] = useState<RequestInput>({ serverName: "", displayName: "", image: "", url: "", connection: "", transport: "stdio", reason: "" });
   const set = (k: keyof RequestInput) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setF({ ...f, [k]: e.target.value });
+  const where = (r: boolean) => { setRemote(r); setF({ ...f, image: "", url: "", connection: "", transport: r ? "streamable-http" : "stdio" }); };
   const send = useMutation({
     mutationFn: () => sendJSON("POST", "/api/server-requests", f),
     onSuccess: () => { qc.invalidateQueries(); onDone(); },
@@ -180,14 +188,32 @@ function RequestForm({ onDone }: { onDone: () => void }) {
     <form onSubmit={(e) => { e.preventDefault(); send.mutate(); }} className="space-y-3 rounded-md border border-line bg-surface p-4">
       <h2 className="text-[15px] font-semibold">Request a server</h2>
       <label className="block"><span className="mb-1 block text-muted">Name</span>
-        <input id="req-name" className={field} value={f.serverName} onChange={set("serverName")} placeholder="postgres-readonly" required /></label>
+        <input id="req-name" className={field} value={f.serverName} onChange={set("serverName")} placeholder={remote ? "jira" : "postgres-readonly"} required /></label>
       <label className="block"><span className="mb-1 block text-muted">Display name</span>
-        <input id="req-display" className={cn(field, "font-sans")} value={f.displayName} onChange={set("displayName")} placeholder="Postgres (read-only)" /></label>
-      <label className="block"><span className="mb-1 block text-muted">Image, pinned by digest</span>
-        <input id="req-image" className={field} value={f.image} onChange={set("image")} placeholder="ghcr.io/org/server@sha256:…" required /></label>
+        <input id="req-display" className={cn(field, "font-sans")} value={f.displayName} onChange={set("displayName")} placeholder={remote ? "Jira" : "Postgres (read-only)"} /></label>
+      <fieldset className="space-y-1">
+        <legend className="mb-1 text-muted">Where it runs</legend>
+        <label className="flex items-center gap-2"><input type="radio" name="req-where" checked={!remote} onChange={() => where(false)} /> In the cluster, from a container image</label>
+        <label className="flex items-center gap-2"><input type="radio" name="req-where" checked={remote} onChange={() => where(true)} /> Already running elsewhere, reached by URL</label>
+      </fieldset>
+      {!remote && (
+        <label className="block"><span className="mb-1 block text-muted">Image, pinned by digest</span>
+          <input id="req-image" className={field} value={f.image} onChange={set("image")} placeholder="ghcr.io/org/server@sha256:…" required /></label>
+      )}
+      {remote && (
+        <>
+          <label className="block"><span className="mb-1 block text-muted">Server URL</span>
+            <input id="req-url" className={field} value={f.url} onChange={set("url")} placeholder="https://mcp.example.com/mcp" required /></label>
+          <label className="block"><span className="mb-1 block text-muted">Sign-in for each user</span>
+            <select id="req-connection" className={cn(field, "font-sans")} value={f.connection} onChange={set("connection")}>
+              <option value="">None: the server needs no user sign-in</option>
+              {conns.data?.map((c) => <option key={c.name} value={c.name}>{c.displayName} (each user connects their own account)</option>)}
+            </select></label>
+        </>
+      )}
       <label className="block"><span className="mb-1 block text-muted">Transport</span>
         <select id="req-transport" className={field} value={f.transport} onChange={set("transport")}>
-          <option value="stdio">stdio</option><option value="streamable-http">streamable-http</option><option value="sse">sse</option>
+          {!remote && <option value="stdio">stdio</option>}<option value="streamable-http">streamable-http</option><option value="sse">sse</option>
         </select></label>
       <label className="block"><span className="mb-1 block text-muted">Why your team needs it</span>
         <textarea id="req-reason" className={cn(field, "font-sans")} rows={3} value={f.reason} onChange={set("reason")} /></label>

@@ -52,11 +52,11 @@ export type RuleInput = { name?: string; groups: string[]; allSignedIn: boolean;
 
 export type Tool = { name: string; description?: string };
 export type ServerView = {
-  name: string; displayName: string; image: string; transport: string; ready: string; message: string;
+  name: string; displayName: string; image: string; url: string; connection: string; transport: string; ready: string; message: string;
   tools: Tool[]; requestedBy: string; approvedBy: string; gitManaged: boolean; rules: string[]; changedTools: string[];
 };
 export type RequestView = {
-  name: string; serverName: string; displayName: string; image: string; transport: string; reason: string;
+  name: string; serverName: string; displayName: string; image: string; url: string; connection: string; transport: string; reason: string;
   requestedBy: string; requestedAt: string; decision: "" | "Approved" | "Denied"; decidedBy: string; decidedAt: string | null; comment: string;
   pullRequest: string;
 };
@@ -65,7 +65,7 @@ export type PullRequest = { number: number; url: string; title: string; branch: 
 export type Proposed = { pullRequest: PullRequest };
 export const isProposed = (v: unknown): v is Proposed => !!v && typeof v === "object" && "pullRequest" in v;
 export type Config = { mode: "direct" | "gitops"; repository?: string; branch?: string };
-export type RequestInput = { serverName: string; displayName: string; image: string; transport: string; reason: string };
+export type RequestInput = { serverName: string; displayName: string; image: string; url: string; connection: string; transport: string; reason: string };
 export type MyAccess = {
   groups: string[]; models: string[];
   servers: { server: string; allTools: boolean; tools: string[]; rules: string[] }[];

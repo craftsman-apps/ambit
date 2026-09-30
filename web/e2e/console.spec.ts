@@ -83,6 +83,23 @@ test("MCP servers: tools are listed, and a request waits for another approver", 
   await expect(card.getByRole("button", { name: /^Approve/ })).toHaveCount(0);
 });
 
+test("MCP servers: a server already running elsewhere is requested by URL", async ({ page }) => {
+  await signInAsBootstrapAdmin(page);
+  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: /MCP servers/ }).click();
+  const name = `ui-remote-${Date.now().toString(36)}`;
+  await page.getByRole("button", { name: "Request a server" }).click();
+  await page.getByLabel("Name", { exact: true }).fill(name);
+  await page.getByLabel("Already running elsewhere, reached by URL").check();
+  await page.getByLabel("Server URL").fill("http://mcp.example.com/mcp");
+  await page.getByRole("button", { name: "Send request" }).click();
+  await expect(page.getByText(/use https for a server outside the cluster/)).toBeVisible();
+  await page.getByLabel("Server URL").fill("https://mcp.example.com/mcp");
+  await page.getByRole("button", { name: "Send request" }).click();
+  const card = page.getByTestId(`request-${name}`);
+  await expect(card.getByText("https://mcp.example.com/mcp")).toBeVisible();
+  await expect(card.getByText(/streamable-http/)).toBeVisible();
+});
+
 test("rules form offers each server's tools", async ({ page }) => {
   await signInAsBootstrapAdmin(page);
   await page.goto("/access-rules?edit=new");

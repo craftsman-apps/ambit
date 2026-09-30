@@ -129,6 +129,9 @@ spec:
                 - Approved
                 - Denied
                 type: string
+              pullRequest:
+                description: 'PullRequest is set in GitOps mode: approval opens it, and the Server appears when it is merged.'
+                type: string
             type: object
             x-kubernetes-validations:
             - message: a decision cannot be changed

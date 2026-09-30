@@ -58,6 +58,7 @@ type RequestView struct {
 	DecidedBy   string     `json:"decidedBy"`
 	DecidedAt   *time.Time `json:"decidedAt"`
 	Comment     string     `json:"comment"`
+	PullRequest string     `json:"pullRequest"`
 }
 
 type RequestInput struct {
@@ -130,7 +131,7 @@ func (c *Catalog) listServers(w http.ResponseWriter, r *http.Request, _ Session)
 func requestView(q v1.ServerRequest) RequestView {
 	v := RequestView{Name: q.Name, ServerName: q.Spec.ServerName, DisplayName: q.Spec.Server.DisplayName, Image: q.Spec.Server.Image,
 		Transport: q.Spec.Server.Transport, Reason: q.Spec.Reason, RequestedBy: q.Spec.RequestedBy, RequestedAt: q.CreationTimestamp.Time,
-		Decision: q.Status.Decision, DecidedBy: q.Status.DecidedBy, Comment: q.Status.Comment}
+		Decision: q.Status.Decision, DecidedBy: q.Status.DecidedBy, Comment: q.Status.Comment, PullRequest: q.Status.PullRequest}
 	if q.Status.DecidedAt != nil {
 		t := q.Status.DecidedAt.Time
 		v.DecidedAt = &t
@@ -266,7 +267,7 @@ func lower(decision string) string {
 // and the resourceVersion check makes a second, concurrent decision fail instead of overwrite.
 func (c *Catalog) decide(w http.ResponseWriter, r *http.Request, s Session, q *v1.ServerRequest, decision, comment string) bool {
 	now := metav1.Now()
-	q.Status = v1.ServerRequestStatus{Decision: decision, DecidedBy: s.Email, DecidedAt: &now, Comment: comment}
+	q.Status = v1.ServerRequestStatus{Decision: decision, DecidedBy: s.Email, DecidedAt: &now, Comment: comment, PullRequest: q.Status.PullRequest}
 	if err := c.Client.Status().Update(r.Context(), q); err != nil {
 		if apierrors.IsConflict(err) {
 			writeErr(w, http.StatusConflict, "someone else decided on this request first; reload")
@@ -291,6 +292,27 @@ func (c *Catalog) approveRequest(w http.ResponseWriter, r *http.Request, s Sessi
 		ObjectMeta: metav1.ObjectMeta{Name: q.Spec.ServerName, Namespace: c.Namespace, Annotations: map[string]string{
 			requestedByKey: q.Spec.RequestedBy, approvedByKey: s.Email, requestKey: q.Name}},
 		Spec: q.Spec.Server,
+	}
+	if c.GitOps != nil {
+		// GitOps mode: approval opens the pull request; merging it is the second review, and the
+		// Server appears when Argo CD syncs.
+		manifest, err := Manifest("Server", srv.Name, srv.Annotations, srv.Spec)
+		if err != nil {
+			serverErr(w, err)
+			return
+		}
+		pr, err := c.GitOps.Propose(r.Context(), "add", "Server", "servers", srv.Name, s.Email, manifest)
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, "could not open a pull request in "+c.GitOps.Repository+": "+err.Error())
+			return
+		}
+		q.Status.PullRequest = pr.URL
+		if !c.decide(w, r, s, q, "Approved", in.Comment) {
+			return
+		}
+		slog.Info("server request approved; pull request opened", "request", q.Name, "server", srv.Name, "approvedBy", s.Email, "url", pr.URL)
+		writeJSON(w, http.StatusAccepted, Proposed{PullRequest: pr})
+		return
 	}
 	if err := c.Client.Create(r.Context(), srv); err != nil {
 		if !apierrors.IsAlreadyExists(err) {

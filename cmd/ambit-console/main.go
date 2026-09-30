@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -45,6 +46,29 @@ func retry(ctx context.Context, what string, f func() error) error {
 		case <-time.After(delay):
 		}
 	}
+}
+
+// gitopsFromEnv reads GitOps mode settings rendered by the chart; nil means Direct mode.
+func gitopsFromEnv() (*console.GitOps, error) {
+	repo := os.Getenv("AMBIT_GITOPS_REPOSITORY")
+	if repo == "" {
+		return nil, nil
+	}
+	keyPEM, err := os.ReadFile(env("AMBIT_GITHUB_APP_KEY_FILE", "/etc/ambit/github/private-key.pem"))
+	if err != nil {
+		return nil, fmt.Errorf("GitOps mode needs the GitHub App private key: %w", err)
+	}
+	key, err := console.ParseAppKey(keyPEM)
+	if err != nil {
+		return nil, err
+	}
+	branch := env("AMBIT_GITOPS_BRANCH", "main")
+	gh := &console.GitHub{API: env("AMBIT_GITHUB_API", "https://api.github.com"), Repository: repo, Branch: branch,
+		AppID: os.Getenv("AMBIT_GITHUB_APP_ID"), Key: key}
+	if gh.AppID == "" {
+		return nil, errors.New("GitOps mode needs AMBIT_GITHUB_APP_ID")
+	}
+	return &console.GitOps{Repo: gh, Repository: repo, Branch: branch, Dir: env("AMBIT_GITOPS_PATH", "ambit")}, nil
 }
 
 func main() {
@@ -111,8 +135,15 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	gitops, err := gitopsFromEnv()
+	if err != nil {
+		return err
+	}
+	if gitops != nil {
+		slog.Info("GitOps mode: changes become pull requests", "repository", gitops.Repository, "branch", gitops.Branch, "path", gitops.Dir)
+	}
 	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), console.LoginOptions{Bootstrap: bootstrapAdmin, SSO: sso},
-		&console.Catalog{Client: objects, Namespace: ns}), ReadHeaderTimeout: 10 * time.Second}
+		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops}), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)

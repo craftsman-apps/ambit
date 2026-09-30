@@ -207,6 +207,9 @@ type ServerRequestStatus struct {
 	// +kubebuilder:validation:MaxLength=2000
 	// +optional
 	Comment string `json:"comment,omitempty"`
+	// PullRequest is set in GitOps mode: approval opens it, and the Server appears when it is merged.
+	// +optional
+	PullRequest string `json:"pullRequest,omitempty"`
 }
 
 // +kubebuilder:object:root=true

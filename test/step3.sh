@@ -56,10 +56,10 @@ pass "3 alice (eng) -> nemotron-super: 403 model_authorization_denied"
 
 # 4-5 · allowed calls reach OpenRouter (free models)
 if $HAVE_KEY; then
-  c=$(llm "$A" "$GEMMA"); [[ "$c" == 200 ]] || fail "4 alice -> gemma: $c $(head -c 200 "$W/llm")"
-  pass "4 alice -> gemma: 200 from OpenRouter"
-  c=$(llm "$M" "$NEMO"); [[ "$c" == 200 ]] || fail "5 mira -> nemotron-super: $c $(head -c 200 "$W/llm")"
-  pass "5 mira (ml-research) -> nemotron-super: 200 from OpenRouter (A2)"
+  c=$(llm "$A" "$GEMMA"); reached_provider "$c" || fail "4 alice -> gemma: $c $(head -c 200 "$W/llm")"
+  pass "4 alice -> gemma: $VIA"
+  c=$(llm "$M" "$NEMO"); reached_provider "$c" || fail "5 mira -> nemotron-super: $c $(head -c 200 "$W/llm")"
+  pass "5 mira (ml-research) -> nemotron-super: $VIA (A2)"
 else
   echo "SKIP 4-5 no key at $KEYFILE; the checks that do not reach OpenRouter still ran"
 fi

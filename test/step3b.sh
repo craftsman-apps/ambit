@@ -39,8 +39,8 @@ wait_expr nemotron-3-super 'jwt.groups.exists(g, g in ["eng", "ml-research"])'
 [[ $(kubectl -n "$NS" get "accessrules.$G" eng-nemotron -o jsonpath='{.metadata.annotations.ambitproject\.dev/created-by}') == priya@acme.test ]] \
   || fail "2 creator not recorded"
 if [[ -s "$KEYFILE" ]]; then
-  c=$(llm "$(token alice)" "$NEMO"); [[ "$c" == 200 ]] || fail "2 alice still denied after the rule: $c $(head -c 200 "$W/llm")"
-  pass "2 priya (admin) creates eng-nemotron in the console -> alice gets 200 from nemotron-super"
+  c=$(llm "$(token alice)" "$NEMO"); reached_provider "$c" || fail "2 alice still denied after the rule: $c $(head -c 200 "$W/llm")"
+  pass "2 priya (admin) creates eng-nemotron in the console -> alice reaches nemotron-super: $VIA"
 else
   pass "2 priya creates eng-nemotron -> gateway policy now includes eng (SKIP the OpenRouter call: no key)"
 fi

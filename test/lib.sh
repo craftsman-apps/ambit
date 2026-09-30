@@ -43,6 +43,16 @@ api() {
   [[ $# -ge 3 ]] && a+=(-H 'Content-Type: application/json' -d "$3")
   command curl "${a[@]}" "$BASE$2"
 }
+# reached_provider CODE: the gateway allowed an LLM request and OpenRouter answered. 200, or OpenRouter's own
+# free-tier 429 ("rate-limited upstream"): both prove the request passed Ambit's checks. Sets VIA for the log.
+reached_provider() {
+  VIA="$1 from OpenRouter"
+  [[ "$1" == 200 ]] && return 0
+  if [[ "$1" == 429 ]] && grep -q '"code":429' "$W/llm" && grep -qi 'rate-limited upstream\|Provider returned error' "$W/llm"; then
+    VIA="429 from OpenRouter (free-tier limit; the gateway allowed the request)"; return 0
+  fi
+  return 1
+}
 me_status() { curl -s ${CURL_CA:+--cacert "$CURL_CA"} -o "$W/me" -w '%{http_code}' -b "$W/jar" "$BASE/api/me"; }
 
 # ensure_llm_setup NS: Keycloak test IdP, SSO + LLM chart values, provider key Secret, test catalog.

@@ -27,6 +27,10 @@ type Catalog struct {
 	Namespace string
 	// GitOps is set in GitOps mode: changes become pull requests instead of cluster writes.
 	GitOps *GitOps
+	// PublicURL and Connectors let the Connect SSO page build the callback URL and refuse IDs in use.
+	PublicURL  string
+	Connectors []Connector
+	HTTP       *http.Client // for reaching identity providers; nil uses a 10-second client
 }
 
 // Config tells the console UI how changes are applied.
@@ -153,6 +157,8 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	mux.HandleFunc("GET /api/me/access", read(c.myAccess))
 	mux.HandleFunc("GET /api/config", read(c.config))
 	mux.HandleFunc("GET /api/changes", read(c.changes))
+	mux.HandleFunc("POST /api/sso/check", allow("only admins can connect sign-in providers", c.checkSSO, RoleAdmin))
+	mux.HandleFunc("POST /api/sso/connectors", allow("only admins can connect sign-in providers", c.connectSSO, RoleAdmin))
 }
 
 func (c *Catalog) config(w http.ResponseWriter, _ *http.Request, _ Session) {

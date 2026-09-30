@@ -91,3 +91,15 @@ test("rules form offers each server's tools", async ({ page }) => {
   await expect(page.getByLabel("convert_time")).toBeVisible();
   await expect(page.getByLabel("get_current_time")).toBeVisible();
 });
+
+test("Sign-in settings: Check verifies the provider and shows the callback URL", async ({ page }) => {
+  await signInAsBootstrapAdmin(page);
+  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Sign-in" }).click();
+  await expect(page.getByRole("heading", { name: "Sign-in", exact: true })).toBeVisible();
+  await page.getByLabel("Issuer URL").fill("http://keycloak.localtest.me:8080/realms/acme/");
+  await page.getByRole("button", { name: "Check" }).click();
+  await expect(page.getByText(/a trailing slash counts/)).toBeVisible();
+  await page.getByLabel("Issuer URL").fill("http://keycloak.localtest.me:8080/realms/acme");
+  await page.getByRole("button", { name: "Check" }).click();
+  await expect(page.getByTestId("sso-check")).toContainText("http://console.localtest.me:8080/dex/callback");
+});

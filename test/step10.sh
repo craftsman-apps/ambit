@@ -28,6 +28,14 @@ mem() { # mem: "name=MiB ..." for Ambit's own pods (metrics-server). New pods ha
   [[ -n "$out" ]] || fail "S3 metrics-server returned no pod metrics for 5 minutes"
   awk '$1 ~ /^ambit/ {sub("Mi","",$3); print $1"="$3}' <<<"$out"
 }
+# rollout TARGET...: waits for a rollout; on timeout prints what the pods and events say, then fails.
+rollout() {
+  kubectl -n "$NS" rollout status "$@" --timeout=300s >/dev/null && return 0
+  kubectl -n "$NS" get pods -o wide >&2
+  kubectl -n "$NS" get rs -l gateway.networking.k8s.io/gateway-name=ambit >&2
+  kubectl -n "$NS" get events --sort-by=.lastTimestamp 2>/dev/null | tail -25 >&2
+  fail "rollout of $* did not finish in 5 minutes (pods and events above)"
+}
 restore() {
   helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --wait --timeout 5m >/dev/null 2>&1 || true
   kubectl -n "$NS" delete "budgets.$G" eng --ignore-not-found >/dev/null 2>&1 || true
@@ -62,9 +70,10 @@ kind: Budget
 metadata: { name: eng }
 spec: { group: eng, userRequestsPerDay: 1 }
 YAML
-for _ in $(seq 1 60); do kubectl -n "$NS" exec deploy/ambit-ratelimit -- cat /data/ratelimit/config/config.yaml 2>/dev/null | grep -q 'value: eng' && break; sleep 3; done
+# The ConfigMap reaches the ratelimit pod on the kubelet's next sync (up to about two minutes):
+# wait until the gateway refuses alice (her first request uses her 1 request a day).
 A=$(token alice)
-outcome "$A" >/dev/null
+for _ in $(seq 1 60); do [[ $(outcome "$A") == blocked ]] && break; sleep 3; done
 blocked=0; for _ in $(seq 1 10); do [[ $(outcome "$A") == blocked ]] && blocked=$((blocked + 1)); done
 [[ "$blocked" == 10 ]] || fail "S1 over budget but only $blocked of 10 requests refused across 3 replicas"
 pass "S1 over budget: 10 of 10 requests refused across 3 gateway replicas (shared counter)"
@@ -83,7 +92,7 @@ traffic=$!
 sleep 5
 kubectl -n "$NS" rollout restart deploy -l gateway.networking.k8s.io/gateway-name=ambit >/dev/null
 kubectl -n "$NS" rollout restart deploy/ambit-console deploy/ambit-controller deploy/ambit-guard >/dev/null
-kubectl -n "$NS" rollout status deploy -l gateway.networking.k8s.io/gateway-name=ambit --timeout=300s >/dev/null
+rollout deploy -l gateway.networking.k8s.io/gateway-name=ambit
 wait $traffic
 read -r ok bad <"$W/s2"
 [[ "$bad" == 0 && "$ok" -gt 50 ]] || fail "S2 rolling update: $ok ok, $bad failed ($(sort "$W/s2-bad" | uniq -c | tr '\n' ' '))"
@@ -131,7 +140,7 @@ secret=secret/ambit-session-key # created by the agentgateway controller from th
 kubectl -n "$NS" get "$secret" >/dev/null 2>&1 || fail "S5 no gateway session-key Secret $secret"
 kubectl -n "$NS" delete "$secret" >/dev/null
 kubectl -n "$NS" rollout restart deploy -l gateway.networking.k8s.io/gateway-name=ambit >/dev/null
-kubectl -n "$NS" rollout status deploy -l gateway.networking.k8s.io/gateway-name=ambit --timeout=300s >/dev/null
+rollout deploy -l gateway.networking.k8s.io/gateway-name=ambit
 new=$(tools "$A" >/dev/null 2>&1 && echo ok || echo failed)
 SID=$old_sid
 oldres=$(mcp_send '{"jsonrpc":"2.0","id":9,"method":"tools/list"}' | head -c 80)

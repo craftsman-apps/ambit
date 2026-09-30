@@ -10,6 +10,7 @@ import { ServersPage } from "@/routes/servers";
 import { SSOPage } from "@/routes/sso";
 import { ConnectionsPage } from "@/routes/connections";
 import { OffboardingPage } from "@/routes/offboarding";
+import { AppsPage } from "@/routes/apps";
 import { AuditPage, UsagePage } from "@/routes/audit";
 import { BudgetsPage } from "@/routes/budgets";
 import "@fontsource/ibm-plex-sans/400.css";
@@ -35,6 +36,7 @@ const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/sign-in", component: SSOPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/connections", component: ConnectionsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/offboarding", component: OffboardingPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/settings/apps", component: AppsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/audit", component: AuditPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/usage", component: UsagePage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/budgets", component: BudgetsPage }),

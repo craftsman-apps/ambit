@@ -51,7 +51,7 @@ export function Shell({ crumb, children }: { crumb: string; children: ReactNode 
         {u.role === "admin" && <><Section>Evidence</Section><NavLink to="/audit">Audit</NavLink><NavLink to="/usage">Usage</NavLink></>}
         <Section>You</Section>
         <NavLink to="/connections">My connections</NavLink>
-        {u.role === "admin" && <><Section>Settings</Section><NavLink to="/settings/sign-in">Sign-in</NavLink><NavLink to="/settings/offboarding">Offboarding</NavLink></>}
+        {u.role === "admin" && <><Section>Settings</Section><NavLink to="/settings/sign-in">Sign-in</NavLink><NavLink to="/settings/apps">Apps</NavLink><NavLink to="/settings/offboarding">Offboarding</NavLink></>}
       </nav>
       <div className="grid grid-rows-[auto_1fr]">
         <header className="flex items-center justify-between border-b border-line bg-surface px-4 py-2">

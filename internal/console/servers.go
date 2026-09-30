@@ -84,14 +84,15 @@ type RequestInput struct {
 // remoteURLRE is the CRD's pattern: no query or fragment, where tokens tend to leak.
 var remoteURLRE = regexp.MustCompile(`^https?://[^/?#]+(/[^?#]*)?$`)
 
-// inCluster is true for Kubernetes service hosts, which may use plain HTTP inside the cluster.
-func inCluster(rawURL string) bool {
+// plainHTTPOK is true for hosts where plain HTTP does not cross a network: Kubernetes services
+// inside the cluster, and localhost.
+func plainHTTPOK(rawURL string) bool {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return false
 	}
 	h := u.Hostname()
-	return strings.HasSuffix(h, ".svc") || strings.HasSuffix(h, ".svc.cluster.local")
+	return strings.HasSuffix(h, ".svc") || strings.HasSuffix(h, ".svc.cluster.local") || h == "localhost" || strings.HasSuffix(h, ".localhost")
 }
 
 type DecisionInput struct {
@@ -255,7 +256,7 @@ func (c *Catalog) validateRequest(r *http.Request, in RequestInput) error {
 		return errors.New("pin the image by digest, like ghcr.io/org/server@sha256:<64 hex characters>; a tag can later point to different code")
 	case in.URL != "" && !remoteURLRE.MatchString(in.URL):
 		return errors.New("the URL must look like https://host/path, without a query string or fragment")
-	case in.URL != "" && strings.HasPrefix(in.URL, "http://") && !inCluster(in.URL):
+	case in.URL != "" && strings.HasPrefix(in.URL, "http://") && !plainHTTPOK(in.URL):
 		return errors.New("use https for a server outside the cluster; plain http is only for in-cluster services (*.svc)")
 	case in.URL != "" && in.Transport == "stdio":
 		return errors.New("a server reached by URL speaks streamable-http or sse")

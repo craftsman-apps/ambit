@@ -176,6 +176,18 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	mux.HandleFunc("POST /api/sso/connectors", allow("only admins can connect sign-in providers", c.connectSSO, RoleAdmin))
 	if c.Conns != nil {
 		c.Conns.register(mux, auth)
+		apps := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
+			return allow("only admins can manage apps", h, RoleAdmin)
+		}
+		mux.HandleFunc("GET /api/apps", read(func(w http.ResponseWriter, r *http.Request, s Session) {
+			if s.Role != RoleAdmin {
+				writeErr(w, http.StatusForbidden, "only admins can manage apps")
+				return
+			}
+			c.listApps(w, r, s)
+		}))
+		mux.HandleFunc("POST /api/apps", apps(c.createApp))
+		mux.HandleFunc("DELETE /api/apps/{name}", apps(c.deleteApp))
 	}
 	admin := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
 		return read(func(w http.ResponseWriter, r *http.Request, s Session) {

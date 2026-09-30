@@ -163,3 +163,24 @@ test("Budgets page adds, changes and removes a group budget", async ({ page }) =
   await card.getByRole("button", { name: "Remove budget" }).click();
   await expect(card).toHaveCount(0);
 });
+
+test("Apps page adds an app for per-user sign-in and removes it", async ({ page }) => {
+  await signInAsBootstrapAdmin(page);
+  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Apps" }).click();
+  await page.getByRole("button", { name: "Add an app" }).click();
+  await expect(page.getByText(/\/connections\/callback/)).toBeVisible();
+  const name = `ui-app-${Date.now().toString(36)}`;
+  await page.getByLabel("Name", { exact: true }).fill(name);
+  await page.getByLabel("Name users see").fill("UI Test App");
+  await page.getByLabel("Authorization URL").fill("https://auth.example.com/authorize");
+  await page.getByLabel("Token URL").fill("https://auth.example.com/token");
+  await page.getByLabel("Client ID").fill("ui-client");
+  await page.getByLabel("Client secret").fill("ui-secret-not-shown");
+  await page.getByRole("button", { name: "Add app" }).click();
+  const row = page.getByTestId(`app-${name}`);
+  await expect(row.getByText("UI Test App")).toBeVisible();
+  await expect(page.getByText("ui-secret-not-shown")).toHaveCount(0);
+  await row.getByRole("button", { name: "Remove" }).click();
+  await row.getByRole("button", { name: "Remove app" }).click();
+  await expect(row).toHaveCount(0);
+});

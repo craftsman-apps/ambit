@@ -89,6 +89,7 @@ export function AppsPage() {
         </div>
         {adding && q.data && <AppForm callbackURL={q.data.callbackURL} onDone={() => setAdding(false)} />}
         {pr && <PullRequestNotice pr={pr} repository={repository} onDone={() => setPR(null)} />}
+        {q.isLoading && <p className="text-muted">Loading…</p>}
         {q.isError && <p className="text-bad" role="alert">{q.error.message}</p>}
         {remove.isError && <p className="text-bad" role="alert">{remove.error.message}</p>}
         {q.data && (

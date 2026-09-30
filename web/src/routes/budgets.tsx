@@ -104,7 +104,7 @@ export function BudgetsPage() {
         {q.data?.map((b) => (
           <div key={b.name} className="rounded-md border border-line p-4" data-testid={`budget-${b.group}`}>
             <div className="mb-2 flex items-center justify-between gap-3">
-              <h2 className="font-semibold">{b.group} <span className="font-mono text-[12px] font-normal text-muted">{b.name}</span></h2>
+              <h2 className="font-semibold">{b.group}{b.name !== b.group && <span className="ml-1.5 font-mono text-[12px] font-normal text-muted">{b.name}</span>}</h2>
               <span className="flex items-center gap-3">
                 <Status ready={b.ready} text={b.ready === "True" ? "Enforced" : undefined} />
                 {admin && (b.gitManaged && !gitops

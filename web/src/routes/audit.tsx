@@ -18,12 +18,15 @@ const today = () => new Date().toISOString().slice(0, 10);
 const monthAgo = () => new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
 // A refusal by policy: no or bad token, a rule or offboarding said no, over budget, or a tool the
 // person may not use (the gateway calls it unknown) or that changed since it was approved.
-const refused = (c: Call) => ["401", "403", "429"].includes(c.status) || /Unknown tool|changed since it was approved/.test(c.error);
+// A 429 is a refusal only when the gateway's budget said so ("rate limit exceeded"); without that
+// reason it came from the model provider (its own limit), which is a failure, not a policy decision.
+const refused = (c: Call) => ["401", "403"].includes(c.status) || (c.status === "429" && /rate limit/i.test(c.error))
+  || /Unknown tool|changed since it was approved/.test(c.error);
 const failed = (c: Call) => !refused(c) && (c.error !== "" || Number(c.status) >= 400);
 // What an auditor asks about: tool calls, model requests, and refusals before the MCP method is known.
 const isCall = (c: Call) => c.method === "tools/call" || c.method === "";
 const utc = (t: string) => new Date(t).toISOString().replace("T", " ").slice(0, 19);
-const what = (c: Call) => c.method ? `${c.method}${c.tool ? ` · ${c.tool}` : ""}` : c.model ? "LLM request" : c.route;
+const what = (c: Call) => c.method ? `${c.method}${c.tool ? ` · ${c.tool}` : ""}` : c.model || /llm$/.test(c.route) ? "LLM request" : c.route;
 const outcome = (c: Call) => refused(c) ? "Refused by policy" : failed(c) ? "Failed" : "OK";
 
 function csv(calls: Call[]) {

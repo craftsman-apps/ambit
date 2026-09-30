@@ -1,6 +1,7 @@
 package console
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -558,6 +559,9 @@ func writeErr(w http.ResponseWriter, code int, msg string) {
 }
 
 func serverErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, context.Canceled) {
+		return // the browser left the page; nobody reads this answer
+	}
 	slog.Error("catalog", "err", err)
 	writeErr(w, http.StatusInternalServerError, "the console could not reach Kubernetes; try again")
 }

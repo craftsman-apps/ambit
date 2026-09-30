@@ -143,6 +143,7 @@ function ServerRow({ s, open, onToggle }: { s: ServerView; open: boolean; onTogg
 
 function PendingCard({ q, me, canDecide }: { q: RequestView; me: string; canDecide: boolean }) {
   const qc = useQueryClient();
+  const app = useConnections().data?.find((c) => c.name === q.connection)?.displayName ?? q.connection;
   const [comment, setComment] = useState("");
   const decide = useMutation({
     mutationFn: (d: "approve" | "deny") => sendJSON("POST", `/api/server-requests/${encodeURIComponent(q.name)}/${d}`, { comment }),
@@ -154,7 +155,7 @@ function PendingCard({ q, me, canDecide }: { q: RequestView; me: string; canDeci
       <p className="font-mono font-medium">{q.serverName}</p>
       <p className="text-[12.5px] text-muted">{q.displayName && `${q.displayName} · `}asked by {q.requestedBy} · {q.transport}</p>
       <p className="mt-1 break-all font-mono text-[12px]">{q.url || q.image}</p>
-      {q.connection && <p className="text-[12.5px] text-muted">Each user signs in to {q.connection} with their own account.</p>}
+      {q.connection && <p className="text-[12.5px] text-muted">Each user signs in to {app} with their own account.</p>}
       {q.reason && <p className="mt-2">“{q.reason}”</p>}
       {canDecide && !own && (
         <div className="mt-3 space-y-2">

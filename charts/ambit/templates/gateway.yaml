@@ -3,6 +3,22 @@ kind: AgentgatewayParameters
 metadata:
   name: ambit
 spec:
+  deployment:
+    spec:
+      replicas: {{ .Values.gateway.replicas }}
+      # A rolling update starts a new pod before stopping an old one, so capacity never drops.
+      strategy:
+        type: RollingUpdate
+        rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  {{- with .Values.gateway.resources }}
+  resources: {{ toJson . }}
+  {{- end }}
+  {{- if gt (int .Values.gateway.replicas) 1 }}
+  # Voluntary disruptions (node drains, upgrades) leave at least one gateway pod serving.
+  podDisruptionBudget:
+    spec:
+      minAvailable: 1
+  {{- end }}
   service:
     spec:
       type: {{ .Values.gateway.service.type }}

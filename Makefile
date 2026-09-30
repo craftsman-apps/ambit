@@ -11,7 +11,7 @@ CRDS := charts/ambit-crds
 KIND_CLUSTER ?= ambit
 IMAGE ?= ambit-console:dev
 
-.PHONY: kind-up kind-down deps lint web test-go envtest-assets argocd proto image install install-crds test test-ui generate vendor-crds
+.PHONY: kind-up kind-down deps lint web test-go envtest-assets argocd metrics-server proto image install install-crds test test-ui generate vendor-crds
 
 # Browser tests (Playwright) against the running kind install; needs the LLM test catalog (make test STEPS=3).
 test-ui:
@@ -50,6 +50,12 @@ argocd:
 	  $(foreach k,Model Server AccessRule,--set-file 'configs.cm.resource\.customizations\.health\.ambitproject\.dev_$(k)=deploy/argocd/health.lua') \
 	  --wait --timeout 5m
 
+# metrics-server v0.9.0 (chart 3.14.0) for `kubectl top` in the step 10 soak. kind kubelets use
+# self-signed certificates, hence --kubelet-insecure-tls (kind only).
+metrics-server:
+	helm upgrade --install metrics-server metrics-server --repo https://kubernetes-sigs.github.io/metrics-server/ --version 3.14.0 \
+	  -n kube-system --set 'args={--kubelet-insecure-tls}' --wait --timeout 5m
+
 kind-down:
 	kind delete cluster --name $(KIND_CLUSTER)
 
@@ -80,7 +86,7 @@ install: deps install-crds
 	helm upgrade --install ambit-crds charts/ambit-crds -n $(NS) --create-namespace --wait
 	helm upgrade --install ambit charts/ambit -n $(NS) -f charts/ambit/values-kind.yaml --wait --timeout 5m
 
-STEPS ?= 0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 8 9
+STEPS ?= 0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 8 9 10
 # make test            -> every step; make test STEPS=3b -> one step (each sets up what it needs)
 test:
 	@for s in $(STEPS); do ./test/step$$s.sh $(NS) || exit 1; done

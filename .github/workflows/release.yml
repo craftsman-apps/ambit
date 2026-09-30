@@ -22,6 +22,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/ambit-console:${{ steps.v.outputs.version }}
+          # Journey S6: an SBOM and build provenance travel with every image in the registry.
+          sbom: true
+          provenance: mode=max
       - name: Charts to GHCR (OCI)
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin

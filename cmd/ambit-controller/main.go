@@ -38,12 +38,15 @@ func main() {
 	if err := v1.AddToScheme(scheme); err != nil {
 		panic(err)
 	}
-	// ponytail: one replica, no leader election; add it before running two controllers.
+	// Leader election: during a rolling update, or with two replicas, only one controller writes.
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                 scheme,
-		Cache:                  cache.Options{DefaultNamespaces: map[string]cache.Config{ns: {}}},
-		Metrics:                metricsserver.Options{BindAddress: ":8080"},
-		HealthProbeBindAddress: ":8081",
+		Scheme:                  scheme,
+		Cache:                   cache.Options{DefaultNamespaces: map[string]cache.Config{ns: {}}},
+		Metrics:                 metricsserver.Options{BindAddress: ":8080"},
+		HealthProbeBindAddress:  ":8081",
+		LeaderElection:          true,
+		LeaderElectionID:        "ambit-controller",
+		LeaderElectionNamespace: ns,
 	})
 	if err != nil {
 		log.Error(err, "create manager")

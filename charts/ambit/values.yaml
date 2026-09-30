@@ -2,6 +2,9 @@ gateway:
   # Gateway pods. They share budgets (ratelimit + Valkey) and MCP sessions (a session key in a Secret),
   # so any replica can answer any request. Two or more also get a PodDisruptionBudget (minAvailable 1).
   replicas: 2
+  # Gateway container resources; empty keeps agentgateway's defaults (100m CPU, 128Mi requested).
+  # A rolling update starts one extra pod first, so the nodes need room for one more gateway pod.
+  resources: {}
   # Listener port of the Ambit Gateway. Also the port of the generated Service.
   port: 8080
   service:

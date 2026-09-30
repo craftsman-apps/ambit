@@ -10,6 +10,9 @@ spec:
       strategy:
         type: RollingUpdate
         rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  {{- with .Values.gateway.resources }}
+  resources: {{ toJson . }}
+  {{- end }}
   {{- if gt (int .Values.gateway.replicas) 1 }}
   # Voluntary disruptions (node drains, upgrades) leave at least one gateway pod serving.
   podDisruptionBudget:

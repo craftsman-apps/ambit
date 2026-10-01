@@ -1,4 +1,4 @@
-{{- if .Values.evidence.enabled }}
+{{- if and .Values.evidence.enabled (not .Values.evidence.clickhouse.external.host) }}
 # ClickHouse keeps the gateway's access logs (journey A5: "every call Alice made in March").
 # The ambit user's password is created by the console at first start (Secret ambit-clickhouse), so the
 # chart renders the same on every run; this pod starts once that Secret exists.

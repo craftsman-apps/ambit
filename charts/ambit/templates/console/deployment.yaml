@@ -38,10 +38,34 @@ spec:
             - { name: AMBIT_GRANTS_NAMESPACE, value: {{ .Values.connections.grantsNamespace | default (printf "%s-grants" .Release.Namespace) | quote }} }
             {{- end }}
             {{- if .Values.evidence.enabled }}
-            - { name: AMBIT_CLICKHOUSE_ADDR, value: "ambit-clickhouse:8123" }
+            - { name: AMBIT_CLICKHOUSE_ADDR, value: {{ include "ambit.clickhouse.http" . | quote }} }
+            {{- with .Values.evidence.clickhouse.external }}{{ if .host }}
+            - { name: AMBIT_CLICKHOUSE_USER, value: {{ .user | quote }} }
+            - { name: AMBIT_CLICKHOUSE_DATABASE, value: {{ .database | quote }} }
+            - name: AMBIT_CLICKHOUSE_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ required "evidence.clickhouse.external.passwordSecret is required with an external ClickHouse" .passwordSecret }}, key: password } }
+            {{- if .tls }}
+            - { name: AMBIT_CLICKHOUSE_TLS, value: "true" }
+            {{- end }}
+            {{- if .caSecret }}
+            - { name: AMBIT_CLICKHOUSE_CA, value: /etc/ambit/clickhouse-ca/ca.crt }
+            {{- end }}
+            {{- end }}{{ end }}
             {{- end }}
             {{- if .Values.limits.enabled }}
-            - { name: AMBIT_VALKEY_ADDR, value: "ambit-valkey:6379" }
+            - { name: AMBIT_VALKEY_ADDR, value: {{ include "ambit.valkey.address" . | quote }} }
+            {{- with .Values.limits.valkey.external }}{{ if .address }}
+            {{- if .tls }}
+            - { name: AMBIT_VALKEY_TLS, value: "true" }
+            {{- end }}
+            {{- if .caSecret }}
+            - { name: AMBIT_VALKEY_CA, value: /etc/ambit/valkey-ca/ca.crt }
+            {{- end }}
+            {{- if .passwordSecret }}
+            - name: AMBIT_VALKEY_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ .passwordSecret }}, key: password } }
+            {{- end }}
+            {{- end }}{{ end }}
             {{- end }}
             {{- with .Values.gitops }}{{ if .enabled }}
             - { name: AMBIT_GITOPS_REPOSITORY, value: {{ required "gitops.repository is required (owner/name)" .repository | quote }} }
@@ -51,6 +75,12 @@ spec:
             - { name: AMBIT_GITHUB_APP_ID, value: {{ required "gitops.github.appID is required" .github.appID | quote }} }
             {{- end }}{{ end }}
           volumeMounts:
+            {{- if and .Values.evidence.enabled .Values.evidence.clickhouse.external.host .Values.evidence.clickhouse.external.caSecret }}
+            - { name: clickhouse-ca, mountPath: /etc/ambit/clickhouse-ca, readOnly: true }
+            {{- end }}
+            {{- if and .Values.limits.enabled .Values.limits.valkey.external.address .Values.limits.valkey.external.caSecret }}
+            - { name: valkey-ca, mountPath: /etc/ambit/valkey-ca, readOnly: true }
+            {{- end }}
             {{- if .Values.console.caBundleSecret }}
             - { name: extra-ca, mountPath: /etc/ambit/ca, readOnly: true }
             {{- end }}
@@ -67,6 +97,12 @@ spec:
             requests: { cpu: 20m, memory: 32Mi }
             limits: { memory: 128Mi }
       volumes:
+        {{- if and .Values.evidence.enabled .Values.evidence.clickhouse.external.host .Values.evidence.clickhouse.external.caSecret }}
+        - { name: clickhouse-ca, secret: { secretName: {{ .Values.evidence.clickhouse.external.caSecret | quote }}, items: [{ key: ca.crt, path: ca.crt }] } }
+        {{- end }}
+        {{- if and .Values.limits.enabled .Values.limits.valkey.external.address .Values.limits.valkey.external.caSecret }}
+        - { name: valkey-ca, secret: { secretName: {{ .Values.limits.valkey.external.caSecret | quote }}, items: [{ key: ca.crt, path: ca.crt }] } }
+        {{- end }}
         {{- with .Values.console.caBundleSecret }}
         - name: extra-ca
           secret: { secretName: {{ . | quote }}, items: [{ key: ca.crt, path: ca.crt }] }

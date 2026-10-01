@@ -29,12 +29,20 @@ spec:
           args: [--config=/etc/otel/config.yaml]
           env:
             - name: CLICKHOUSE_PASSWORD
-              valueFrom: { secretKeyRef: { name: ambit-clickhouse, key: password } }
+              valueFrom: { secretKeyRef: { name: {{ include "ambit.clickhouse.passwordSecret" . }}, key: password } }
           ports: [{ name: otlp, containerPort: 4317 }]
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
           resources: {{ toJson .Values.evidence.collector.resources }}
-          volumeMounts: [{ name: config, mountPath: /etc/otel }]
-      volumes: [{ name: config, configMap: { name: ambit-otel-collector } }]
+          volumeMounts:
+            - { name: config, mountPath: /etc/otel }
+            {{- with .Values.evidence.clickhouse.external.caSecret }}
+            - { name: clickhouse-ca, mountPath: /etc/ambit/clickhouse-ca, readOnly: true }
+            {{- end }}
+      volumes:
+        - { name: config, configMap: { name: ambit-otel-collector } }
+        {{- with .Values.evidence.clickhouse.external.caSecret }}
+        - { name: clickhouse-ca, secret: { secretName: {{ . }}, items: [{ key: ca.crt, path: ca.crt }] } }
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service

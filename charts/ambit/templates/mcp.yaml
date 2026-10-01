@@ -18,6 +18,10 @@ spec:
   rules:
     - name: mcp
       matches: [{ path: { type: PathPrefix, value: /mcp } }]
+      # The token broker trusts X-Ambit-User from gateway pods; a client's own must never reach a server.
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier: { remove: [X-Ambit-User] }
       backendRefs: [{ group: agentgateway.dev, kind: AgentgatewayBackend, name: ambit-mcp }]
 ---
 apiVersion: agentgateway.dev/v1alpha1

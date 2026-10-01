@@ -18,6 +18,11 @@ spec:
       # and "/chat/completions" is not a path it parses, so requests passed through unparsed: no token
       # counts, no LLM policies (found 2026-10-01). Clients still call <host>/v1/chat/completions.
       matches: [{ path: { type: PathPrefix, value: / } }]
+      # The token broker trusts X-Ambit-User from gateway pods; a client's own must never reach a model,
+      # whose baseURL could point anywhere.
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier: { remove: [X-Ambit-User] }
       backendRefs: [{ group: agentgateway.dev, kind: AgentgatewayModel, name: "*" }]
 ---
 apiVersion: agentgateway.dev/v1alpha1
@@ -27,6 +32,13 @@ metadata:
 spec:
   targetRefs: [{ group: gateway.networking.k8s.io, kind: HTTPRoute, name: ambit-llm }]
   traffic:
+    # Only the APIs the gateway parses. Any other path would pass through to the provider with the model's
+    # credential, unlogged and uncounted (the route must match "/" above). /v1/completions is not parsed.
+    authorization:
+      action: Deny
+      policy:
+        matchExpressions:
+          - '!(request.path in ["/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/embeddings", "/v1/models"])'
     jwtAuthentication:
       mode: Strict
       providers:

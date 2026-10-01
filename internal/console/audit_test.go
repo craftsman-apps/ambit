@@ -86,3 +86,20 @@ func TestUsageCost(t *testing.T) {
 		t.Fatalf("ml %+v", ml)
 	}
 }
+
+// A model name shared by Models with different prices (or one unpriced) gets no price, so its cost is
+// never computed from the wrong Model.
+func TestPricesByModel(t *testing.T) {
+	price := func(in string) *v1.ModelPrice { return &v1.ModelPrice{InputPerMillionTokens: in, OutputPerMillionTokens: "1"} }
+	model := func(name string, p *v1.ModelPrice) v1.Model { return v1.Model{Spec: v1.ModelSpec{Model: name, Price: p}} }
+	got := PricesByModel([]v1.Model{
+		model("gpt-small", price("0.15")),
+		model("llama", price("0.10")), model("llama", price("0.20")), // same name, different prices
+		model("qwen", price("0.30")), model("qwen", nil), // one copy unpriced
+		model("mistral", price("0.40")), model("mistral", price("0.40")), // same price twice is fine
+		model("local", nil),
+	})
+	if len(got) != 2 || got["gpt-small"].InputPerMillionTokens != "0.15" || got["mistral"].InputPerMillionTokens != "0.40" {
+		t.Fatalf("%+v", got)
+	}
+}

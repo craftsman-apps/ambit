@@ -1,6 +1,7 @@
 # Test only: an OpenAI-compatible server that answers every chat completion with fixed usage (12 input,
 # 3 output tokens), streamed or not. Tests use it instead of a real provider where they need a successful
-# answer (token counts, cost), so they do not depend on a provider's free quota.
+# answer (token counts, cost), so they do not depend on a provider's free quota. The answer names any
+# X-Ambit-User header it received, so a test can check that clients cannot pass one through.
 apiVersion: v1
 kind: ConfigMap
 metadata: { name: mock-llm }
@@ -13,6 +14,7 @@ data:
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
             model = body.get("model")
+            content = "pong" + (" x-ambit-user=" + self.headers["x-ambit-user"] if self.headers.get("x-ambit-user") else "")
             if body.get("stream"):
                 self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
                 for chunk in ({"choices": [{"index": 0, "delta": {"content": "pong"}}]}, {"choices": [], "usage": USAGE}):
@@ -21,7 +23,7 @@ data:
                 self.wfile.write(b"data: [DONE]\n\n")
                 return
             out = json.dumps({"id": "c1", "object": "chat.completion", "model": model, "usage": USAGE,
-                              "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}]}).encode()
+                              "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}]}).encode()
             self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(out)))
             self.end_headers(); self.wfile.write(out)
     http.server.ThreadingHTTPServer(("", 8080), H).serve_forever()

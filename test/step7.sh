@@ -66,19 +66,22 @@ out=$(kubectl -n "$NS" run ch-probe --rm -i --restart=Never --quiet --image="$CU
 pass "3 otel_logs has TTL $(grep -o 'TTL[^S]*' <<<"$ttl" | head -c 60); other pods cannot reach ClickHouse"
 
 # 4 · A3 and requirement 17: LLM requests, tokens and cost per group per day. mira calls the priced test
-#     model twice (once streamed); each answer carries 12 input and 3 output tokens.
-for s in false true; do
-  command curl -s -o /dev/null -H "Authorization: Bearer $M" -H 'Content-Type: application/json' \
-    -d "{\"model\":\"mock/echo\",\"stream\":$s,\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}" http://llm.localtest.me:8080/v1/chat/completions
-done
+#     model twice (once streamed); each answer carries 12 input and 3 output tokens. The check measures the
+#     increase from these two requests, not totals that earlier requests could already fill.
 sign_in keycloak priya priya-test-pass
 mr='[u for u in d["usage"] if u["group"]=="ml-research"]'
-for _ in $(seq 1 30); do
-  [[ $(api GET /api/usage) == 200 && $(field "sum(u['inputTokens'] for u in $mr)") -ge 24 ]] && break; sleep 2
+totals() { [[ $(api GET /api/usage) == 200 ]] && field "f\"{sum(u['inputTokens'] for u in $mr)} {sum(u['outputTokens'] for u in $mr)} {sum(u.get('cost') or 0 for u in $mr):.9f}\""; }
+read -r in0 out0 cost0 <<<"$(totals)"
+for s in false true; do
+  code=$(command curl -s -o "$W/llm" -w '%{http_code}' -H "Authorization: Bearer $M" -H 'Content-Type: application/json' \
+    -d "{\"model\":\"mock/echo\",\"stream\":$s,\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}" http://llm.localtest.me:8080/v1/chat/completions)
+  [[ "$code" == 200 ]] || fail "4 mock model call (stream $s) answered $code: $(head -c 200 "$W/llm")"
 done
-n=$(field "sum(u['requests'] for u in $mr)"); tin=$(field "sum(u['inputTokens'] for u in $mr)"); tout=$(field "sum(u['outputTokens'] for u in $mr)")
-cost=$(field "sum(u.get('cost') or 0 for u in $mr)")
-[[ "$n" -gt 0 && "$tin" -ge 24 && "$tout" -ge 6 ]] || fail "4 usage lacks ml-research's tokens: requests $n, tokens $tin in / $tout out: $(cat "$W/api")"
-uv run --no-project python -c "import sys; sys.exit(0 if float(sys.argv[1]) >= 0.000048 else 1)" "$cost" || fail "4 no cost for the priced model: $cost"
-pass "4 usage: ml-research made $n LLM request(s) today, $tin input and $tout output tokens, cost \$$(printf '%.6f' "$cost") (streamed answers counted too)"
+for _ in $(seq 1 30); do
+  read -r in1 out1 cost1 <<<"$(totals)"
+  (( in1 - in0 >= 24 && out1 - out0 >= 6 )) && break; sleep 2
+done
+(( in1 - in0 >= 24 && out1 - out0 >= 6 )) || fail "4 usage did not grow by both answers' tokens: input $in0 -> $in1, output $out0 -> $out1"
+uv run --no-project python -c "import sys; sys.exit(0 if float(sys.argv[2]) - float(sys.argv[1]) >= 0.000048 - 1e-12 else 1)" "$cost0" "$cost1" || fail "4 cost did not grow by the priced answers: $cost0 -> $cost1"
+pass "4 usage: two answers (one streamed) added $((in1 - in0)) input and $((out1 - out0)) output tokens and \$$(uv run --no-project python -c "import sys; print(f'{float(sys.argv[2]) - float(sys.argv[1]):.6f}')" "$cost0" "$cost1") to ml-research's cost"
 done_step 7

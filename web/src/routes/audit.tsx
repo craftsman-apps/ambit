@@ -128,7 +128,7 @@ export function UsagePage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Usage</h1>
           <p className="text-muted">LLM requests, tokens and cost per group per day (UTC), last 30 days. Someone in two groups counts toward both. Cost comes from each model's price.</p>
-          {res.data && !tokens && <p className="text-[12.5px] text-muted">No token counts in this period: no LLM request was answered yet.</p>}
+          {res.data && !tokens && <p className="text-[12.5px] text-muted">No token usage was recorded in this period.</p>}
           {unpriced.length > 0 && <p className="text-[12.5px] text-warn">No price set for {unpriced.join(", ")}: their tokens are counted but not in the cost. Set a price on the Model.</p>}
         </div>
         {res.isLoading && <p className="text-muted">Loading…</p>}

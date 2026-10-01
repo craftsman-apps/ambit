@@ -186,13 +186,7 @@ func run(ctx context.Context) error {
 			if objects.List(ctx, &l, client.InNamespace(ns)) != nil {
 				return nil
 			}
-			out := map[string]v1.ModelPrice{}
-			for _, m := range l.Items {
-				if m.Spec.Price != nil {
-					out[m.Spec.Model] = *m.Spec.Price
-				}
-			}
-			return out
+			return console.PricesByModel(l.Items)
 		}
 	}
 	var budgets *console.Budgets

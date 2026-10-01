@@ -13,7 +13,7 @@
 # Exit code 0 only when nothing failed.
 set -euo pipefail
 COMP=${1:?component}; VER=${2:?version}
-ALL="0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 8 9 10 ext ui"  # add new steps here too
+ALL="0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 8 9 10 ext args ui"  # add new steps here too
 no4c=""
 [[ -s "$HOME/.config/ambit/github-app.pem" ]] || { ALL=${ALL/ 4c / }; no4c=1; }
 STEPS=${3:-$ALL}

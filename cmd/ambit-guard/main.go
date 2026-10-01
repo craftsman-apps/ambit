@@ -40,7 +40,8 @@ func main() {
 		slog.Info("masking with Presidio", "analyzer", a)
 	}
 	srv := grpc.NewServer()
-	extmcp.RegisterExtMcpServer(srv, &guard.Guard{Pins: guard.KubePins{Client: mgr.GetClient(), Namespace: ns}, Masker: masker})
+	extmcp.RegisterExtMcpServer(srv, &guard.Guard{Pins: guard.KubePins{Client: mgr.GetClient(), Namespace: ns}, Masker: masker,
+		Rules: guard.KubeRules{Client: mgr.GetClient(), Namespace: ns}})
 	lis, err := net.Listen("tcp", ":9090")
 	if err != nil {
 		slog.Error("listen", "err", err)

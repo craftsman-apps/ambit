@@ -79,6 +79,48 @@ spec:
                 description: Servers lists Server objects in this namespace and, optionally, which of their tools are allowed.
                 items:
                   properties:
+                    arguments:
+                      description: 'Arguments limit what the listed tools may be called with (requirement 8): every condition must
+
+                        hold, or ambit-guard refuses the call and says which condition failed. Needs protection enabled;
+
+                        without it, a rule with argument limits grants nothing.'
+                      items:
+                        description: ArgumentRule is one condition on one top-level argument of a tool call.
+                        properties:
+                          max:
+                            description: 'Max: the argument must be present, a number, and at most this value, e.g. "1000" or "99.5".'
+                            pattern: ^-?[0-9]{1,15}(\.[0-9]{1,6})?$
+                            type: string
+                          name:
+                            description: Name of the argument, as the tool's input schema names it (top level only).
+                            pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,63}$
+                            type: string
+                          notContains:
+                            description: 'NotContains: when present, the argument (as text) must not contain any of these, ignoring case.'
+                            items:
+                              maxLength: 256
+                              minLength: 1
+                              type: string
+                            maxItems: 50
+                            minItems: 1
+                            type: array
+                          oneOf:
+                            description: 'OneOf: the argument must be present and equal to one of these strings.'
+                            items:
+                              maxLength: 256
+                              type: string
+                            maxItems: 50
+                            minItems: 1
+                            type: array
+                        required:
+                        - name
+                        type: object
+                        x-kubernetes-validations:
+                        - message: set oneOf, notContains or max
+                          rule: has(self.oneOf) || has(self.notContains) || has(self.max)
+                      maxItems: 20
+                      type: array
                     name:
                       description: Name of a Server object in this namespace.
                       minLength: 1

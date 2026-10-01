@@ -150,3 +150,35 @@ func agentgatewayModel(m v1.Model, a Access, route RouteRef) *unstructured.Unstr
 	}})
 	return o
 }
+
+// WithoutArgumentLimits removes every server grant that carries argument limits, for clusters without
+// ambit-guard (protection off), where nothing would enforce them: such a grant must grant nothing rather
+// than everything. It returns the servers removed, by rule name.
+func WithoutArgumentLimits(rules []v1.AccessRule) ([]v1.AccessRule, map[string][]string) {
+	dropped := map[string][]string{}
+	out := make([]v1.AccessRule, 0, len(rules))
+	for _, r := range rules {
+		var keep []v1.ServerAccess
+		for _, sa := range r.Spec.Servers {
+			if len(sa.Arguments) > 0 {
+				dropped[r.Name] = append(dropped[r.Name], sa.Name)
+				continue
+			}
+			keep = append(keep, sa)
+		}
+		r = *r.DeepCopy()
+		r.Spec.Servers = keep
+		out = append(out, r)
+	}
+	return out, dropped
+}
+
+// ApplyDropped marks the rules whose limited grants were removed.
+func ApplyDropped(res *Result, dropped map[string][]string) {
+	for name, servers := range dropped {
+		c := res.RuleConditions[name]
+		c.Status, c.Reason = metav1.ConditionFalse, "ArgumentLimitsNeedProtection"
+		c.Message = "argument limits on " + strings.Join(servers, ", ") + " need protection (ambit-guard) to be enforced, so those grants are not applied; the rest of the rule is"
+		res.RuleConditions[name] = c
+	}
+}

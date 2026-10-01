@@ -85,6 +85,37 @@ type ServerAccess struct {
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:items:Pattern=`^[A-Za-z0-9_.-]{1,128}$`
 	Tools []string `json:"tools,omitempty"`
+	// Arguments limit what the listed tools may be called with (requirement 8): every condition must
+	// hold, or ambit-guard refuses the call and says which condition failed. Needs protection enabled;
+	// without it, a rule with argument limits grants nothing.
+	// +optional
+	// +kubebuilder:validation:MaxItems=20
+	Arguments []ArgumentRule `json:"arguments,omitempty"`
+}
+
+// ArgumentRule is one condition on one top-level argument of a tool call.
+// +kubebuilder:validation:XValidation:rule="has(self.oneOf) || has(self.notContains) || has(self.max)",message="set oneOf, notContains or max"
+type ArgumentRule struct {
+	// Name of the argument, as the tool's input schema names it (top level only).
+	// +kubebuilder:validation:Pattern=`^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`
+	Name string `json:"name"`
+	// OneOf: the argument must be present and equal to one of these strings.
+	// +optional
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=50
+	// +kubebuilder:validation:items:MaxLength=256
+	OneOf []string `json:"oneOf,omitempty"`
+	// NotContains: when present, the argument (as text) must not contain any of these, ignoring case.
+	// +optional
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=50
+	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:MaxLength=256
+	NotContains []string `json:"notContains,omitempty"`
+	// Max: the argument must be present, a number, and at most this value, e.g. "1000" or "99.5".
+	// +optional
+	// +kubebuilder:validation:Pattern=`^-?[0-9]{1,15}(\.[0-9]{1,6})?$`
+	Max string `json:"max,omitempty"`
 }
 
 type AccessRuleStatus struct {

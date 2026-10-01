@@ -16,6 +16,7 @@ import (
 
 	"github.com/craftsman-apps/ambit/internal/controller"
 	"github.com/craftsman-apps/ambit/internal/extmcp"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // Pins reports the approved fingerprints of a server's tools and the current ones the controller last
@@ -33,6 +34,9 @@ type Guard struct {
 	extmcp.UnimplementedExtMcpServer
 	Pins   Pins
 	Masker Masker
+	// Rules, when set, enforces argument limits from access rules (requirement 8). The caller's groups
+	// come from the gateway's metadata ("groups", from the verified token), never from the client.
+	Rules Rules
 }
 
 func pass() *extmcp.McpRequestResult { return &extmcp.McpRequestResult{Result: &extmcp.McpRequestResult_Pass{Pass: &extmcp.Pass{}}} }
@@ -61,21 +65,50 @@ func (g *Guard) CheckRequest(ctx context.Context, req *extmcp.McpRequest) (*extm
 		return pass(), nil
 	}
 	var p struct {
-		Name string `json:"name"`
+		Name      string         `json:"name"`
+		Arguments map[string]any `json:"arguments"`
 	}
 	if err := json.Unmarshal(req.McpRequest, &p); err != nil {
 		return pass(), nil // the gateway and the server validate the request itself
 	}
 	server, tool := split(p.Name, req.ServiceNames)
-	approved, current, pinned := g.Pins.Pins(ctx, server)
-	if !pinned {
-		return pass(), nil
+	if approved, current, pinned := g.Pins.Pins(ctx, server); pinned {
+		if fp, ok := approved[tool]; !ok || current[tool] != fp {
+			slog.Warn("guard: refused unapproved tool", "server", server, "tool", tool)
+			return deny(fmt.Sprintf("tool %s on %s changed since it was approved; an admin must approve it again", tool, server)), nil
+		}
 	}
-	if fp, ok := approved[tool]; !ok || current[tool] != fp {
-		slog.Warn("guard: refused unapproved tool", "server", server, "tool", tool)
-		return deny(fmt.Sprintf("tool %s on %s changed since it was approved; an admin must approve it again", tool, server)), nil
+	if g.Rules != nil {
+		if reason := CheckArguments(g.Rules.Grants(ctx, server), metadataStrings(req.MetadataContext, "groups"), tool, p.Arguments); reason != "" {
+			slog.Info("guard: refused arguments", "server", server, "tool", tool, "reason", reason)
+			return deny(reason), nil
+		}
 	}
 	return pass(), nil
+}
+
+// metadataStrings reads a list of strings the gateway put in the metadata context: a list, or a JSON
+// array or single value in a string (as a claim may arrive).
+func metadataStrings(ctx *structpb.Struct, key string) []string {
+	v, ok := ctx.GetFields()[key]
+	if !ok {
+		return nil
+	}
+	if l := v.GetListValue(); l != nil {
+		var out []string
+		for _, e := range l.Values {
+			out = append(out, e.GetStringValue())
+		}
+		return out
+	}
+	if s := v.GetStringValue(); s != "" {
+		var out []string
+		if json.Unmarshal([]byte(s), &out) == nil {
+			return out
+		}
+		return []string{s}
+	}
+	return nil
 }
 
 func (g *Guard) CheckResponse(ctx context.Context, resp *extmcp.McpResponse) (*extmcp.McpResponseResult, error) {

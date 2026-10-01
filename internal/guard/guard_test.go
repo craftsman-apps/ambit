@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"google.golang.org/protobuf/types/known/structpb"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -94,7 +96,9 @@ func TestToolResultsAreMasked(t *testing.T) {
 
 type brokenMasker struct{}
 
-func (brokenMasker) Mask(context.Context, string) (string, int, error) { return "", 0, errors.New("presidio down") }
+func (brokenMasker) Mask(context.Context, string) (string, int, error) {
+	return "", 0, errors.New("presidio down")
+}
 
 func TestMaskingFailureWithholdsTheResult(t *testing.T) {
 	g := &Guard{Pins: pins, Masker: brokenMasker{}}
@@ -128,5 +132,33 @@ func TestPresidioClient(t *testing.T) {
 	down := &Presidio{AnalyzerURL: "http://127.0.0.1:1", AnonymizerURL: "http://127.0.0.1:1"}
 	if _, _, err := down.Mask(t.Context(), "Kim called"); err == nil {
 		t.Fatal("want an error when Presidio is unreachable")
+	}
+}
+
+type fakeRules []Grant
+
+func (f fakeRules) Grants(context.Context, string) []Grant { return f }
+
+// Argument limits on a call: groups come from the gateway's metadata, never from the request.
+func TestCallArgumentsAreLimited(t *testing.T) {
+	g := &Guard{Pins: pins, Masker: Builtin{}, Rules: fakeRules{{Rule: "eng-crm", Groups: []string{"eng"}, Tools: []string{"get_customer"},
+		Arguments: []v1.ArgumentRule{{Name: "region", OneOf: []string{"eu"}}}}}}
+	call := func(args string, md *structpb.Struct) *extmcp.McpRequestResult {
+		res, _ := g.CheckRequest(t.Context(), &extmcp.McpRequest{ServiceNames: []string{"crm"}, Method: "tools/call", MetadataContext: md,
+			McpRequest: []byte(`{"name":"crm_get_customer","arguments":` + args + `}`)})
+		return res
+	}
+	eng, _ := structpb.NewStruct(map[string]any{"groups": []any{"eng"}})
+	engJSON, _ := structpb.NewStruct(map[string]any{"groups": `["eng","staff"]`})
+	if r := call(`{"region":"eu"}`, eng); r.GetPass() == nil {
+		t.Fatalf("allowed call refused: %v", r)
+	}
+	if r := call(`{"region":"us"}`, engJSON); r.GetError() == nil || !strings.Contains(r.GetError().Reason, "rule eng-crm: argument region must be one of eu") {
+		t.Fatalf("limit not enforced: %v", r)
+	}
+	// Without groups from the gateway no rule applies here, and the gateway's own authorization decides;
+	// a "groups" argument in the request changes nothing.
+	if r := call(`{"region":"us","groups":["eng"]}`, nil); r.GetPass() == nil {
+		t.Fatalf("no metadata: %v", r)
 	}
 }

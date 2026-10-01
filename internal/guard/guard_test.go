@@ -62,7 +62,7 @@ func TestListHidesChangedAndNewToolsOfPinnedServers(t *testing.T) {
 func TestCallsToUnapprovedToolsAreRefused(t *testing.T) {
 	changed := fakePins{"crm": {{"get_customer": good}, {"get_customer": "different"}}}
 	g := &Guard{Pins: changed, Masker: Builtin{}}
-	res, _ := g.CheckRequest(t.Context(), &extmcp.McpRequest{ServiceNames: []string{"crm"}, Method: "tools/call", McpRequest: []byte(`{"name":"crm_get_customer","arguments":{}}`)})
+	res, _ := g.CheckRequest(t.Context(), &extmcp.McpRequest{ServiceNames: []string{"crm"}, Method: "tools/call", McpRequest: []byte(`{"name":"get_customer","arguments":{}}`)})
 	if res.GetError() == nil || !strings.Contains(res.GetError().Reason, "approve it again") {
 		t.Fatalf("changed tool call: %v", res)
 	}
@@ -137,28 +137,58 @@ func TestPresidioClient(t *testing.T) {
 
 type fakeRules []Grant
 
-func (f fakeRules) Grants(context.Context, string) []Grant { return f }
+func (f fakeRules) Grants(context.Context, string) ([]Grant, error) { return f, nil }
 
-// Argument limits on a call: groups come from the gateway's metadata, never from the request.
+type brokenRules struct{}
+
+func (brokenRules) Grants(context.Context, string) ([]Grant, error) {
+	return nil, errors.New("api server unreachable")
+}
+
+// Argument limits on a call: groups come from the gateway's metadata, never from the request. The gateway
+// sends the tool's own name and its one server (agentgateway v1.5.0, mcp/session.rs).
 func TestCallArgumentsAreLimited(t *testing.T) {
-	g := &Guard{Pins: pins, Masker: Builtin{}, Rules: fakeRules{{Rule: "eng-crm", Groups: []string{"eng"}, Tools: []string{"get_customer"},
-		Arguments: []v1.ArgumentRule{{Name: "region", OneOf: []string{"eu"}}}}}}
-	call := func(args string, md *structpb.Struct) *extmcp.McpRequestResult {
-		res, _ := g.CheckRequest(t.Context(), &extmcp.McpRequest{ServiceNames: []string{"crm"}, Method: "tools/call", MetadataContext: md,
-			McpRequest: []byte(`{"name":"crm_get_customer","arguments":` + args + `}`)})
+	g := &Guard{Pins: pins, Masker: Builtin{}, Rules: fakeRules{
+		{Rule: "eng-crm", Groups: []string{"eng"}, Tools: []string{"get_customer", "sales_export"},
+			Arguments: []v1.ArgumentRule{{Name: "region", OneOf: []string{"eu"}}}},
+	}}
+	server := "crm"
+	call := func(tool, args string, md *structpb.Struct) *extmcp.McpRequestResult {
+		res, _ := g.CheckRequest(t.Context(), &extmcp.McpRequest{ServiceNames: []string{server}, Method: "tools/call", MetadataContext: md,
+			McpRequest: []byte(`{"name":"` + tool + `","arguments":` + args + `}`)})
 		return res
+	}
+	refused := func(r *extmcp.McpRequestResult, part string) bool {
+		return r.GetError() != nil && strings.Contains(r.GetError().Reason, part)
 	}
 	eng, _ := structpb.NewStruct(map[string]any{"groups": []any{"eng"}})
 	engJSON, _ := structpb.NewStruct(map[string]any{"groups": `["eng","staff"]`})
-	if r := call(`{"region":"eu"}`, eng); r.GetPass() == nil {
+	noGroups, _ := structpb.NewStruct(map[string]any{"groups": []any{}})
+	if r := call("get_customer", `{"region":"eu"}`, eng); r.GetPass() == nil {
 		t.Fatalf("allowed call refused: %v", r)
 	}
-	if r := call(`{"region":"us"}`, engJSON); r.GetError() == nil || !strings.Contains(r.GetError().Reason, "rule eng-crm: argument region must be one of eu") {
+	if r := call("get_customer", `{"region":"us"}`, engJSON); !refused(r, "rule eng-crm: argument region must be one of eu") {
 		t.Fatalf("limit not enforced: %v", r)
 	}
-	// Without groups from the gateway no rule applies here, and the gateway's own authorization decides;
-	// a "groups" argument in the request changes nothing.
-	if r := call(`{"region":"us","groups":["eng"]}`, nil); r.GetPass() == nil {
+	// A tool whose own name starts with the server's name is still that tool, not "export".
+	server = "sales"
+	if r := call("sales_export", `{"region":"us"}`, eng); !refused(r, "region must be one of eu") {
+		t.Fatalf("sales_export checked under another name: %v", r)
+	}
+	server = "crm"
+	// Groups missing from the gateway's metadata: limits cannot be checked, so the call is refused; a
+	// "groups" argument in the request changes nothing. An empty list is a real answer: no rule applies.
+	if r := call("get_customer", `{"region":"us","groups":["eng"]}`, nil); !refused(r, "groups did not reach the guard") {
 		t.Fatalf("no metadata: %v", r)
+	}
+	if r := call("get_customer", `{"region":"us"}`, noGroups); r.GetPass() == nil {
+		t.Fatalf("no groups, no applicable rule: %v", r)
+	}
+	if r := call("get_customer", `not json`, eng); !refused(r, "could not be read") {
+		t.Fatalf("unreadable call: %v", r)
+	}
+	g.Rules = brokenRules{}
+	if r := call("get_customer", `{"region":"eu"}`, eng); !refused(r, "access rules could not be read") {
+		t.Fatalf("rules unreadable: %v", r)
 	}
 }

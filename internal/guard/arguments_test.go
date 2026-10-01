@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -26,11 +27,16 @@ func TestCheckArguments(t *testing.T) {
 		{"allowed database and query", []string{"eng"}, "query", map[string]any{"database": "analytics", "sql": "select 1"}, ""},
 		{"database not in the list", []string{"eng"}, "query", map[string]any{"database": "prod", "sql": "select 1"}, "database must be one of analytics, reporting"},
 		{"database missing", []string{"eng"}, "query", map[string]any{"sql": "select 1"}, "database must be one of"},
-		{"database not a string", []string{"eng"}, "query", map[string]any{"database": 7, "sql": "x"}, "database must be one of"},
+		{"database not a string", []string{"eng"}, "query", map[string]any{"database": json.Number("7"), "sql": "x"}, "database must be one of"},
 		{"forbidden word, other case", []string{"eng"}, "query", map[string]any{"database": "analytics", "sql": "Drop table users"}, "sql must not contain drop"},
 		{"forbidden word in a non-string value", []string{"eng"}, "query", map[string]any{"database": "analytics", "sql": []any{"DELETE"}}, "must not contain DELETE"},
-		{"amount within the limit", []string{"finance"}, "pay", map[string]any{"amount": 999.5}, ""},
-		{"amount over the limit", []string{"finance"}, "pay", map[string]any{"amount": 1000.01}, "amount must be a number at most 1000"},
+		{"amount within the limit", []string{"finance"}, "pay", map[string]any{"amount": json.Number("999.5")}, ""},
+		{"amount over the limit", []string{"finance"}, "pay", map[string]any{"amount": json.Number("1000.01")}, "amount must be a number at most 1000"},
+		{"forbidden text with escaped characters in a nested value", []string{"eng"}, "query", map[string]any{"database": "analytics", "sql": map[string]any{"q": []any{"x <DROP> y"}}}, "sql must not contain drop"},
+		{"forbidden text as a nested key", []string{"eng"}, "query", map[string]any{"database": "analytics", "sql": map[string]any{"drop": true}}, "sql must not contain drop"},
+		{"amount exactly at the limit", []string{"finance"}, "pay", map[string]any{"amount": json.Number("1000")}, ""},
+		{"amount over the limit by less than float precision", []string{"finance"}, "pay", map[string]any{"amount": json.Number("1000.0000000000000001")}, "amount must be a number at most 1000"},
+		{"amount in exponent form over the limit", []string{"finance"}, "pay", map[string]any{"amount": json.Number("1e4")}, "amount must be a number at most 1000"},
 		{"amount as text", []string{"finance"}, "pay", map[string]any{"amount": "10"}, "amount must be a number"},
 		{"amount missing", []string{"finance"}, "pay", map[string]any{}, "amount must be a number"},
 		{"another rule grants the tool without limits", []string{"eng", "dba"}, "query", map[string]any{"database": "prod", "sql": "drop table x"}, ""},

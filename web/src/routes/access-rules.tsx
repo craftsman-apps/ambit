@@ -13,7 +13,7 @@ const features = tableFeatures({ rowSortingFeature, sortedRowModel: createSorted
 const col = createColumnHelper<typeof features, RuleView>();
 const who = (r: RuleView) => (r.allSignedIn ? "Everyone signed in" : r.groups.join(", "));
 // "time: get_current_time" or "everything: all tools"; argument limits follow in brackets.
-const limitText = (a: ArgumentRule) => a.oneOf ? `${a.name} one of ${a.oneOf.join("/")}` : a.notContains ? `${a.name} without ${a.notContains.join("/")}` : `${a.name} ≤ ${a.max}`;
+const limitText = (a: ArgumentRule) => split(a).map((x) => x.oneOf ? `${x.name} one of ${x.oneOf.join("/")}` : x.notContains ? `${x.name} without ${x.notContains.join("/")}` : `${x.name} ≤ ${x.max}`).join("; ");
 const serverText = (sa: ServerAccess) => `${sa.name}: ${sa.tools?.length ? sa.tools.join(", ") : "all tools"}${sa.arguments?.length ? ` (${sa.arguments.map(limitText).join("; ")})` : ""}`;
 const canUse = (r: RuleView) => [...r.models, ...r.servers.map(serverText)].join("; ");
 // A client works best with about 40 tools or fewer (journey U5).
@@ -271,6 +271,15 @@ function RuleForm({ name, repository, onDone }: { name?: string; repository?: st
 }
 
 type Kind = "oneOf" | "notContains" | "max";
+// One condition per row: a limit with several conditions (possible in YAML) becomes several rows with the same
+// argument name, which means the same thing (all must hold), so editing one row never drops another.
+const split = (a: ArgumentRule): ArgumentRule[] => {
+  const out: ArgumentRule[] = [];
+  if (a.oneOf) out.push({ name: a.name, oneOf: a.oneOf });
+  if (a.notContains) out.push({ name: a.name, notContains: a.notContains });
+  if (a.max) out.push({ name: a.name, max: a.max });
+  return out.length ? out : [a];
+};
 const kindOf = (a: ArgumentRule): Kind => (a.oneOf ? "oneOf" : a.notContains ? "notContains" : "max");
 const valueOf = (a: ArgumentRule) => a.oneOf?.join(", ") ?? a.notContains?.join(", ") ?? a.max ?? "";
 const build = (name: string, kind: Kind, value: string): ArgumentRule => {
@@ -278,28 +287,30 @@ const build = (name: string, kind: Kind, value: string): ArgumentRule => {
   return kind === "max" ? { name, max: value.trim() } : { name, [kind]: list };
 };
 
-// Argument limits for the chosen tools (requirement 8): every limit must hold, or the call is refused with
-// the reason. ambit-guard enforces them; without protection, a grant with limits grants nothing.
+// Argument limits for the chosen tools (requirement 8): a call this rule allows must meet every limit, or it
+// is refused with the reason. ambit-guard enforces them; without protection, a grant with limits grants nothing.
 function ArgumentLimits({ sa, onChange }: { sa: ServerAccess; onChange: (a: ArgumentRule[]) => void }) {
-  const args = sa.arguments ?? [];
+  const args = (sa.arguments ?? []).flatMap(split);
+  // What was typed in each Values box, so commas and spaces survive until the next character.
+  const [typed, setTyped] = useState<Record<number, string>>({});
   const set = (i: number, a: ArgumentRule) => onChange(args.map((x, j) => (j === i ? a : x)));
   const cell = "rounded-md border border-line bg-surface px-2 py-1 font-mono text-[12.5px] outline-none focus:border-accent";
   return (
     <div className="ml-6 mt-2 space-y-1.5 rounded-md border border-line-soft p-2" data-testid={`limits-${sa.name}`}>
-      <p className="text-[12px] text-muted">Argument limits for these tools. Every limit must hold, or the call is refused with the reason.</p>
+      <p className="text-[12px] text-muted">Argument limits for these tools. A call this rule allows must meet every limit, or it is refused with the reason. Another rule that grants the same tool without limits still allows the call.</p>
       {args.map((a, i) => (
         <div key={i} className="flex flex-wrap items-center gap-1.5">
           <input aria-label="Argument name" className={`${cell} w-28`} value={a.name} placeholder="database"
-            onChange={(e) => set(i, build(e.target.value, kindOf(a), valueOf(a)))} />
-          <select aria-label="Condition" className={cell} value={kindOf(a)} onChange={(e) => set(i, build(a.name, e.target.value as Kind, valueOf(a)))}>
+            onChange={(e) => set(i, build(e.target.value, kindOf(a), typed[i] ?? valueOf(a)))} />
+          <select aria-label="Condition" className={cell} value={kindOf(a)} onChange={(e) => set(i, build(a.name, e.target.value as Kind, typed[i] ?? valueOf(a)))}>
             <option value="oneOf">must be one of</option>
             <option value="notContains">must not contain</option>
             <option value="max">at most</option>
           </select>
-          <input aria-label="Values" className={`${cell} min-w-0 flex-1`} value={valueOf(a)}
+          <input aria-label="Values" className={`${cell} min-w-0 flex-1`} value={typed[i] ?? valueOf(a)}
             placeholder={kindOf(a) === "max" ? "1000" : "analytics, reporting"}
-            onChange={(e) => set(i, build(a.name, kindOf(a), e.target.value))} />
-          <button type="button" className="text-[12px] text-muted underline" onClick={() => onChange(args.filter((_, j) => j !== i))}>Remove</button>
+            onChange={(e) => { setTyped({ ...typed, [i]: e.target.value }); set(i, build(a.name, kindOf(a), e.target.value)); }} />
+          <button type="button" className="text-[12px] text-muted underline" onClick={() => { setTyped({}); onChange(args.filter((_, j) => j !== i)); }}>Remove</button>
         </div>
       ))}
       <button type="button" className="text-[12.5px] text-accent-text underline" onClick={() => onChange([...args, { name: "", oneOf: [] }])}>Add a limit</button>

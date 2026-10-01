@@ -107,6 +107,13 @@ test("rules form offers each server's tools", async ({ page }) => {
   await page.getByLabel("Only these tools").check();
   await expect(page.getByLabel("convert_time")).toBeVisible();
   await expect(page.getByLabel("get_current_time")).toBeVisible();
+  // Argument limits: typed values keep their commas and spaces while typing.
+  await page.getByLabel("get_current_time").check();
+  const limits = page.getByTestId("limits-time");
+  await limits.getByRole("button", { name: "Add a limit" }).click();
+  await limits.getByLabel("Argument name").fill("timezone");
+  await limits.getByLabel("Values").pressSequentially("UTC, Europe/Paris");
+  await expect(limits.getByLabel("Values")).toHaveValue("UTC, Europe/Paris");
 });
 
 test("Sign-in settings: Check verifies the provider and shows the callback URL", async ({ page }) => {

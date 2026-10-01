@@ -11,7 +11,7 @@ CRDS := charts/ambit-crds
 KIND_CLUSTER ?= ambit
 IMAGE ?= ambit-console:dev
 
-.PHONY: verify-upgrade contracts kind-up kind-down deps lint web test-go envtest-assets argocd metrics-server proto image install install-crds test test-ui generate vendor-crds
+.PHONY: verify-upgrade restore-pins contracts kind-up kind-down deps lint web test-go envtest-assets argocd metrics-server proto image install install-crds test test-ui generate vendor-crds
 
 # Browser tests (Playwright) against the running kind install; needs the LLM test catalog (make test STEPS=3).
 test-ui:
@@ -95,7 +95,11 @@ test:
 #   make verify-upgrade COMPONENT=agentgateway VERSION=v1.6.0-alpha.2
 # Upgrades the kind cluster under traffic, checks contracts and acceptance steps, then restores the pins.
 verify-upgrade:
-	test/upgrade.sh $(COMPONENT) $(VERSION) "$(or $(UPGRADE_STEPS),4a 4b 5 7 8 9 10)"
+	test/upgrade.sh $(COMPONENT) $(VERSION) $(if $(UPGRADE_STEPS),"$(UPGRADE_STEPS)")
+
+# Put the pinned versions back after an interrupted upgrade check.
+restore-pins: install-crds
+	helm upgrade ambit charts/ambit -n $(NS) -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --wait --timeout 6m
 
 # The specific things Ambit relies on in the components it ships, against what is installed now.
 contracts:

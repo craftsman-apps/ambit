@@ -65,12 +65,20 @@ out=$(kubectl -n "$NS" run ch-probe --rm -i --restart=Never --quiet --image="$CU
 [[ "${out:0:3}" != 200 ]] || fail "3 a random pod reached ClickHouse"
 pass "3 otel_logs has TTL $(grep -o 'TTL[^S]*' <<<"$ttl" | head -c 60); other pods cannot reach ClickHouse"
 
-# 4 · A3: LLM requests per group per day (tokens: agentgateway v1.5.0 does not log them for model routes)
-sign_in keycloak priya priya-test-pass
-for _ in $(seq 1 30); do
-  [[ $(api GET /api/usage) == 200 && $(field 'sum(u["requests"] for u in d["usage"] if u["group"]=="ml-research")') -gt 0 ]] && break; sleep 2
+# 4 · A3 and requirement 17: LLM requests, tokens and cost per group per day. mira calls the priced test
+#     model twice (once streamed); each answer carries 12 input and 3 output tokens.
+for s in false true; do
+  command curl -s -o /dev/null -H "Authorization: Bearer $M" -H 'Content-Type: application/json' \
+    -d "{\"model\":\"mock/echo\",\"stream\":$s,\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}]}" http://llm.localtest.me:8080/v1/chat/completions
 done
-n=$(field 'sum(u["requests"] for u in d["usage"] if u["group"]=="ml-research")')
-[[ "$n" -gt 0 ]] || fail "4 no ml-research requests in usage: $(cat "$W/api")"
-pass "4 usage: ml-research made $n LLM request(s) today (token counts are not logged by agentgateway v1.5.0 for model routes)"
+sign_in keycloak priya priya-test-pass
+mr='[u for u in d["usage"] if u["group"]=="ml-research"]'
+for _ in $(seq 1 30); do
+  [[ $(api GET /api/usage) == 200 && $(field "sum(u['inputTokens'] for u in $mr)") -ge 24 ]] && break; sleep 2
+done
+n=$(field "sum(u['requests'] for u in $mr)"); tin=$(field "sum(u['inputTokens'] for u in $mr)"); tout=$(field "sum(u['outputTokens'] for u in $mr)")
+cost=$(field "sum(u.get('cost') or 0 for u in $mr)")
+[[ "$n" -gt 0 && "$tin" -ge 24 && "$tout" -ge 6 ]] || fail "4 usage lacks ml-research's tokens: requests $n, tokens $tin in / $tout out: $(cat "$W/api")"
+uv run --no-project python -c "import sys; sys.exit(0 if float(sys.argv[1]) >= 0.000048 else 1)" "$cost" || fail "4 no cost for the priced model: $cost"
+pass "4 usage: ml-research made $n LLM request(s) today, $tin input and $tout output tokens, cost \$$(printf '%.6f' "$cost") (streamed answers counted too)"
 done_step 7

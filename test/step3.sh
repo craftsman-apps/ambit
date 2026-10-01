@@ -107,10 +107,16 @@ PY
 # edits by people, e.g. through the console, are not the controller's).
 gens() { kubectl -n "$NS" get "models.$G,accessrules.$G" -o jsonpath='{range .items[*]}{.metadata.name}={.metadata.generation}{" "}{end}'; }
 g0=$(gens)
-kubectl -n "$NS" annotate "models.$G" --all ambitproject.dev/test-reconcile="$(date +%s)" --overwrite >/dev/null  # triggers a reconcile, not a spec change
-sleep 5
+# Creating a Budget is a watched event, so the controller reconciles everything; its status shows the pass ended.
+kubectl -n "$NS" apply -f - >/dev/null <<YAML
+apiVersion: $G/v1alpha1
+kind: Budget
+metadata: { name: test-reconcile }
+spec: { group: test-reconcile, userRequestsPerDay: 1 }
+YAML
+kubectl -n "$NS" wait "budgets.$G" test-reconcile --for=jsonpath='{.status.conditions[0].type}'=Ready --timeout=60s >/dev/null || fail "9 the controller did not reconcile"
 g1=$(gens)
-kubectl -n "$NS" annotate "models.$G" --all ambitproject.dev/test-reconcile- >/dev/null
+kubectl -n "$NS" delete "budgets.$G" test-reconcile >/dev/null
 [[ "$g0" == "$g1" ]] || fail "9 controller changed the spec of Ambit objects (generations before: $g0; after a reconcile: $g1)"
 pass "9 generated object owned by its Model, no Argo CD metadata; a reconcile leaves Ambit objects' spec unchanged"
 

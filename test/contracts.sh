@@ -26,10 +26,15 @@ pass "C1 ToolHive: each image Server has its mcp-<name>-proxy Service"
 bad=$(kubectl -n "$NS" get agentgatewaypolicies,agentgatewaybackends,agentgatewaymodels -l app.kubernetes.io/managed-by=ambit -o json | uv run --no-project python -c '
 import json, sys
 bad = []
-for o in json.load(sys.stdin)["items"]:
-    st = o.get("status", {})
+items = json.load(sys.stdin)["items"]
+if not items:
+    bad.append("(no generated objects at all)")
+for o in items:
+    st, gen = o.get("status", {}), o["metadata"].get("generation")
     conds = [c for a in st.get("ancestors", []) + st.get("parents", []) for c in a.get("conditions", [])] + st.get("conditions", [])
-    if any(c.get("type") == "Accepted" and c.get("status") != "True" for c in conds):
+    acc = [c for c in conds if c.get("type") == "Accepted"]
+    # Every object needs an Accepted condition, all True, and none from an older generation.
+    if not acc or any(c.get("status") != "True" or c.get("observedGeneration", gen) != gen for c in acc):
         bad.append(o["kind"] + "/" + o["metadata"]["name"])
 print(" ".join(bad))')
 [[ -z "$bad" ]] || fail "C2 agentgateway refused generated objects: $bad"
@@ -116,16 +121,20 @@ kind: Budget
 metadata: { name: contract-eng }
 spec: { group: eng, userRequestsPerDay: 100000 }
 YAML
-day=$(( $(date -u +%s) / 86400 * 86400 ))
+day=$(( $(date -u +%s) / 86400 * 86400 )); key="ambit-llm_group_eng_user_alice@acme.test_$day"
+vget() { kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "$key" 2>/dev/null || true; }
+# The counter must grow with a new request (a counter left from earlier proves nothing).
+before=""; after=""
 for _ in $(seq 1 60); do
+  before=$(vget)
   command curl -s -o /dev/null -H "Authorization: Bearer $A" -H 'Content-Type: application/json' \
     -d '{"model":"google/gemma-4-31b-it:free","max_tokens":4,"messages":[{"role":"user","content":"hi"}]}' http://llm.localtest.me:8080/v1/chat/completions || true
-  key=$(kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli --scan --pattern "ambit-llm_group_eng_user_alice@acme.test_$day" 2>/dev/null || true)
-  [[ -n "$key" ]] && break; sleep 3
+  after=$(vget)
+  [[ -n "$after" && "$after" -gt "${before:-0}" ]] && break; sleep 3
 done
 kubectl -n "$NS" delete "budgets.$G" contract-eng --ignore-not-found >/dev/null
-[[ -n "$key" ]] || fail "C10 no counter ambit-llm_group_eng_user_alice@acme.test_$day in Valkey (key format changed? keys: $(kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli --scan --pattern 'ambit-llm*' 2>/dev/null | head -3 | tr '\n' ' '))"
-pass "C10 ratelimit counter key format unchanged ($key)"
+[[ -n "$after" && "$after" -gt "${before:-0}" ]] || fail "C10 a new request did not increase $key in Valkey (key format changed? keys: $(kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli --scan --pattern 'ambit-llm*' 2>/dev/null | head -3 | tr '\n' ' '))"
+pass "C10 ratelimit counter key format unchanged; one request raised $key from ${before:-0} to $after"
 
 # C11 · ClickHouse loaded Ambit's config (an unknown setting would stop it starting) and otel_logs has the
 #       columns Ambit reads.

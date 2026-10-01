@@ -24,7 +24,7 @@ pass "3 signed in as admin (bootstrap)"
 
 # 7 · session cookie flags (checked on the Set-Cookie header from this sign-in)
 ck=$(grep -i '^set-cookie: ambit_session=' "$W/all-headers" | tail -1)
-[[ "$ck" == *HttpOnly* && "$ck" == *"SameSite=Lax"* ]] || fail "7 cookie flags: $ck"
+[[ "$ck" == *HttpOnly* && "$ck" == *"SameSite=Lax"* ]] || fail "7 cookie flags: $(sed -E 's/ambit_session=[^;]*/ambit_session=<redacted>/' <<<"$ck")"
 pass "7 session cookie HttpOnly, SameSite=Lax (Secure is added when the URL is https)"
 
 # 6 · sign out, then Back: the page must not come back

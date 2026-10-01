@@ -138,6 +138,9 @@ func agentgatewayModel(m v1.Model, a Access, route RouteRef) *unstructured.Unstr
 			},
 		},
 	}}
+	if m.Spec.BaseURL != "" {
+		unstructured.SetNestedField(o.Object, m.Spec.BaseURL, "spec", "baseURL")
+	}
 	o.SetAPIVersion("agentgateway.dev/v1alpha1")
 	o.SetKind("AgentgatewayModel")
 	o.SetName(m.Name)

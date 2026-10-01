@@ -152,3 +152,17 @@ func TestOutputIsDeterministic(t *testing.T) {
 		}
 	}
 }
+
+// A self-hosted, OpenAI-compatible model is reached at its baseURL; others use the provider's endpoint.
+func TestModelBaseURL(t *testing.T) {
+	self := model("llama", "meta/llama-3-8b")
+	self.Spec.Provider, self.Spec.BaseURL = "OpenAI", "http://vllm.models.svc:8000/v1"
+	r := Compile([]v1.Model{self, model("gemma", "google/gemma:free")}, nil, nil, route)
+	got, _, _ := unstructured.NestedString(find(t, r.Objects, "AgentgatewayModel", "llama").Object, "spec", "baseURL")
+	if got != "http://vllm.models.svc:8000/v1" {
+		t.Fatalf("baseURL %q", got)
+	}
+	if _, found, _ := unstructured.NestedString(find(t, r.Objects, "AgentgatewayModel", "gemma").Object, "spec", "baseURL"); found {
+		t.Fatal("a provider model got a baseURL")
+	}
+}

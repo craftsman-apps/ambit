@@ -18,6 +18,22 @@ type ModelSpec struct {
 	// DisplayName is shown in the console.
 	// +optional
 	DisplayName string `json:"displayName,omitempty"`
+	// BaseURL of a self-hosted, OpenAI-compatible server (vLLM, Ollama, LiteLLM ...), with provider
+	// OpenAI, e.g. http://vllm.models.svc:8000/v1. Without it, the provider's own endpoint is used.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^https?://[^/?#\s]+(/[^?#\s]*)?$`
+	BaseURL string `json:"baseURL,omitempty"`
+	// Price of this model, for cost in Usage. Without it, Usage shows tokens only for this model.
+	// +optional
+	Price *ModelPrice `json:"price,omitempty"`
+}
+
+// ModelPrice is what the provider charges, in US dollars per million tokens.
+type ModelPrice struct {
+	// +kubebuilder:validation:Pattern=`^[0-9]{1,6}(\.[0-9]{1,6})?$`
+	InputPerMillionTokens string `json:"inputPerMillionTokens"`
+	// +kubebuilder:validation:Pattern=`^[0-9]{1,6}(\.[0-9]{1,6})?$`
+	OutputPerMillionTokens string `json:"outputPerMillionTokens"`
 }
 
 type SecretRef struct {

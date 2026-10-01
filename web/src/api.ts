@@ -39,7 +39,9 @@ export type ModelView = {
   name: string; displayName: string; model: string; provider: string;
   allowedGroups: string[]; allSignedIn: boolean; ready: string; message: string;
 };
-export type ServerAccess = { name: string; tools?: string[] };
+// One condition on one argument of a tool call (requirement 8); ambit-guard enforces it.
+export type ArgumentRule = { name: string; oneOf?: string[]; notContains?: string[]; max?: string };
+export type ServerAccess = { name: string; tools?: string[]; arguments?: ArgumentRule[] };
 export type RuleView = {
   name: string; groups: string[]; allSignedIn: boolean; models: string[]; servers: ServerAccess[];
   ready: string; reason: string; message: string; gitManaged: boolean; createdBy: string;

@@ -25,6 +25,11 @@ rules:
     resources: [secrets]
     resourceNames: [ambit-clickhouse]
     verbs: [get]
+  # Dependencies page: whether each component of the chart has a ready pod.
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets]
+    resourceNames: [ambit, ambit-dex, ambit-ratelimit, ambit-guard, ambit-otel-collector, ambit-clickhouse]
+    verbs: [get]
   # Catalog screens: everyone signed in reads; admins change access rules (Direct mode).
   - apiGroups: [ambitproject.dev]
     resources: [models, accessrules, servers, serverrequests, connections, budgets]

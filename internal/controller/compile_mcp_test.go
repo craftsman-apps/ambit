@@ -208,3 +208,31 @@ func TestMalformedRemoteURLIsSkipped(t *testing.T) {
 		t.Fatalf("targets %v", targets)
 	}
 }
+
+// Argument limits are enforced by ambit-guard. Without it (protection off), a grant with limits must not
+// become an unlimited grant: it grants nothing, and the rule says why.
+func TestArgumentLimitsWithoutTheGuardGrantNothing(t *testing.T) {
+	limited := toolRule("eng-limited", []string{"eng"}, false, v1.ServerAccess{Name: "time", Tools: []string{"convert_time"},
+		Arguments: []v1.ArgumentRule{{Name: "time", OneOf: []string{"12:00"}}}})
+	plain := toolRule("eng-plain", []string{"eng"}, false, v1.ServerAccess{Name: "time", Tools: []string{"get_current_time"}})
+	servers := []v1.Server{server("time", "stdio")}
+	rules, dropped := WithoutArgumentLimits([]v1.AccessRule{limited, plain})
+	r := Compile(nil, servers, rules, route)
+	ApplyDropped(&r, dropped)
+	e := mcpExpr(t, r)
+	if strings.Contains(e, "convert_time") || !strings.Contains(e, "get_current_time") {
+		t.Fatalf("limited grant leaked or plain grant lost: %s", e)
+	}
+	c := r.RuleConditions["eng-limited"]
+	if c.Status != "False" || c.Reason != "ArgumentLimitsNeedProtection" || !strings.Contains(c.Message, "time") {
+		t.Fatalf("condition %+v", c)
+	}
+	if r.RuleConditions["eng-plain"].Status != "True" {
+		t.Fatalf("plain rule %+v", r.RuleConditions["eng-plain"])
+	}
+	// With the guard, the limited grant compiles like any grant (the guard checks the arguments).
+	r = Compile(nil, servers, []v1.AccessRule{limited, plain}, route)
+	if e := mcpExpr(t, r); !strings.Contains(e, "convert_time") {
+		t.Fatalf("with the guard: %s", e)
+	}
+}

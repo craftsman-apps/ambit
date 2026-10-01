@@ -2,9 +2,13 @@ gateway:
   # Gateway pods. They share budgets (ratelimit + Valkey) and MCP sessions (a session key in a Secret),
   # so any replica can answer any request. Two or more also get a PodDisruptionBudget (minAvailable 1).
   replicas: 2
-  # Gateway container resources; empty keeps agentgateway's defaults (100m CPU, 128Mi requested).
-  # A rolling update starts one extra pod first, so the nodes need room for one more gateway pod.
-  resources: {}
+  # Gateway container resources. A rolling update starts one extra pod first, so the nodes need room for one
+  # more gateway pod. Memory grows with open MCP sessions: about 7 KiB each, dropped after 30 idle minutes
+  # (agentgateway's fixed default). A client that never closes its sessions levels off: at 12 new sessions a
+  # second, about 160Mi. A pod over its limit restarts; clients keep their sessions on the other replicas.
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 512Mi }
   # Listener port of the Ambit Gateway. Also the port of the generated Service.
   port: 8080
   service:
@@ -166,6 +170,15 @@ agentgateway:
   # authorization runs before the gateway reads the requested model.
   agentgatewayModels:
     enabled: true
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 256Mi }
+
+# Default memory for containers in Ambit's namespace that set none themselves: ToolHive's proxy pods (whose
+# resources ToolHive does not expose) and MCP servers. A LimitRange applies it when the pod is created.
+containerDefaults:
+  requests: { memory: 64Mi }
+  limits: { memory: 512Mi }
 
 # Dex, rendered by this chart (templates/dex/). Its config is generated from console, sso and bootstrapAdmin.
 dex:

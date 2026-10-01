@@ -1,0 +1,13 @@
+{{- with .Values.containerDefaults }}
+# Memory for containers that set none (ToolHive proxies, MCP servers): no pod in Ambit's namespace runs
+# without a memory limit (S3).
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: ambit-container-defaults
+spec:
+  limits:
+    - type: Container
+      defaultRequest: {{ toJson .requests }}
+      default: {{ toJson .limits }}
+{{- end }}

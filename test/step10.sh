@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Step 10 acceptance: operations (SRE journeys).
+#   S3 every container in the namespace has a memory limit (chart values, or the LimitRange default).
 #   S1 three gateway replicas: an open MCP session survives losing two pods; budgets hold on every replica.
 #   S2 a rolling update under steady traffic fails no request; budgets still hold afterwards.
 #   S3 a shortened soak (SOAK_SECONDS, default 300): memory of every Ambit component stays flat.
@@ -52,7 +53,12 @@ helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f tes
 for _ in $(seq 1 60); do [[ $(gw_pods | wc -l | tr -d ' ') == 3 ]] && break; sleep 2; done
 [[ $(gw_pods | wc -l | tr -d ' ') == 3 ]] || fail "0 gateway did not scale to 3: $(gw_pods)"
 [[ $(kubectl -n "$NS" get pdb -o jsonpath='{.items[*].spec.minAvailable}') == *1* ]] || fail "0 no PodDisruptionBudget for the gateway"
-pass "0 gateway at 3 replicas with a PodDisruptionBudget (minAvailable 1)"
+nolimit=$(kubectl -n "$NS" get pods --field-selector=status.phase=Running -o json | uv run --no-project python -c '
+import json, sys
+print(" ".join(p["metadata"]["name"] + "/" + c["name"] for p in json.load(sys.stdin)["items"]
+               for c in p["spec"]["containers"] if not c.get("resources", {}).get("limits", {}).get("memory")))')
+[[ -z "$nolimit" ]] || fail "0 containers without a memory limit: $nolimit"
+pass "0 gateway at 3 replicas with a PodDisruptionBudget (minAvailable 1); every container has a memory limit"
 
 # S1 · an open MCP session survives losing two of three gateway pods
 A=$(token alice)

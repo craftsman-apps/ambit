@@ -23,6 +23,7 @@ func main() {
 	rlService := flag.String("ratelimit-service", "", "Service of envoy's ratelimit for Budgets; empty turns budgets off")
 	rlPort := flag.Int64("ratelimit-port", 8081, "gRPC port of the ratelimit service")
 	rlFailure := flag.String("ratelimit-failure-mode", "FailOpen", "FailOpen or FailClosed when the ratelimit service is down")
+	argLimits := flag.Bool("argument-limits", false, "ambit-guard runs and enforces argument limits in access rules")
 	toolsRefresh := flag.Duration("tools-refresh", 10*time.Minute, "how often each running server's tools are read again (changed tools are hidden until approved)")
 	flag.Parse()
 	ctrl.SetLogger(zap.New())
@@ -53,7 +54,7 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&controller.Reconciler{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), ListTools: controller.ListTools, Namespace: ns, Route: controller.RouteRef{Name: *route},
-		RateLimit: controller.RateLimit{Service: *rlService, Port: *rlPort, FailureMode: *rlFailure}, ToolsRefresh: *toolsRefresh}).SetupWithManager(mgr); err != nil {
+		RateLimit: controller.RateLimit{Service: *rlService, Port: *rlPort, FailureMode: *rlFailure}, ToolsRefresh: *toolsRefresh, ArgumentLimits: *argLimits}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "set up controller")
 		os.Exit(1)
 	}

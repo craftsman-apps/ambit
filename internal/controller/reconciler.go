@@ -55,6 +55,8 @@ type Reconciler struct {
 	RateLimit RateLimit
 
 	toolsRead map[types.UID]time.Time // when each Server's tools were last read (single worker, no lock)
+	// ArgumentLimits is true when ambit-guard runs (protection on) and enforces argument limits.
+	ArgumentLimits bool
 }
 
 // How often the tools of a running server are read again by default: servers may add or change tools.
@@ -128,7 +130,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			return reconcile.Result{}, err
 		}
 	}
-	res := Compile(models.Items, servers.Items, rules.Items, r.Route)
+	compiled := rules.Items
+	var dropped map[string][]string
+	if !r.ArgumentLimits {
+		compiled, dropped = WithoutArgumentLimits(rules.Items)
+	}
+	res := Compile(models.Items, servers.Items, compiled, r.Route)
+	ApplyDropped(&res, dropped)
 	var budgets v1.BudgetList
 	if err := r.Live.List(ctx, &budgets, client.InNamespace(r.Namespace)); err != nil {
 		return reconcile.Result{}, err

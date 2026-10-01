@@ -20,6 +20,9 @@ spec:
           command:
             - /ambit-controller
             - --llm-route=ambit-llm
+            {{- if .Values.protection.enabled }}
+            - --argument-limits  # ambit-guard enforces argument limits in access rules
+            {{- end }}
             - --tools-refresh={{ .Values.protection.toolsRefresh }}
             {{- if .Values.limits.enabled }}
             - --ratelimit-service=ambit-ratelimit

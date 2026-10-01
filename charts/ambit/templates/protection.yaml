@@ -11,7 +11,7 @@ kind: Role
 metadata: { name: ambit-guard }
 rules:
   - apiGroups: [ambitproject.dev]
-    resources: [servers]
+    resources: [servers, accessrules]
     verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -84,6 +84,10 @@ spec:
           - remote:
               backendRef: { name: ambit-guard, port: 9090 }
               failureMode: FailClosed
+              # The caller's groups from the verified token, for argument limits in access rules.
+              metadata: { groups: jwt.groups }
+              # The guard needs no credentials.
+              disallowedRequestHeaders: [authorization, cookie, x-ambit-user]
             methods:
               tools/list: Response
               tools/call: Full

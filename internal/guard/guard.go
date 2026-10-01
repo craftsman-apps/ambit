@@ -16,6 +16,7 @@ import (
 
 	"github.com/craftsman-apps/ambit/internal/controller"
 	"github.com/craftsman-apps/ambit/internal/extmcp"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // Pins reports the approved fingerprints of a server's tools and the current ones the controller last
@@ -33,9 +34,14 @@ type Guard struct {
 	extmcp.UnimplementedExtMcpServer
 	Pins   Pins
 	Masker Masker
+	// Rules, when set, enforces argument limits from access rules (requirement 8). The caller's groups
+	// come from the gateway's metadata ("groups", from the verified token), never from the client.
+	Rules Rules
 }
 
-func pass() *extmcp.McpRequestResult { return &extmcp.McpRequestResult{Result: &extmcp.McpRequestResult_Pass{Pass: &extmcp.Pass{}}} }
+func pass() *extmcp.McpRequestResult {
+	return &extmcp.McpRequestResult{Result: &extmcp.McpRequestResult_Pass{Pass: &extmcp.Pass{}}}
+}
 
 func deny(reason string) *extmcp.McpRequestResult {
 	return &extmcp.McpRequestResult{Result: &extmcp.McpRequestResult_Error{Error: &extmcp.AuthorizationError{
@@ -55,27 +61,73 @@ func split(name string, services []string) (server, tool string) {
 	return "", name
 }
 
-// CheckRequest refuses a call to a tool that is not approved in its current form.
+// CheckRequest refuses a call to a tool that is not approved in its current form, or whose arguments
+// break a limit of the caller's access rules.
 func (g *Guard) CheckRequest(ctx context.Context, req *extmcp.McpRequest) (*extmcp.McpRequestResult, error) {
 	if req.Method != "tools/call" || req.McpRequest == nil {
 		return pass(), nil
 	}
 	var p struct {
-		Name string `json:"name"`
+		Name      string         `json:"name"`
+		Arguments map[string]any `json:"arguments"`
 	}
-	if err := json.Unmarshal(req.McpRequest, &p); err != nil {
-		return pass(), nil // the gateway and the server validate the request itself
+	dec := json.NewDecoder(bytes.NewReader(req.McpRequest))
+	dec.UseNumber() // exact numbers for argument limits
+	if err := dec.Decode(&p); err != nil {
+		return deny("the tool call could not be read, so it was not checked"), nil
 	}
+	// For tools/call the gateway sends the one target server and the tool's own (unprefixed) name.
 	server, tool := split(p.Name, req.ServiceNames)
-	approved, current, pinned := g.Pins.Pins(ctx, server)
-	if !pinned {
-		return pass(), nil
+	if len(req.ServiceNames) == 1 {
+		server, tool = req.ServiceNames[0], p.Name
 	}
-	if fp, ok := approved[tool]; !ok || current[tool] != fp {
-		slog.Warn("guard: refused unapproved tool", "server", server, "tool", tool)
-		return deny(fmt.Sprintf("tool %s on %s changed since it was approved; an admin must approve it again", tool, server)), nil
+	if approved, current, pinned := g.Pins.Pins(ctx, server); pinned {
+		if fp, ok := approved[tool]; !ok || current[tool] != fp {
+			slog.Warn("guard: refused unapproved tool", "server", server, "tool", tool)
+			return deny(fmt.Sprintf("tool %s on %s changed since it was approved; an admin must approve it again", tool, server)), nil
+		}
+	}
+	if g.Rules != nil {
+		grants, err := g.Rules.Grants(ctx, server)
+		if err != nil {
+			slog.Error("guard: cannot read access rules; call refused", "server", server, "err", err)
+			return deny("the access rules could not be read, so the call was not checked"), nil
+		}
+		if Limited(grants) {
+			groups, ok := metadataStrings(req.MetadataContext, "groups")
+			if !ok {
+				slog.Error("guard: no groups from the gateway; call refused", "server", server, "tool", tool)
+				return deny("the caller's groups did not reach the guard, so argument limits could not be checked"), nil
+			}
+			if reason := CheckArguments(grants, groups, tool, p.Arguments); reason != "" {
+				slog.Info("guard: refused arguments", "server", server, "tool", tool, "reason", reason)
+				return deny(reason), nil
+			}
+		}
 	}
 	return pass(), nil
+}
+
+// metadataStrings reads a list of strings the gateway put in the metadata context: a list, or a JSON
+// array or single value in a string (as a claim may arrive). ok is false when the key is missing or null.
+func metadataStrings(ctx *structpb.Struct, key string) (out []string, ok bool) {
+	v, found := ctx.GetFields()[key]
+	if !found {
+		return nil, false
+	}
+	switch x := v.GetKind().(type) {
+	case *structpb.Value_ListValue:
+		for _, e := range x.ListValue.Values {
+			out = append(out, e.GetStringValue())
+		}
+		return out, true
+	case *structpb.Value_StringValue:
+		if json.Unmarshal([]byte(x.StringValue), &out) == nil {
+			return out, true
+		}
+		return []string{x.StringValue}, true
+	}
+	return nil, false
 }
 
 func (g *Guard) CheckResponse(ctx context.Context, resp *extmcp.McpResponse) (*extmcp.McpResponseResult, error) {

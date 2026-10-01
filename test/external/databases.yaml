@@ -65,14 +65,19 @@ spec:
         - name: valkey
           image: valkey/valkey:9.1.2@sha256:418652cfb58ef879d4978c33553735d7147016032d5aefaa14c828e611eb9dfd
           env:
-            - name: VK_PASSWORD
+            - name: VK_PASSWORD  # for valkey-cli in the test (REDISCLI_AUTH); the server reads its config file
               valueFrom: { secretKeyRef: { name: ext-passwords, key: valkey } }
-          args: [--port, "0", --tls-port, "6380", --tls-cert-file, /tls/tls.crt, --tls-key-file, /tls/tls.key,
-                 --tls-ca-cert-file, /tls/ca.crt, --tls-auth-clients, "no", --requirepass, $(VK_PASSWORD), --save, ""]
+          # The password is in the config file (from the Secret), not in the process arguments.
+          args: [/etc/valkey/valkey.conf, --port, "0", --tls-port, "6380", --tls-cert-file, /tls/tls.crt, --tls-key-file, /tls/tls.key,
+                 --tls-ca-cert-file, /tls/ca.crt, --tls-auth-clients, "no", --save, ""]
           ports: [{ containerPort: 6380 }]
           readinessProbe: { tcpSocket: { port: 6380 } }
-          volumeMounts: [{ name: tls, mountPath: /tls, readOnly: true }]
-      volumes: [{ name: tls, secret: { secretName: ext-tls, defaultMode: 0440 } }]
+          volumeMounts:
+            - { name: tls, mountPath: /tls, readOnly: true }
+            - { name: conf, mountPath: /etc/valkey, readOnly: true }
+      volumes:
+        - { name: tls, secret: { secretName: ext-tls, defaultMode: 0440 } }
+        - { name: conf, secret: { secretName: ext-passwords, defaultMode: 0440, items: [{ key: valkey.conf, path: valkey.conf }] } }
 ---
 apiVersion: v1
 kind: Service

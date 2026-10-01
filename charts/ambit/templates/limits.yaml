@@ -60,7 +60,7 @@ spec:
             {{- with .Values.limits.valkey.external }}
             {{- if and .address .tls }}
             - { name: REDIS_TLS, value: "true" }
-            {{- if .caSecret }}
+            {{- if include "ambit.valkey.ca" $ }}
             - { name: REDIS_TLS_CACERT, value: /etc/ambit/valkey-ca/ca.crt }
             {{- end }}
             {{- end }}
@@ -85,14 +85,14 @@ spec:
           resources: { requests: { cpu: 20m, memory: 32Mi }, limits: { memory: 128Mi } }
           volumeMounts:
             - { name: config, mountPath: /data/ratelimit/config }
-            {{- if and .Values.limits.valkey.external.address .Values.limits.valkey.external.caSecret }}
+            {{- if include "ambit.valkey.ca" . }}
             - { name: valkey-ca, mountPath: /etc/ambit/valkey-ca, readOnly: true }
             {{- end }}
       volumes:
         - name: config
           configMap: { name: ambit-ratelimit-config, optional: true }
-        {{- if and .Values.limits.valkey.external.address .Values.limits.valkey.external.caSecret }}
-        - { name: valkey-ca, secret: { secretName: {{ .Values.limits.valkey.external.caSecret }}, items: [{ key: ca.crt, path: ca.crt }] } }
+        {{- with include "ambit.valkey.ca" . }}
+        - { name: valkey-ca, secret: { secretName: {{ . }}, items: [{ key: ca.crt, path: ca.crt }] } }
         {{- end }}
 ---
 apiVersion: v1

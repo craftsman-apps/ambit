@@ -168,8 +168,8 @@ func run(ctx context.Context) error {
 	if addr := os.Getenv("AMBIT_CLICKHOUSE_ADDR"); addr != "" {
 		// An external ClickHouse brings its own password (AMBIT_CLICKHOUSE_PASSWORD, from the customer's
 		// Secret); the chart's own gets one the console creates once.
-		pw := os.Getenv("AMBIT_CLICKHOUSE_PASSWORD")
-		if pw == "" {
+		pw, external := os.LookupEnv("AMBIT_CLICKHOUSE_PASSWORD") // set (even empty) only for an external one
+		if !external {
 			var err error
 			if pw, err = console.EnsureClickHousePassword(ctx, kube, ns); err != nil {
 				return err

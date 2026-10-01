@@ -19,3 +19,7 @@ limits.valkey.external). */}}
 {{- define "ambit.valkey.address" -}}
 {{- .Values.limits.valkey.external.address | default "ambit-valkey:6379" -}}
 {{- end -}}
+{{/* A CA is mounted only for an external database reached over TLS (the exporter turns TLS on whenever
+it has a CA file, whatever the endpoint says). */}}
+{{- define "ambit.clickhouse.ca" -}}{{ with .Values.evidence.clickhouse.external }}{{ if and .host .tls .caSecret }}{{ .caSecret }}{{ end }}{{ end }}{{- end -}}
+{{- define "ambit.valkey.ca" -}}{{ with .Values.limits.valkey.external }}{{ if and .address .tls .caSecret }}{{ .caSecret }}{{ end }}{{ end }}{{- end -}}

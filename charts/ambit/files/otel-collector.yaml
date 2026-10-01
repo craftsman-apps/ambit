@@ -5,10 +5,17 @@ receivers:
 exporters:
   clickhouse:
     endpoint: {{ include "ambit.clickhouse.native" . }}
-    database: {{ .Values.evidence.clickhouse.external.database | default "otel" }}
-    username: {{ .Values.evidence.clickhouse.external.user | default "ambit" }}
-    {{- if .Values.evidence.clickhouse.external.caSecret }}
+    {{- with .Values.evidence.clickhouse.external }}
+    {{- if .host }}
+    database: {{ .database | default "otel" }}
+    username: {{ .user | default "ambit" }}
+    {{- if and .tls .caSecret }}
     tls: { ca_file: /etc/ambit/clickhouse-ca/ca.crt }
+    {{- end }}
+    {{- else }}
+    database: otel
+    username: ambit
+    {{- end }}
     {{- end }}
     password: ${env:CLICKHOUSE_PASSWORD}
     logs_table_name: otel_logs

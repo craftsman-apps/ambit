@@ -15,8 +15,10 @@ outcome() { # blocked (the gateway refused on budget) or passed:<code>
     -d '{"model":"google/gemma-4-31b-it:free","max_tokens":4,"messages":[{"role":"user","content":"hi"}]}' "$LLM")
   if [[ "$code" == 429 ]] && grep -qi '^x-ratelimit-remaining: 0' "$W/h" && ! grep -q 'Provider returned error' "$W/llm"; then echo blocked; else echo "passed:$code"; fi
 }
-ch() { kubectl -n "$EXT" exec deploy/clickhouse -- clickhouse-client --user ambit_ext --password "$CH_PW" -q "$1"; }
-vk() { kubectl -n "$EXT" exec deploy/valkey -- valkey-cli --tls --cacert /tls/ca.crt -p 6380 -a "$VK_PW" --no-auth-warning "$@"; }
+# Passwords stay inside the containers (their own environment), never in kubectl's arguments.
+ch() { kubectl -n "$EXT" exec deploy/clickhouse -- sh -c 'clickhouse-client --user ambit_ext --password "$CLICKHOUSE_PASSWORD" -q "$0"' "$1"; }
+vk() { kubectl -n "$EXT" exec deploy/valkey -- sh -c 'REDISCLI_AUTH="$VK_PASSWORD" valkey-cli --tls --cacert /tls/ca.crt -p 6380 "$@"' sh "$@"; }
+bundled_ch() { kubectl -n "$NS" exec ambit-clickhouse-0 -- sh -c 'clickhouse-client --user ambit --password "$CLICKHOUSE_PASSWORD" -q "$0"' "$1"; }
 restore() {
   kubectl -n "$NS" delete "budgets.$G" ext-eng --ignore-not-found >/dev/null 2>&1 || true
   helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --wait --timeout 5m >/dev/null 2>&1 || true
@@ -24,6 +26,21 @@ restore() {
   kubectl delete namespace "$EXT" --ignore-not-found --wait=false >/dev/null 2>&1 || true
 }
 trap 'rc=$?; restore; on_exit $rc' EXIT
+
+# R · the chart's choices, rendered (no cluster change): settings left behind after switching back to the
+#     bundled ClickHouse are ignored, and a CA without TLS never turns TLS on (the collector's exporter
+#     does TLS whenever it has a CA file).
+render() { helm template ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml "$@"; }
+r=$(render --set evidence.clickhouse.external.user=other --set evidence.clickhouse.external.database=other --set evidence.clickhouse.external.caSecret=ext-ca)
+[[ "$r" == *"username: ambit"* && "$r" == *"database: otel"* && "$r" != *ca_file* && "$r" != *clickhouse-ca* && "$r" == *"kind: StatefulSet"* ]] ||
+  fail "R external ClickHouse settings without a host leak into the bundled setup"
+r=$(render --set evidence.clickhouse.external.host=ch.example --set evidence.clickhouse.external.tls=false --set evidence.clickhouse.external.nativePort=9000 \
+  --set evidence.clickhouse.external.httpPort=8123 --set evidence.clickhouse.external.passwordSecret=pw --set evidence.clickhouse.external.caSecret=ca)
+[[ "$r" == *"tcp://ch.example:9000?dial_timeout=10s"* && "$r" != *"secure=true"* && "$r" != *ca_file* && "$r" != *AMBIT_CLICKHOUSE_TLS* && "$r" != *AMBIT_CLICKHOUSE_CA* ]] ||
+  fail "R ClickHouse with tls=false still gets TLS settings"
+r=$(render --set limits.valkey.external.address=vk.example:6379 --set limits.valkey.external.tls=false --set limits.valkey.external.caSecret=ca)
+[[ "$r" == *'"vk.example:6379"'* && "$r" != *REDIS_TLS* && "$r" != *AMBIT_VALKEY_TLS* && "$r" != *valkey-ca* ]] || fail "R Valkey with tls=false still gets TLS settings"
+pass "R rendering: stale external settings are ignored without a host; a CA never turns TLS on by itself"
 
 ensure_llm_setup "$NS"
 kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
@@ -53,7 +70,8 @@ PY
 CH_PW=$(openssl rand -hex 16); VK_PW=$(openssl rand -hex 16)
 kubectl create namespace "$EXT" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 kubectl -n "$EXT" create secret generic ext-tls --from-file="$W/tls.crt" --from-file="$W/tls.key" --from-file="$W/ca.crt" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-kubectl -n "$EXT" create secret generic ext-passwords --from-literal=clickhouse="$CH_PW" --from-literal=valkey="$VK_PW" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n "$EXT" create secret generic ext-passwords --from-literal=clickhouse="$CH_PW" --from-literal=valkey="$VK_PW" \
+  --from-literal=valkey.conf="requirepass $VK_PW" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 kubectl -n "$EXT" apply -f test/external/databases.yaml >/dev/null
 kubectl -n "$EXT" rollout status deploy/clickhouse deploy/valkey --timeout=300s >/dev/null
 kubectl -n "$NS" create secret generic ext-clickhouse --from-literal=password="$CH_PW" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
@@ -105,4 +123,17 @@ used=$(field '[u["used"] for b in d if b["name"]=="ext-eng" for u in b["users"] 
 missing=$(field '[b.get("countsMissing", False) for b in d if b["name"]=="ext-eng"]')
 [[ "$missing" == "[False]" && "$used" != "[]" ]] || fail "2 console could not read the external counters: used=$used missing=$missing"
 pass "2 budget enforced on the external Valkey (TLS, password): alice refused; counter $keys; console shows used $used"
+
+# 3 · back to the bundled databases: the collector writes to the chart's ClickHouse again
+kubectl -n "$NS" delete "budgets.$G" ext-eng --ignore-not-found >/dev/null
+helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --wait --timeout 5m >/dev/null
+kubectl -n "$NS" rollout status statefulset/ambit-clickhouse deploy/ambit-otel-collector deploy/ambit-console --timeout=300s >/dev/null
+since=$(date -u +"%Y-%m-%d %H:%M:%S")
+A=$(token alice); tools "$A"; call time_get_current_time '{"timezone":"UTC"}' >/dev/null
+for _ in $(seq 1 60); do
+  n=$(bundled_ch "SELECT count() FROM otel.otel_logs WHERE Timestamp >= '$since' AND LogAttributes['jwt.email'] = 'alice@acme.test'" 2>/dev/null || echo 0)
+  [[ "$n" -ge 1 ]] && break; sleep 2
+done
+[[ "$n" -ge 1 ]] || fail "3 after switching back, no access log reached the bundled ClickHouse"
+pass "3 switched back: the chart's own ClickHouse and Valkey run again and receive new access logs"
 done_step ext

@@ -47,7 +47,7 @@ spec:
             {{- if .tls }}
             - { name: AMBIT_CLICKHOUSE_TLS, value: "true" }
             {{- end }}
-            {{- if .caSecret }}
+            {{- if include "ambit.clickhouse.ca" $ }}
             - { name: AMBIT_CLICKHOUSE_CA, value: /etc/ambit/clickhouse-ca/ca.crt }
             {{- end }}
             {{- end }}{{ end }}
@@ -58,7 +58,7 @@ spec:
             {{- if .tls }}
             - { name: AMBIT_VALKEY_TLS, value: "true" }
             {{- end }}
-            {{- if .caSecret }}
+            {{- if include "ambit.valkey.ca" $ }}
             - { name: AMBIT_VALKEY_CA, value: /etc/ambit/valkey-ca/ca.crt }
             {{- end }}
             {{- if .passwordSecret }}
@@ -75,10 +75,10 @@ spec:
             - { name: AMBIT_GITHUB_APP_ID, value: {{ required "gitops.github.appID is required" .github.appID | quote }} }
             {{- end }}{{ end }}
           volumeMounts:
-            {{- if and .Values.evidence.enabled .Values.evidence.clickhouse.external.host .Values.evidence.clickhouse.external.caSecret }}
+            {{- if and .Values.evidence.enabled (include "ambit.clickhouse.ca" .) }}
             - { name: clickhouse-ca, mountPath: /etc/ambit/clickhouse-ca, readOnly: true }
             {{- end }}
-            {{- if and .Values.limits.enabled .Values.limits.valkey.external.address .Values.limits.valkey.external.caSecret }}
+            {{- if and .Values.limits.enabled (include "ambit.valkey.ca" .) }}
             - { name: valkey-ca, mountPath: /etc/ambit/valkey-ca, readOnly: true }
             {{- end }}
             {{- if .Values.console.caBundleSecret }}
@@ -97,11 +97,11 @@ spec:
             requests: { cpu: 20m, memory: 32Mi }
             limits: { memory: 128Mi }
       volumes:
-        {{- if and .Values.evidence.enabled .Values.evidence.clickhouse.external.host .Values.evidence.clickhouse.external.caSecret }}
-        - { name: clickhouse-ca, secret: { secretName: {{ .Values.evidence.clickhouse.external.caSecret | quote }}, items: [{ key: ca.crt, path: ca.crt }] } }
+        {{- if and .Values.evidence.enabled (include "ambit.clickhouse.ca" .) }}
+        - { name: clickhouse-ca, secret: { secretName: {{ include "ambit.clickhouse.ca" . | quote }}, items: [{ key: ca.crt, path: ca.crt }] } }
         {{- end }}
-        {{- if and .Values.limits.enabled .Values.limits.valkey.external.address .Values.limits.valkey.external.caSecret }}
-        - { name: valkey-ca, secret: { secretName: {{ .Values.limits.valkey.external.caSecret | quote }}, items: [{ key: ca.crt, path: ca.crt }] } }
+        {{- if and .Values.limits.enabled (include "ambit.valkey.ca" .) }}
+        - { name: valkey-ca, secret: { secretName: {{ include "ambit.valkey.ca" . | quote }}, items: [{ key: ca.crt, path: ca.crt }] } }
         {{- end }}
         {{- with .Values.console.caBundleSecret }}
         - name: extra-ca

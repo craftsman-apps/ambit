@@ -35,12 +35,12 @@ spec:
           resources: {{ toJson .Values.evidence.collector.resources }}
           volumeMounts:
             - { name: config, mountPath: /etc/otel }
-            {{- with .Values.evidence.clickhouse.external.caSecret }}
+            {{- if include "ambit.clickhouse.ca" . }}
             - { name: clickhouse-ca, mountPath: /etc/ambit/clickhouse-ca, readOnly: true }
             {{- end }}
       volumes:
         - { name: config, configMap: { name: ambit-otel-collector } }
-        {{- with .Values.evidence.clickhouse.external.caSecret }}
+        {{- with include "ambit.clickhouse.ca" . }}
         - { name: clickhouse-ca, secret: { secretName: {{ . }}, items: [{ key: ca.crt, path: ca.crt }] } }
         {{- end }}
 ---

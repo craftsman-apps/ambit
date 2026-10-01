@@ -2,6 +2,8 @@ package console
 
 import (
 	"net"
+	"net/http"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -54,5 +56,28 @@ func TestDependenciesReport(t *testing.T) {
 	}
 	if g := got["ambit-guard"].Detail; g == "" {
 		t.Error("a missing Deployment should say why it is unhealthy")
+	}
+}
+
+// Only admins see dependencies (component names, addresses, pod counts).
+func TestDependenciesEndpointIsAdminOnly(t *testing.T) {
+	_, c, auth := serversFixture(t)
+	d := &Dependencies{Client: c, Namespace: testNS, Budgets: &Budgets{Valkey: Valkey{Addr: "127.0.0.1:1"}}}
+	h := NewServer(auth, testSPA, LoginOptions{}, &Catalog{Client: c, Namespace: testNS, Dependencies: d})
+	for _, tc := range []struct {
+		who  *http.Cookie
+		want int
+	}{
+		{nil, http.StatusUnauthorized},
+		{user(auth, "alice@acme.test", RoleViewer), http.StatusForbidden},
+		{user(auth, "sam@acme.test", RoleApprover), http.StatusForbidden},
+	} {
+		if r := do(t, h, "GET", "/api/dependencies", tc.who, nil); r.Code != tc.want || strings.Contains(r.Body.String(), "Valkey") {
+			t.Errorf("%v: %d %s", tc.who, r.Code, r.Body)
+		}
+	}
+	r := do(t, h, "GET", "/api/dependencies", user(auth, "priya@acme.test", RoleAdmin), nil)
+	if r.Code != http.StatusOK || !strings.Contains(r.Body.String(), `"name":"Valkey"`) {
+		t.Fatalf("admin: %d %s", r.Code, r.Body)
 	}
 }

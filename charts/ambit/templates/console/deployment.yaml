@@ -37,7 +37,7 @@ spec:
             {{- if .Values.mcp.enabled }}
             - { name: AMBIT_GRANTS_NAMESPACE, value: {{ .Values.connections.grantsNamespace | default (printf "%s-grants" .Release.Namespace) | quote }} }
             {{- end }}
-            {{- if .Values.protection.enabled }}
+            {{- if and .Values.mcp.enabled .Values.protection.enabled }}
             - { name: AMBIT_PROTECTION, value: "true" }
             {{- end }}
             {{- if .Values.evidence.enabled }}

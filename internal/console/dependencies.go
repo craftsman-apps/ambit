@@ -80,7 +80,7 @@ func (d *Dependencies) checks() []depCheck {
 	if d.Budgets != nil {
 		mode, when := "fail-open", "LLM requests pass without being counted against budgets (limits.failureMode: FailOpen)."
 		if d.RatelimitMode == "FailClosed" {
-			mode, when = "fail-closed", "LLM requests are refused (limits.failureMode: FailClosed)."
+			mode, when = "fail-closed", "While any Budget exists, LLM requests are refused (limits.failureMode: FailClosed)."
 		}
 		v := d.Budgets.Valkey
 		out = append(out,

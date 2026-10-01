@@ -4,6 +4,7 @@
 # Budget objects (ConfigMap ambit-ratelimit-config).
 # ponytail: Valkey without persistence — a restart resets today's counts; add a PVC or managed Valkey
 # (ElastiCache) when budgets must survive restarts.
+{{- if not .Values.limits.valkey.external.address }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -33,6 +34,7 @@ metadata: { name: ambit-valkey }
 spec:
   selector: { app.kubernetes.io/name: ambit-valkey }
   ports: [{ name: redis, port: 6379 }]
+{{- end }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -54,7 +56,19 @@ spec:
           command: [/bin/ratelimit]
           env:
             - { name: REDIS_SOCKET_TYPE, value: tcp }
-            - { name: REDIS_URL, value: "ambit-valkey:6379" }
+            - { name: REDIS_URL, value: {{ include "ambit.valkey.address" . | quote }} }
+            {{- with .Values.limits.valkey.external }}
+            {{- if and .address .tls }}
+            - { name: REDIS_TLS, value: "true" }
+            {{- if include "ambit.valkey.ca" $ }}
+            - { name: REDIS_TLS_CACERT, value: /etc/ambit/valkey-ca/ca.crt }
+            {{- end }}
+            {{- end }}
+            {{- if and .address .passwordSecret }}
+            - name: REDIS_AUTH
+              valueFrom: { secretKeyRef: { name: {{ .passwordSecret }}, key: password } }
+            {{- end }}
+            {{- end }}
             - { name: USE_STATSD, value: "false" }
             - { name: LOG_LEVEL, value: info }
             - { name: GRPC_PORT, value: "8081" }
@@ -69,10 +83,17 @@ spec:
           readinessProbe: { httpGet: { path: /healthcheck, port: http } }
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
           resources: { requests: { cpu: 20m, memory: 32Mi }, limits: { memory: 128Mi } }
-          volumeMounts: [{ name: config, mountPath: /data/ratelimit/config }]
+          volumeMounts:
+            - { name: config, mountPath: /data/ratelimit/config }
+            {{- if include "ambit.valkey.ca" . }}
+            - { name: valkey-ca, mountPath: /etc/ambit/valkey-ca, readOnly: true }
+            {{- end }}
       volumes:
         - name: config
           configMap: { name: ambit-ratelimit-config, optional: true }
+        {{- with include "ambit.valkey.ca" . }}
+        - { name: valkey-ca, secret: { secretName: {{ . }}, items: [{ key: ca.crt, path: ca.crt }] } }
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -92,6 +113,7 @@ spec:
     - from: [{ podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit } } }]
       ports: [{ port: 8081 }]
     - ports: [{ port: 8080 }]  # health checks
+{{- if not .Values.limits.valkey.external.address }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -105,4 +127,5 @@ spec:
         - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-ratelimit } }
         - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-console } }
       ports: [{ port: 6379 }]
+{{- end }}
 {{- end }}

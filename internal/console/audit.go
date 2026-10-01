@@ -2,6 +2,7 @@ package console
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -20,10 +21,30 @@ type Audit struct {
 	DB *sql.DB
 }
 
-// OpenAudit connects over ClickHouse's HTTP interface.
-func OpenAudit(addr, password string) *Audit {
-	return &Audit{DB: clickhouse.OpenDB(&clickhouse.Options{Protocol: clickhouse.HTTP, Addr: []string{addr},
-		Auth: clickhouse.Auth{Database: "otel", Username: "ambit", Password: password}, DialTimeout: 5 * time.Second})}
+// ClickHouse is where the audit store is: the chart's own (plain HTTP inside the cluster) or an external
+// one such as ClickHouse Cloud (HTTPS, often on port 8443).
+type ClickHouse struct {
+	Addr     string // host:port of the HTTP or HTTPS interface
+	User     string // default "ambit"
+	Database string // default "otel"
+	Password string
+	TLS      *tls.Config // nil: plain HTTP
+}
+
+func clickhouseOptions(c ClickHouse) *clickhouse.Options {
+	if c.User == "" {
+		c.User = "ambit"
+	}
+	if c.Database == "" {
+		c.Database = "otel"
+	}
+	return &clickhouse.Options{Protocol: clickhouse.HTTP, Addr: []string{c.Addr}, TLS: c.TLS,
+		Auth: clickhouse.Auth{Database: c.Database, Username: c.User, Password: c.Password}, DialTimeout: 5 * time.Second}
+}
+
+// OpenAudit connects over ClickHouse's HTTP interface (HTTPS when c.TLS is set).
+func OpenAudit(c ClickHouse) *Audit {
+	return &Audit{DB: clickhouse.OpenDB(clickhouseOptions(c))}
 }
 
 // Call is one gateway request as the auditor sees it.

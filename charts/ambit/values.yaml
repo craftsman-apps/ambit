@@ -89,6 +89,20 @@ evidence:
     image: clickhouse/clickhouse-server:26.3.36.6@sha256:5b10577fc3382ee6b26c4916a1d915d90543ade66e85fc29e3a78c4ce08daeb3
     storage: 10Gi
     resources: { requests: { cpu: 100m, memory: 512Mi }, limits: { memory: 1536Mi } }
+    # Use an existing ClickHouse (e.g. ClickHouse Cloud) instead of installing one: set host. The collector
+    # writes over the native protocol, the console reads over HTTP(S). The user needs CREATE TABLE in the
+    # database once (the collector creates otel_logs with the retention above), then INSERT and SELECT.
+    external:
+      host: ""
+      tls: true
+      nativePort: 9440   # 9000 without TLS
+      httpPort: 8443     # 8123 without TLS
+      database: otel
+      user: ambit
+      # Secret in the release namespace with key "password". Required with host.
+      passwordSecret: ""
+      # Optional Secret with key "ca.crt" (PEM) for a ClickHouse behind a private CA.
+      caSecret: ""
   collector:
     image: otel/opentelemetry-collector-contrib:0.161.0@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
     resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 256Mi } }
@@ -116,6 +130,15 @@ limits:
     image: envoyproxy/ratelimit:63c7e9cc@sha256:f10186a0c94f339326015a955bf1ad5f694addef220b86d0f84e330fcc0f4939
   valkey:
     image: valkey/valkey:9.1.2@sha256:418652cfb58ef879d4978c33553735d7147016032d5aefaa14c828e611eb9dfd
+    # Use an existing Valkey or Redis (e.g. Amazon ElastiCache) instead of installing one: set address
+    # (host:port). Every gateway replica's budget counts go there, so budgets survive restarts.
+    external:
+      address: ""
+      tls: true
+      # Optional Secret with key "password" (Valkey AUTH).
+      passwordSecret: ""
+      # Optional Secret with key "ca.crt" (PEM) for a private CA.
+      caSecret: ""
 
 connections:
   # Namespace for users' SaaS grants and the Connections' client secrets. Empty: <release namespace>-grants.

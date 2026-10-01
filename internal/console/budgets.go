@@ -3,6 +3,7 @@ package console
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -27,7 +28,7 @@ import (
 type Budgets struct {
 	Client    client.Client
 	Namespace string
-	Valkey    string // host:port
+	Valkey    Valkey
 	Now       func() time.Time
 }
 
@@ -82,7 +83,7 @@ func (b *Budgets) views(ctx context.Context) ([]BudgetView, error) {
 			v.Ready, v.Message = string(c.Status), c.Message
 		}
 		groupKey := budgetDomain + "_group_" + bu.Spec.Group
-		counts, err := valkeyCounts(ctx, b.Valkey, groupKey+"_*"+suffix)
+		counts, err := b.Valkey.counts(ctx, groupKey+"_*"+suffix)
 		if err != nil {
 			v.CountsMissing = true
 			out = append(out, v)
@@ -93,7 +94,7 @@ func (b *Budgets) views(ctx context.Context) ([]BudgetView, error) {
 				v.Users = append(v.Users, UserUse{Email: strings.TrimSuffix(strings.TrimPrefix(k, groupKey+"_user_"), suffix), Used: n})
 			}
 		}
-		if n, err := valkeyGet(ctx, b.Valkey, groupKey+suffix); err == nil { // the group key has no "_user_" part
+		if n, err := b.Valkey.get(ctx, groupKey+suffix); err == nil { // the group key has no "_user_" part
 			v.GroupUsed = n
 		}
 		sort.Slice(v.Users, func(i, j int) bool {
@@ -108,25 +109,50 @@ func (b *Budgets) views(ctx context.Context) ([]BudgetView, error) {
 	return out, nil
 }
 
-// --- a minimal RESP client: GET and SCAN only, which is all the budget view needs ---
+// --- a minimal RESP client: AUTH, GET and SCAN only, which is all the budget view needs ---
 
-func respDo(ctx context.Context, addr string, args ...string) (any, error) {
+// Valkey is the ratelimit counter store: the chart's own, or an external one (e.g. ElastiCache) with
+// TLS and a password.
+type Valkey struct {
+	Addr     string // host:port
+	Password string // sent with AUTH before each command; empty sends none
+	TLS      *tls.Config
+}
+
+// do opens a connection, authenticates, and sends one command.
+func (v Valkey) do(ctx context.Context, args ...string) (any, error) {
 	d := net.Dialer{Timeout: 2 * time.Second}
-	conn, err := d.DialContext(ctx, "tcp", addr)
+	var conn net.Conn
+	var err error
+	if v.TLS != nil {
+		conn, err = (&tls.Dialer{NetDialer: &d, Config: v.TLS}).DialContext(ctx, "tcp", v.Addr)
+	} else {
+		conn, err = d.DialContext(ctx, "tcp", v.Addr)
+	}
 	if err != nil {
 		return nil, err
 	}
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	r := bufio.NewReader(conn)
+	if v.Password != "" {
+		if _, err := respSend(conn, r, "AUTH", v.Password); err != nil {
+			return nil, fmt.Errorf("valkey AUTH: %w", err)
+		}
+	}
+	return respSend(conn, r, args...)
+}
+
+func respSend(w io.Writer, r *bufio.Reader, args ...string) (any, error) {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "*%d\r\n", len(args))
 	for _, a := range args {
 		fmt.Fprintf(&sb, "$%d\r\n%s\r\n", len(a), a)
 	}
-	if _, err := io.WriteString(conn, sb.String()); err != nil {
+	if _, err := io.WriteString(w, sb.String()); err != nil {
 		return nil, err
 	}
-	return respRead(bufio.NewReader(conn))
+	return respRead(r)
 }
 
 func respRead(r *bufio.Reader) (any, error) {
@@ -173,21 +199,21 @@ func respRead(r *bufio.Reader) (any, error) {
 	return nil, fmt.Errorf("resp: unexpected %q", line)
 }
 
-func valkeyGet(ctx context.Context, addr, key string) (int64, error) {
-	v, err := respDo(ctx, addr, "GET", key)
+func (vk Valkey) get(ctx context.Context, key string) (int64, error) {
+	v, err := vk.do(ctx, "GET", key)
 	if err != nil || v == nil {
 		return 0, err
 	}
 	return strconv.ParseInt(fmt.Sprint(v), 10, 64)
 }
 
-// valkeyCounts returns every counter matching pattern. ponytail: SCAN plus one GET per key; fine for
+// counts returns every counter matching pattern. ponytail: SCAN plus one GET per key; fine for
 // hundreds of users per group, use MGET or a Lua script beyond.
-func valkeyCounts(ctx context.Context, addr, pattern string) (map[string]int64, error) {
+func (vk Valkey) counts(ctx context.Context, pattern string) (map[string]int64, error) {
 	out := map[string]int64{}
 	cursor := "0"
 	for {
-		v, err := respDo(ctx, addr, "SCAN", cursor, "MATCH", pattern, "COUNT", "500")
+		v, err := vk.do(ctx, "SCAN", cursor, "MATCH", pattern, "COUNT", "500")
 		if err != nil {
 			return nil, err
 		}
@@ -197,7 +223,7 @@ func valkeyCounts(ctx context.Context, addr, pattern string) (map[string]int64, 
 		}
 		keys, _ := arr[1].([]any)
 		for _, k := range keys {
-			n, err := valkeyGet(ctx, addr, fmt.Sprint(k))
+			n, err := vk.get(ctx, fmt.Sprint(k))
 			if err != nil {
 				return nil, err
 			}

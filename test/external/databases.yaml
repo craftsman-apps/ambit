@@ -1,0 +1,87 @@
+# Test only: a ClickHouse and a Valkey outside the Ambit release, as a customer's managed databases would
+# be — TLS from a private CA (Secret ext-tls), passwords (Secret ext-passwords), a non-default ClickHouse
+# user and database. Created by test/stepext.sh in namespace ambit-ext.
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: clickhouse-tls }
+data:
+  tls.xml: |
+    <clickhouse>
+      <https_port>8443</https_port>
+      <tcp_port_secure>9440</tcp_port_secure>
+      <openSSL><server>
+        <certificateFile>/etc/ch-tls/tls.crt</certificateFile>
+        <privateKeyFile>/etc/ch-tls/tls.key</privateKeyFile>
+        <verificationMode>none</verificationMode>
+        <loadDefaultCAFile>false</loadDefaultCAFile>
+        <disableProtocols>sslv2,sslv3,tlsv1,tlsv1_1</disableProtocols>
+      </server></openSSL>
+    </clickhouse>
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: clickhouse }
+spec:
+  selector: { matchLabels: { app: clickhouse } }
+  template:
+    metadata: { labels: { app: clickhouse } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 101, runAsGroup: 101, fsGroup: 101 }
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:26.3.36.6@sha256:5b10577fc3382ee6b26c4916a1d915d90543ade66e85fc29e3a78c4ce08daeb3
+          env:
+            - { name: CLICKHOUSE_DB, value: audit }
+            - { name: CLICKHOUSE_USER, value: ambit_ext }
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom: { secretKeyRef: { name: ext-passwords, key: clickhouse } }
+          ports: [{ containerPort: 8443 }, { containerPort: 9440 }]
+          readinessProbe: { tcpSocket: { port: 9440 } }
+          resources: { requests: { memory: 256Mi }, limits: { memory: 1536Mi } }
+          volumeMounts:
+            - { name: tls, mountPath: /etc/ch-tls, readOnly: true }
+            - { name: conf, mountPath: /etc/clickhouse-server/config.d/tls.xml, subPath: tls.xml }
+      volumes:
+        - { name: tls, secret: { secretName: ext-tls, defaultMode: 0440 } }
+        - { name: conf, configMap: { name: clickhouse-tls } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: clickhouse }
+spec:
+  selector: { app: clickhouse }
+  ports: [{ name: https, port: 8443 }, { name: native-tls, port: 9440 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: valkey }
+spec:
+  selector: { matchLabels: { app: valkey } }
+  template:
+    metadata: { labels: { app: valkey } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 999, runAsGroup: 999, fsGroup: 999 }
+      containers:
+        - name: valkey
+          image: valkey/valkey:9.1.2@sha256:418652cfb58ef879d4978c33553735d7147016032d5aefaa14c828e611eb9dfd
+          env:
+            - name: VK_PASSWORD  # for valkey-cli in the test (REDISCLI_AUTH); the server reads its config file
+              valueFrom: { secretKeyRef: { name: ext-passwords, key: valkey } }
+          # The password is in the config file (from the Secret), not in the process arguments.
+          args: [/etc/valkey/valkey.conf, --port, "0", --tls-port, "6380", --tls-cert-file, /tls/tls.crt, --tls-key-file, /tls/tls.key,
+                 --tls-ca-cert-file, /tls/ca.crt, --tls-auth-clients, "no", --save, ""]
+          ports: [{ containerPort: 6380 }]
+          readinessProbe: { tcpSocket: { port: 6380 } }
+          volumeMounts:
+            - { name: tls, mountPath: /tls, readOnly: true }
+            - { name: conf, mountPath: /etc/valkey, readOnly: true }
+      volumes:
+        - { name: tls, secret: { secretName: ext-tls, defaultMode: 0440 } }
+        - { name: conf, secret: { secretName: ext-passwords, defaultMode: 0440, items: [{ key: valkey.conf, path: valkey.conf }] } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: valkey }
+spec:
+  selector: { app: valkey }
+  ports: [{ name: tls, port: 6380 }]

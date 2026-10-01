@@ -4,9 +4,19 @@ receivers:
       grpc: { endpoint: 0.0.0.0:4317 }
 exporters:
   clickhouse:
-    endpoint: tcp://ambit-clickhouse:9000?dial_timeout=10s
+    endpoint: {{ include "ambit.clickhouse.native" . }}
+    {{- with .Values.evidence.clickhouse.external }}
+    {{- if .host }}
+    database: {{ .database | default "otel" }}
+    username: {{ .user | default "ambit" }}
+    {{- if and .tls .caSecret }}
+    tls: { ca_file: /etc/ambit/clickhouse-ca/ca.crt }
+    {{- end }}
+    {{- else }}
     database: otel
     username: ambit
+    {{- end }}
+    {{- end }}
     password: ${env:CLICKHOUSE_PASSWORD}
     logs_table_name: otel_logs
     ttl: {{ .Values.evidence.retention }}

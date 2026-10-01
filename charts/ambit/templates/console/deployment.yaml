@@ -37,6 +37,9 @@ spec:
             {{- if .Values.mcp.enabled }}
             - { name: AMBIT_GRANTS_NAMESPACE, value: {{ .Values.connections.grantsNamespace | default (printf "%s-grants" .Release.Namespace) | quote }} }
             {{- end }}
+            {{- if .Values.protection.enabled }}
+            - { name: AMBIT_PROTECTION, value: "true" }
+            {{- end }}
             {{- if .Values.evidence.enabled }}
             - { name: AMBIT_CLICKHOUSE_ADDR, value: {{ include "ambit.clickhouse.http" . | quote }} }
             {{- with .Values.evidence.clickhouse.external }}{{ if .host }}
@@ -54,6 +57,7 @@ spec:
             {{- end }}
             {{- if .Values.limits.enabled }}
             - { name: AMBIT_VALKEY_ADDR, value: {{ include "ambit.valkey.address" . | quote }} }
+            - { name: AMBIT_RATELIMIT_FAILURE_MODE, value: {{ .Values.limits.failureMode | quote }} }
             {{- with .Values.limits.valkey.external }}{{ if .address }}
             {{- if .tls }}
             - { name: AMBIT_VALKEY_TLS, value: "true" }

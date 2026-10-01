@@ -65,17 +65,11 @@ function AppForm({ callbackURL, onDone }: { callbackURL: string; onDone: () => v
 
 // Apps (journey U1): the SaaS apps users connect with their own accounts. Admins add them here;
 // an MCP server reached by URL then names the app, and each call carries the caller's own token.
-// Providers whose revocation endpoint refuses a standard RFC 7009 request (docs/offboarding.md).
-const nonStandard: Record<string, string> = {
-  "api.github.com": "GitHub", "slack.com": "Slack", "api.notion.com": "Notion", "api.hubapi.com": "HubSpot",
-};
-
+// Offboarding revokes at the provider in its own format (GitHub, Slack, Notion, HubSpot, or RFC 7009);
+// see docs/offboarding.md. HubSpot can revoke only the renewal token.
 function Revokes({ url }: { url?: string }) {
   if (!url) return <span className="text-warn">No: offboarding only forgets the grant</span>;
-  let host = "";
-  try { host = new URL(url).hostname; } catch { /* the server validated it; show "Yes" */ }
-  const provider = nonStandard[host];
-  if (provider) return <span className="text-warn">No: {provider} refuses a standard revocation request, so offboarding only forgets the grant</span>;
+  if (url.includes("/oauth/v1/refresh-tokens")) return <>Yes, within 30 minutes (HubSpot ends only the renewal token)</>;
   return <>Yes</>;
 }
 

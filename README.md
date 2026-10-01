@@ -56,8 +56,9 @@ Create the Secrets in the release namespace first, for example
 
 ## Offboarding
 
-When someone leaves, Ambit revokes their stored SaaS grants at each provider that accepts a standard
-(RFC 7009) revocation request. Some providers do not; [docs/offboarding.md](docs/offboarding.md) lists which.
+When someone leaves, Ambit revokes their stored SaaS grants at each provider: in the standard (RFC 7009)
+format, or in GitHub's, Slack's, Notion's or HubSpot's own. Microsoft and Atlassian offer no way to revoke;
+[docs/offboarding.md](docs/offboarding.md) lists each provider and the URL to enter.
 
 ## Layout
 

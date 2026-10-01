@@ -4,3 +4,5 @@ gitops:
   repository: craftsman-apps/ambit-config-test
   branch: main
   path: ambit
+  argocd:
+    application: argocd/ambit-config

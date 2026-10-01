@@ -63,6 +63,8 @@ export type RequestView = {
 export type PullRequest = { number: number; url: string; title: string; branch: string; author?: string };
 // A change in GitOps mode answers 202 with the pull request it opened; nothing changed yet.
 export type Proposed = { pullRequest: PullRequest };
+export type ChangeStep = { name: string; state: "done" | "waiting" | "failed" | "skipped"; detail?: string };
+export type Change = PullRequest & { merged: boolean; closed: boolean; verb: string; kind: string; name: string; steps: ChangeStep[] };
 export const isProposed = (v: unknown): v is Proposed => !!v && typeof v === "object" && "pullRequest" in v;
 export type Config = { mode: "direct" | "gitops"; repository?: string; branch?: string };
 export type RequestInput = { serverName: string; displayName: string; image: string; url: string; connection: string; transport: string; reason: string };
@@ -71,7 +73,7 @@ export type MyAccess = {
   servers: { server: string; allTools: boolean; tools: string[]; rules: string[] }[];
 };
 
-async function getJSON<T>(url: string): Promise<T> {
+export async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(url, { credentials: "same-origin" });
   if (r.status === 401) { window.location.assign("/login"); throw new Error("signed out"); }
   if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `${url} returned ${r.status}`);

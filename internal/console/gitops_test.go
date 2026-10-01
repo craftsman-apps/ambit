@@ -18,6 +18,10 @@ func (r *recordingRepo) OpenPullRequest(_ context.Context, branch, title, _ stri
 	return PullRequest{Number: len(r.files), URL: "https://github.com/acme/config/pull/" + itoa(len(r.files)), Title: title, Branch: branch}, nil
 }
 func (r *recordingRepo) OpenPullRequests(context.Context) ([]PullRequest, error) { return nil, nil }
+func (r *recordingRepo) PullRequestState(context.Context, int) (PullRequestState, error) {
+	return PullRequestState{}, nil
+}
+func (r *recordingRepo) Contains(context.Context, string, string) (bool, error) { return false, nil }
 
 func gitopsFixture(t *testing.T) (http.Handler, client.Client, *Auth, *recordingRepo) {
 	t.Helper()

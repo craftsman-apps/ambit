@@ -250,6 +250,43 @@ func (g *GitHub) OpenPullRequests(ctx context.Context) ([]PullRequest, error) {
 	return out, nil
 }
 
+// PullRequestState reads one pull request of the configuration repository.
+func (g *GitHub) PullRequestState(ctx context.Context, number int) (PullRequestState, error) {
+	var p struct {
+		Number         int       `json:"number"`
+		HTMLURL        string    `json:"html_url"`
+		Title          string    `json:"title"`
+		State          string    `json:"state"`
+		Merged         bool      `json:"merged"`
+		MergeCommitSHA string    `json:"merge_commit_sha"`
+		MergedAt       time.Time `json:"merged_at"`
+		Head           struct {
+			Ref string `json:"ref"`
+		} `json:"head"`
+		Body string `json:"body"`
+	}
+	if err := g.api(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/pulls/%d", g.Repository, number), nil, &p); err != nil {
+		return PullRequestState{}, err
+	}
+	st := PullRequestState{PullRequest: PullRequest{Number: p.Number, URL: p.HTMLURL, Title: p.Title, Branch: p.Head.Ref, Author: requestedBy(p.Body)},
+		Merged: p.Merged, Closed: p.State == "closed" && !p.Merged}
+	if p.Merged {
+		st.MergeCommit, st.MergedAt = p.MergeCommitSHA, p.MergedAt
+	}
+	return st, nil
+}
+
+// Contains compares commit with revision: "identical" or "ahead" means revision includes commit.
+func (g *GitHub) Contains(ctx context.Context, commit, revision string) (bool, error) {
+	var c struct {
+		Status string `json:"status"`
+	}
+	if err := g.api(ctx, http.MethodGet, "/repos/"+g.Repository+"/compare/"+url.PathEscape(commit)+"..."+url.PathEscape(revision), nil, &c); err != nil {
+		return false, err
+	}
+	return c.Status == "identical" || c.Status == "ahead", nil
+}
+
 const branchPrefix = "ambit/"
 
 // requestedBy reads the "Requested by" line the console writes into every pull request body.

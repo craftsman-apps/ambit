@@ -73,6 +73,9 @@ spec:
             - { name: AMBIT_GITOPS_PATH, value: {{ .path | quote }} }
             - { name: AMBIT_GITHUB_API, value: {{ .github.apiURL | quote }} }
             - { name: AMBIT_GITHUB_APP_ID, value: {{ required "gitops.github.appID is required" .github.appID | quote }} }
+            {{- if .argocd.application }}
+            - { name: AMBIT_ARGOCD_APPLICATION, value: {{ .argocd.application | quote }} }
+            {{- end }}
             {{- end }}{{ end }}
           volumeMounts:
             {{- if and .Values.evidence.enabled (include "ambit.clickhouse.ca" .) }}

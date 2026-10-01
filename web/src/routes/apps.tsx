@@ -65,6 +65,20 @@ function AppForm({ callbackURL, onDone }: { callbackURL: string; onDone: () => v
 
 // Apps (journey U1): the SaaS apps users connect with their own accounts. Admins add them here;
 // an MCP server reached by URL then names the app, and each call carries the caller's own token.
+// Providers whose revocation endpoint refuses a standard RFC 7009 request (docs/offboarding.md).
+const nonStandard: Record<string, string> = {
+  "api.github.com": "GitHub", "slack.com": "Slack", "api.notion.com": "Notion", "api.hubapi.com": "HubSpot",
+};
+
+function Revokes({ url }: { url?: string }) {
+  if (!url) return <span className="text-warn">No: offboarding only forgets the grant</span>;
+  let host = "";
+  try { host = new URL(url).hostname; } catch { /* the server validated it; show "Yes" */ }
+  const provider = nonStandard[host];
+  if (provider) return <span className="text-warn">No: {provider} refuses a standard revocation request, so offboarding only forgets the grant</span>;
+  return <>Yes</>;
+}
+
 export function AppsPage() {
   const q = useQuery({ queryKey: ["apps"], queryFn: () => get<{ callbackURL: string; apps: AppView[] }>("/api/apps") });
   const qc = useQueryClient();
@@ -101,7 +115,7 @@ export function AppsPage() {
                   <td className="px-3 py-2.5"><span className="font-medium">{a.displayName}</span><span className="block font-mono text-[12px] text-muted">{a.name}</span></td>
                   <td className="break-all px-3 py-2.5 font-mono text-[12px]">{a.tokenURL}</td>
                   <td className="px-3 py-2.5 font-mono text-[12px]">{a.scopes.join(" ") || <span className="font-sans text-muted">none</span>}</td>
-                  <td className="px-3 py-2.5">{a.revocationURL ? "Yes" : <span className="text-warn">No: offboarding only forgets the grant</span>}</td>
+                  <td className="px-3 py-2.5"><Revokes url={a.revocationURL} /></td>
                   <td className="px-3 py-2.5"><Status ready={a.ready} text={a.ready === "Unknown" ? "Added" : undefined} />{a.message && <span className="block text-[12px] text-muted">{a.message}</span>}</td>
                   <td className="px-3 py-2.5 text-right">
                     {a.gitManaged && !gitops ? <span className="text-[12px] text-muted">Managed in Git</span>

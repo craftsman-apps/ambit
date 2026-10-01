@@ -174,12 +174,14 @@ test("Apps page adds an app for per-user sign-in and removes it", async ({ page 
   await page.getByLabel("Name users see").fill("UI Test App");
   await page.getByLabel("Authorization URL").fill("https://auth.example.com/authorize");
   await page.getByLabel("Token URL").fill("https://auth.example.com/token");
+  await page.getByLabel(/Revocation URL/).fill("https://api.github.com/applications/ui-client/grant");
   await page.getByLabel("Client ID").fill("ui-client");
   await page.getByLabel("Client secret").fill("ui-secret-not-shown");
   await page.getByRole("button", { name: "Add app" }).click();
   const row = page.getByTestId(`app-${name}`);
   await expect(row.getByText("UI Test App")).toBeVisible();
   await expect(page.getByText("ui-secret-not-shown")).toHaveCount(0);
+  await expect(row.getByText("No: GitHub refuses a standard revocation request, so offboarding only forgets the grant")).toBeVisible();
   await row.getByRole("button", { name: "Remove" }).click();
   await row.getByRole("button", { name: "Remove app" }).click();
   await expect(row).toHaveCount(0);

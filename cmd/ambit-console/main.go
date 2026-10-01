@@ -19,9 +19,9 @@ import (
 	"github.com/dexidp/dex/api/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -166,15 +166,30 @@ func run(ctx context.Context) error {
 	}
 	var audit *console.Audit
 	if addr := os.Getenv("AMBIT_CLICKHOUSE_ADDR"); addr != "" {
-		pw, err := console.EnsureClickHousePassword(ctx, kube, ns)
-		if err != nil {
-			return err
+		// An external ClickHouse brings its own password (AMBIT_CLICKHOUSE_PASSWORD, from the customer's
+		// Secret); the chart's own gets one the console creates once.
+		pw := os.Getenv("AMBIT_CLICKHOUSE_PASSWORD")
+		if pw == "" {
+			var err error
+			if pw, err = console.EnsureClickHousePassword(ctx, kube, ns); err != nil {
+				return err
+			}
 		}
-		audit = console.OpenAudit(addr, pw)
+		tlsc, err := console.TLSConfig(os.Getenv("AMBIT_CLICKHOUSE_TLS") == "true", os.Getenv("AMBIT_CLICKHOUSE_CA"))
+		if err != nil {
+			return fmt.Errorf("ClickHouse TLS: %w", err)
+		}
+		audit = console.OpenAudit(console.ClickHouse{Addr: addr, User: os.Getenv("AMBIT_CLICKHOUSE_USER"),
+			Database: os.Getenv("AMBIT_CLICKHOUSE_DATABASE"), Password: pw, TLS: tlsc})
 	}
 	var budgets *console.Budgets
 	if addr := os.Getenv("AMBIT_VALKEY_ADDR"); addr != "" {
-		budgets = &console.Budgets{Client: objects, Namespace: ns, Valkey: addr}
+		tlsc, err := console.TLSConfig(os.Getenv("AMBIT_VALKEY_TLS") == "true", os.Getenv("AMBIT_VALKEY_CA"))
+		if err != nil {
+			return fmt.Errorf("Valkey TLS: %w", err)
+		}
+		budgets = &console.Budgets{Client: objects, Namespace: ns,
+			Valkey: console.Valkey{Addr: addr, Password: os.Getenv("AMBIT_VALKEY_PASSWORD"), TLS: tlsc}}
 	}
 	var scim *console.SCIM
 	if conns != nil {

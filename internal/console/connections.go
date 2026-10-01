@@ -2,8 +2,8 @@ package console
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -227,15 +227,20 @@ func (c *Connections) Revoke(ctx context.Context, g *Grant) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		tok := g.RefreshToken
-		hint := "refresh_token"
-		if tok == "" {
-			tok, hint = g.AccessToken, "access_token"
+		// Formats that send the access token need a current one: renew an expired token first. If renewal
+		// fails, the old token is sent and the provider's refusal is reported.
+		if revokesAccessToken(conn.Spec.RevocationURL) && g.RefreshToken != "" && !g.Expiry.IsZero() && !c.now().Before(g.Expiry) {
+			c.mu.Lock()
+			_, renewed, rerr := c.refresh(ctx, g)
+			c.mu.Unlock()
+			if rerr == nil && renewed != nil && renewed.State == grantConnectedState {
+				g = renewed
+			}
 		}
-		form := url.Values{"token": {tok}, "token_type_hint": {hint}}
-		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, conn.Spec.RevocationURL, strings.NewReader(form.Encode()))
-		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(url.QueryEscape(cfg.ClientID)+":"+url.QueryEscape(cfg.ClientSecret))))
+		req, check, err := revocationRequest(ctx, conn.Spec.RevocationURL, cfg.ClientID, cfg.ClientSecret, g)
+		if err != nil {
+			return false, fmt.Errorf("revoke at %s: %w", conn.Spec.RevocationURL, err)
+		}
 		hc := c.HTTP
 		if hc == nil {
 			hc = &http.Client{Timeout: 10 * time.Second}
@@ -244,9 +249,10 @@ func (c *Connections) Revoke(ctx context.Context, g *Grant) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("revoke at %s: %w", conn.Spec.RevocationURL, err)
 		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return false, fmt.Errorf("revoke at %s: HTTP %d", conn.Spec.RevocationURL, resp.StatusCode)
+		if err := check(resp.StatusCode, body); err != nil {
+			return false, fmt.Errorf("revoke at %s: %w", conn.Spec.RevocationURL, err)
 		}
 		revoked = true
 	}

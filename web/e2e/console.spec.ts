@@ -188,7 +188,7 @@ test("Apps page adds an app for per-user sign-in and removes it", async ({ page 
   const row = page.getByTestId(`app-${name}`);
   await expect(row.getByText("UI Test App")).toBeVisible();
   await expect(page.getByText("ui-secret-not-shown")).toHaveCount(0);
-  await expect(row.getByText("No: GitHub refuses a standard revocation request, so offboarding only forgets the grant")).toBeVisible();
+  await expect(row.getByRole("cell", { name: "Yes", exact: true })).toBeVisible();
   await row.getByRole("button", { name: "Remove" }).click();
   await row.getByRole("button", { name: "Remove app" }).click();
   await expect(row).toHaveCount(0);

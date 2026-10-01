@@ -63,6 +63,21 @@ func newFakeSaaS(t *testing.T) *fakeSaaS {
 		f.revoked = append(f.revoked, r.PostForm.Get("token"))
 		f.mu.Unlock()
 	})
+	// GitHub's format: DELETE /applications/{client_id}/grant, app credentials, the access token in JSON.
+	mux.HandleFunc("DELETE /applications/{client}/grant", func(w http.ResponseWriter, r *http.Request) {
+		var in struct {
+			AccessToken string `json:"access_token"`
+		}
+		json.NewDecoder(r.Body).Decode(&in)
+		if u, p, ok := r.BasicAuth(); !ok || u != "ambit" || p != "conn-secret" || r.PathValue("client") != "ambit" {
+			http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+			return
+		}
+		f.mu.Lock()
+		f.revoked = append(f.revoked, in.AccessToken)
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
@@ -223,5 +238,39 @@ func TestDisconnectRevokesAtTheProvider(t *testing.T) {
 	}
 	if g, _ := conns.Store.Get(t.Context(), "alice@acme.test", "jira"); g != nil {
 		t.Fatal("grant kept after revocation")
+	}
+}
+
+// A provider format that sends the access token gets a current one: an expired grant is renewed first.
+func TestRevokeRenewsAnExpiredAccessTokenFirst(t *testing.T) {
+	saas := newFakeSaaS(t)
+	conns, c := connFixture(t, saas)
+	connect(t, conns, testAuthOnly(), "alice@acme.test", "alice")
+	var conn v1.Connection
+	_ = c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "jira"}, &conn)
+	conn.Spec.RevocationURL = saas.srv.URL + "/applications/{client_id}/grant"
+	if err := c.Update(t.Context(), &conn); err != nil {
+		t.Fatal(err)
+	}
+	g, _ := conns.Store.Get(t.Context(), "alice@acme.test", "jira")
+	g.Expiry = time.Now().Add(-time.Hour)
+	_ = conns.Store.Put(t.Context(), g)
+
+	revoked, err := conns.Revoke(t.Context(), g)
+	if err != nil || !revoked || len(saas.revoked) != 1 || saas.revoked[0] != "renewed-alice" {
+		t.Fatalf("revoke: %v %v %v", revoked, err, saas.revoked)
+	}
+	if g, _ := conns.Store.Get(t.Context(), "alice@acme.test", "jira"); g != nil {
+		t.Fatal("grant kept after revocation")
+	}
+	// A refusal is reported, and the grant is kept (nothing was revoked).
+	connect(t, conns, testAuthOnly(), "bob@acme.test", "bob")
+	_ = c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "jira"}, &conn)
+	conn.Spec.RevocationURL = saas.srv.URL + "/applications/x/grant"
+	conn.Spec.ClientID = "not-ambit"
+	_ = c.Update(t.Context(), &conn)
+	g, _ = conns.Store.Get(t.Context(), "bob@acme.test", "jira")
+	if revoked, err := conns.Revoke(t.Context(), g); revoked || err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+		t.Fatalf("refused revocation: %v %v", revoked, err)
 	}
 }

@@ -261,12 +261,18 @@ func (g *GitHub) PullRequestState(ctx context.Context, number int) (PullRequestS
 		MergeCommitSHA string    `json:"merge_commit_sha"`
 		MergedAt       time.Time `json:"merged_at"`
 		Head           struct {
-			Ref string `json:"ref"`
+			Ref  string `json:"ref"`
+			Repo struct {
+				FullName string `json:"full_name"`
+			} `json:"repo"`
 		} `json:"head"`
 		Body string `json:"body"`
 	}
 	if err := g.api(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/pulls/%d", g.Repository, number), nil, &p); err != nil {
 		return PullRequestState{}, err
+	}
+	if !strings.EqualFold(p.Head.Repo.FullName, g.Repository) { // the console never opens one from a fork
+		p.Head.Ref = ""
 	}
 	st := PullRequestState{PullRequest: PullRequest{Number: p.Number, URL: p.HTMLURL, Title: p.Title, Branch: p.Head.Ref, Author: requestedBy(p.Body)},
 		Merged: p.Merged, Closed: p.State == "closed" && !p.Merged}

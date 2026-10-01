@@ -90,8 +90,10 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 	case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/pulls/9"):
 		reply(200, map[string]any{"number": 9, "html_url": "u9", "title": "Ambit: update access rule eng-time", "state": "closed", "merged": true,
-			"merge_commit_sha": "abc1234def", "merged_at": "2026-10-01T06:00:00Z", "head": map[string]string{"ref": "ambit/update-accessrule-eng-time-1"},
+			"merge_commit_sha": "abc1234def", "merged_at": "2026-10-01T06:00:00Z", "head": map[string]any{"ref": "ambit/update-accessrule-eng-time-1", "repo": map[string]string{"full_name": "craftsman-apps/ambit-config-test"}},
 			"body": "Requested by priya@acme.test in the Ambit console."})
+	case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/pulls/11"): // from a fork, with a console-like branch
+		reply(200, map[string]any{"number": 11, "state": "open", "head": map[string]any{"ref": "ambit/update-accessrule-eng-time-1", "repo": map[string]string{"full_name": "someone/ambit-config-test"}}})
 	case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/pulls/10"):
 		reply(200, map[string]any{"number": 10, "state": "closed", "merged": false, "merge_commit_sha": "tmp999", "head": map[string]string{"ref": "ambit/x"}})
 	case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/compare/abc1234def...later"):
@@ -207,6 +209,9 @@ func TestPullRequestStateAndContains(t *testing.T) {
 	// A closed, unmerged pull request has a test-merge commit; it must not count as merged.
 	if st, err := gh.PullRequestState(t.Context(), 10); err != nil || st.Merged || !st.Closed || st.MergeCommit != "" {
 		t.Fatalf("closed pull request: %+v %v", st, err)
+	}
+	if st, err := gh.PullRequestState(t.Context(), 11); err != nil || st.Branch != "" {
+		t.Fatalf("a fork's pull request must not look like the console's: %+v %v", st, err)
 	}
 	if in, err := gh.Contains(t.Context(), "abc1234def", "later"); err != nil || !in {
 		t.Errorf("later revision: %v %v", in, err)

@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/controller"
@@ -31,6 +32,7 @@ type Catalog struct {
 	// ArgoApplication (namespace/name) is the Argo CD Application that syncs the repository; the change
 	// timeline reads its sync status. Empty skips that step.
 	ArgoApplication string
+	containsCache   sync.Map // "commit...revision" pairs known to be contained
 	// PublicURL and Connectors let the Connect SSO page build the callback URL and refuse IDs in use.
 	PublicURL  string
 	Connectors []Connector

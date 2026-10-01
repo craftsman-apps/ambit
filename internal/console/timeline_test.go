@@ -36,6 +36,13 @@ func argoApp(status, revision string) *unstructured.Unstructured {
 	return u
 }
 
+func argoMulti(revisions ...any) *unstructured.Unstructured {
+	u := argoApp("Synced", "")
+	_ = unstructured.SetNestedSlice(u.Object, revisions, "status", "sync", "revisions")
+	unstructured.RemoveNestedField(u.Object, "status", "sync", "revision")
+	return u
+}
+
 func TestChangeTimeline(t *testing.T) {
 	branch := "ambit/update-accessrule-eng-time-1759300000"
 	open := PullRequestState{PullRequest: PullRequest{Number: 12, Branch: branch}}
@@ -60,7 +67,9 @@ func TestChangeTimeline(t *testing.T) {
 		{"synced, controller not yet", merged, argoApp("Synced", "merge1"), rule(2, 1, "True"), "", []string{"done", "done", "done", "waiting"}, "the controller has not checked this version yet"},
 		{"synced at a later commit, ready", merged, argoApp("Synced", "main2"), rule(2, 2, "True"), "", []string{"done", "done", "done", "done"}, "server time is not running"},
 		{"synced, not ready", merged, argoApp("Synced", "merge1"), rule(2, 2, "False"), "", []string{"done", "done", "done", "failed"}, "server time is not running"},
-		{"no Argo CD configured", merged, nil, rule(2, 2, "True"), "", []string{"done", "done", "skipped", "done"}, "server time is not running"},
+		{"no Argo CD configured", merged, nil, rule(2, 2, "True"), "", []string{"done", "done", "skipped", "skipped"}, "unknown without Argo CD: the cluster may still have the old version"},
+		{"synced, controller still starting the server", merged, argoApp("Synced", "merge1"), rule(2, 2, "Unknown"), "", []string{"done", "done", "done", "waiting"}, "server time is not running"},
+		{"multi-source Application", merged, argoMulti("main0", "merge1"), rule(2, 2, "True"), "", []string{"done", "done", "done", "done"}, "server time is not running"},
 		{"delete applied", merged, argoApp("Synced", "merge1"), nil, "delete", []string{"done", "done", "done", "done"}, "removed"},
 		{"delete not yet applied", merged, argoApp("Synced", "merge1"), rule(1, 1, "True"), "delete", []string{"done", "done", "done", "waiting"}, "still in the cluster"},
 	}

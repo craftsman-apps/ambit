@@ -5,15 +5,18 @@ const mark: Record<ChangeStep["state"], string> = { done: "✓", waiting: "…",
 const tone: Record<ChangeStep["state"], string> = { done: "text-ok", waiting: "text-muted", failed: "text-bad", skipped: "text-muted" };
 
 // Shown after a change in GitOps mode: the change waits for review in Git, then Argo CD applies it.
-// The timeline is read every 5 seconds until the change is applied or the pull request is closed.
+// The timeline is read every 10 seconds until the change is applied or the pull request is closed.
 export function PullRequestNotice({ pr, repository, onDone }: { pr: PullRequest; repository?: string; onDone?: () => void }) {
   const q = useQuery({
     queryKey: ["change", pr.number],
     queryFn: () => getJSON<Change>(`/api/changes/${pr.number}`),
+    // Stops when the pull request is closed unmerged or the last step is settled; a failed Applied step can
+    // still recover (a server that starts late), so it is read again, less often.
     refetchInterval: (query) => {
-      const steps = query.state.data?.steps ?? [];
-      const finished = steps.some((s) => s.state === "failed") || (steps.length === 4 && steps[3].state === "done");
-      return finished ? false : 5000;
+      const d = query.state.data;
+      const last = d?.steps.at(-1);
+      if (d?.closed || (d?.steps.length === 4 && (last?.state === "done" || last?.state === "skipped"))) return false;
+      return last?.state === "failed" ? 30_000 : 10_000;
     },
   });
   const steps = q.data?.steps;

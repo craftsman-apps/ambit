@@ -87,8 +87,12 @@ func (c *Catalog) timeline(ctx context.Context, number int) (Change, error) {
 
 	sync := c.synced(ctx, st.MergeCommit)
 	ch.Steps = append(ch.Steps, sync)
-	if sync.State == "waiting" { // the cluster still has the old version; its status says nothing yet
+	switch sync.State { // until Argo CD has synced the merge, the cluster's status describes the old version
+	case "waiting":
 		ch.Steps = append(ch.Steps, Step{Name: "Applied", State: "waiting", Detail: "waiting for Argo CD"})
+		return ch, nil
+	case "skipped":
+		ch.Steps = append(ch.Steps, Step{Name: "Applied", State: "skipped", Detail: "unknown without Argo CD: the cluster may still have the old version"})
 		return ch, nil
 	}
 	ch.Steps = append(ch.Steps, c.applied(ctx, verb, kind, name))
@@ -114,22 +118,39 @@ func (c *Catalog) synced(ctx context.Context, commit string) Step {
 	}
 	status, _, _ := unstructured.NestedString(app.Object, "status", "sync", "status")
 	revision, _, _ := unstructured.NestedString(app.Object, "status", "sync", "revision")
-	if status != "Synced" || revision == "" {
+	revisions, _, _ := unstructured.NestedStringSlice(app.Object, "status", "sync", "revisions") // multi-source
+	if revision != "" {
+		revisions = []string{revision}
+	}
+	if status != "Synced" || len(revisions) == 0 {
 		s.State, s.Detail = "waiting", "Argo CD application is "+strings.ToLower(orDefault(status, "unknown"))
 		return s
 	}
+	for _, rev := range revisions { // a revision of another source's repository does not compare: skip it
+		if c.contains(ctx, commit, rev) {
+			s.State, s.Detail = "done", shortSHA(rev)
+			return s
+		}
+	}
+	s.State, s.Detail = "waiting", "synced at "+shortSHA(revisions[0])+", which does not include the change yet"
+	return s
+}
+
+// contains asks GitHub once per commit and revision pair: the answer never changes once true.
+func (c *Catalog) contains(ctx context.Context, commit, revision string) bool {
+	key := commit + "..." + revision
+	if _, ok := c.containsCache.Load(key); ok {
+		return true
+	}
 	in, err := c.GitOps.Repo.Contains(ctx, commit, revision)
 	if err != nil {
-		slog.Error("compare revisions", "commit", commit, "revision", revision, "err", err)
-		s.State, s.Detail = "waiting", "cannot compare "+shortSHA(commit)+" with "+shortSHA(revision)
-		return s
+		slog.Warn("compare revisions", "commit", commit, "revision", revision, "err", err)
+		return false
 	}
-	if !in {
-		s.State, s.Detail = "waiting", "synced at "+shortSHA(revision)+", which does not include the change yet"
-		return s
+	if in {
+		c.containsCache.Store(key, true)
 	}
-	s.State, s.Detail = "done", shortSHA(revision)
-	return s
+	return in
 }
 
 func orDefault(s, def string) string {
@@ -164,14 +185,20 @@ func (c *Catalog) applied(ctx context.Context, verb, kind, name string) Step {
 		s.State, s.Detail = "waiting", "cannot read "+kind+" "+name
 		return s
 	}
+	if kind == "connection" { // no controller reports on Connections: Argo CD applying it is the change
+		s.State, s.Detail = "done", "in the cluster"
+		return s
+	}
 	ready := meta.FindStatusCondition(conditionsOf(obj), "Ready")
 	switch {
 	case ready == nil || ready.ObservedGeneration != obj.GetGeneration():
 		s.State, s.Detail = "waiting", "the controller has not checked this version yet"
-	case ready.Status == "False":
+	case ready.Status == metav1.ConditionTrue:
+		s.State, s.Detail = "done", orDefault(ready.Message, "ready")
+	case ready.Status == metav1.ConditionFalse:
 		s.State, s.Detail = "failed", ready.Message
 	default:
-		s.State, s.Detail = "done", orDefault(ready.Message, "ready")
+		s.State, s.Detail = "waiting", orDefault(ready.Message, "not ready yet")
 	}
 	return s
 }
@@ -181,8 +208,6 @@ func conditionsOf(obj client.Object) []metav1.Condition {
 	case *v1.AccessRule:
 		return o.Status.Conditions
 	case *v1.Budget:
-		return o.Status.Conditions
-	case *v1.Connection:
 		return o.Status.Conditions
 	case *v1.Server:
 		return o.Status.Conditions

@@ -62,7 +62,7 @@ for a in jwt.email jwt.groups route protocol; do [[ " $llm " == *" $a "* ]] || m
 [[ " $mcp " == *" http.status "* || " $mcp " == *" http.response.status_code "* ]] || missing+=("MCP:http.status|http.response.status_code")
 (( ${#missing[@]} == 0 )) || fail "C3 agentgateway access log lacks attributes Ambit reads: ${missing[*]}"
 status_name=$([[ " $mcp " == *" http.response.status_code "* ]] && echo http.response.status_code || echo http.status)
-tokens=$([[ " $llm " == *" gen_ai.usage.input_tokens "* ]] && echo "present" || echo "absent (risk 13)")
+tokens=$([[ " $llm " == *" gen_ai.usage.input_tokens "* ]] && echo "present" || echo "absent (see C14)")
 pass "C3 access log has every attribute Ambit reads; status as $status_name; LLM token counts $tokens"
 
 # C4 · ClickHouse keeps audit records for the retention the chart sets (one year by default).
@@ -152,6 +152,29 @@ groups=$(uv run --no-project python -c "import json;print(json.load(open('$W/api
 pass "C12 groups claim reaches the console through Dex ($groups)"
 
 # C13 · with Argo CD installed: Ambit's health check is still registered for Ambit objects.
+# C14 · agentgateway parses LLM requests on Ambit's route: a call to the mock model is logged with its model and
+#       token counts (the Usage page's cost depends on them; a route that falls back to passthrough loses them),
+#       other paths are refused, and a client's X-Ambit-User header never reaches a model.
+ensure_llm_setup "$NS"
+since=$(date -u -v-3S +"%Y-%m-%d %H:%M:%S" 2>/dev/null || date -u -d '3 seconds ago' +"%Y-%m-%d %H:%M:%S")
+code=$(command curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(token mira)" -H 'Content-Type: application/json' \
+  -d '{"model":"mock/echo","messages":[{"role":"user","content":"contract"}]}' http://llm.localtest.me:8080/v1/chat/completions)
+[[ "$code" == 200 ]] || fail "C14 mock model call answered $code"
+for _ in $(seq 1 30); do
+  rec=$(ch "SELECT concat(LogAttributes['gen_ai.request.model'], ' ', LogAttributes['gen_ai.usage.input_tokens'], ' ', LogAttributes['gen_ai.usage.output_tokens']) FROM otel.otel_logs WHERE Timestamp >= '$since' AND LogAttributes['protocol'] = 'llm' AND LogAttributes['jwt.email'] = 'mira@acme.test' ORDER BY Timestamp DESC LIMIT 1" 2>/dev/null || true)
+  [[ -n "$rec" ]] && break; sleep 2
+done
+read -r model tin tout <<<"$rec"
+[[ "$model" == mock/echo && "${tin:-0}" -gt 0 && "${tout:-0}" -gt 0 ]] || fail "C14 agentgateway did not parse the LLM request (model, input, output tokens: '${rec:-no record}')"
+code=$(command curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(token mira)" -H 'Content-Type: application/json' \
+  -d '{"model":"mock/echo","messages":[{"role":"user","content":"contract"}]}' http://llm.localtest.me:8080/chat/completions)
+[[ "$code" == 403 ]] || fail "C14 a path the gateway does not parse was answered $code (it would pass through uncounted)"
+# The token broker trusts X-Ambit-User from gateway pods, so the gateway must never pass a client's own to a model.
+answer=$(command curl -s -H "Authorization: Bearer $(token mira)" -H 'X-Ambit-User: victim@acme.test' -H 'Content-Type: application/json' \
+  -d '{"model":"mock/echo","messages":[{"role":"user","content":"contract"}]}' http://llm.localtest.me:8080/v1/chat/completions)
+[[ "$answer" == *pong* && "$answer" != *victim* ]] || fail "C14 the model received the client's X-Ambit-User header: ${answer:0:200}"
+pass "C14 LLM requests parsed: model $model, $tin input and $tout output tokens logged; an unparsed path is refused (403); a client's X-Ambit-User does not reach the model"
+
 if kubectl get namespace argocd >/dev/null 2>&1; then
   cm=$(kubectl -n argocd get configmap argocd-cm -o json | uv run --no-project python -c 'import json,sys;print(" ".join(k for k in json.load(sys.stdin)["data"] if "ambitproject.dev" in k))')
   [[ "$cm" == *Server* && "$cm" == *AccessRule* ]] || fail "C13 Argo CD has no Ambit health check: '$cm'"

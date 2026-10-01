@@ -55,6 +55,12 @@ spec:
           spec:
             description: 'ModelSpec is one entry in the model catalog: a model clients may request through the gateway.'
             properties:
+              baseURL:
+                description: 'BaseURL of a self-hosted, OpenAI-compatible server (vLLM, Ollama, LiteLLM ...), with provider
+
+                  OpenAI, e.g. http://vllm.models.svc:8000/v1. Without it, the provider''s own endpoint is used.'
+                pattern: ^https?://[^/?#\s]+(/[^?#\s]*)?$
+                type: string
               credentialsRef:
                 description: 'CredentialsRef names a Secret in this namespace with the provider key in its "Authorization" entry.
 
@@ -78,6 +84,19 @@ spec:
                 description: Model is the exact name clients send in the request, e.g. "google/gemma-4-31b-it:free".
                 minLength: 1
                 type: string
+              price:
+                description: Price of this model, for cost in Usage. Without it, Usage shows tokens only for this model.
+                properties:
+                  inputPerMillionTokens:
+                    pattern: ^[0-9]{1,6}(\.[0-9]{1,6})?$
+                    type: string
+                  outputPerMillionTokens:
+                    pattern: ^[0-9]{1,6}(\.[0-9]{1,6})?$
+                    type: string
+                required:
+                - inputPerMillionTokens
+                - outputPerMillionTokens
+                type: object
               provider:
                 description: Provider serving the model. Values follow agentgateway's AgentgatewayModel providers.
                 enum:

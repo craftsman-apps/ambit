@@ -92,6 +92,10 @@ ensure_llm_setup() {
     kubectl -n "$ns" create secret generic ambit-llm-openrouter --from-literal=Authorization=no-key --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   fi
   kubectl -n "$ns" apply -f test/llm/objects.yaml >/dev/null
+  # A fake OpenAI-compatible model with a price (test/llm/mock.yaml), for token counts and cost.
+  kubectl -n "$ns" create secret generic ambit-llm-mock --from-literal=Authorization=not-used --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+  kubectl -n "$ns" apply -f test/llm/mock.yaml >/dev/null
+  kubectl -n "$ns" rollout status deploy/mock-llm --timeout=180s >/dev/null
   kubectl -n "$ns" wait models.ambitproject.dev --all --for=condition=Ready --timeout=120s >/dev/null
 }
 me_field() { uv run --no-project python -c "import json,sys;v=json.load(open('$W/me')).get('$1');print(json.dumps(v))"; }

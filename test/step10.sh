@@ -13,6 +13,10 @@ source test/lib.sh
 G=ambitproject.dev
 LLM=http://llm.localtest.me:8080/v1/chat/completions
 SOAK_SECONDS=${SOAK_SECONDS:-300}
+# First memory sample after this many seconds. The soak's MCP sessions are never closed, like a careless
+# client; the gateway drops them after 30 idle minutes, so a 24-hour soak samples from 3600 s on:
+#   SOAK_SECONDS=86400 SOAK_WARMUP=3600 test/step10.sh
+SOAK_WARMUP=${SOAK_WARMUP:-45}
 gw_pods() { kubectl -n "$NS" get pods -l gateway.networking.k8s.io/gateway-name=ambit --field-selector=status.phase=Running -o name; }
 outcome() { # blocked (the gateway refused on budget) or passed:<code>
   local code; code=$(command curl -s -D "$W/h" -o "$W/llm" -w '%{http_code}' --max-time 60 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
@@ -117,8 +121,8 @@ mem >/dev/null
     command curl -s -o /dev/null -X DELETE -H "Authorization: Bearer $TOK" -H "Mcp-Session-Id: $SID" "$MCP" || true
   done ) &
 load=$!
-sleep 45; base=$(mem)
-sleep $((SOAK_SECONDS - 60)); final=$(mem)
+sleep "$SOAK_WARMUP"; base=$(mem)
+sleep $((SOAK_SECONDS - SOAK_WARMUP - 15)); final=$(mem)
 wait $load
 verdict=$(uv run --no-project python - "$base" "$final" <<'PY'
 import sys
@@ -138,7 +142,7 @@ PY
 )
 growth=${verdict%% *}
 uv run --no-project python -c "import sys; sys.exit(0 if float(sys.argv[1]) < 0.5 else 1)" "$growth" || fail "S3 memory grew by ${growth} (over 50% and 16 MiB): ${verdict#* }"
-pass "S3 ${SOAK_SECONDS}s soak under steady MCP traffic: worst growth ${growth} (limit 0.50): ${verdict#* }"
+pass "S3 ${SOAK_SECONDS}s soak under steady MCP traffic (sessions never closed), measured from ${SOAK_WARMUP}s: worst growth ${growth} (limit 0.50): ${verdict#* }"
 
 # S5 · rotate the gateway's session key (agentgateway keeps it in a Secret): new sessions work at once;
 #      sessions opened before the rotation are recorded as the finding (the key encrypts session IDs).

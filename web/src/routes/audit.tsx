@@ -5,7 +5,7 @@ import { Shell, Status } from "@/components/shell";
 import { csvRow } from "@/lib/csv";
 
 type Call = { time: string; email: string; route: string; method: string; server: string; tool: string; model: string; status: string; error: string; inputTokens: number; outputTokens: number };
-type Usage = { day: string; group: string; requests: number; inputTokens: number; outputTokens: number };
+type Usage = { day: string; group: string; requests: number; inputTokens: number; outputTokens: number; cost?: number; unpricedModels?: string[] };
 
 async function get<T>(url: string): Promise<T> {
   const r = await fetch(url, { credentials: "same-origin" });
@@ -116,29 +116,37 @@ export function UsagePage() {
   const res = useQuery({ queryKey: ["usage"], queryFn: () => get<{ usage: Usage[] }>("/api/usage") });
   const usage = res.data?.usage ?? [];
   const tokens = usage.some((u) => u.inputTokens || u.outputTokens);
+  const costs = usage.some((u) => u.cost !== undefined);
+  const unpriced = [...new Set(usage.flatMap((u) => u.unpricedModels ?? []))];
+  // Small amounts keep two significant digits ($0.000048), not a misleading $0.00.
+  const usd = (n: number) => n >= 0.01 || n === 0
+    ? n.toLocaleString("en-US", { style: "currency", currency: "USD" })
+    : n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumSignificantDigits: 2 });
   return (
     <Shell crumb="Evidence / Usage">
       <section className="max-w-4xl space-y-4 p-5">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Usage</h1>
-          <p className="text-muted">LLM requests per group per day (UTC), last 30 days. Someone in two groups counts toward both.</p>
-          {!tokens && <p className="text-[12.5px] text-muted">Token counts appear here once the gateway reports them: agentgateway v1.5.0 does not log tokens for model routes yet. Request counts are exact.</p>}
+          <p className="text-muted">LLM requests, tokens and cost per group per day (UTC), last 30 days. Someone in two groups counts toward both. Cost comes from each model's price.</p>
+          {res.data && !tokens && <p className="text-[12.5px] text-muted">No token counts in this period: no LLM request was answered yet.</p>}
+          {unpriced.length > 0 && <p className="text-[12.5px] text-warn">No price set for {unpriced.join(", ")}: their tokens are counted but not in the cost. Set a price on the Model.</p>}
         </div>
         {res.isLoading && <p className="text-muted">Loading…</p>}
         {res.isError && <p className="text-bad" role="alert">{res.error.message}</p>}
         {res.data && (
           <table className="w-full border-collapse text-[13px]">
             <thead><tr className="border-b border-line"><th className={th}>Day</th><th className={th}>Group</th><th className={th}>Requests</th>
-              {tokens && <><th className={th}>Input tokens</th><th className={th}>Output tokens</th></>}</tr></thead>
+              {tokens && <><th className={th}>Input tokens</th><th className={th}>Output tokens</th></>}{costs && <th className={th}>Cost (USD)</th>}</tr></thead>
             <tbody>
               {usage.map((u) => (
                 <tr key={u.day + u.group} className="border-b border-line-soft">
                   <td className="px-3 py-2 font-mono">{u.day}</td><td className="px-3 py-2">{u.group}</td>
                   <td className="px-3 py-2 tabular-nums">{u.requests}</td>
-                  {tokens && <><td className="px-3 py-2 tabular-nums">{u.inputTokens}</td><td className="px-3 py-2 tabular-nums">{u.outputTokens}</td></>}
+                  {tokens && <><td className="px-3 py-2 tabular-nums">{u.inputTokens.toLocaleString()}</td><td className="px-3 py-2 tabular-nums">{u.outputTokens.toLocaleString()}</td></>}
+                  {costs && <td className="px-3 py-2 tabular-nums">{u.cost !== undefined ? usd(u.cost) : <span className="text-muted">–</span>}</td>}
                 </tr>
               ))}
-              {usage.length === 0 && <tr><td colSpan={5} className="px-3 py-6 text-muted">No LLM requests in the last 30 days.</td></tr>}
+              {usage.length === 0 && <tr><td colSpan={6} className="px-3 py-6 text-muted">No LLM requests in the last 30 days.</td></tr>}
             </tbody>
           </table>
         )}

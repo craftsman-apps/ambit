@@ -181,6 +181,19 @@ func run(ctx context.Context) error {
 		}
 		audit = console.OpenAudit(console.ClickHouse{Addr: addr, User: os.Getenv("AMBIT_CLICKHOUSE_USER"),
 			Database: os.Getenv("AMBIT_CLICKHOUSE_DATABASE"), Password: pw, TLS: tlsc})
+		audit.Prices = func(ctx context.Context) map[string]v1.ModelPrice { // by the model name clients send
+			var l v1.ModelList
+			if objects.List(ctx, &l, client.InNamespace(ns)) != nil {
+				return nil
+			}
+			out := map[string]v1.ModelPrice{}
+			for _, m := range l.Items {
+				if m.Spec.Price != nil {
+					out[m.Spec.Model] = *m.Spec.Price
+				}
+			}
+			return out
+		}
 	}
 	var budgets *console.Budgets
 	if addr := os.Getenv("AMBIT_VALKEY_ADDR"); addr != "" {

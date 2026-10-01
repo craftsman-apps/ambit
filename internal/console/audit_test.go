@@ -1,6 +1,7 @@
 package console
 
 import (
+	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -57,5 +58,31 @@ func TestAuditStoreFailureNamesClickHouse(t *testing.T) {
 func TestCallsSQLReadsBothStatusNames(t *testing.T) {
 	if !strings.Contains(callsSQL, "LogAttributes['http.status']") || !strings.Contains(callsSQL, "LogAttributes['http.response.status_code']") || strings.Contains(callsSQL, "{status}") {
 		t.Fatal(callsSQL)
+	}
+}
+
+// Usage totals per group and day, with cost from each model's price; tokens of models without a price
+// are counted but named, so the cost is never silently low.
+func TestUsageCost(t *testing.T) {
+	rows := []usageRow{
+		{Day: "2026-10-01", Group: "eng", Model: "gpt-small", Requests: 10, In: 1_000_000, Out: 500_000},
+		{Day: "2026-10-01", Group: "eng", Model: "llama-local", Requests: 5, In: 2000, Out: 100},
+		{Day: "2026-10-01", Group: "eng", Model: "", Requests: 2}, // refused before a model was read
+		{Day: "2026-10-01", Group: "ml", Model: "llama-local", Requests: 1, In: 10, Out: 10},
+	}
+	prices := map[string]v1.ModelPrice{"gpt-small": {InputPerMillionTokens: "0.15", OutputPerMillionTokens: "0.6"}}
+	got := aggregateUsage(rows, prices)
+	if len(got) != 2 {
+		t.Fatalf("%+v", got)
+	}
+	eng := got[0]
+	if eng.Group != "eng" || eng.Requests != 17 || eng.InputTokens != 1_002_000 || eng.OutputTokens != 500_100 {
+		t.Fatalf("eng %+v", eng)
+	}
+	if eng.Cost == nil || *eng.Cost < 0.4499 || *eng.Cost > 0.4501 || len(eng.UnpricedModels) != 1 || eng.UnpricedModels[0] != "llama-local" {
+		t.Fatalf("eng cost %+v %v", eng.Cost, eng.UnpricedModels)
+	}
+	if ml := got[1]; ml.Cost != nil || len(ml.UnpricedModels) != 1 {
+		t.Fatalf("ml %+v", ml)
 	}
 }

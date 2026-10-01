@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 )
 
 // Audit answers from the gateway's access logs in ClickHouse (journey A5: "every call Alice made in
@@ -19,6 +21,8 @@ import (
 // server-side query parameter, never as SQL text.
 type Audit struct {
 	DB *sql.DB
+	// Prices returns each model's price by the name clients send (from Model objects); nil means none.
+	Prices func(ctx context.Context) map[string]v1.ModelPrice
 }
 
 // ClickHouse is where the audit store is: the chart's own (plain HTTP inside the cluster) or an external
@@ -129,30 +133,39 @@ func arrayLiteral(items []string) string {
 	return "[" + strings.Join(q, ",") + "]"
 }
 
-// GroupUsage is LLM requests and tokens per group per day; a user in two groups counts toward both.
-// ponytail: agentgateway v1.5.0 does not log the model or token counts for requests routed to an
-// AgentgatewayModel, so tokens read 0 until it does; request counts are exact.
+// GroupUsage is LLM requests, tokens and cost per group per day; a user in two groups counts toward both.
+// Cost comes from each Model's price; tokens of models without a price are counted and named.
 type GroupUsage struct {
-	Day          string `json:"day"`
-	Group        string `json:"group"`
-	Requests     uint64 `json:"requests"`
-	InputTokens  int64  `json:"inputTokens"`
-	OutputTokens int64  `json:"outputTokens"`
+	Day            string   `json:"day"`
+	Group          string   `json:"group"`
+	Requests       uint64   `json:"requests"`
+	InputTokens    int64    `json:"inputTokens"`
+	OutputTokens   int64    `json:"outputTokens"`
+	Cost           *float64 `json:"cost,omitempty"` // US dollars; nil when no priced model was used
+	UnpricedModels []string `json:"unpricedModels,omitempty"`
+}
+
+type usageRow struct {
+	Day, Group, Model string
+	Requests          uint64
+	In, Out           int64
 }
 
 const usageSQL = `
 SELECT toString(toDate(Timestamp)) AS day,
        arrayJoin(if(empty(JSONExtract(LogAttributes['jwt.groups'], 'Array(String)')), ['(no group)'], JSONExtract(LogAttributes['jwt.groups'], 'Array(String)'))) AS grp,
+       LogAttributes['gen_ai.request.model'] AS model,
        count(),
        sum(toInt64OrZero(LogAttributes['gen_ai.usage.input_tokens'])),
        sum(toInt64OrZero(LogAttributes['gen_ai.usage.output_tokens']))
 FROM otel_logs
 WHERE LogAttributes['protocol'] = 'llm' AND LogAttributes['jwt.groups'] != ''
   AND Timestamp >= {from:DateTime64(9)} AND Timestamp < {to:DateTime64(9)}
-GROUP BY day, grp
-ORDER BY day DESC, grp`
+GROUP BY day, grp, model
+ORDER BY day DESC, grp, model`
 
-func (a *Audit) Usage(ctx context.Context, from, to time.Time) ([]GroupUsage, error) {
+// Usage reads LLM use per group per day; prices maps the model name clients send to its price.
+func (a *Audit) Usage(ctx context.Context, from, to time.Time, prices map[string]v1.ModelPrice) ([]GroupUsage, error) {
 	ctx = clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{
 		"from": from.UTC().Format("2006-01-02 15:04:05.000000000"), "to": to.UTC().Format("2006-01-02 15:04:05.000000000")}))
 	rows, err := a.DB.QueryContext(ctx, usageSQL)
@@ -160,15 +173,55 @@ func (a *Audit) Usage(ctx context.Context, from, to time.Time) ([]GroupUsage, er
 		return nil, err
 	}
 	defer rows.Close()
-	out := []GroupUsage{}
+	var all []usageRow
 	for rows.Next() {
-		var u GroupUsage
-		if err := rows.Scan(&u.Day, &u.Group, &u.Requests, &u.InputTokens, &u.OutputTokens); err != nil {
+		var u usageRow
+		if err := rows.Scan(&u.Day, &u.Group, &u.Model, &u.Requests, &u.In, &u.Out); err != nil {
 			return nil, err
 		}
-		out = append(out, u)
+		all = append(all, u)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return aggregateUsage(all, prices), nil
+}
+
+// aggregateUsage totals the rows per day and group (keeping their order) and prices each model's tokens.
+func aggregateUsage(rows []usageRow, prices map[string]v1.ModelPrice) []GroupUsage {
+	out := []GroupUsage{}
+	idx := map[string]int{}
+	for _, r := range rows {
+		k := r.Day + "\x00" + r.Group
+		i, ok := idx[k]
+		if !ok {
+			i = len(out)
+			idx[k] = i
+			out = append(out, GroupUsage{Day: r.Day, Group: r.Group})
+		}
+		g := &out[i]
+		g.Requests += r.Requests
+		g.InputTokens += r.In
+		g.OutputTokens += r.Out
+		if r.Model == "" || r.In+r.Out == 0 {
+			continue
+		}
+		p, priced := prices[r.Model]
+		if !priced {
+			if !slices.Contains(g.UnpricedModels, r.Model) {
+				g.UnpricedModels = append(g.UnpricedModels, r.Model)
+			}
+			continue
+		}
+		in, _ := strconv.ParseFloat(p.InputPerMillionTokens, 64)
+		outp, _ := strconv.ParseFloat(p.OutputPerMillionTokens, 64)
+		c := (float64(r.In)*in + float64(r.Out)*outp) / 1e6
+		if g.Cost == nil {
+			g.Cost = new(float64)
+		}
+		*g.Cost += c
+	}
+	return out
 }
 
 // period reads from/to (RFC 3339 or YYYY-MM-DD) with a default of the last 30 days.
@@ -221,7 +274,11 @@ func (a *Audit) register(mux *http.ServeMux, admin func(func(http.ResponseWriter
 			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		u, err := a.Usage(r.Context(), from, to)
+		var prices map[string]v1.ModelPrice
+		if a.Prices != nil {
+			prices = a.Prices(r.Context())
+		}
+		u, err := a.Usage(r.Context(), from, to, prices)
 		if err != nil {
 			storeErr(w, err)
 			return

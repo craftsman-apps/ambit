@@ -27,6 +27,33 @@ make test                    # acceptance tests for every step
 Console: http://console.localtest.me:8080 — the bootstrap admin password is printed by `helm install`.
 The LLM tests call OpenRouter free models when `~/.config/ambit/openrouter-api-key` exists and skip those calls otherwise.
 
+## Use your own ClickHouse and Valkey
+
+By default the chart runs a ClickHouse (audit) and a Valkey (budget counters) inside the release. To use
+managed ones instead (for example ClickHouse Cloud and Amazon ElastiCache), set their address; the chart
+then installs neither. TLS is on by default; give a CA Secret (key `ca.crt`) only for a private CA.
+
+```yaml
+evidence:
+  enabled: true
+  clickhouse:
+    external:
+      host: abc123.eu-west-1.aws.clickhouse.cloud   # native protocol on 9440, HTTPS on 8443
+      user: ambit             # needs CREATE TABLE once in the database, then INSERT and SELECT
+      database: otel
+      passwordSecret: ambit-clickhouse-external   # key "password"
+limits:
+  enabled: true
+  valkey:
+    external:
+      address: master.ambit.abc123.euw1.cache.amazonaws.com:6379
+      passwordSecret: ambit-valkey-external       # key "password"; leave empty without AUTH
+```
+
+Create the Secrets in the release namespace first, for example
+`kubectl create secret generic ambit-clickhouse-external --from-literal=password=...`.
+`test/stepext.sh` installs Ambit against a separate ClickHouse and Valkey with TLS from a private CA.
+
 ## Layout
 
 | Path | Contents |

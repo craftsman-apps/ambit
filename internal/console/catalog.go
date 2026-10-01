@@ -12,6 +12,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/controller"
@@ -28,6 +29,10 @@ type Catalog struct {
 	Namespace string
 	// GitOps is set in GitOps mode: changes become pull requests instead of cluster writes.
 	GitOps *GitOps
+	// ArgoApplication (namespace/name) is the Argo CD Application that syncs the repository; the change
+	// timeline reads its sync status. Empty skips that step.
+	ArgoApplication string
+	containsCache   sync.Map // "commit...revision" pairs known to be contained
 	// PublicURL and Connectors let the Connect SSO page build the callback URL and refuse IDs in use.
 	PublicURL  string
 	Connectors []Connector
@@ -175,6 +180,7 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	mux.HandleFunc("GET /api/me/access", read(c.myAccess))
 	mux.HandleFunc("GET /api/config", read(c.config))
 	mux.HandleFunc("GET /api/changes", read(c.changes))
+	mux.HandleFunc("GET /api/changes/{number}", read(c.change))
 	mux.HandleFunc("POST /api/sso/check", allow("only admins can connect sign-in providers", c.checkSSO, RoleAdmin))
 	mux.HandleFunc("POST /api/sso/connectors", allow("only admins can connect sign-in providers", c.connectSSO, RoleAdmin))
 	if c.Conns != nil {

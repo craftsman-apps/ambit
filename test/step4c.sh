@@ -99,10 +99,14 @@ code=$(api PUT /api/access-rules/eng-time '{"groups":["eng"],"allSignedIn":false
 PR=$(field "$W/api" 'd["pullRequest"]["url"]')
 [[ $(kubectl -n "$NS" get "accessrules.$G" eng-time -o jsonpath='{.spec.servers[0].tools}') == '["get_current_time"]' ]] || fail "3 cluster changed before merge"
 [[ $(api GET /api/changes) == 200 && "$(cat "$W/api")" == *"$PR"* ]] || fail "3 pending changes do not list $PR: $(cat "$W/api")"
+steps() { [[ $(api GET "/api/changes/${PR##*/}") == 200 ]] && field "$W/api" '" ".join(s["state"] for s in d["steps"])'; }
+[[ $(steps) == "done waiting" ]] || fail "3 timeline before merge: $(cat "$W/api")"
 merge "$PR"
 wait_for "3 rule not synced after merge" 120 '[[ $(kubectl -n "$NS" get "accessrules.$G" eng-time -o jsonpath="{.spec.servers[0].tools}") == *convert_time* ]]'
 wait_for "3 alice does not see convert_time: $TOOLS" 60 'try_tools "$(token alice)"; [[ $TOOLS == *time_convert_time* ]]'
-pass "3 priya's change opened $PR; cluster unchanged until merge; after merge alice sees: $TOOLS"
+wait_for "3 console timeline did not reach Applied: $(cat "$W/api")" 60 '[[ $(steps) == "done done done done" ]]'
+timeline=$(field "$W/api" '" -> ".join(s["name"] + " " + s.get("detail", "") for s in d["steps"])')
+pass "3 priya's change opened $PR; cluster unchanged until merge; after merge alice sees: $TOOLS; console timeline: $timeline"
 
 # 4 · server approval through Git: sam approves -> pull request with the digest; the server runs after merge
 sign_in keycloak alice alice-test-pass

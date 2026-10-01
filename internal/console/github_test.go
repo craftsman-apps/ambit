@@ -88,6 +88,18 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			{"number": 9, "html_url": "u9", "title": "Ambit: update access rule eng-time", "head": map[string]string{"ref": "ambit/update-accessrule-eng-time-1"}, "body": "Requested by priya@acme.test in the Ambit console."},
 			{"number": 8, "html_url": "u8", "title": "Bump chart", "head": map[string]string{"ref": "renovate/chart"}, "body": ""},
 		})
+	case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/pulls/9"):
+		reply(200, map[string]any{"number": 9, "html_url": "u9", "title": "Ambit: update access rule eng-time", "state": "closed", "merged": true,
+			"merge_commit_sha": "abc1234def", "merged_at": "2026-10-01T06:00:00Z", "head": map[string]any{"ref": "ambit/update-accessrule-eng-time-1", "repo": map[string]string{"full_name": "craftsman-apps/ambit-config-test"}},
+			"body": "Requested by priya@acme.test in the Ambit console."})
+	case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/pulls/11"): // from a fork, with a console-like branch
+		reply(200, map[string]any{"number": 11, "state": "open", "head": map[string]any{"ref": "ambit/update-accessrule-eng-time-1", "repo": map[string]string{"full_name": "someone/ambit-config-test"}}})
+	case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/pulls/10"):
+		reply(200, map[string]any{"number": 10, "state": "closed", "merged": false, "merge_commit_sha": "tmp999", "head": map[string]string{"ref": "ambit/x"}})
+	case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/compare/abc1234def...later"):
+		reply(200, map[string]string{"status": "ahead"})
+	case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/compare/abc1234def...older"):
+		reply(200, map[string]string{"status": "behind"})
 	default:
 		reply(404, map[string]string{"message": "Not Found: " + r.Method + " " + r.URL.Path})
 	}
@@ -185,5 +197,26 @@ func TestOpenPullRequestsListsOnlyTheConsolesOwn(t *testing.T) {
 func TestParseAppKeyRejectsGarbage(t *testing.T) {
 	if _, err := ParseAppKey([]byte("not a key")); err == nil {
 		t.Fatal("want an error")
+	}
+}
+
+func TestPullRequestStateAndContains(t *testing.T) {
+	gh, _ := githubFixture(t, nil)
+	st, err := gh.PullRequestState(t.Context(), 9)
+	if err != nil || !st.Merged || st.Closed || st.MergeCommit != "abc1234def" || st.Branch != "ambit/update-accessrule-eng-time-1" || st.Author != "priya@acme.test" {
+		t.Fatalf("merged pull request: %+v %v", st, err)
+	}
+	// A closed, unmerged pull request has a test-merge commit; it must not count as merged.
+	if st, err := gh.PullRequestState(t.Context(), 10); err != nil || st.Merged || !st.Closed || st.MergeCommit != "" {
+		t.Fatalf("closed pull request: %+v %v", st, err)
+	}
+	if st, err := gh.PullRequestState(t.Context(), 11); err != nil || st.Branch != "" {
+		t.Fatalf("a fork's pull request must not look like the console's: %+v %v", st, err)
+	}
+	if in, err := gh.Contains(t.Context(), "abc1234def", "later"); err != nil || !in {
+		t.Errorf("later revision: %v %v", in, err)
+	}
+	if in, err := gh.Contains(t.Context(), "abc1234def", "older"); err != nil || in {
+		t.Errorf("older revision: %v %v", in, err)
 	}
 }

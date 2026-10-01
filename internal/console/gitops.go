@@ -28,6 +28,18 @@ func (e *InvalidChange) Error() string {
 type PullRequester interface {
 	OpenPullRequest(ctx context.Context, branch, title, body string, f FileChange) (PullRequest, error)
 	OpenPullRequests(ctx context.Context) ([]PullRequest, error)
+	PullRequestState(ctx context.Context, number int) (PullRequestState, error)
+	// Contains reports whether revision includes commit (revision is commit or a descendant of it).
+	Contains(ctx context.Context, commit, revision string) (bool, error)
+}
+
+// PullRequestState is where a pull request is: open, merged (with its merge commit) or closed unmerged.
+type PullRequestState struct {
+	PullRequest
+	Merged      bool      `json:"merged"`
+	Closed      bool      `json:"closed"`
+	MergeCommit string    `json:"mergeCommit,omitempty"`
+	MergedAt    time.Time `json:"mergedAt,omitzero"`
 }
 
 // GitOps turns console changes into pull requests against the configuration repository that Argo CD

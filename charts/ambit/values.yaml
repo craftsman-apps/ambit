@@ -72,6 +72,10 @@ gitops:
     appID: ""
     # Secret with key private-key.pem: the GitHub App's key. Create it yourself; the chart never holds it.
     privateKeySecret: ambit-github-app
+  argocd:
+    # namespace/name of the Argo CD Application that syncs the repository, e.g. argocd/ambit-config. The
+    # console reads its sync status (read only) to show when a merged change reached the cluster.
+    application: ""
 
 mcp:
   # Serve MCP at <host>/mcp. Servers and tool access come from Server and AccessRule objects;

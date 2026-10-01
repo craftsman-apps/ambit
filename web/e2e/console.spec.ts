@@ -193,3 +193,14 @@ test("Apps page adds an app for per-user sign-in and removes it", async ({ page 
   await row.getByRole("button", { name: "Remove app" }).click();
   await expect(row).toHaveCount(0);
 });
+
+test("Dependencies page shows each component, its failure mode and its health", async ({ page }) => {
+  await signInAsBootstrapAdmin(page);
+  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Dependencies" }).click();
+  const gateway = page.getByTestId("dep-Gateway");
+  await expect(gateway.getByText("Answers")).toBeVisible();
+  await expect(gateway.getByText(/All MCP and LLM requests fail/)).toBeVisible();
+  await expect(page.getByTestId("dep-ClickHouse").getByText("answers queries")).toBeVisible();
+  await expect(page.getByTestId("dep-Valkey").getByText(/Fails (open|closed)\./)).toBeVisible();
+  await expect(page.getByText("Everything answers")).toBeVisible();
+});

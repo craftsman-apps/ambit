@@ -13,6 +13,7 @@ import { OffboardingPage } from "@/routes/offboarding";
 import { AppsPage } from "@/routes/apps";
 import { AuditPage, UsagePage } from "@/routes/audit";
 import { BudgetsPage } from "@/routes/budgets";
+import { DependenciesPage } from "@/routes/dependencies";
 import "@fontsource/ibm-plex-sans/400.css";
 import "@fontsource/ibm-plex-sans/500.css";
 import "@fontsource/ibm-plex-sans/600.css";
@@ -40,6 +41,7 @@ const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: "/audit", component: AuditPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/usage", component: UsagePage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/budgets", component: BudgetsPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/settings/dependencies", component: DependenciesPage }),
 ]);
 const router = createRouter({ routeTree });
 

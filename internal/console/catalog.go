@@ -40,6 +40,8 @@ type Catalog struct {
 	Audit *Audit
 	// Budgets shows today's use of each Budget; nil when limits are off.
 	Budgets *Budgets
+	// Dependencies reports what Ambit relies on and whether it answers; nil hides the page.
+	Dependencies *Dependencies
 }
 
 // Config tells the console UI how changes are applied.
@@ -204,6 +206,9 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	}
 	if c.Budgets != nil {
 		c.Budgets.register(mux, admin)
+	}
+	if c.Dependencies != nil {
+		c.Dependencies.register(mux, admin)
 	}
 	if c.SCIM != nil {
 		c.SCIM.register(mux)

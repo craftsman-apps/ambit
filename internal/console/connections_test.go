@@ -274,3 +274,24 @@ func TestRevokeRenewsAnExpiredAccessTokenFirst(t *testing.T) {
 		t.Fatalf("refused revocation: %v %v", revoked, err)
 	}
 }
+
+// A provider that echoes the token in its error does not put it into the error Ambit records.
+func TestRevokeErrorsNeverContainTokens(t *testing.T) {
+	echo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		http.Error(w, `{"error":"invalid_token","token":"`+r.PostForm.Get("token")+`"}`, http.StatusBadRequest)
+	}))
+	t.Cleanup(echo.Close)
+	saas := newFakeSaaS(t)
+	conns, c := connFixture(t, saas)
+	connect(t, conns, testAuthOnly(), "alice@acme.test", "alice")
+	var conn v1.Connection
+	_ = c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "jira"}, &conn)
+	conn.Spec.RevocationURL = echo.URL + "/revoke"
+	_ = c.Update(t.Context(), &conn)
+	g, _ := conns.Store.Get(t.Context(), "alice@acme.test", "jira")
+	_, err := conns.Revoke(t.Context(), g)
+	if err == nil || strings.Contains(err.Error(), "rt-alice") || !strings.Contains(err.Error(), "[token]") {
+		t.Fatalf("error: %v", err)
+	}
+}

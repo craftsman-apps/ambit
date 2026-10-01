@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -110,5 +111,34 @@ func TestRevocationMissingToken(t *testing.T) {
 	}
 	if _, _, err := revocationRequest(t.Context(), "https://slack.com/api/auth.revoke", "c", "s", &Grant{RefreshToken: "rt"}); err == nil {
 		t.Fatal("Slack without an access token")
+	}
+}
+
+// Only the exact GitHub path shape and the other providers' own hosts pick a special format.
+func TestRevocationStyleIsNotGuessedFromLookalikes(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://api.github.com/applications/{client_id}/grant":     "github",
+		"https://ghe.acme.test/api/v3/applications/abc/grant":       "github",
+		"https://idp.acme.test/oauth/applications/abc/grant/revoke": "rfc7009",
+		"https://idp.acme.test/applications/abc/grants":             "rfc7009",
+		"https://slack.com/api/auth.revoke":                         "slack",
+		"https://chat.acme.test/api/auth.revoke":                    "rfc7009",
+		"https://api.notion.com/v1/oauth/revoke":                    "notion",
+		"https://api.hubapi.com/oauth/v1/refresh-tokens":            "hubspot",
+		"https://idp.acme.test/oauth/v1/refresh-tokens/revoke":      "rfc7009",
+		"https://oauth2.googleapis.com/revoke":                      "rfc7009",
+	} {
+		u, _ := url.Parse(raw)
+		if got := revocationStyle(u); got != want {
+			t.Errorf("%s: %s, want %s", raw, got, want)
+		}
+	}
+}
+
+func TestRedactTokens(t *testing.T) {
+	g := &Grant{AccessToken: "at-secret", RefreshToken: "rt/secret"}
+	got := redactTokens(`Delete "https://api.hubapi.com/oauth/v1/refresh-tokens/rt%2Fsecret": timeout; echoed at-secret and rt/secret`, g)
+	if strings.Contains(got, "secret") || strings.Count(got, "[token]") != 3 {
+		t.Fatal(got)
 	}
 }

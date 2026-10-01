@@ -9,23 +9,41 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 )
 
-// revocationStyle names the provider format a revocation URL asks for; "rfc7009" is the standard.
+// githubGrantPath is GitHub's (/applications/...) and GitHub Enterprise Server's (/api/v3/applications/...)
+// grant endpoint, exactly: a standard provider whose path merely contains "/applications/" is not GitHub.
+var githubGrantPath = regexp.MustCompile(`^(/api/v3)?/applications/[^/]+/grant$`)
+
+// revocationStyle names the provider format a revocation URL asks for; "rfc7009" is the standard. Slack,
+// Notion and HubSpot are recognised by their own hosts only.
 func revocationStyle(u *url.URL) string {
 	path := strings.TrimSuffix(u.Path, "/")
+	host := u.Hostname()
 	switch {
-	case strings.Contains(path, "/applications/") && strings.HasSuffix(path, "/grant"):
+	case githubGrantPath.MatchString(path):
 		return "github"
-	case strings.HasSuffix(path, "/api/auth.revoke"):
+	case host == "slack.com" && path == "/api/auth.revoke":
 		return "slack"
-	case u.Hostname() == "api.notion.com" && path == "/v1/oauth/revoke":
+	case host == "api.notion.com" && path == "/v1/oauth/revoke":
 		return "notion"
-	case strings.Contains(path, "/oauth/v1/refresh-tokens"):
+	case host == "api.hubapi.com" && strings.HasPrefix(path, "/oauth/v1/refresh-tokens"):
 		return "hubspot"
 	}
 	return "rfc7009"
+}
+
+// redactTokens removes a grant's tokens from text that may reach logs, records or the browser: a network
+// error repeats the request URL (HubSpot's holds the refresh token), and a provider may echo what it got.
+func redactTokens(text string, g *Grant) string {
+	for _, t := range []string{g.AccessToken, g.RefreshToken, url.PathEscape(g.RefreshToken)} {
+		if t != "" {
+			text = strings.ReplaceAll(text, t, "[token]")
+		}
+	}
+	return text
 }
 
 // revokesAccessToken reports whether the format sends the access token, which must then be current.
@@ -89,8 +107,7 @@ func revocationRequest(ctx context.Context, revURL, clientID, clientSecret strin
 		if err := needAccess(); err != nil {
 			return nil, nil, err
 		}
-		base := path[:strings.LastIndex(path, "/applications/")]
-		u.Path = base + "/applications/" + clientID + "/grant"
+		u.Path = githubGrantPath.FindStringSubmatch(path)[1] + "/applications/" + url.PathEscape(clientID) + "/grant"
 		u.RawPath = ""
 		body, _ := json.Marshal(map[string]string{"access_token": g.AccessToken})
 		r, err := newReq(http.MethodDelete, u.String(), body)
@@ -141,8 +158,8 @@ func revocationRequest(ctx context.Context, revURL, clientID, clientSecret strin
 		if g.RefreshToken == "" {
 			return nil, nil, errors.New("HubSpot revokes only a refresh token, and the grant has none")
 		}
-		u.Path = path[:strings.Index(path, "/oauth/v1/refresh-tokens")] + "/oauth/v1/refresh-tokens/" + url.PathEscape(g.RefreshToken)
-		u.RawPath = ""
+		u.Path = "/oauth/v1/refresh-tokens/" + g.RefreshToken
+		u.RawPath = "/oauth/v1/refresh-tokens/" + url.PathEscape(g.RefreshToken)
 		r, err := newReq(http.MethodDelete, u.String(), nil)
 		if err != nil {
 			return nil, nil, err

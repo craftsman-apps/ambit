@@ -219,7 +219,15 @@ func (c *Connections) callback(w http.ResponseWriter, r *http.Request, s Session
 
 // Revoke asks the provider to revoke the grant (RFC 7009), then forgets it. It reports whether the
 // provider confirmed; offboarding (step 6) logs that answer as proof.
+// Revoke ends a grant at its provider (in the provider's format, see revoke.go) and deletes Ambit's copy.
+// It holds the connections lock throughout and re-reads the grant, so a renewal running at the same time
+// cannot be overwritten or leave a newer token unrevoked. Errors never contain the grant's tokens.
 func (c *Connections) Revoke(ctx context.Context, g *Grant) (bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cur, err := c.Store.Get(ctx, g.Email, g.Connection); err == nil && cur != nil {
+		g = cur
+	}
 	conn, err := c.connection(ctx, g.Connection)
 	revoked := false
 	if err == nil && conn.Spec.RevocationURL != "" {
@@ -230,16 +238,16 @@ func (c *Connections) Revoke(ctx context.Context, g *Grant) (bool, error) {
 		// Formats that send the access token need a current one: renew an expired token first. If renewal
 		// fails, the old token is sent and the provider's refusal is reported.
 		if revokesAccessToken(conn.Spec.RevocationURL) && g.RefreshToken != "" && !g.Expiry.IsZero() && !c.now().Before(g.Expiry) {
-			c.mu.Lock()
-			_, renewed, rerr := c.refresh(ctx, g)
-			c.mu.Unlock()
-			if rerr == nil && renewed != nil && renewed.State == grantConnectedState {
+			if _, renewed, rerr := c.refresh(ctx, g); rerr == nil && renewed != nil && renewed.State == grantConnectedState {
 				g = renewed
 			}
 		}
+		fail := func(err error) (bool, error) {
+			return false, fmt.Errorf("revoke at %s: %s", conn.Spec.RevocationURL, redactTokens(err.Error(), g))
+		}
 		req, check, err := revocationRequest(ctx, conn.Spec.RevocationURL, cfg.ClientID, cfg.ClientSecret, g)
 		if err != nil {
-			return false, fmt.Errorf("revoke at %s: %w", conn.Spec.RevocationURL, err)
+			return fail(err)
 		}
 		hc := c.HTTP
 		if hc == nil {
@@ -247,12 +255,12 @@ func (c *Connections) Revoke(ctx context.Context, g *Grant) (bool, error) {
 		}
 		resp, err := hc.Do(req)
 		if err != nil {
-			return false, fmt.Errorf("revoke at %s: %w", conn.Spec.RevocationURL, err)
+			return fail(err)
 		}
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		resp.Body.Close()
 		if err := check(resp.StatusCode, body); err != nil {
-			return false, fmt.Errorf("revoke at %s: %w", conn.Spec.RevocationURL, err)
+			return fail(err)
 		}
 		revoked = true
 	}

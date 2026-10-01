@@ -14,7 +14,10 @@ spec:
   hostnames: [{{ .Values.llm.host | quote }}]
   rules:
     - name: models
-      matches: [{ path: { type: PathPrefix, value: /v1 } }]
+      # Match "/" (not "/v1"): the gateway strips the matched prefix before its model router reads the path,
+      # and "/chat/completions" is not a path it parses, so requests passed through unparsed: no token
+      # counts, no LLM policies (found 2026-10-01). Clients still call <host>/v1/chat/completions.
+      matches: [{ path: { type: PathPrefix, value: / } }]
       backendRefs: [{ group: agentgateway.dev, kind: AgentgatewayModel, name: "*" }]
 ---
 apiVersion: agentgateway.dev/v1alpha1

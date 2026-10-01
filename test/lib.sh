@@ -12,6 +12,18 @@ on_exit() {
   rm -rf "$W"; exit "$rc"
 }
 trap 'on_exit $?' EXIT
+# Upgrade checks (test/upgrade.sh) run the steps against a candidate version: AMBIT_CHART is a copy of
+# the chart with candidate subcharts, AMBIT_EXTRA_VALUES a values file with candidate images. Every
+# "helm upgrade ambit charts/ambit" in the steps goes through here; unset, nothing changes.
+helm() {
+  if [[ "${1:-}" == upgrade && "${3:-}" == charts/ambit ]]; then
+    local args=("$@")
+    args[2]=${AMBIT_CHART:-charts/ambit}
+    command helm "${args[@]}" ${AMBIT_EXTRA_VALUES:+-f "$AMBIT_EXTRA_VALUES"}
+  else
+    command helm "$@"
+  fi
+}
 pass() { echo "PASS $1"; }
 fail() { echo "FAIL $1"; [[ -t 1 ]] || echo "FAIL $1" >&2; exit 1; }  # also stderr: stdout may be captured
 

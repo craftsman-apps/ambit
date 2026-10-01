@@ -54,6 +54,11 @@ Create the Secrets in the release namespace first, for example
 `kubectl create secret generic ambit-clickhouse-external --from-literal=password=...`.
 `test/stepext.sh` installs Ambit against a separate ClickHouse and Valkey with TLS from a private CA.
 
+## Offboarding
+
+When someone leaves, Ambit revokes their stored SaaS grants at each provider that accepts a standard
+(RFC 7009) revocation request. Some providers do not; [docs/offboarding.md](docs/offboarding.md) lists which.
+
 ## Layout
 
 | Path | Contents |

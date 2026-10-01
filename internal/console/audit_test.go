@@ -52,3 +52,10 @@ func TestAuditStoreFailureNamesClickHouse(t *testing.T) {
 		}
 	}
 }
+
+// The audit reads the status under the v1.5 and the v1.6 attribute names (upgrade check, 2026-10-01).
+func TestCallsSQLReadsBothStatusNames(t *testing.T) {
+	if !strings.Contains(callsSQL, "LogAttributes['http.status']") || !strings.Contains(callsSQL, "LogAttributes['http.response.status_code']") || strings.Contains(callsSQL, "{status}") {
+		t.Fatal(callsSQL)
+	}
+}

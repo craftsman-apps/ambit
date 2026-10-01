@@ -62,10 +62,14 @@ type Call struct {
 	OutputTokens int64     `json:"outputTokens"`
 }
 
-const callsSQL = `
+// status reads the HTTP status under both names agentgateway has used: http.status (v1.5) and the
+// OpenTelemetry name http.response.status_code (v1.6), so an upgrade does not blank the Audit page.
+const status = "if(LogAttributes['http.response.status_code'] != '', LogAttributes['http.response.status_code'], LogAttributes['http.status'])"
+
+var callsSQL = strings.Replace(`
 SELECT Timestamp,
        {email:String}, LogAttributes['route'], LogAttributes['mcp.method.name'], LogAttributes['mcp.target'],
-       LogAttributes['gen_ai.tool.name'], LogAttributes['gen_ai.request.model'], LogAttributes['http.status'], LogAttributes['error'],
+       LogAttributes['gen_ai.tool.name'], LogAttributes['gen_ai.request.model'], {status}, LogAttributes['error'],
        toInt64OrZero(LogAttributes['gen_ai.usage.input_tokens']), toInt64OrZero(LogAttributes['gen_ai.usage.output_tokens'])
 FROM otel_logs
 WHERE (LogAttributes['jwt.email'] = {email:String}
@@ -74,7 +78,7 @@ WHERE (LogAttributes['jwt.email'] = {email:String}
        OR (LogAttributes['jwt.email'] = '' AND has({subs:Array(String)}, LogAttributes['jwt.sub'])))
   AND Timestamp >= {from:DateTime64(9)} AND Timestamp < {to:DateTime64(9)}
 ORDER BY Timestamp DESC
-LIMIT {limit:UInt32}`
+LIMIT {limit:UInt32}`, "{status}", status, 1)
 
 const subsSQL = `SELECT DISTINCT LogAttributes['jwt.sub'] FROM otel_logs
 WHERE LogAttributes['jwt.email'] = {email:String} AND LogAttributes['jwt.sub'] != '' LIMIT 100`

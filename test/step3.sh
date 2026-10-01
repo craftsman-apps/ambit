@@ -103,11 +103,22 @@ assert len(refs)==1 and refs[0]["kind"]=="Model" and refs[0]["name"]=="nemotron-
 assert not [k for k in md.get("annotations",{}) if k.startswith("argocd.argoproj.io/")], md.get("annotations")
 assert "app.kubernetes.io/instance" not in md.get("labels",{}), md.get("labels")
 PY
-for kind in models accessrules; do
-  gens=$(kubectl -n "$NS" get "$kind.$G" -o jsonpath='{range .items[*]}{.metadata.generation}{" "}{end}')
-  [[ -z "$(tr -d '1 ' <<<"$gens")" ]] || fail "9 controller changed the spec of $kind (generations: $gens)"
-done
-pass "9 generated object owned by its Model, no Argo CD metadata; Ambit objects' spec never written (generation 1)"
+# The controller writes only status: a reconcile leaves every Ambit object's generation as it was (earlier
+# edits by people, e.g. through the console, are not the controller's).
+gens() { kubectl -n "$NS" get "models.$G,accessrules.$G" -o jsonpath='{range .items[*]}{.metadata.name}={.metadata.generation}{" "}{end}'; }
+g0=$(gens)
+# Creating a Budget is a watched event, so the controller reconciles everything; its status shows the pass ended.
+kubectl -n "$NS" apply -f - >/dev/null <<YAML
+apiVersion: $G/v1alpha1
+kind: Budget
+metadata: { name: test-reconcile }
+spec: { group: test-reconcile, userRequestsPerDay: 1 }
+YAML
+kubectl -n "$NS" wait "budgets.$G" test-reconcile --for=jsonpath='{.status.conditions[0].type}'=Ready --timeout=60s >/dev/null || fail "9 the controller did not reconcile"
+g1=$(gens)
+kubectl -n "$NS" delete "budgets.$G" test-reconcile >/dev/null
+[[ "$g0" == "$g1" ]] || fail "9 controller changed the spec of Ambit objects (generations before: $g0; after a reconcile: $g1)"
+pass "9 generated object owned by its Model, no Argo CD metadata; a reconcile leaves Ambit objects' spec unchanged"
 
 # 10 · a manual edit of a generated object is reverted
 kubectl -n "$NS" patch agentgatewaymodel nemotron-3-super --type=json \

@@ -77,6 +77,18 @@ reached_provider() {
 }
 me_status() { curl -s ${CURL_CA:+--cacert "$CURL_CA"} -o "$W/me" -w '%{http_code}' -b "$W/jar" "$BASE/api/me"; }
 
+# rlconfig NS: the limits envoy ratelimit has actually loaded, from its debug endpoint (port 6070) through the
+# API server's pod proxy. Its image has no shell tools, so the mounted ConfigMap cannot be read with exec.
+# Lines look like "ambit-llm.spend_group_eng: unit=DAY requests_per_unit=5, shadow_mode: false, ...".
+rlconfig() {
+  local pod; pod=$(kubectl -n "$1" get pod -l app.kubernetes.io/name=ambit-ratelimit --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  [[ -n "$pod" ]] && kubectl get --raw "/api/v1/namespaces/$1/pods/$pod:6070/proxy/rlconfig" 2>/dev/null
+}
+# wait_rl NS TEXT: wait until the loaded limits contain TEXT; fail after 3 minutes (ConfigMaps reach pods in up to ~2)
+wait_rl() {
+  for _ in $(seq 1 60); do [[ "$(rlconfig "$1")" == *"$2"* ]] && return 0; sleep 3; done
+  fail "ratelimit did not load '$2' (loaded: $(rlconfig "$1" | head -5 | tr '\n' ' '))"
+}
 # ensure_llm_setup NS: Keycloak test IdP, SSO + LLM chart values, provider key Secret, test catalog.
 # Every LLM test calls this, so each can run on its own after `make install`.
 ensure_llm_setup() {
@@ -95,6 +107,7 @@ ensure_llm_setup() {
   # A fake OpenAI-compatible model with a price (test/llm/mock.yaml), for token counts and cost.
   kubectl -n "$ns" create secret generic ambit-llm-mock --from-literal=Authorization=not-used --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   kubectl -n "$ns" apply -f test/llm/mock.yaml >/dev/null
+  kubectl -n "$ns" rollout restart deploy/mock-llm >/dev/null
   kubectl -n "$ns" rollout status deploy/mock-llm --timeout=180s >/dev/null
   kubectl -n "$ns" wait models.ambitproject.dev --all --for=condition=Ready --timeout=120s >/dev/null
 }

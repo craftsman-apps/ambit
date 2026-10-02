@@ -14,15 +14,26 @@ data:
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
             model = body.get("model")
+            last = (body.get("messages") or [{}])[-1].get("content", "")
+            if self.path.endswith("/embeddings"):
+                out = json.dumps({"object": "list", "model": model, "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                                  "usage": {"prompt_tokens": 12, "total_tokens": 12}}).encode()
+                self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(out)))
+                self.end_headers(); self.wfile.write(out); return
+            if last == "CUT" and body.get("stream"):
+                self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
+                self.wfile.write(b'data: {"id":"c1","object":"chat.completion.chunk","model":"' + model.encode() + b'","choices":[{"index":0,"delta":{"content":"po"}}]}\n\n')
+                self.wfile.flush(); self.close_connection = True; return
+            usage = None if last == "NO-USAGE" else USAGE
             content = "pong" + (" x-ambit-user=" + self.headers["x-ambit-user"] if self.headers.get("x-ambit-user") else "")
             if body.get("stream"):
                 self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
-                for chunk in ({"choices": [{"index": 0, "delta": {"content": "pong"}}]}, {"choices": [], "usage": USAGE}):
+                for chunk in ({"choices": [{"index": 0, "delta": {"content": "pong"}}]}, {"choices": [], **({"usage": usage} if usage else {})}):
                     chunk.update({"id": "c1", "object": "chat.completion.chunk", "model": model})
                     self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n")
                 self.wfile.write(b"data: [DONE]\n\n")
                 return
-            out = json.dumps({"id": "c1", "object": "chat.completion", "model": model, "usage": USAGE,
+            out = json.dumps({"id": "c1", "object": "chat.completion", "model": model, **({"usage": usage} if usage else {}),
                               "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}]}).encode()
             self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(out)))
             self.end_headers(); self.wfile.write(out)
@@ -70,3 +81,38 @@ metadata: { name: ml-research-mock }
 spec:
   groups: [ml-research]
   models: [mock-echo]
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: Model
+metadata: { name: mock-unpriced }
+spec:
+  displayName: Test model (no price)
+  provider: OpenAI
+  model: mock/unpriced
+  baseURL: http://mock-llm.ambit-system.svc.cluster.local:8080/v1
+  credentialsRef: { name: ambit-llm-mock }
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: AccessRule
+metadata: { name: everyone-mock-unpriced }
+spec:
+  allSignedIn: true
+  models: [mock-unpriced]
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: Model
+metadata: { name: mock-free }
+spec:
+  displayName: Test model (free)
+  provider: OpenAI
+  model: mock/free
+  baseURL: http://mock-llm.ambit-system.svc.cluster.local:8080/v1
+  credentialsRef: { name: ambit-llm-mock }
+  price: { inputPerMillionTokens: "0", outputPerMillionTokens: "0" }
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: AccessRule
+metadata: { name: ml-research-mock-free }
+spec:
+  groups: [ml-research]
+  models: [mock-free]

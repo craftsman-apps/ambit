@@ -291,9 +291,14 @@ type ConnectionList struct {
 	Items           []Connection `json:"items"`
 }
 
-// BudgetSpec limits LLM requests per day for one group from the identity provider. Limits are shared
-// across every gateway replica. A member of several budgeted groups is counted against each of them.
-// +kubebuilder:validation:XValidation:rule="has(self.groupRequestsPerDay) || has(self.userRequestsPerDay)",message="set groupRequestsPerDay, userRequestsPerDay, or both"
+// BudgetSpec limits LLM use per day for one group from the identity provider: requests, estimated dollars
+// (from Model prices), or both. Limits are shared across every gateway replica. A member of several
+// budgeted groups is counted against each of them.
+// +kubebuilder:validation:XValidation:rule="has(self.groupRequestsPerDay) || has(self.userRequestsPerDay) || has(self.groupDollarsPerDay) || has(self.userDollarsPerDay)",message="set at least one limit"
+// +kubebuilder:validation:XValidation:rule="!has(self.groupDollarsPerDay) || double(self.groupDollarsPerDay) > 0.0",message="groupDollarsPerDay must be greater than 0"
+// +kubebuilder:validation:XValidation:rule="!has(self.userDollarsPerDay) || double(self.userDollarsPerDay) > 0.0",message="userDollarsPerDay must be greater than 0"
+// +kubebuilder:validation:XValidation:rule="!has(self.groupDollarsPerDay) || double(self.groupDollarsPerDay) <= 42949.67",message="groupDollarsPerDay must be at most 42949.67"
+// +kubebuilder:validation:XValidation:rule="!has(self.userDollarsPerDay) || double(self.userDollarsPerDay) <= 42949.67",message="userDollarsPerDay must be at most 42949.67"
 type BudgetSpec struct {
 	// Group from the identity provider's "groups" claim.
 	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._@/-]*$`
@@ -306,6 +311,15 @@ type BudgetSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	UserRequestsPerDay *int64 `json:"userRequestsPerDay,omitempty"`
+	// GroupDollarsPerDay is shared by everyone in the group (UTC days), estimated from Model prices. Answers
+	// already started when the cap is passed still finish and are charged.
+	// +kubebuilder:validation:Pattern=`^[0-9]{1,5}(\.[0-9]{1,5})?$`
+	// +optional
+	GroupDollarsPerDay string `json:"groupDollarsPerDay,omitempty"`
+	// UserDollarsPerDay applies to each member separately.
+	// +kubebuilder:validation:Pattern=`^[0-9]{1,5}(\.[0-9]{1,5})?$`
+	// +optional
+	UserDollarsPerDay string `json:"userDollarsPerDay,omitempty"`
 }
 
 type BudgetStatus struct {
@@ -318,6 +332,8 @@ type BudgetStatus struct {
 // +kubebuilder:printcolumn:name="Group",type=string,JSONPath=`.spec.group`
 // +kubebuilder:printcolumn:name="Group/day",type=integer,JSONPath=`.spec.groupRequestsPerDay`
 // +kubebuilder:printcolumn:name="User/day",type=integer,JSONPath=`.spec.userRequestsPerDay`
+// +kubebuilder:printcolumn:name="Group $/day",type=string,JSONPath=`.spec.groupDollarsPerDay`
+// +kubebuilder:printcolumn:name="User $/day",type=string,JSONPath=`.spec.userDollarsPerDay`
 
 // Budget caps a group's LLM requests per day. Over the limit the gateway answers 429.
 type Budget struct {

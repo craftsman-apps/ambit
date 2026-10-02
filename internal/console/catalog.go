@@ -47,6 +47,8 @@ type Catalog struct {
 	Budgets *Budgets
 	// Dependencies reports what Ambit relies on and whether it answers; nil hides the page.
 	Dependencies *Dependencies
+	// Prices suggests model prices (LiteLLM's list); nil offers no suggestions.
+	Prices *PriceSource
 }
 
 // Config tells the console UI how changes are applied.
@@ -70,6 +72,8 @@ type ModelView struct {
 	AllSignedIn   bool     `json:"allSignedIn"`
 	Ready         string   `json:"ready"`
 	Message       string   `json:"message"`
+	// Price in dollars per million tokens; nil when the model has none.
+	Price *v1.ModelPrice `json:"price"`
 }
 
 type RuleView struct {
@@ -216,6 +220,12 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	if c.Dependencies != nil {
 		c.Dependencies.register(mux, admin)
 	}
+	mux.HandleFunc("GET /api/models/{name}/price", admin(c.modelPrice))
+	mux.HandleFunc("PUT /api/models/{name}/price", allow("only admins can change prices", c.setModelPrice, RoleAdmin))
+	mux.HandleFunc("GET /api/prices/licence", read(func(w http.ResponseWriter, r *http.Request, _ Session) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Write([]byte(LiteLLMLicence))
+	}))
 	if c.SCIM != nil {
 		c.SCIM.register(mux)
 		mux.HandleFunc("GET /api/offboarding", admin(func(w http.ResponseWriter, r *http.Request, _ Session) {
@@ -305,7 +315,7 @@ func (c *Catalog) listModels(w http.ResponseWriter, r *http.Request, _ Session) 
 	for _, m := range ms {
 		cond := meta.FindStatusCondition(m.Status.Conditions, "Ready")
 		v := ModelView{Name: m.Name, DisplayName: m.Spec.DisplayName, Model: m.Spec.Model, Provider: m.Spec.Provider,
-			AllowedGroups: nonNil(m.Status.AllowedGroups), AllSignedIn: m.Status.AllowAllSignedIn, Ready: "Unknown"}
+			AllowedGroups: nonNil(m.Status.AllowedGroups), AllSignedIn: m.Status.AllowAllSignedIn, Ready: "Unknown", Price: m.Spec.Price}
 		if cond != nil {
 			v.Ready, v.Message = string(cond.Status), cond.Message
 		}

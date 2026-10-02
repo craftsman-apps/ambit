@@ -164,30 +164,6 @@ WHERE LogAttributes['protocol'] = 'llm' AND LogAttributes['jwt.groups'] != ''
 GROUP BY day, grp, model
 ORDER BY day DESC, grp, model`
 
-// PricesByModel maps the model name clients send to its price. A name that several Models share with
-// different prices (or one without a price) has no price: its tokens are shown as unpriced, never at a
-// wrong cost.
-func PricesByModel(models []v1.Model) map[string]v1.ModelPrice {
-	byName := map[string][]*v1.ModelPrice{}
-	for _, m := range models {
-		byName[m.Spec.Model] = append(byName[m.Spec.Model], m.Spec.Price)
-	}
-	out := map[string]v1.ModelPrice{}
-	for name, ps := range byName {
-		same := ps[0] != nil
-		for _, p := range ps[1:] {
-			same = same && p != nil && *p == *ps[0]
-		}
-		switch {
-		case same:
-			out[name] = *ps[0]
-		case len(ps) > 1:
-			slog.Warn("usage: Models sharing this model name differ in price; its cost is not shown", "model", name)
-		}
-	}
-	return out
-}
-
 // Usage reads LLM use per group per day; prices maps the model name clients send to its price.
 func (a *Audit) Usage(ctx context.Context, from, to time.Time, prices map[string]v1.ModelPrice) ([]GroupUsage, error) {
 	ctx = clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{

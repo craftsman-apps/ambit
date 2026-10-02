@@ -151,3 +151,35 @@ func TestBudgetViewOverTLSWithPassword(t *testing.T) {
 		t.Fatalf("untrusted certificate: %+v %v", got, err)
 	}
 }
+
+func TestBudgetViewShowsSpend(t *testing.T) {
+	now := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	day := strconv.FormatInt(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC).Unix(), 10)
+	addr := fakeValkey(t, map[string]string{
+		"ambit-llm_spend_group_ml-research_" + day:                           "3120000",
+		"ambit-llm_spend_group_ml-research_spend_user_mira@acme.test_" + day: "300000",
+		"ambit-llm_spend_group_ml-research_spend_user_kim@acme.test_" + day:  "3",
+		"ambit-llm_group_ml-research_user_mira@acme.test_" + day:             "4",
+	})
+	scheme := runtime.NewScheme()
+	_ = v1.AddToScheme(scheme)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(&v1.Budget{ObjectMeta: metav1.ObjectMeta{Name: "ml", Namespace: testNS},
+		Spec: v1.BudgetSpec{Group: "ml-research", GroupDollarsPerDay: "50", UserDollarsPerDay: "5", UserRequestsPerDay: ptr.To[int64](10)}}).Build()
+	b := &Budgets{Client: c, Namespace: testNS, Valkey: Valkey{Addr: addr}, Now: func() time.Time { return now }}
+	got, err := b.views(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := got[0]
+	if v.GroupDollarLimit != "50" || v.UserDollarLimit != "5" || v.GroupSpent != 31.2 {
+		t.Fatalf("%+v", v)
+	}
+	spent := map[string]float64{}
+	used := map[string]int64{}
+	for _, u := range v.Users {
+		spent[u.Email], used[u.Email] = u.Spent, u.Used
+	}
+	if spent["mira@acme.test"] != 3 || spent["kim@acme.test"] != 0.00003 || used["mira@acme.test"] != 4 {
+		t.Fatalf("users %+v", v.Users)
+	}
+}

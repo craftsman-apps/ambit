@@ -10,12 +10,14 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/pricing"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,22 +37,27 @@ type Budgets struct {
 const budgetDomain = "ambit-llm" // matches controller.RateLimitDomain
 
 type UserUse struct {
-	Email string `json:"email"`
-	Used  int64  `json:"used"`
+	Email string  `json:"email"`
+	Used  int64   `json:"used"`
+	Spent float64 `json:"spent"` // estimated dollars today
 }
 
 type BudgetView struct {
-	Name          string    `json:"name"`
-	Group         string    `json:"group"`
-	GroupLimit    *int64    `json:"groupLimit"`
-	UserLimit     *int64    `json:"userLimit"`
-	GroupUsed     int64     `json:"groupUsed"`
-	Users         []UserUse `json:"users"` // today's users, most used first
-	Ready         string    `json:"ready"`
-	Message       string    `json:"message"`
-	ResetsAt      time.Time `json:"resetsAt"`
-	CountsMissing bool      `json:"countsMissing,omitempty"` // Valkey unreachable
-	GitManaged    bool      `json:"gitManaged"`
+	Name       string `json:"name"`
+	Group      string `json:"group"`
+	GroupLimit *int64 `json:"groupLimit"`
+	UserLimit  *int64 `json:"userLimit"`
+	GroupUsed  int64  `json:"groupUsed"`
+	// Dollar limits (decimal strings, empty when not set) and today's estimated spend in dollars.
+	GroupDollarLimit string    `json:"groupDollarLimit"`
+	UserDollarLimit  string    `json:"userDollarLimit"`
+	GroupSpent       float64   `json:"groupSpent"`
+	Users            []UserUse `json:"users"` // today's users, most used first
+	Ready            string    `json:"ready"`
+	Message          string    `json:"message"`
+	ResetsAt         time.Time `json:"resetsAt"`
+	CountsMissing    bool      `json:"countsMissing,omitempty"` // Valkey unreachable
+	GitManaged       bool      `json:"gitManaged"`
 }
 
 func (b *Budgets) register(mux *http.ServeMux, admin func(func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc) {
@@ -78,7 +85,8 @@ func (b *Budgets) views(ctx context.Context) ([]BudgetView, error) {
 	out := []BudgetView{}
 	for _, bu := range l.Items {
 		v := BudgetView{Name: bu.Name, Group: bu.Spec.Group, GroupLimit: bu.Spec.GroupRequestsPerDay, UserLimit: bu.Spec.UserRequestsPerDay,
-			Users: []UserUse{}, Ready: "Unknown", ResetsAt: day.Add(24 * time.Hour), GitManaged: gitManaged(bu.Annotations)}
+			Users: []UserUse{}, Ready: "Unknown", ResetsAt: day.Add(24 * time.Hour), GitManaged: gitManaged(bu.Annotations),
+			GroupDollarLimit: bu.Spec.GroupDollarsPerDay, UserDollarLimit: bu.Spec.UserDollarsPerDay}
 		if c := meta.FindStatusCondition(bu.Status.Conditions, "Ready"); c != nil {
 			v.Ready, v.Message = string(c.Status), c.Message
 		}
@@ -97,7 +105,26 @@ func (b *Budgets) views(ctx context.Context) ([]BudgetView, error) {
 		if n, err := b.Valkey.get(ctx, groupKey+suffix); err == nil { // the group key has no "_user_" part
 			v.GroupUsed = n
 		}
+		// Dollar spend, in units of $0.00001: "<domain>_spend_group_<group>[_spend_user_<email>]_<day>".
+		spendKey := budgetDomain + "_spend_group_" + bu.Spec.Group
+		if spend, err := b.Valkey.counts(ctx, spendKey+"_spend_user_*"+suffix); err == nil {
+			for k, n := range spend {
+				email := strings.TrimSuffix(strings.TrimPrefix(k, spendKey+"_spend_user_"), suffix)
+				i := slices.IndexFunc(v.Users, func(u UserUse) bool { return u.Email == email })
+				if i < 0 {
+					v.Users = append(v.Users, UserUse{Email: email})
+					i = len(v.Users) - 1
+				}
+				v.Users[i].Spent = float64(n) / pricing.UnitsPerDollar
+			}
+		}
+		if n, err := b.Valkey.get(ctx, spendKey+suffix); err == nil {
+			v.GroupSpent = float64(n) / pricing.UnitsPerDollar
+		}
 		sort.Slice(v.Users, func(i, j int) bool {
+			if v.Users[i].Spent != v.Users[j].Spent {
+				return v.Users[i].Spent > v.Users[j].Spent
+			}
 			if v.Users[i].Used != v.Users[j].Used {
 				return v.Users[i].Used > v.Users[j].Used
 			}
@@ -235,12 +262,25 @@ func (vk Valkey) counts(ctx context.Context, pattern string) (map[string]int64, 
 	}
 }
 
+// friendlyDollarError says what is wrong with a dollar limit in the form's own words.
+func friendlyDollarError(err error) string {
+	switch {
+	case strings.Contains(err.Error(), "largest"):
+		return "a dollar limit must be at most 42949.67"
+	case strings.Contains(err.Error(), "decimals"):
+		return "a dollar limit has at most 5 decimals"
+	}
+	return "a dollar limit must be greater than 0, like 50 or 0.5"
+}
+
 // BudgetInput is the Budgets form. Name is ignored on update (the path names the budget).
 type BudgetInput struct {
 	Name                string `json:"name"`
 	Group               string `json:"group"`
 	GroupRequestsPerDay *int64 `json:"groupRequestsPerDay"`
 	UserRequestsPerDay  *int64 `json:"userRequestsPerDay"`
+	GroupDollarsPerDay  string `json:"groupDollarsPerDay"`
+	UserDollarsPerDay   string `json:"userDollarsPerDay"`
 }
 
 // checkBudget validates the form; self is the budget being edited ("" when creating). A second
@@ -249,10 +289,18 @@ func (c *Catalog) checkBudget(r *http.Request, in BudgetInput, self string) (int
 	switch {
 	case !groupRE.MatchString(in.Group):
 		return http.StatusBadRequest, fmt.Errorf("group %q may only contain letters, digits and . _ @ / -", in.Group)
-	case in.GroupRequestsPerDay == nil && in.UserRequestsPerDay == nil:
-		return http.StatusBadRequest, errors.New("set a limit for the whole group, for each person, or both")
+	case in.GroupRequestsPerDay == nil && in.UserRequestsPerDay == nil && in.GroupDollarsPerDay == "" && in.UserDollarsPerDay == "":
+		return http.StatusBadRequest, errors.New("set at least one limit: requests or dollars, for the whole group or for each person")
 	case (in.GroupRequestsPerDay != nil && *in.GroupRequestsPerDay < 1) || (in.UserRequestsPerDay != nil && *in.UserRequestsPerDay < 1):
 		return http.StatusBadRequest, errors.New("a limit must be at least 1 request per day")
+	}
+	for _, d := range []string{in.GroupDollarsPerDay, in.UserDollarsPerDay} {
+		if d == "" {
+			continue
+		}
+		if _, err := pricing.Units(d); err != nil {
+			return http.StatusBadRequest, errors.New(friendlyDollarError(err))
+		}
 	}
 	var l v1.BudgetList
 	if err := c.Client.List(r.Context(), &l, client.InNamespace(c.Namespace)); err != nil {
@@ -284,7 +332,8 @@ func (c *Catalog) createBudget(w http.ResponseWriter, r *http.Request, s Session
 		return
 	}
 	b := &v1.Budget{ObjectMeta: metav1.ObjectMeta{Name: in.Name, Namespace: c.Namespace, Annotations: map[string]string{createdByKey: s.Email}},
-		Spec: v1.BudgetSpec{Group: in.Group, GroupRequestsPerDay: in.GroupRequestsPerDay, UserRequestsPerDay: in.UserRequestsPerDay}}
+		Spec: v1.BudgetSpec{Group: in.Group, GroupRequestsPerDay: in.GroupRequestsPerDay, UserRequestsPerDay: in.UserRequestsPerDay,
+			GroupDollarsPerDay: in.GroupDollarsPerDay, UserDollarsPerDay: in.UserDollarsPerDay}}
 	if c.GitOps != nil {
 		// A pull request for an existing file would replace that budget, not add one.
 		var existing v1.Budget
@@ -341,7 +390,8 @@ func (c *Catalog) updateBudget(w http.ResponseWriter, r *http.Request, s Session
 		}
 		return
 	}
-	b.Spec = v1.BudgetSpec{Group: in.Group, GroupRequestsPerDay: in.GroupRequestsPerDay, UserRequestsPerDay: in.UserRequestsPerDay}
+	b.Spec = v1.BudgetSpec{Group: in.Group, GroupRequestsPerDay: in.GroupRequestsPerDay, UserRequestsPerDay: in.UserRequestsPerDay,
+		GroupDollarsPerDay: in.GroupDollarsPerDay, UserDollarsPerDay: in.UserDollarsPerDay}
 	if c.GitOps != nil {
 		c.propose(w, r, s, "update", "Budget", "budgets", b.Name, b.Spec, consoleAnnotations(b.Annotations))
 		return

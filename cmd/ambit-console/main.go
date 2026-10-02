@@ -15,6 +15,7 @@ import (
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/console"
+	"github.com/craftsman-apps/ambit/internal/pricing"
 	"github.com/craftsman-apps/ambit/web"
 	"github.com/dexidp/dex/api/v2"
 	"google.golang.org/grpc"
@@ -186,7 +187,7 @@ func run(ctx context.Context) error {
 			if objects.List(ctx, &l, client.InNamespace(ns)) != nil {
 				return nil
 			}
-			return console.PricesByModel(l.Items)
+			return pricing.ByModel(l.Items)
 		}
 	}
 	var budgets *console.Budgets
@@ -202,10 +203,12 @@ func run(ctx context.Context) error {
 	if conns != nil {
 		scim = &console.SCIM{Client: objects, Namespace: ns, Token: keys.SCIMToken, Conns: conns, Sessions: auth.Sessions}
 	}
+	prices := &console.PriceSource{URL: os.Getenv("AMBIT_PRICES_URL")}
+	go prices.Run(ctx)
 	deps := &console.Dependencies{Client: objects, Namespace: ns, Audit: audit, Budgets: budgets,
 		RatelimitMode: os.Getenv("AMBIT_RATELIMIT_FAILURE_MODE"), Protection: os.Getenv("AMBIT_PROTECTION") == "true"}
 	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), console.LoginOptions{Bootstrap: bootstrapAdmin, SSO: sso},
-		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, Budgets: budgets, Dependencies: deps}), ReadHeaderTimeout: 10 * time.Second}
+		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, Budgets: budgets, Dependencies: deps, Prices: prices}), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)

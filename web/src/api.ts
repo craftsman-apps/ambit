@@ -35,9 +35,17 @@ export function useLoginOptions() {
   });
 }
 
+export type ModelPrice = { inputPerMillionTokens: string; outputPerMillionTokens: string };
 export type ModelView = {
   name: string; displayName: string; model: string; provider: string;
   allowedGroups: string[]; allSignedIn: boolean; ready: string; message: string;
+  price: ModelPrice | null;
+};
+// A model's price and the suggestion from LiteLLM's list (admins only).
+export type PriceInfo = {
+  price: ModelPrice | null;
+  suggestion: (ModelPrice & { key: string; source: string; commit: string; date: string }) | null;
+  listError: string; licenceURL: string;
 };
 // One condition on one argument of a tool call (requirement 8); ambit-guard enforces it.
 export type ArgumentRule = { name: string; oneOf?: string[]; notContains?: string[]; max?: string };

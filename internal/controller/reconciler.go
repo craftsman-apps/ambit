@@ -142,9 +142,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	if err := r.Live.List(ctx, &budgets, client.InNamespace(r.Namespace)); err != nil {
 		return reconcile.Result{}, err
 	}
+	prices := pricing.ByModel(models.Items)
+	refused := refuseUnpricedIfEnforced(r.RateLimit, &res, models.Items, prices, budgets.Items)
 	budgetPolicy := false
 	if r.RateLimit.Service != "" {
-		cfg, p := compileBudgets(budgets.Items, pricing.ByModel(models.Items), r.Namespace, r.RateLimit, r.Route.Name)
+		cfg, p := compileBudgets(budgets.Items, prices, r.Namespace, r.RateLimit, r.Route.Name)
 		res.Objects = append(res.Objects, rateLimitConfigMap(r.Namespace, cfg))
 		if p != nil {
 			res.Objects = append(res.Objects, p)
@@ -223,7 +225,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		a := res.Access[m.Name]
 		next := m.DeepCopy()
 		next.Status.AllowedGroups, next.Status.AllowAllSignedIn = a.Groups, a.AllSignedIn
-		setReady(&next.Status.Conditions, conds["Model/"+m.Name], m.Generation)
+		c := conds["Model/"+m.Name]
+		if gs := refused[m.Name]; len(gs) > 0 && c.Status == metav1.ConditionTrue {
+			c.Message = strings.TrimPrefix(c.Message+"; "+unpricedMessage(gs), "; ")
+		}
+		setReady(&next.Status.Conditions, c, m.Generation)
 		if err := r.updateStatus(ctx, m.Status, next.Status, next); err != nil {
 			return reconcile.Result{}, err
 		}

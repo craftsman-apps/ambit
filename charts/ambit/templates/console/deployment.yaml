@@ -34,6 +34,9 @@ spec:
             # Go reads every directory in SSL_CERT_DIR: system CAs plus the extra one.
             - { name: SSL_CERT_DIR, value: "/etc/ssl/certs:/etc/ambit/ca" }
             {{- end }}
+            {{- with .Values.prices.sourceURL }}
+            - { name: AMBIT_PRICES_URL, value: {{ . | quote }} }
+            {{- end }}
             {{- if .Values.mcp.enabled }}
             - { name: AMBIT_GRANTS_NAMESPACE, value: {{ .Values.connections.grantsNamespace | default (printf "%s-grants" .Release.Namespace) | quote }} }
             {{- end }}

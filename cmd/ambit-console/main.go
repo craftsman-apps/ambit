@@ -203,6 +203,8 @@ func run(ctx context.Context) error {
 	if conns != nil {
 		scim = &console.SCIM{Client: objects, Namespace: ns, Token: keys.SCIMToken, Conns: conns, Sessions: auth.Sessions}
 	}
+	prices := &console.PriceSource{URL: os.Getenv("AMBIT_PRICES_URL")}
+	go prices.Run(ctx)
 	deps := &console.Dependencies{Client: objects, Namespace: ns, Audit: audit, Budgets: budgets,
 		RatelimitMode: os.Getenv("AMBIT_RATELIMIT_FAILURE_MODE"), Protection: os.Getenv("AMBIT_PROTECTION") == "true"}
 	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), console.LoginOptions{Bootstrap: bootstrapAdmin, SSO: sso},

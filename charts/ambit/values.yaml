@@ -77,6 +77,12 @@ gitops:
     # console reads its sync status (read only) to show when a merged change reached the cluster.
     application: ""
 
+prices:
+  # HTTPS address of a copy of LiteLLM's model_prices_and_context_window.json (for example an internal
+  # mirror). Empty: the console suggests prices from the list built into this release only. Read at start
+  # and once a day; redirects are not followed and the file may be at most 10 MiB.
+  sourceURL: ""
+
 mcp:
   # Serve MCP at <host>/mcp. Servers and tool access come from Server and AccessRule objects;
   # ToolHive runs each server in a pod that only the gateway can reach.

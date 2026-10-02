@@ -121,6 +121,14 @@ evidence:
     image: otel/opentelemetry-collector-contrib:0.161.0@sha256:fd328de2552466ad78385e1b1289c3f2402b1c45f265b252aab1955b42845ac1
     resources: { requests: { cpu: 50m, memory: 64Mi }, limits: { memory: 256Mi } }
 
+alerts:
+  # Prometheus alert rules for every Ambit component (a PrometheusRule and a PodMonitor, for the Prometheus
+  # Operator): restarts, memory kills, memory near the limit, unavailable workloads, the budget store
+  # down, and lost audit records. They read kube-state-metrics and cAdvisor (kube-prometheus-stack has both).
+  enabled: false
+  # Labels your Prometheus selects rules and monitors by, e.g. { release: kube-prometheus-stack }.
+  labels: {}
+
 protection:
   # MCP guardrails (ambit-guard): tool pinning and masking of personal data in tool results.
   enabled: false

@@ -1,0 +1,89 @@
+{{- if .Values.alerts.enabled }}
+{{- $ns := .Release.Namespace }}
+# Alerts for every Ambit component (requirement S3). They read kube-state-metrics and cAdvisor, which
+# kube-prometheus-stack installs, and the collector's own metrics (the PodMonitor below).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ambit
+  {{- with .Values.alerts.labels }}
+  labels: {{ toJson . }}
+  {{- end }}
+spec:
+  groups:
+    - name: ambit
+      rules:
+        - alert: AmbitContainerRestarting
+          expr: increase(kube_pod_container_status_restarts_total{namespace="{{ $ns }}"}[30m]) >= 2
+          labels: { severity: warning }
+          annotations:
+            summary: "{{`{{ $labels.pod }}`}} ({{`{{ $labels.container }}`}}) restarted {{`{{ $value | printf \"%.0f\" }}`}} times in 30 minutes"
+            description: "Read the reason with kubectl -n {{ $ns }} describe pod {{`{{ $labels.pod }}`}} (Last State)."
+        - alert: AmbitContainerOOMKilled
+          expr: |
+            (kube_pod_container_status_last_terminated_reason{namespace="{{ $ns }}", reason="OOMKilled"} == 1)
+              and on (namespace, pod, container)
+            (increase(kube_pod_container_status_restarts_total{namespace="{{ $ns }}"}[30m]) > 0)
+          labels: { severity: warning }
+          annotations:
+            summary: "{{`{{ $labels.pod }}`}} ({{`{{ $labels.container }}`}}) was killed at its memory limit"
+            description: "Raise the container's memory limit in the chart values, or find what grew (docs/alerts.md)."
+        - alert: AmbitMemoryNearLimit
+          expr: |
+            max by (namespace, pod, container) (container_memory_working_set_bytes{namespace="{{ $ns }}", container!=""})
+              / on (namespace, pod, container)
+            max by (namespace, pod, container) (kube_pod_container_resource_limits{namespace="{{ $ns }}", resource="memory"})
+              > 0.9
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{`{{ $labels.pod }}`}} ({{`{{ $labels.container }}`}}) uses {{`{{ $value | humanizePercentage }}`}} of its memory limit"
+            description: "At 100% the container is killed and restarts."
+        - alert: AmbitWorkloadUnavailable
+          expr: |
+            (kube_deployment_status_replicas_available{namespace="{{ $ns }}"} < kube_deployment_spec_replicas{namespace="{{ $ns }}"})
+              or
+            (kube_statefulset_status_replicas_ready{namespace="{{ $ns }}"} < kube_statefulset_replicas{namespace="{{ $ns }}"})
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{`{{ $labels.deployment }}{{ $labels.statefulset }}`}} has fewer ready pods than it should for 10 minutes"
+            description: "kubectl -n {{ $ns }} get pods; kubectl -n {{ $ns }} get events --sort-by=.lastTimestamp"
+        {{- if .Values.limits.enabled }}
+        - alert: AmbitBudgetStoreDown
+          expr: kube_deployment_status_replicas_available{namespace="{{ $ns }}", deployment=~"ambit-ratelimit|ambit-valkey"} == 0
+          for: 1m
+          labels: { severity: critical }
+          annotations:
+            summary: "{{`{{ $labels.deployment }}`}} is down: budgets are not enforced"
+            {{- if eq .Values.limits.failureMode "FailClosed" }}
+            description: "limits.failureMode is FailClosed: the gateway refuses LLM and MCP requests until it is back."
+            {{- else }}
+            description: "limits.failureMode is FailOpen: requests pass uncounted until it is back."
+            {{- end }}
+        {{- end }}
+        {{- if .Values.evidence.enabled }}
+        - alert: AmbitAuditLogsDropped
+          expr: |
+            sum by (namespace, pod) (increase(otelcol_exporter_send_failed_log_records_total{namespace="{{ $ns }}"}[10m])) > 0
+              or
+            sum by (namespace, pod) (increase(otelcol_receiver_refused_log_records_total{namespace="{{ $ns }}"}[10m])) > 0
+          labels: { severity: critical }
+          annotations:
+            summary: "Audit records were lost in the last 10 minutes ({{`{{ $value | printf \"%.0f\" }}`}})"
+            description: "The collector could not write to ClickHouse, or refused records near its memory limit. Check ClickHouse first: kubectl -n {{ $ns }} logs deploy/ambit-otel-collector"
+        {{- end }}
+{{- if .Values.evidence.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: ambit-otel-collector
+  {{- with .Values.alerts.labels }}
+  labels: {{ toJson . }}
+  {{- end }}
+spec:
+  selector: { matchLabels: { app.kubernetes.io/name: ambit-otel-collector } }
+  podMetricsEndpoints: [{ port: metrics }]
+{{- end }}
+{{- end }}

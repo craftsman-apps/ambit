@@ -31,6 +31,8 @@ jobs:
           helm template ambit charts/ambit -n ambit-system -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml > /tmp/r1
           helm template ambit charts/ambit -n ambit-system -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml > /tmp/r2
           cmp /tmp/r1 /tmp/r2
+      - name: Alert rules (promtool unit tests)
+        run: test/alerts.sh
 
   e2e:
     needs: build

@@ -51,6 +51,10 @@ rules:
   - apiGroups: [ambitproject.dev]
     resources: [accessrules, budgets, connections]
     verbs: [create, update, delete]
+  # Edit price (Models page): the console changes only spec.price, admins only.
+  - apiGroups: [ambitproject.dev]
+    resources: [models]
+    verbs: [update]
   # Anyone signed in may request a server; approving one creates the Server. The console never
   # updates or deletes Servers, and records a decision only in the request's status.
   - apiGroups: [ambitproject.dev]

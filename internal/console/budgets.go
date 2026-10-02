@@ -102,12 +102,14 @@ func (b *Budgets) views(ctx context.Context) ([]BudgetView, error) {
 				v.Users = append(v.Users, UserUse{Email: strings.TrimSuffix(strings.TrimPrefix(k, groupKey+"_user_"), suffix), Used: n})
 			}
 		}
-		if n, err := b.Valkey.get(ctx, groupKey+suffix); err == nil { // the group key has no "_user_" part
-			v.GroupUsed = n
-		}
+		// A read that fails shows "counts unavailable", never a misleading 0 or $0.
+		n, err := b.Valkey.get(ctx, groupKey+suffix) // the group key has no "_user_" part
+		v.GroupUsed, v.CountsMissing = n, err != nil
 		// Dollar spend, in units of $0.00001: "<domain>_spend_group_<group>[_spend_user_<email>]_<day>".
 		spendKey := budgetDomain + "_spend_group_" + bu.Spec.Group
-		if spend, err := b.Valkey.counts(ctx, spendKey+"_spend_user_*"+suffix); err == nil {
+		spend, err := b.Valkey.counts(ctx, spendKey+"_spend_user_*"+suffix)
+		v.CountsMissing = v.CountsMissing || err != nil
+		if err == nil {
 			for k, n := range spend {
 				email := strings.TrimSuffix(strings.TrimPrefix(k, spendKey+"_spend_user_"), suffix)
 				i := slices.IndexFunc(v.Users, func(u UserUse) bool { return u.Email == email })
@@ -118,9 +120,8 @@ func (b *Budgets) views(ctx context.Context) ([]BudgetView, error) {
 				v.Users[i].Spent = float64(n) / pricing.UnitsPerDollar
 			}
 		}
-		if n, err := b.Valkey.get(ctx, spendKey+suffix); err == nil {
-			v.GroupSpent = float64(n) / pricing.UnitsPerDollar
-		}
+		n, err = b.Valkey.get(ctx, spendKey+suffix)
+		v.GroupSpent, v.CountsMissing = float64(n)/pricing.UnitsPerDollar, v.CountsMissing || err != nil
 		sort.Slice(v.Users, func(i, j int) bool {
 			if v.Users[i].Spent != v.Users[j].Spent {
 				return v.Users[i].Spent > v.Users[j].Spent

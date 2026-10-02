@@ -2,7 +2,9 @@ package console
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -30,6 +32,38 @@ type Dependencies struct {
 	Budgets       *Budgets // nil: limits off
 	RatelimitMode string   // FailOpen or FailClosed, from limits.failureMode
 	Protection    bool     // ambit-guard installed
+	XDSAddr       string   // agentgateway's control plane (xDS), host:port; empty skips the certificate check
+	Now           func() time.Time
+}
+
+// xdsCertificate reads the expiry of the certificate agentgateway's control plane serves to gateway pods.
+// It renews it 12 hours before expiry (24-hour lifetime); after expiry new gateway pods cannot get their
+// configuration (seen 2026-10-02: the renewal did not happen, and new pods stayed not ready).
+func (d *Dependencies) xdsCertificate(ctx context.Context) (bool, string) {
+	now := time.Now()
+	if d.Now != nil {
+		now = d.Now()
+	}
+	// Only the dates are read, so the chain is not verified; nothing is sent over the connection.
+	dialer := &tls.Dialer{NetDialer: &net.Dialer{}, Config: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec
+	conn, err := dialer.DialContext(ctx, "tcp", d.XDSAddr)
+	if err != nil {
+		return answered(err, "")
+	}
+	defer conn.Close()
+	certs := conn.(*tls.Conn).ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return false, "no certificate from " + d.XDSAddr
+	}
+	end := certs[0].NotAfter.UTC()
+	at := end.Format("2006-01-02 15:04 UTC")
+	switch left := end.Sub(now); {
+	case left <= 0:
+		return false, "expired " + at + ". Restart the control plane: kubectl rollout restart deploy/ambit-agentgateway"
+	case left < 11*time.Hour:
+		return false, "not renewed: expires " + at + ". Restart the control plane before then: kubectl rollout restart deploy/ambit-agentgateway"
+	}
+	return true, "valid until " + at
 }
 
 type depCheck struct {
@@ -76,6 +110,11 @@ func (d *Dependencies) checks() []depCheck {
 		{Dependency{Name: "Dex", Purpose: "Signs people in through your identity provider", Mode: "partial",
 			WhenDown: "New sign-ins fail. Tokens already issued keep working until they expire."},
 			d.workload(&appsv1.Deployment{}, "ambit-dex")},
+	}
+	if d.XDSAddr != "" {
+		out = append(out, depCheck{Dependency{Name: "Gateway control plane", Purpose: "Sends configuration to gateway pods over TLS",
+			Mode: "partial", WhenDown: "Running gateway pods keep their last configuration. New or restarted gateway pods cannot start, and changes do not reach the gateway."},
+			d.xdsCertificate})
 	}
 	if d.Budgets != nil {
 		mode, when := "fail-open", "LLM requests pass without being counted against budgets (limits.failureMode: FailOpen)."

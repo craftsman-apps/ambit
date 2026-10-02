@@ -167,6 +167,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 
 	// Ready condition per Ambit object that controls a generated object, keyed "Kind/name".
 	conds := map[string]metav1.Condition{}
+	applyFailed := false
 	for _, desired := range res.Objects {
 		name, kind := desired.GetName(), desired.GetKind()
 		owner := controllerOwner(desired) // "" for the shared MCP backend and policy
@@ -192,6 +193,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 				return reconcile.Result{}, err
 			}
 			conds[owner] = cond(metav1.ConditionFalse, "ApplyFailed", err.Error())
+			applyFailed = true
 			continue
 		}
 		switch kind {
@@ -218,6 +220,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		if c.Status == metav1.ConditionUnknown {
 			result.RequeueAfter = 5 * time.Second
 		}
+	}
+	// A failed apply is retried on its own; otherwise it waits for an unrelated change, and meanwhile the
+	// gateway keeps the old object (e.g. without the refusal of an unpriced model to capped groups).
+	if applyFailed && result.RequeueAfter == 0 {
+		result.RequeueAfter = 10 * time.Second
 	}
 
 	for i := range models.Items {

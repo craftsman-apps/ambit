@@ -58,6 +58,8 @@ spec:
             {{- end }}
             {{- end }}{{ end }}
             {{- end }}
+            # agentgateway's control plane (the subchart's Service), for the certificate check on the Dependencies page
+            - { name: AMBIT_XDS_ADDR, value: "{{ .Release.Name }}-agentgateway.{{ .Release.Namespace }}.svc:9978" }
             {{- if .Values.limits.enabled }}
             - { name: AMBIT_VALKEY_ADDR, value: {{ include "ambit.valkey.address" . | quote }} }
             - { name: AMBIT_RATELIMIT_FAILURE_MODE, value: {{ .Values.limits.failureMode | quote }} }

@@ -76,9 +76,13 @@ func ParseLiteLLM(data []byte, source, commit, date string) (*PriceList, error) 
 			}
 			continue
 		}
+		if key == "sample_spec" {
+			continue // LiteLLM's description of the fields, not a model
+		}
 		var probe map[string]any
 		if json.Unmarshal(msg, &probe) != nil {
-			continue // not an entry (e.g. LiteLLM's "sample_spec" text)
+			// skipped, the model would silently lose its suggestion; a damaged file is rejected instead
+			return nil, fmt.Errorf("price list entry %q is not an object", key)
 		}
 		in, hasIn := probe["input_cost_per_token"]
 		out, hasOut := probe["output_cost_per_token"]

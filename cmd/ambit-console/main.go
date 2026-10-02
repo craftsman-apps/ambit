@@ -206,7 +206,8 @@ func run(ctx context.Context) error {
 	prices := &console.PriceSource{URL: os.Getenv("AMBIT_PRICES_URL")}
 	go prices.Run(ctx)
 	deps := &console.Dependencies{Client: objects, Namespace: ns, Audit: audit, Budgets: budgets,
-		RatelimitMode: os.Getenv("AMBIT_RATELIMIT_FAILURE_MODE"), Protection: os.Getenv("AMBIT_PROTECTION") == "true"}
+		RatelimitMode: os.Getenv("AMBIT_RATELIMIT_FAILURE_MODE"), Protection: os.Getenv("AMBIT_PROTECTION") == "true",
+		XDSAddr: os.Getenv("AMBIT_XDS_ADDR")}
 	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), console.LoginOptions{Bootstrap: bootstrapAdmin, SSO: sso},
 		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, Budgets: budgets, Dependencies: deps, Prices: prices}), ReadHeaderTimeout: 10 * time.Second}
 	go func() {

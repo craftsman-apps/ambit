@@ -143,7 +143,7 @@ func (c *Catalog) createApp(w http.ResponseWriter, r *http.Request, s Session) {
 		Spec: v1.ConnectionSpec{DisplayName: strings.TrimSpace(in.DisplayName), AuthorizationURL: in.AuthorizationURL, TokenURL: in.TokenURL,
 			RevocationURL: in.RevocationURL, ClientID: in.ClientID, ClientSecretRef: v1.SecretRef{Name: secretName}, Scopes: in.Scopes}}
 	if c.GitOps != nil {
-		c.propose(w, r, s, "add", "Connection", "connections", in.Name, conn.Spec, conn.Annotations)
+		c.propose(w, r, s, "add", "Connection", "connections", in.Name, conn.Spec, conn.Labels, conn.Annotations)
 		return
 	}
 	if err := c.Client.Create(r.Context(), conn); err != nil {
@@ -173,7 +173,7 @@ func (c *Catalog) deleteApp(w http.ResponseWriter, r *http.Request, s Session) {
 	if c.GitOps != nil {
 		// ponytail: after the pull request merges, the app's grants and Secret ambit-conn-<name> stay
 		// until someone removes them (Token already refuses a removed app); a controller could clean up.
-		c.propose(w, r, s, "delete", "Connection", "connections", conn.Name, nil, nil)
+		c.propose(w, r, s, "delete", "Connection", "connections", conn.Name, nil, nil, nil)
 		return
 	}
 	// Revoke every user's grant at the provider while the app (its URLs and secret) still exists.

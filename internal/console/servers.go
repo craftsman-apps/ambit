@@ -405,7 +405,7 @@ func (c *Catalog) approveRequest(w http.ResponseWriter, r *http.Request, s Sessi
 	if c.GitOps != nil {
 		// GitOps mode: approval opens the pull request; merging it is the second review, and the
 		// Server appears when Argo CD syncs.
-		manifest, err := Manifest("Server", srv.Name, srv.Annotations, srv.Spec)
+		manifest, err := Manifest("Server", srv.Name, srv.Labels, srv.Annotations, srv.Spec)
 		if err != nil {
 			serverErr(w, err)
 			return

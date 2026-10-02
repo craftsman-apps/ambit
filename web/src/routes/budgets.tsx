@@ -34,6 +34,9 @@ function Bar({ used, limit }: { used: number; limit: number }) {
   );
 }
 
+// Under a cent, the exact amount (one unit is $0.00001), so a small spend does not read as $0.00.
+const dollars = (n: number) => (n > 0 && n < 0.01 ? n.toFixed(5).replace(/0+$/, "") : n.toFixed(2));
+
 // Spend in dollars against a dollar cap, estimated from model prices.
 function Spend({ spent, limit }: { spent: number; limit: string }) {
   const cap = Number(limit);
@@ -44,7 +47,7 @@ function Spend({ spent, limit }: { spent: number; limit: string }) {
       <span className="block h-1.5 w-32 overflow-hidden rounded-full bg-line-soft" role="meter" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${pct}% of the dollar limit spent`}>
         <span className={`block h-full ${tone}`} style={{ width: `${pct}%` }} />
       </span>
-      <span className="font-mono text-[12px] tabular-nums">${spent.toFixed(2)} of ${limit} (estimated)</span>
+      <span className="font-mono text-[12px] tabular-nums">${dollars(spent)} of ${limit} (estimated)</span>
     </span>
   );
 }

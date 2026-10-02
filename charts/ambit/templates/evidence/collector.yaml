@@ -30,7 +30,7 @@ spec:
           env:
             - name: CLICKHOUSE_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ include "ambit.clickhouse.passwordSecret" . }}, key: password } }
-          ports: [{ name: otlp, containerPort: 4317 }]
+          ports: [{ name: otlp, containerPort: 4317 }, { name: metrics, containerPort: 8888 }]
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
           resources: {{ toJson .Values.evidence.collector.resources }}
           volumeMounts:

@@ -69,3 +69,16 @@ func TestWildcardModelNamesAreUnpriced(t *testing.T) {
 		t.Fatalf("%v", got)
 	}
 }
+
+func TestMicros(t *testing.T) {
+	for in, want := range map[string]uint64{"1.00": 1_000_000, "0.15": 150_000, "0": 0, "0.000001": 1, "999999.999999": 999_999_999_999} {
+		if got, err := Micros(in); err != nil || got != want {
+			t.Errorf("Micros(%q) = %d, %v; want %d", in, got, err, want)
+		}
+	}
+	for _, in := range []string{"x", "-1", "0.0000001", "1e3", "1/2"} {
+		if _, err := Micros(in); err == nil {
+			t.Errorf("Micros(%q) accepted", in)
+		}
+	}
+}

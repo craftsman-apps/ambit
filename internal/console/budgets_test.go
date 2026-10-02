@@ -183,3 +183,23 @@ func TestBudgetViewShowsSpend(t *testing.T) {
 		t.Fatalf("users %+v", v.Users)
 	}
 }
+
+// A spend counter that cannot be read must not show as $0 spent.
+func TestBudgetViewSpendReadFailure(t *testing.T) {
+	now := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	day := strconv.FormatInt(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC).Unix(), 10)
+	for name, data := range map[string]map[string]string{
+		"group":  {"ambit-llm_spend_group_ml-research_" + day: "not a number"},
+		"person": {"ambit-llm_spend_group_ml-research_spend_user_mira@acme.test_" + day: "not a number"},
+	} {
+		scheme := runtime.NewScheme()
+		_ = v1.AddToScheme(scheme)
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(&v1.Budget{ObjectMeta: metav1.ObjectMeta{Name: "ml", Namespace: testNS},
+			Spec: v1.BudgetSpec{Group: "ml-research", GroupDollarsPerDay: "50", UserDollarsPerDay: "5"}}).Build()
+		b := &Budgets{Client: c, Namespace: testNS, Valkey: Valkey{Addr: fakeValkey(t, data)}, Now: func() time.Time { return now }}
+		got, err := b.views(t.Context())
+		if err != nil || !got[0].CountsMissing {
+			t.Errorf("%s spend unreadable: %+v %v", name, got, err)
+		}
+	}
+}

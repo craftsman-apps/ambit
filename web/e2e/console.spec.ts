@@ -215,6 +215,16 @@ test("Budgets page sets a dollar limit and shows estimated spend", async ({ page
   await page.getByRole("button", { name: "Add budget" }).click();
   const row = page.getByTestId("budget-ui-dollars");
   await expect(row.getByText("$0.00 of $50 (estimated)")).toBeVisible();
+  // 3 units ($0.00003) spent: shown exactly, not as $0.00
+  const key = `ambit-llm_spend_group_ui-dollars_${Math.floor(Date.now() / 86_400_000) * 86_400}`;
+  const valkey = (...a: string[]) => execFileSync("kubectl", ["-n", "ambit-system", "exec", "deploy/ambit-valkey", "--", "valkey-cli", ...a]);
+  valkey("SET", key, "3");
+  try {
+    await page.reload();
+    await expect(row.getByText("$0.00003 of $50 (estimated)")).toBeVisible();
+  } finally {
+    valkey("DEL", key);
+  }
   await row.getByRole("button", { name: "Delete" }).click();
   await row.getByRole("button", { name: "Remove budget" }).click();
   await expect(row).toHaveCount(0);

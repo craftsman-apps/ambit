@@ -176,7 +176,7 @@ answer=$(command curl -s -H "Authorization: Bearer $(token mira)" -H 'X-Ambit-Us
 pass "C14 LLM requests parsed: model $model, $tin input and $tout output tokens logged; an unparsed path is refused (403); a client's X-Ambit-User does not reach the model"
 
 # C15 · dollar budgets: envoy ratelimit keeps spend under ambit-llm_spend_group_<group>_<day>, and the cost
-#       expression (math.ceil over price maps) runs in the gateway: one mock answer adds exactly 3 units.
+#       expression (integer arithmetic over price maps) runs in the gateway: one mock answer adds exactly 3 units.
 trap 'rc=$?; kubectl -n "$NS" delete "budgets.$G" contract-ml --ignore-not-found >/dev/null 2>&1; on_exit $rc' EXIT
 kubectl -n "$NS" apply -f - >/dev/null <<YAML
 apiVersion: $G/v1alpha1
@@ -196,6 +196,21 @@ g1=$(vget "$gk"); u1=$(vget "$uk")
 kubectl -n "$NS" delete "budgets.$G" contract-ml --ignore-not-found >/dev/null
 [[ "$g1" == $(( ${g0:-0} + 3 )) && "$u1" == $(( ${u0:-0} + 3 )) ]] || fail "C15 spend keys or cost changed: $gk ${g0:-0}->$g1, $uk ${u0:-0}->$u1 (want +3 each)"
 pass "C15 spend counters: one answer added 3 units to $gk and to the person's key"
+
+# C16 · agentgateway's control plane renews the certificate it serves to gateway pods 12 hours before expiry
+#       (24-hour lifetime), so more than 11 hours are always left. On 2026-10-02 it was not renewed, and new
+#       gateway pods stayed not ready once it expired (risk 17). The Dependencies page shows the same date.
+kubectl -n "$NS" port-forward svc/ambit-agentgateway 19978:9978 >/dev/null 2>&1 & pf=$!
+left=$(for _ in $(seq 1 10); do uv run --no-project --with cryptography python -c '
+import datetime, ssl, sys
+from cryptography import x509
+pem = ssl.get_server_certificate(("127.0.0.1", 19978), timeout=3)
+end = x509.load_pem_x509_certificate(pem.encode()).not_valid_after_utc
+print(int((end - datetime.datetime.now(datetime.timezone.utc)).total_seconds() // 3600), end.strftime("%Y-%m-%d %H:%M UTC"))' 2>/dev/null && break; sleep 1; done)
+kill $pf 2>/dev/null || true
+[[ -n "$left" ]] || fail "C16 agentgateway: no certificate on the control plane's xDS port 9978"
+(( ${left%% *} >= 11 )) || fail "C16 agentgateway: the xDS certificate was not renewed, ${left%% *} hours left (expires ${left#* })"
+pass "C16 agentgateway xDS certificate: ${left%% *} hours left (expires ${left#* }); renewal is due at 12"
 
 if kubectl get namespace argocd >/dev/null 2>&1; then
   cm=$(kubectl -n argocd get configmap argocd-cm -o json | uv run --no-project python -c 'import json,sys;print(" ".join(k for k in json.load(sys.stdin)["data"] if "ambitproject.dev" in k))')

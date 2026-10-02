@@ -50,10 +50,24 @@ func TestSuggest(t *testing.T) {
 
 func TestMirrorRejectsBadPrices(t *testing.T) {
 	for _, bad := range []string{`{"x": {"litellm_provider": "openai", "input_cost_per_token": -1, "output_cost_per_token": 1}}`,
-		`{"x": {"litellm_provider": "openai", "input_cost_per_token": "1", "output_cost_per_token": 1}}`, `[1,2]`, `not json`} {
+		`{"x": {"litellm_provider": "openai", "input_cost_per_token": "1", "output_cost_per_token": 1}}`, `[1,2]`, `not json`,
+		// a row that is not an object would silently lose that model's suggestion
+		`{"gpt-4.1": {"litellm_provider": "openai", "input_cost_per_token": 2e-06, "output_cost_per_token": 8e-06}, "claude-x": [3e-06, 1.5e-05]}`} {
 		if _, err := ParseLiteLLM([]byte(bad), "mirror", "", ""); err == nil {
 			t.Errorf("accepted %s", bad)
 		}
+	}
+}
+
+// LiteLLM's own file starts with "sample_spec", a description of the fields; it is not a model.
+func TestSampleSpecIsNotAModel(t *testing.T) {
+	l, err := ParseLiteLLM([]byte(`{"sample_spec": {"input_cost_per_token": 0.0, "litellm_provider": "one of https://docs.litellm.ai/docs/providers"},
+ "gpt-4.1": {"litellm_provider": "openai", "input_cost_per_token": 2e-06, "output_cost_per_token": 8e-06}}`), "mirror", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := l.Suggest(model("OpenAI", "gpt-4.1", "")); !ok {
+		t.Fatal("no suggestion for gpt-4.1")
 	}
 }
 

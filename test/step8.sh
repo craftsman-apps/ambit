@@ -200,10 +200,25 @@ pass "11 not charged: no token counts, a stream cut off before them, embeddings 
 
 fresh
 # 12 · a price change applies to new answers only (10 / 40 per million: 12 + 12 = 24 units an answer)
-set_price 10 40; wait_policy '"mock/echo": 1.0'
+set_price 10 40; wait_policy '"mock/echo": 10000000u'
 ask "$M" mock/echo >/dev/null; wait_spent 27 "12 answer at the new price (3 + 24)"
-set_price 1.00 4.00; wait_policy '"mock/echo": 0.1'
+set_price 1.00 4.00; wait_policy '"mock/echo": 1000000u'
 pass "12 price change: earlier spend kept (3), the next answer charged at the new price (24)"
+
+fresh
+# 14 · the price changes while a streamed answer is still running (its usage arrives 25 s after it starts):
+#      it is charged at the price when it started (3 units), not the new one (24)
+s0=$(spent)
+( ask "$M" mock/echo SLOW true >"$W/slow" ) &
+slow=$!
+sleep 2
+set_price 10 40; wait_policy '"mock/echo": 10000000u'
+wait $slow
+for _ in $(seq 1 30); do [[ "$(spent)" != "$s0" ]] && break; sleep 1; done
+d=$(( $(spent) - ${s0:-0} ))
+set_price 1.00 4.00; wait_policy '"mock/echo": 1000000u'
+[[ "$(cat "$W/slow")" == 200 && "$d" == 3 ]] || fail "14 price change during a stream: status $(cat "$W/slow"), charged $d units (want 3)"
+pass "14 price changed while a streamed answer ran: charged 3 units, the price when it started"
 
 # 13 · parallel requests started under the cap may all finish (documented); once spend is above it, refused
 set_ml '{ group: ml-research, groupDollarsPerDay: "0.00005" }' 'spend_group_ml-research: unit=DAY requests_per_unit=5,'

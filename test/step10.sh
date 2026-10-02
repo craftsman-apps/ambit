@@ -3,7 +3,7 @@
 #   S3 every container in the namespace has a memory limit (chart values, or the LimitRange default).
 #   S1 three gateway replicas: an open MCP session survives losing two pods; budgets hold on every replica.
 #   S2 a rolling update under steady traffic fails no request; budgets still hold afterwards.
-#   S3 a shortened soak (SOAK_SECONDS, default 300): memory of every Ambit component stays flat.
+#   S3 a shortened soak (SOAK_SECONDS, default 300): no restarts, no refused ClickHouse writes, memory flat.
 #   S5 rotating the gateway's session key: new sessions keep working (open ones are recorded, see below).
 #   S6 within minutes, list every running image and find which contain a named package.
 set -euo pipefail
@@ -43,7 +43,7 @@ rollout() {
 }
 restore() {
   helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --wait --timeout 5m >/dev/null 2>&1 || true
-  kubectl -n "$NS" delete "budgets.$G" eng --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete "budgets.$G" eng soak --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" exec deploy/ambit-valkey -- sh -c "valkey-cli --scan --pattern 'ambit-llm*' | xargs -r valkey-cli del" >/dev/null 2>&1 || true
 }
 trap 'rc=$?; restore; on_exit $rc' EXIT
@@ -111,38 +111,83 @@ read -r ok bad <"$W/s2"
 [[ $(outcome "$(token alice)") == blocked ]] || fail "S2 budget not enforced after the update"
 pass "S2 rolling restart of gateway, console, controller and guard under traffic: $ok MCP requests, 0 failed; budget still enforced"
 
-# S3 · shortened soak: steady MCP traffic, memory of every component stays flat
+# S3 · soak: steady MCP and LLM traffic. No Ambit container restarts, ClickHouse accepts every write, and
+#      memory stays flat: per pod, the average of the last quarter of samples against the first quarter.
+#      (Two single readings are not enough: the collector's memory swings by 100 MiB between them.)
 kubectl -n "$NS" delete "budgets.$G" eng >/dev/null
+# A dollar budget, so each LLM answer also runs the cost expression and the spend counter.
+kubectl -n "$NS" apply -f - >/dev/null <<YAML
+apiVersion: $G/v1alpha1
+kind: Budget
+metadata: { name: soak }
+spec: { group: ml-research, groupDollarsPerDay: "1000" }
+YAML
+SOAK_SAMPLE=${SOAK_SAMPLE:-$(( SOAK_SECONDS >= 7200 ? 300 : 15 ))}
+restarts() { # "pod=restarts ..." for Ambit's own pods, all containers summed
+  kubectl -n "$NS" get pods -o jsonpath='{range .items[*]}{.metadata.name}{range .status.containerStatuses[*]} {.restartCount}{end}{"\n"}{end}' |
+    awk '$1 ~ /^ambit/ {s=0; for (i=2; i<=NF; i++) s+=$i; printf "%s=%d ", $1, s}'
+}
+ch_failed_inserts() { # inserts ClickHouse refused since $1 (epoch seconds)
+  kubectl -n "$NS" exec ambit-clickhouse-0 -- clickhouse-client -q \
+    "SELECT count() FROM system.query_log WHERE type IN ('ExceptionBeforeStart','ExceptionWhileProcessing') AND query_kind IN ('Insert','AsyncInsertFlush') AND event_time >= toDateTime($1)" | tr -d '\r'
+}
 mem >/dev/null
-# Each request is a well-behaved client: a fresh token (they last 5 minutes), a session, tools/list, then
-# DELETE of the session. Sessions left open cost the gateway about 7 KiB each until they expire (measured).
+r0=$(restarts); t0=$(date +%s)
+# Each round is a well-behaved MCP client (a fresh token, a session, tools/list, then DELETE of the session;
+# sessions left open cost the gateway about 7 KiB each until they expire) and one LLM answer from the mock.
 ( end=$((SECONDS + SOAK_SECONDS)); while (( SECONDS < end )); do
     tools "$(token mira)" >/dev/null 2>&1 || true
     command curl -s -o /dev/null -X DELETE -H "Authorization: Bearer $TOK" -H "Mcp-Session-Id: $SID" "$MCP" || true
+    command curl -s -o /dev/null --max-time 30 -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
+      -d '{"model":"mock/echo","messages":[{"role":"user","content":"hi"}]}' "$LLM" || true
   done ) &
 load=$!
-sleep "$SOAK_WARMUP"; base=$(mem)
-sleep $((SOAK_SECONDS - SOAK_WARMUP - 15)); final=$(mem)
+sleep "$SOAK_WARMUP"
+: >"$W/soak"
+while (( $(date +%s) - t0 < SOAK_SECONDS - 15 )); do
+  echo "$(( $(date +%s) - t0 )) $(mem | tr '\n' ' ')" >>"$W/soak"
+  sleep "$SOAK_SAMPLE"
+done
 wait $load
-verdict=$(uv run --no-project python - "$base" "$final" <<'PY'
+r1=$(restarts)
+[[ "$r0" == "$r1" ]] || fail "S3 restarts or replaced pods during the soak: before [$r0] after [$r1]"
+bad=$(ch_failed_inserts "$t0")
+[[ "$bad" == 0 ]] || fail "S3 ClickHouse refused $bad inserts during the soak (system.query_log)"
+kubectl -n "$NS" delete "budgets.$G" soak >/dev/null
+verdict=$(uv run --no-project python - "$W/soak" <<'PY'
 import sys
-b = dict(x.split("=") for x in sys.argv[1].split())
-f = dict(x.split("=") for x in sys.argv[2].split())
-worst, lines = 0.0, []  # growth of pods that grew by more than 16 MiB (smaller moves are noise)
-for pod, v in f.items():  # the same pod before and after (nothing restarts during the soak)
-    if not int(b.get(pod, 0)):
-        continue
-    base = int(b[pod])
-    growth = (int(v) - base) / base
-    if int(v) - base > 16:
+rows = []  # (seconds, {pod: MiB})
+for line in open(sys.argv[1]):
+    t, *pairs = line.split()
+    rows.append((int(t), {p: int(v) for p, v in (x.split("=") for x in pairs)}))
+if len(rows) < 4:
+    sys.exit(f"only {len(rows)} memory samples; raise SOAK_SECONDS or lower SOAK_SAMPLE")
+q = len(rows) // 4
+avg = lambda part, pod: sum(r[pod] for _, r in part) / len(part)
+worst, lines = 0.0, []
+for pod in sorted(rows[0][1]):
+    first, last = avg(rows[:q], pod), avg(rows[-q:], pod)
+    growth = (last - first) / first if first else 0.0
+    if last - first > 16:  # smaller moves are noise
         worst = max(worst, growth)
-    lines.append(f"{pod} {base}->{v}Mi")
-print(f"{worst:.2f} " + ", ".join(sorted(lines)))
+    lines.append(f"{pod} {first:.0f}->{last:.0f}Mi")
+# Hourly averages (or quarters, for a soak under 4 hours), for the record.
+span = 3600 if rows[-1][0] - rows[0][0] >= 4 * 3600 else max(1, (rows[-1][0] - rows[0][0]) // 4 + 1)
+with open(sys.argv[1] + ".table", "w") as out:
+    buckets = {}
+    for t, r in rows:
+        buckets.setdefault((t - rows[0][0]) // span, []).append(r)
+    pods = sorted(rows[0][1])
+    out.write("from_s\t" + "\t".join(pods) + "\n")
+    for b, rs in sorted(buckets.items()):
+        out.write(f"{rows[0][0] + b * span}\t" + "\t".join(f"{sum(r[p] for r in rs) / len(rs):.0f}" for p in pods) + "\n")
+print(f"{worst:.2f} {len(rows)} samples; " + ", ".join(lines))
 PY
-)
+) || fail "S3 $verdict"
+cat "$W/soak.table" >&2
 growth=${verdict%% *}
 uv run --no-project python -c "import sys; sys.exit(0 if float(sys.argv[1]) < 0.5 else 1)" "$growth" || fail "S3 memory grew by ${growth} (over 50% and 16 MiB): ${verdict#* }"
-pass "S3 ${SOAK_SECONDS}s soak under steady MCP traffic (sessions never closed), measured from ${SOAK_WARMUP}s: worst growth ${growth} (limit 0.50): ${verdict#* }"
+pass "S3 ${SOAK_SECONDS}s soak (MCP and LLM traffic), no restarts, no refused ClickHouse writes; memory from ${SOAK_WARMUP}s, last quarter against first: worst growth ${growth} (limit 0.50): ${verdict#* }"
 
 # S5 · rotate the gateway's session key (agentgateway keeps it in a Secret): new sessions work at once;
 #      sessions opened before the rotation are recorded as the finding (the key encrypts session IDs).

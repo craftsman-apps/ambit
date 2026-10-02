@@ -25,6 +25,8 @@ Each answer costs `input tokens × input price + output tokens × output price`,
 (`Model.spec.price`, dollars per million tokens), rounded up to $0.00001. That step is also the counting unit,
 so a cap can be at most **$42,949.67** a day. Amounts are **estimates from list prices**: cache discounts, batch
 prices and contract prices are not applied, so spend is usually a little higher than the invoice.
+A price change applies to requests that start after it; an answer still running when the price changes is
+charged at the price from when it started.
 
 | Request | Charged? |
 |---|---|

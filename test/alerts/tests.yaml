@@ -1,0 +1,130 @@
+# promtool unit tests for charts/ambit/templates/alerts/rules.yaml (run by test/alerts.sh).
+rule_files: [rules.yaml]
+evaluation_interval: 1m
+tests:
+  # Two restarts in 30 minutes fire; one does not.
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="ambit-system",pod="ambit-guard-1",container="guard"}'
+        values: '0x10 1x10 2x10'
+      - series: 'kube_pod_container_status_restarts_total{namespace="ambit-system",pod="ambit-console-1",container="console"}'
+        values: '0x10 1x20'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: AmbitContainerRestarting
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: ambit-system, pod: ambit-guard-1, container: guard }
+            exp_annotations:
+              summary: "ambit-guard-1 (guard) restarted 2 times in 30 minutes"
+              description: "Read the reason with kubectl -n ambit-system describe pod ambit-guard-1 (Last State)."
+  # Other namespaces are not Ambit's.
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_restarts_total{namespace="other",pod="x",container="x"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: AmbitContainerRestarting
+        exp_alerts: []
+  # An OOM kill with a recent restart fires; an old OOM kill (no restart in 30 minutes) does not.
+  - interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="ambit-system",pod="ambit-otel-collector-1",container="collector",reason="OOMKilled"}'
+        values: '1x60'
+      - series: 'kube_pod_container_status_restarts_total{namespace="ambit-system",pod="ambit-otel-collector-1",container="collector"}'
+        values: '3x20 4x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: AmbitContainerOOMKilled
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: ambit-system, pod: ambit-otel-collector-1, container: collector, reason: OOMKilled }
+            exp_annotations:
+              summary: "ambit-otel-collector-1 (collector) was killed at its memory limit"
+              description: "Raise the container's memory limit in the chart values, or find what grew (docs/alerts.md)."
+      - eval_time: 59m
+        alertname: AmbitContainerOOMKilled
+        exp_alerts: []
+  # Over 90% of the limit for 15 minutes fires; 80% does not.
+  - interval: 1m
+    input_series:
+      - series: 'container_memory_working_set_bytes{namespace="ambit-system",pod="ambit-gw-1",container="agentgateway",id="a"}'
+        values: '490000000x30'
+      - series: 'kube_pod_container_resource_limits{namespace="ambit-system",pod="ambit-gw-1",container="agentgateway",resource="memory",unit="byte"}'
+        values: '536870912x30'
+      - series: 'container_memory_working_set_bytes{namespace="ambit-system",pod="ambit-guard-1",container="guard",id="b"}'
+        values: '430000000x30'
+      - series: 'kube_pod_container_resource_limits{namespace="ambit-system",pod="ambit-guard-1",container="guard",resource="memory",unit="byte"}'
+        values: '536870912x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AmbitMemoryNearLimit
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: AmbitMemoryNearLimit
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: ambit-system, pod: ambit-gw-1, container: agentgateway }
+            exp_annotations:
+              summary: "ambit-gw-1 (agentgateway) uses 91.27% of its memory limit"
+              description: "At 100% the container is killed and restarts."
+  # A deployment short of replicas for 10 minutes fires; a statefulset too.
+  - interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="ambit-system",deployment="ambit-console"}'
+        values: '0x15'
+      - series: 'kube_deployment_spec_replicas{namespace="ambit-system",deployment="ambit-console"}'
+        values: '1x15'
+      - series: 'kube_statefulset_status_replicas_ready{namespace="ambit-system",statefulset="ambit-clickhouse"}'
+        values: '0x15'
+      - series: 'kube_statefulset_replicas{namespace="ambit-system",statefulset="ambit-clickhouse"}'
+        values: '1x15'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AmbitWorkloadUnavailable
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: AmbitWorkloadUnavailable
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: ambit-system, deployment: ambit-console }
+            exp_annotations:
+              summary: "ambit-console has fewer ready pods than it should for 10 minutes"
+              description: "kubectl -n ambit-system get pods; kubectl -n ambit-system get events --sort-by=.lastTimestamp"
+          - exp_labels: { severity: warning, namespace: ambit-system, statefulset: ambit-clickhouse }
+            exp_annotations:
+              summary: "ambit-clickhouse has fewer ready pods than it should for 10 minutes"
+              description: "kubectl -n ambit-system get pods; kubectl -n ambit-system get events --sort-by=.lastTimestamp"
+  # Valkey down fires after 1 minute, critical; the rendered failure mode is FailClosed (test/alerts.sh).
+  - interval: 1m
+    input_series:
+      - series: 'kube_deployment_status_replicas_available{namespace="ambit-system",deployment="ambit-valkey"}'
+        values: '1 0x5'
+      - series: 'kube_deployment_spec_replicas{namespace="ambit-system",deployment="ambit-valkey"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AmbitBudgetStoreDown
+        exp_alerts:
+          - exp_labels: { severity: critical, namespace: ambit-system, deployment: ambit-valkey }
+            exp_annotations:
+              summary: "ambit-valkey is down: budgets are not enforced"
+              description: "limits.failureMode is FailClosed: the gateway refuses LLM and MCP requests until it is back."
+  # Failed exports fire; so do records the collector refused (memory_limiter); a quiet collector does not.
+  - interval: 1m
+    input_series:
+      - series: 'otelcol_exporter_send_failed_log_records_total{namespace="ambit-system",pod="ambit-otel-collector-1",exporter="clickhouse"}'
+        values: '0x5 40x10'
+      - series: 'otelcol_receiver_refused_log_records_total{namespace="ambit-system",pod="ambit-otel-collector-2",receiver="otlp",transport="grpc"}'
+        values: '0x5 7x10'
+      - series: 'otelcol_exporter_send_failed_log_records_total{namespace="ambit-system",pod="ambit-otel-collector-3",exporter="clickhouse"}'
+        values: '0x15'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AmbitAuditLogsDropped
+        exp_alerts:
+          - exp_labels: { severity: critical, namespace: ambit-system, pod: ambit-otel-collector-1 }
+            exp_annotations:
+              summary: "Audit records were lost in the last 10 minutes (40)"
+              description: "The collector could not write to ClickHouse, or refused records near its memory limit. Check ClickHouse first: kubectl -n ambit-system logs deploy/ambit-otel-collector"
+          - exp_labels: { severity: critical, namespace: ambit-system, pod: ambit-otel-collector-2 }
+            exp_annotations:
+              summary: "Audit records were lost in the last 10 minutes (7)"
+              description: "The collector could not write to ClickHouse, or refused records near its memory limit. Check ClickHouse first: kubectl -n ambit-system logs deploy/ambit-otel-collector"

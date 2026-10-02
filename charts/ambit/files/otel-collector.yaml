@@ -21,10 +21,19 @@ exporters:
     logs_table_name: otel_logs
     ttl: {{ .Values.evidence.retention }}
     create_schema: true
-    sending_queue: { enabled: true }
+    # While ClickHouse refuses writes, failed batches wait here for a retry. Capped in bytes: unbounded,
+    # this queue grew until the collector was killed at its memory limit (24-hour soak, 2026-10-01).
+    sending_queue: { enabled: true, sizer: bytes, queue_size: 67108864 }
     retry_on_failure: { enabled: true }
 processors:
+  # Refuses new logs (the gateway sees the export fail) before the container's memory limit is reached.
+  memory_limiter: { check_interval: 1s, limit_percentage: 75, spike_limit_percentage: 20 }
   batch: { timeout: 2s }
 service:
+  # The collector's own metrics (records sent, failed, refused) for Prometheus; alerts.enabled scrapes them.
+  telemetry:
+    metrics:
+      readers:
+        - pull: { exporter: { prometheus: { host: 0.0.0.0, port: 8888 } } }
   pipelines:
-    logs: { receivers: [otlp], processors: [batch], exporters: [clickhouse] }
+    logs: { receivers: [otlp], processors: [memory_limiter, batch], exporters: [clickhouse] }

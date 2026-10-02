@@ -2,7 +2,10 @@
      on a 1.5 GiB pod they grew until every audit query failed with MEMORY_LIMIT_EXCEEDED (console review,
      2026-10-01: asynchronous_metric_log alone had 14 million rows). Caches are sized for a small pod.
      Upgrading from a chart without this file: the old tables stay on disk until dropped
-     (DROP TABLE system.trace_log etc.); new installations never create them. -->
+     (DROP TABLE system.trace_log etc.); new installations never create them.
+     Thread pools: the defaults suit a large server. Here they kept 665 threads alive, each with its own
+     allocator cache, and memory crept up until inserts failed with MEMORY_LIMIT_EXCEEDED (24-hour soak,
+     2026-10-01). Idle threads are now released, and the pools fit a single small table. -->
 <clickhouse>
     <asynchronous_metric_log remove="1"/>
     <metric_log remove="1"/>
@@ -22,4 +25,23 @@
     <uncompressed_cache_size>16777216</uncompressed_cache_size>
     <max_server_memory_usage_to_ram_ratio>0.8</max_server_memory_usage_to_ram_ratio>
     <concurrent_threads_soft_limit_num>4</concurrent_threads_soft_limit_num>
+    <max_thread_pool_free_size>16</max_thread_pool_free_size>
+    <async_insert_threads>2</async_insert_threads>
+    <background_pool_size>4</background_pool_size>
+    <background_common_pool_size>2</background_common_pool_size>
+    <background_move_pool_size>1</background_move_pool_size>
+    <background_fetches_pool_size>1</background_fetches_pool_size>
+    <background_schedule_pool_size>16</background_schedule_pool_size>
+    <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>
+    <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>
+    <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>
+    <max_io_thread_pool_size>16</max_io_thread_pool_size>
+    <max_parts_cleaning_thread_pool_size>4</max_parts_cleaning_thread_pool_size>
+    <!-- Each must stay below background_pool_size x background_merges_mutations_concurrency_ratio (4 x 2),
+         or ClickHouse refuses to load the tables. -->
+    <merge_tree>
+        <number_of_free_entries_in_pool_to_execute_mutation>4</number_of_free_entries_in_pool_to_execute_mutation>
+        <number_of_free_entries_in_pool_to_lower_max_size_of_merge>4</number_of_free_entries_in_pool_to_lower_max_size_of_merge>
+        <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>4</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>
+    </merge_tree>
 </clickhouse>

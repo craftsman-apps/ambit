@@ -220,6 +220,19 @@ set_price 1.00 4.00; wait_policy '"mock/echo": 1000000u'
 [[ "$(cat "$W/slow")" == 200 && "$d" == 3 ]] || fail "14 price change during a stream: status $(cat "$W/slow"), charged $d units (want 3)"
 pass "14 price changed while a streamed answer ran: charged 3 units, the price when it started"
 
+fresh
+# 15 · a stream that turns usage reporting off is still charged for a dollar-capped group: the gateway turns
+#      it back on (mira, ml-research). Alice's group has no dollar cap: her request is left as she sent it.
+no_usage() { command curl -s -o "$W/$2" -w '%{http_code}' --max-time 60 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
+  -d "{\"model\":\"$3\",\"stream\":true,\"stream_options\":{\"include_usage\":false},\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" "$MOCK/chat/completions"; }
+s0=$(spent)
+cm=$(no_usage "$M" nu-m mock/echo); ca=$(no_usage "$A" nu-a mock/unpriced)
+for _ in $(seq 1 30); do [[ "$(spent)" != "$s0" ]] && break; sleep 1; done
+d=$(( $(spent) - ${s0:-0} ))
+[[ "$cm" == 200 && "$ca" == 200 && "$d" == 3 ]] && grep -q '"usage"' "$W/nu-m" && ! grep -q '"usage"' "$W/nu-a" ||
+  fail "15 include_usage false: mira $cm charged $d units (want 200, 3, usage in her stream); alice $ca, usage in hers: $(grep -c '"usage"' "$W/nu-a")"
+pass "15 include_usage false: mira's stream reported usage and was charged 3 units; alice's (no dollar cap) left unchanged"
+
 # 13 · parallel requests started under the cap may all finish (documented); once spend is above it, refused
 set_ml '{ group: ml-research, groupDollarsPerDay: "0.00005" }' 'spend_group_ml-research: unit=DAY requests_per_unit=5,'
 for i in 1 2 3 4 5 6; do ( c=$(ask "$M" mock/echo); echo "$c" >"$W/par$i" ) & done; wait

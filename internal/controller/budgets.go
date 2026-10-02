@@ -92,6 +92,23 @@ func costCEL(prices map[string]v1.ModelPrice) string {
 		strings.Join(out, ", ") + "}[llm.requestModel] + 9999999u) / 10000000u"
 }
 
+// usageCondition matches a streamed chat request from a member of a dollar-capped group that turns usage
+// reporting off (include_usage false, or stream_options without it): without token counts the answer would
+// cost nothing. When stream_options is absent the gateway asks for usage itself. A condition that fails to
+// evaluate (a body that is not JSON, no groups claim) counts as false, so such requests pass unchanged.
+func usageCondition(groups []string) string {
+	q := make([]string, len(groups))
+	for i, g := range groups {
+		q[i] = strconv.Quote(g)
+	}
+	return `request.path == "/v1/chat/completions" && jwt.groups.exists(g, g in [` + strings.Join(q, ", ") + `]) && ` +
+		`json(request.body).stream == true && ` +
+		`!(has(json(request.body).stream_options.include_usage) && json(request.body).stream_options.include_usage == true)`
+}
+
+// usageBody is the request with stream_options.include_usage set to true; other stream options are kept.
+const usageBody = `toJson(json(request.body).merge({"stream_options": json(request.body).stream_options.merge({"include_usage": true})}))`
+
 // compileBudgets returns the ratelimit service's config (YAML) and the gateway policy, or a nil
 // policy when there are no budgets.
 func compileBudgets(budgets []v1.Budget, prices map[string]v1.ModelPrice, ns string, rl RateLimit, llmRoute string) (string, *unstructured.Unstructured) {
@@ -138,14 +155,21 @@ func compileBudgets(budgets []v1.Budget, prices map[string]v1.ModelPrice, ns str
 	if len(gwDescriptors) == 0 {
 		return string(out), nil
 	}
+	traffic := map[string]any{"rateLimit": map[string]any{"global": map[string]any{
+		"domain":      RateLimitDomain,
+		"backendRef":  map[string]any{"name": rl.Service, "port": rl.Port},
+		"failureMode": rl.FailureMode,
+		"descriptors": gwDescriptors,
+	}}}
+	if groups := DollarGroups(budgets); len(groups) > 0 {
+		traffic["transformation"] = map[string]any{"conditional": []any{map[string]any{
+			"condition": usageCondition(groups),
+			"policy":    map[string]any{"request": map[string]any{"body": usageBody}},
+		}}}
+	}
 	p := generated("agentgateway.dev/v1alpha1", "AgentgatewayPolicy", BudgetPolicyName, ns, map[string]any{
 		"targetRefs": []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": llmRoute}},
-		"traffic": map[string]any{"rateLimit": map[string]any{"global": map[string]any{
-			"domain":      RateLimitDomain,
-			"backendRef":  map[string]any{"name": rl.Service, "port": rl.Port},
-			"failureMode": rl.FailureMode,
-			"descriptors": gwDescriptors,
-		}}},
+		"traffic":    traffic,
 	})
 	return string(out), p
 }

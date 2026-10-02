@@ -163,3 +163,32 @@ func TestSpendUserFallsBackToSubject(t *testing.T) {
 		t.Fatal(spendUser)
 	}
 }
+
+// A streamed chat request that turns usage reporting off would have no token counts and cost nothing. For
+// members of a group with a dollar limit the gateway turns it back on (the gateway itself does so only
+// when stream_options is absent).
+func TestDollarBudgetForcesUsageInStreams(t *testing.T) {
+	_, p := compileBudgets([]v1.Budget{
+		{ObjectMeta: metav1.ObjectMeta{Name: "ml"}, Spec: v1.BudgetSpec{Group: "ml-research", GroupDollarsPerDay: "50"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "eng"}, Spec: v1.BudgetSpec{Group: "eng", UserRequestsPerDay: ptr.To[int64](2)}},
+	}, testPrices, "ambit-system", rl, "ambit-llm")
+	c, _, _ := unstructured.NestedSlice(p.Object, "spec", "traffic", "transformation", "conditional")
+	if len(c) != 1 {
+		t.Fatalf("conditional %v", c)
+	}
+	rule := c[0].(map[string]any)
+	if rule["condition"] != usageCondition([]string{"ml-research"}) || !strings.Contains(rule["condition"].(string), `g in ["ml-research"]`) ||
+		strings.Contains(rule["condition"].(string), `"eng"`) {
+		t.Fatalf("condition %v", rule["condition"])
+	}
+	if body, _, _ := unstructured.NestedString(rule, "policy", "request", "body"); body != usageBody {
+		t.Fatalf("body %q", body)
+	}
+
+	// request limits only: nothing to charge, nothing rewritten
+	_, p = compileBudgets([]v1.Budget{{ObjectMeta: metav1.ObjectMeta{Name: "eng"}, Spec: v1.BudgetSpec{Group: "eng", UserRequestsPerDay: ptr.To[int64](2)}}},
+		testPrices, "ambit-system", rl, "ambit-llm")
+	if _, found, _ := unstructured.NestedFieldNoCopy(p.Object, "spec", "traffic", "transformation"); found {
+		t.Fatal("a request-only budget rewrites requests")
+	}
+}

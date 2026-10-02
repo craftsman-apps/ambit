@@ -34,7 +34,7 @@ charged at the price from when it started.
 | A stream cut off part-way | For the token counts received before it stopped |
 | `/v1/embeddings` | **No** (agentgateway v1.5.0 does not run the charge step for embeddings) |
 | An answer without token counts | **No** |
-| A streamed request that turns usage reporting off (`stream_options: {"include_usage": false}`) | **No** — agentgateway v1.5.0 keeps the client's choice, so the answer has no token counts. A client can avoid dollar charges this way; request limits still apply |
+| A streamed request that turns usage reporting off (`stream_options: {"include_usage": false}`) | Yes, for members of a group with a dollar limit: the gateway turns usage reporting back on, so the stream ends with one extra chunk carrying the token counts (standard OpenAI behavior). Other people's requests are left as sent |
 | A refused or failed request | No (no tokens) |
 
 ## When a cap is passed

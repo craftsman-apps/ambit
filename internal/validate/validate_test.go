@@ -59,6 +59,22 @@ spec: { groups: [eng] }`, "at least one model or server"},
 kind: AccessRule
 metadata: { name: none }
 spec: { groups: [eng], servers: [{ name: time, tools: [] }] }`, "should have at least 1 items"},
+		{"dollar cap above the largest", `apiVersion: ambitproject.dev/v1alpha1
+kind: Budget
+metadata: { name: eng }
+spec: { group: eng, groupDollarsPerDay: "42949.68" }`, "at most 42949.67"},
+		{"dollar cap of zero", `apiVersion: ambitproject.dev/v1alpha1
+kind: Budget
+metadata: { name: eng }
+spec: { group: eng, userDollarsPerDay: "0" }`, "greater than 0"},
+		{"dollar cap with too many decimals", `apiVersion: ambitproject.dev/v1alpha1
+kind: Budget
+metadata: { name: eng }
+spec: { group: eng, groupDollarsPerDay: "1.000001" }`, "should match"},
+		{"budget with no limit", `apiVersion: ambitproject.dev/v1alpha1
+kind: Budget
+metadata: { name: eng }
+spec: { group: eng }`, "set at least one limit"},
 		{"namespace in Git", `apiVersion: ambitproject.dev/v1alpha1
 kind: AccessRule
 metadata: { name: eng, namespace: ambit-system }
@@ -73,6 +89,12 @@ spec: { groups: [eng], models: [gemma] }`, "metadata.namespace should be left ou
 
 func TestOtherObjectsAreSkipped(t *testing.T) {
 	if p := check(t, "apiVersion: v1\nkind: ConfigMap\nmetadata: { name: x }\n"); len(p) != 0 {
+		t.Fatalf("%v", p)
+	}
+}
+
+func TestDollarOnlyBudgetIsValid(t *testing.T) {
+	if p := check(t, "apiVersion: ambitproject.dev/v1alpha1\nkind: Budget\nmetadata: { name: ml }\nspec: { group: ml-research, groupDollarsPerDay: \"0.00005\", userDollarsPerDay: \"42949.67\" }\n"); len(p) != 0 {
 		t.Fatalf("%v", p)
 	}
 }

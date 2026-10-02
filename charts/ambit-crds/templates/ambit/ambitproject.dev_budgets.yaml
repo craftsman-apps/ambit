@@ -25,6 +25,12 @@ spec:
     - jsonPath: .spec.userRequestsPerDay
       name: User/day
       type: integer
+    - jsonPath: .spec.groupDollarsPerDay
+      name: Group $/day
+      type: string
+    - jsonPath: .spec.userDollarsPerDay
+      name: User $/day
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -53,19 +59,31 @@ spec:
           metadata:
             type: object
           spec:
-            description: 'BudgetSpec limits LLM requests per day for one group from the identity provider. Limits are shared
+            description: 'BudgetSpec limits LLM use per day for one group from the identity provider: requests, estimated dollars
 
-              across every gateway replica. A member of several budgeted groups is counted against each of them.'
+              (from Model prices), or both. Limits are shared across every gateway replica. A member of several
+
+              budgeted groups is counted against each of them.'
             properties:
               group:
                 description: Group from the identity provider's "groups" claim.
                 pattern: ^[A-Za-z0-9][A-Za-z0-9._@/-]*$
+                type: string
+              groupDollarsPerDay:
+                description: 'GroupDollarsPerDay is shared by everyone in the group (UTC days), estimated from Model prices. Answers
+
+                  already started when the cap is passed still finish and are charged.'
+                pattern: ^[0-9]{1,5}(\.[0-9]{1,5})?$
                 type: string
               groupRequestsPerDay:
                 description: GroupRequestsPerDay is shared by everyone in the group (UTC days).
                 format: int64
                 minimum: 1
                 type: integer
+              userDollarsPerDay:
+                description: UserDollarsPerDay applies to each member separately.
+                pattern: ^[0-9]{1,5}(\.[0-9]{1,5})?$
+                type: string
               userRequestsPerDay:
                 description: UserRequestsPerDay applies to each member separately (UTC days).
                 format: int64
@@ -75,8 +93,16 @@ spec:
             - group
             type: object
             x-kubernetes-validations:
-            - message: set groupRequestsPerDay, userRequestsPerDay, or both
-              rule: has(self.groupRequestsPerDay) || has(self.userRequestsPerDay)
+            - message: set at least one limit
+              rule: has(self.groupRequestsPerDay) || has(self.userRequestsPerDay) || has(self.groupDollarsPerDay) || has(self.userDollarsPerDay)
+            - message: groupDollarsPerDay must be greater than 0
+              rule: '!has(self.groupDollarsPerDay) || double(self.groupDollarsPerDay) > 0.0'
+            - message: userDollarsPerDay must be greater than 0
+              rule: '!has(self.userDollarsPerDay) || double(self.userDollarsPerDay) > 0.0'
+            - message: groupDollarsPerDay must be at most 42949.67
+              rule: '!has(self.groupDollarsPerDay) || double(self.groupDollarsPerDay) <= 42949.67'
+            - message: userDollarsPerDay must be at most 42949.67
+              rule: '!has(self.userDollarsPerDay) || double(self.userDollarsPerDay) <= 42949.67'
           status:
             properties:
               conditions:

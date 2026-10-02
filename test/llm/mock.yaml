@@ -1,5 +1,5 @@
 # Test only: an OpenAI-compatible server that answers every chat completion with fixed usage (12 input,
-# 3 output tokens), streamed or not. Tests use it instead of a real provider where they need a successful
+# 3 output tokens), streamed or not; like OpenAI, a stream carries usage only with stream_options.include_usage. Tests use it instead of a real provider where they need a successful
 # answer (token counts, cost), so they do not depend on a provider's free quota. The answer names any
 # X-Ambit-User header it received, so a test can check that clients cannot pass one through.
 apiVersion: v1
@@ -35,6 +35,8 @@ data:
             content = "pong" + (" x-ambit-user=" + self.headers["x-ambit-user"] if self.headers.get("x-ambit-user") else "")
             if body.get("stream"):
                 self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
+                if not (body.get("stream_options") or {}).get("include_usage"):
+                    usage = None
                 for chunk in ({"choices": [{"index": 0, "delta": {"content": "pong"}}]}, {"choices": [], **({"usage": usage} if usage else {})}):
                     chunk.update({"id": "c1", "object": "chat.completion.chunk", "model": model})
                     self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n")

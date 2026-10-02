@@ -15,6 +15,7 @@ import (
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/console"
+	"github.com/craftsman-apps/ambit/internal/pricing"
 	"github.com/craftsman-apps/ambit/web"
 	"github.com/dexidp/dex/api/v2"
 	"google.golang.org/grpc"
@@ -186,7 +187,7 @@ func run(ctx context.Context) error {
 			if objects.List(ctx, &l, client.InNamespace(ns)) != nil {
 				return nil
 			}
-			return console.PricesByModel(l.Items)
+			return pricing.ByModel(l.Items)
 		}
 	}
 	var budgets *console.Budgets

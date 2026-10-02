@@ -9,6 +9,7 @@ import (
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/pricing"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -143,7 +144,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	}
 	budgetPolicy := false
 	if r.RateLimit.Service != "" {
-		cfg, p := compileBudgets(budgets.Items, r.Namespace, r.RateLimit, r.Route.Name)
+		cfg, p := compileBudgets(budgets.Items, pricing.ByModel(models.Items), r.Namespace, r.RateLimit, r.Route.Name)
 		res.Objects = append(res.Objects, rateLimitConfigMap(r.Namespace, cfg))
 		if p != nil {
 			res.Objects = append(res.Objects, p)

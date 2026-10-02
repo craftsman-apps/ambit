@@ -2,6 +2,7 @@ package console
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
@@ -75,5 +76,17 @@ func TestPriceEditInGitOpsOpensAPullRequest(t *testing.T) {
 	_ = c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "gpt"}, &m)
 	if m.Spec.Price != nil {
 		t.Fatal("GitOps mode changed the cluster")
+	}
+}
+
+// The pull request rewrites the whole file: it must keep the object's labels (here team: x).
+func TestPriceEditInGitOpsKeepsLabels(t *testing.T) {
+	h, _, a, repo := priceFixture(t, true)
+	r := do(t, h, "PUT", "/api/models/gpt/price", user(a, "priya@acme.test", RoleAdmin), map[string]string{"inputPerMillionTokens": "1", "outputPerMillionTokens": "4"})
+	if r.Code != http.StatusAccepted || len(repo.files) != 1 {
+		t.Fatalf("%d %s", r.Code, r.Body)
+	}
+	if got := string(repo.files[0].Content); !strings.Contains(got, "labels:\n    team: x\n") {
+		t.Fatalf("labels dropped:\n%s", got)
 	}
 }

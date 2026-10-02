@@ -267,11 +267,11 @@ func (c *Catalog) changes(w http.ResponseWriter, r *http.Request, _ Session) {
 }
 
 // propose opens a pull request for one object and answers 202; manifest nil deletes it.
-func (c *Catalog) propose(w http.ResponseWriter, r *http.Request, s Session, verb, kind, plural, name string, spec any, annotations map[string]string) {
+func (c *Catalog) propose(w http.ResponseWriter, r *http.Request, s Session, verb, kind, plural, name string, spec any, labels, annotations map[string]string) {
 	var manifest []byte
 	if spec != nil {
 		var err error
-		if manifest, err = Manifest(kind, name, annotations, spec); err != nil {
+		if manifest, err = Manifest(kind, name, labels, annotations, spec); err != nil {
 			serverErr(w, err)
 			return
 		}
@@ -462,7 +462,7 @@ func (c *Catalog) createRule(w http.ResponseWriter, r *http.Request, s Session) 
 			writeErr(w, http.StatusConflict, "an access rule named "+in.Name+" already exists")
 			return
 		}
-		c.propose(w, r, s, "create", "AccessRule", "accessrules", in.Name, ar.Spec, ar.Annotations)
+		c.propose(w, r, s, "create", "AccessRule", "accessrules", in.Name, ar.Spec, ar.Labels, ar.Annotations)
 		return
 	}
 	if err := c.Client.Create(r.Context(), ar); err != nil {
@@ -514,7 +514,7 @@ func (c *Catalog) updateRule(w http.ResponseWriter, r *http.Request, s Session) 
 	}
 	ar.Spec = v1.AccessRuleSpec{Groups: in.Groups, AllSignedIn: in.AllSignedIn, Models: in.Models, Servers: servers}
 	if c.GitOps != nil {
-		c.propose(w, r, s, "update", "AccessRule", "accessrules", ar.Name, ar.Spec, consoleAnnotations(ar.Annotations))
+		c.propose(w, r, s, "update", "AccessRule", "accessrules", ar.Name, ar.Spec, ar.Labels, consoleAnnotations(ar.Annotations))
 		return
 	}
 	if ar.Annotations == nil {
@@ -535,7 +535,7 @@ func (c *Catalog) deleteRule(w http.ResponseWriter, r *http.Request, s Session) 
 		return
 	}
 	if c.GitOps != nil {
-		c.propose(w, r, s, "delete", "AccessRule", "accessrules", ar.Name, nil, nil)
+		c.propose(w, r, s, "delete", "AccessRule", "accessrules", ar.Name, nil, nil, nil)
 		return
 	}
 	if err := c.Client.Delete(r.Context(), ar); err != nil && !apierrors.IsNotFound(err) {

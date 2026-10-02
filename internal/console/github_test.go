@@ -144,7 +144,7 @@ func githubFixture(t *testing.T, files map[string]string) (*GitHub, *fakeGitHub)
 func TestPullRequestWritesOneFileOnANewBranch(t *testing.T) {
 	gh, fake := githubFixture(t, map[string]string{"ambit/accessrules/eng-time.yaml": "old"})
 	g := &GitOps{Repo: gh, Branch: "main", Dir: "ambit"}
-	manifest, _ := Manifest("AccessRule", "eng-time", nil, map[string]any{"groups": []string{"eng"}, "models": []string{"gemma"}})
+	manifest, _ := Manifest("AccessRule", "eng-time", nil, nil, map[string]any{"groups": []string{"eng"}, "models": []string{"gemma"}})
 	pr, err := g.Propose(t.Context(), "update", "AccessRule", "accessrules", "eng-time", "priya@acme.test", manifest)
 	if err != nil {
 		t.Fatal(err)

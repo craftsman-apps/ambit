@@ -58,8 +58,11 @@ func (g *GitOps) ObjectPath(plural, name string) string {
 
 // Manifest renders the object as it should appear in Git: no namespace (the Argo CD Application sets
 // it), no status, no server-set metadata.
-func Manifest(kind, name string, annotations map[string]string, spec any) ([]byte, error) {
+func Manifest(kind, name string, labels, annotations map[string]string, spec any) ([]byte, error) {
 	md := map[string]any{"name": name}
+	if len(labels) > 0 {
+		md["labels"] = labels
+	}
 	if len(annotations) > 0 {
 		md["annotations"] = annotations
 	}

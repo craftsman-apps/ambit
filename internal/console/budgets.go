@@ -341,7 +341,7 @@ func (c *Catalog) createBudget(w http.ResponseWriter, r *http.Request, s Session
 			writeErr(w, http.StatusConflict, "a budget named "+in.Name+" already exists")
 			return
 		}
-		c.propose(w, r, s, "create", "Budget", "budgets", in.Name, b.Spec, b.Annotations)
+		c.propose(w, r, s, "create", "Budget", "budgets", in.Name, b.Spec, b.Labels, b.Annotations)
 		return
 	}
 	if err := c.Client.Create(r.Context(), b); err != nil {
@@ -393,7 +393,7 @@ func (c *Catalog) updateBudget(w http.ResponseWriter, r *http.Request, s Session
 	b.Spec = v1.BudgetSpec{Group: in.Group, GroupRequestsPerDay: in.GroupRequestsPerDay, UserRequestsPerDay: in.UserRequestsPerDay,
 		GroupDollarsPerDay: in.GroupDollarsPerDay, UserDollarsPerDay: in.UserDollarsPerDay}
 	if c.GitOps != nil {
-		c.propose(w, r, s, "update", "Budget", "budgets", b.Name, b.Spec, consoleAnnotations(b.Annotations))
+		c.propose(w, r, s, "update", "Budget", "budgets", b.Name, b.Spec, b.Labels, consoleAnnotations(b.Annotations))
 		return
 	}
 	if b.Annotations == nil {
@@ -414,7 +414,7 @@ func (c *Catalog) deleteBudget(w http.ResponseWriter, r *http.Request, s Session
 		return
 	}
 	if c.GitOps != nil {
-		c.propose(w, r, s, "delete", "Budget", "budgets", b.Name, nil, nil)
+		c.propose(w, r, s, "delete", "Budget", "budgets", b.Name, nil, nil, nil)
 		return
 	}
 	if err := c.Client.Delete(r.Context(), b); err != nil && !apierrors.IsNotFound(err) {

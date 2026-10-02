@@ -56,7 +56,7 @@ func (c *Catalog) setModelPrice(w http.ResponseWriter, r *http.Request, s Sessio
 	}
 	m.Spec.Price = price
 	if c.GitOps != nil {
-		c.propose(w, r, s, "update", "Model", "models", m.Name, m.Spec, consoleAnnotations(m.Annotations))
+		c.propose(w, r, s, "update", "Model", "models", m.Name, m.Spec, m.Labels, consoleAnnotations(m.Annotations))
 		return
 	}
 	if err := c.Client.Update(r.Context(), &m); err != nil { // carries the read resourceVersion

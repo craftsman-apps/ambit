@@ -72,7 +72,7 @@ var testPrices = map[string]v1.ModelPrice{
 }
 
 func TestCostCEL(t *testing.T) {
-	want := `uint(math.ceil(double(llm.inputTokens) * {"gpt-4.1": 0.015, "mock/echo": 0.1}[llm.requestModel] + double(llm.outputTokens) * {"gpt-4.1": 0.06, "mock/echo": 0.4}[llm.requestModel]))`
+	want := `(uint(llm.inputTokens) * {"gpt-4.1": 150000u, "mock/echo": 1000000u}[llm.requestModel] + uint(llm.outputTokens) * {"gpt-4.1": 600000u, "mock/echo": 4000000u}[llm.requestModel] + 9999999u) / 10000000u`
 	if got := costCEL(testPrices); got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}

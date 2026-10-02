@@ -7,6 +7,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/dexidp/dex/api/v2 v2.4.0
 	github.com/go-jose/go-jose/v4 v4.1.5
+	github.com/google/cel-go v0.29.2
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	golang.org/x/crypto v0.57.0
 	golang.org/x/oauth2 v0.37.0
@@ -53,7 +54,6 @@ require (
 	github.com/go-openapi/swag/stringutils v0.27.1 // indirect
 	github.com/go-openapi/swag/typeutils v0.27.1 // indirect
 	github.com/go-openapi/swag/yamlutils v0.27.1 // indirect
-	github.com/google/cel-go v0.29.2 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/uuid v1.6.0 // indirect

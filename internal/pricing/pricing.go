@@ -60,6 +60,20 @@ func Units(dollars string) (uint32, error) {
 	return uint32(r.Num().Uint64()), nil
 }
 
+// Micros is a price in millionths of a dollar per million tokens, an exact integer: "1.00" -> 1000000. It is
+// also units per token times 10^7, so a cost in units is (tokens x Micros) / 10^7, rounded up.
+func Micros(perMillion string) (uint64, error) {
+	r, ok := new(big.Rat).SetString(perMillion)
+	if !ok || strings.ContainsAny(perMillion, "eE/") || r.Sign() < 0 {
+		return 0, fmt.Errorf("price %q is not a non-negative decimal", perMillion)
+	}
+	r.Mul(r, big.NewRat(1_000_000, 1))
+	if !r.IsInt() || !r.Num().IsUint64() {
+		return 0, fmt.Errorf("price %q has more than 6 decimals or is too large", perMillion)
+	}
+	return r.Num().Uint64(), nil
+}
+
 // PerTokenUnits converts a price in dollars per million tokens to units per token, as a decimal string for
 // a CEL double literal: "1.00" -> "0.1".
 func PerTokenUnits(perMillion string) (string, error) {

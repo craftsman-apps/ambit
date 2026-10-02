@@ -176,7 +176,7 @@ answer=$(command curl -s -H "Authorization: Bearer $(token mira)" -H 'X-Ambit-Us
 pass "C14 LLM requests parsed: model $model, $tin input and $tout output tokens logged; an unparsed path is refused (403); a client's X-Ambit-User does not reach the model"
 
 # C15 · dollar budgets: envoy ratelimit keeps spend under ambit-llm_spend_group_<group>_<day>, and the cost
-#       expression (math.ceil over price maps) runs in the gateway: one mock answer adds exactly 3 units.
+#       expression (integer arithmetic over price maps) runs in the gateway: one mock answer adds exactly 3 units.
 trap 'rc=$?; kubectl -n "$NS" delete "budgets.$G" contract-ml --ignore-not-found >/dev/null 2>&1; on_exit $rc' EXIT
 kubectl -n "$NS" apply -f - >/dev/null <<YAML
 apiVersion: $G/v1alpha1

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -68,9 +69,11 @@ func DollarGroups(budgets []v1.Budget) []string {
 	return out
 }
 
-// costCEL is the cost of one answer in units: input and output tokens times each model's price per token,
-// rounded up. A model missing from the maps makes the expression fail, and agentgateway then skips the
-// charge; refusing unpriced models (unpriced.go) keeps that from happening for capped groups.
+// costCEL is the cost of one answer in units: input and output tokens times each model's price, rounded
+// up. Integer arithmetic keeps it exact (in floating point, 2 x 0.1 + 7 x 0.4 rounded up to 4 units, not 3):
+// prices are in micros (pricing.Micros), and units = (tokens x micros) / 10^7, rounded up. A model missing
+// from the maps makes the expression fail, and agentgateway then skips the charge; refusing unpriced
+// models (unpriced.go) keeps that from happening for capped groups.
 func costCEL(prices map[string]v1.ModelPrice) string {
 	names := make([]string, 0, len(prices))
 	for n := range prices {
@@ -79,21 +82,14 @@ func costCEL(prices map[string]v1.ModelPrice) string {
 	sort.Strings(names)
 	in, out := make([]string, 0, len(names)), make([]string, 0, len(names))
 	for _, n := range names {
-		pi, _ := pricing.PerTokenUnits(prices[n].InputPerMillionTokens) // CRD pattern guarantees a decimal
-		po, _ := pricing.PerTokenUnits(prices[n].OutputPerMillionTokens)
-		// CEL reads "1" as an int, and int * double fails: write every price as a double literal.
-		if !strings.Contains(pi, ".") {
-			pi += ".0"
-		}
-		if !strings.Contains(po, ".") {
-			po += ".0"
-		}
+		pi, _ := pricing.Micros(prices[n].InputPerMillionTokens) // CRD pattern guarantees at most 6 decimals
+		po, _ := pricing.Micros(prices[n].OutputPerMillionTokens)
 		q := strconv.Quote(n)
-		in = append(in, q+": "+pi)
-		out = append(out, q+": "+po)
+		in = append(in, fmt.Sprintf("%s: %du", q, pi))
+		out = append(out, fmt.Sprintf("%s: %du", q, po))
 	}
-	return "uint(math.ceil(double(llm.inputTokens) * {" + strings.Join(in, ", ") + "}[llm.requestModel] + double(llm.outputTokens) * {" +
-		strings.Join(out, ", ") + "}[llm.requestModel]))"
+	return "(uint(llm.inputTokens) * {" + strings.Join(in, ", ") + "}[llm.requestModel] + uint(llm.outputTokens) * {" +
+		strings.Join(out, ", ") + "}[llm.requestModel] + 9999999u) / 10000000u"
 }
 
 // compileBudgets returns the ratelimit service's config (YAML) and the gateway policy, or a nil

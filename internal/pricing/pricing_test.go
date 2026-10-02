@@ -50,3 +50,12 @@ func TestPerTokenUnits(t *testing.T) {
 		t.Error("bad price accepted")
 	}
 }
+
+// The error says what is wrong, so the console can tell the person.
+func TestUnitsErrorsNameTheProblem(t *testing.T) {
+	for in, want := range map[string]string{"1.000001": "decimals", "42949.67001": "largest", "1.0000001": "decimals", "100000": "largest", "42949.68": "largest", "0": "positive", "abc": "positive"} {
+		if _, err := Units(in); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v, want an error about %q", in, err, want)
+		}
+	}
+}

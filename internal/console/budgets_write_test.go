@@ -2,6 +2,7 @@ package console
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
@@ -70,5 +71,37 @@ func TestGitOpsBudgetCreateRefusesExistingName(t *testing.T) {
 	r := do(t, h, "POST", "/api/budgets", user(a, "priya@acme.test", RoleAdmin), BudgetInput{Name: "eng-a", Group: "eng.a", UserRequestsPerDay: ptr.To[int64](9)})
 	if r.Code != http.StatusConflict || len(repo.files) != 0 {
 		t.Fatalf("%d %s, %d files proposed", r.Code, r.Body, len(repo.files))
+	}
+}
+
+// Dollar limits in the form: exact decimals, at most 42949.67, greater than 0.
+func TestBudgetDollarLimits(t *testing.T) {
+	h, c, auth := catalogFixture(t)
+	admin := as(auth, RoleAdmin)
+	for _, tc := range []struct {
+		in   BudgetInput
+		want string
+	}{
+		{BudgetInput{Name: "ml", Group: "ml", GroupDollarsPerDay: "0"}, "greater than 0"},
+		{BudgetInput{Name: "ml", Group: "ml", UserDollarsPerDay: "42949.68"}, "at most 42949.67"},
+		{BudgetInput{Name: "ml", Group: "ml", GroupDollarsPerDay: "1.000001"}, "5 decimals"},
+	} {
+		if r := do(t, h, "POST", "/api/budgets", admin, tc.in); r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), tc.want) {
+			t.Errorf("%+v: %d %s", tc.in, r.Code, r.Body)
+		}
+	}
+	if r := do(t, h, "POST", "/api/budgets", admin, BudgetInput{Name: "ml", Group: "ml", GroupDollarsPerDay: "50", UserDollarsPerDay: "5"}); r.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", r.Code, r.Body)
+	}
+	var b v1.Budget
+	if err := c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "ml"}, &b); err != nil || b.Spec.GroupDollarsPerDay != "50" || b.Spec.UserDollarsPerDay != "5" {
+		t.Fatalf("created: %+v %v", b.Spec, err)
+	}
+	if r := do(t, h, "PUT", "/api/budgets/ml", admin, BudgetInput{Group: "ml", GroupDollarsPerDay: "20"}); r.Code != http.StatusOK {
+		t.Fatalf("update: %d %s", r.Code, r.Body)
+	}
+	_ = c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "ml"}, &b)
+	if b.Spec.GroupDollarsPerDay != "20" || b.Spec.UserDollarsPerDay != "" {
+		t.Fatalf("updated: %+v", b.Spec)
 	}
 }

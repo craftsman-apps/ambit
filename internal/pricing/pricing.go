@@ -40,7 +40,7 @@ const maxUnits = 4_294_967_000 // $42,949.67
 
 func Units(dollars string) (uint32, error) {
 	r, ok := new(big.Rat).SetString(dollars)
-	if !dollarRE.MatchString(dollars) || !ok || r.Sign() <= 0 {
+	if !ok || r.Sign() <= 0 {
 		return 0, fmt.Errorf("%q is not a positive dollar amount", dollars)
 	}
 	r.Mul(r, big.NewRat(UnitsPerDollar, 1))
@@ -49,6 +49,9 @@ func Units(dollars string) (uint32, error) {
 	}
 	if r.Num().Cmp(big.NewInt(maxUnits)) > 0 {
 		return 0, fmt.Errorf("%q is above the largest cap, 42949.67", dollars)
+	}
+	if !dollarRE.MatchString(dollars) { // e.g. "1e3" or ".5": not how the Budget writes amounts
+		return 0, fmt.Errorf("%q is not a positive dollar amount like 50 or 0.5", dollars)
 	}
 	return uint32(r.Num().Uint64()), nil
 }

@@ -5,10 +5,12 @@ import { Button } from "@/components/ui/button";
 import { PullRequestNotice } from "@/components/pull-request";
 import { Shell, Status } from "@/components/shell";
 
-type UserUse = { email: string; used: number };
+type UserUse = { email: string; used: number; spent: number };
 type BudgetView = { name: string; group: string; groupLimit: number | null; userLimit: number | null; groupUsed: number; users: UserUse[];
+  groupDollarLimit: string; userDollarLimit: string; groupSpent: number;
   ready: string; message: string; resetsAt: string; countsMissing?: boolean; gitManaged: boolean };
-type BudgetInput = { name?: string; group: string; groupRequestsPerDay: number | null; userRequestsPerDay: number | null };
+type BudgetInput = { name?: string; group: string; groupRequestsPerDay: number | null; userRequestsPerDay: number | null;
+  groupDollarsPerDay: string; userDollarsPerDay: string };
 
 async function get<T>(url: string): Promise<T> {
   const r = await fetch(url, { credentials: "same-origin" });
@@ -32,6 +34,21 @@ function Bar({ used, limit }: { used: number; limit: number }) {
   );
 }
 
+// Spend in dollars against a dollar cap, estimated from model prices.
+function Spend({ spent, limit }: { spent: number; limit: string }) {
+  const cap = Number(limit);
+  const pct = Math.min(100, Math.round((spent / cap) * 100));
+  const tone = pct >= 100 ? "bg-bad" : pct >= 80 ? "bg-warn" : "bg-accent";
+  return (
+    <span className="inline-flex items-center gap-2">
+      <span className="block h-1.5 w-32 overflow-hidden rounded-full bg-line-soft" role="meter" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${pct}% of the dollar limit spent`}>
+        <span className={`block h-full ${tone}`} style={{ width: `${pct}%` }} />
+      </span>
+      <span className="font-mono text-[12px] tabular-nums">${spent.toFixed(2)} of ${limit} (estimated)</span>
+    </span>
+  );
+}
+
 // The Budgets form: a new budget (no `editing`) or a change to one.
 function BudgetForm({ editing, onDone }: { editing?: BudgetView; onDone: () => void }) {
   const qc = useQueryClient();
@@ -39,11 +56,14 @@ function BudgetForm({ editing, onDone }: { editing?: BudgetView; onDone: () => v
   const [group, setGroup] = useState(editing?.group ?? "");
   const [groupLimit, setGroupLimit] = useState(editing?.groupLimit?.toString() ?? "");
   const [userLimit, setUserLimit] = useState(editing?.userLimit?.toString() ?? "");
+  const [groupDollars, setGroupDollars] = useState(editing?.groupDollarLimit ?? "");
+  const [userDollars, setUserDollars] = useState(editing?.userDollarLimit ?? "");
   const [pr, setPR] = useState<PullRequest | null>(null);
   const num = (v: string) => (v.trim() === "" ? null : Number(v));
   const save = useMutation({
     mutationFn: () => {
-      const body: BudgetInput = { group: group.trim(), groupRequestsPerDay: num(groupLimit), userRequestsPerDay: num(userLimit) };
+      const body: BudgetInput = { group: group.trim(), groupRequestsPerDay: num(groupLimit), userRequestsPerDay: num(userLimit),
+        groupDollarsPerDay: groupDollars.trim(), userDollarsPerDay: userDollars.trim() };
       return editing ? sendJSON("PUT", `/api/budgets/${encodeURIComponent(editing.name)}`, body)
         : sendJSON("POST", "/api/budgets", { ...body, name: nameFor(group) });
     },
@@ -61,7 +81,14 @@ function BudgetForm({ editing, onDone }: { editing?: BudgetView; onDone: () => v
         <label className="block"><span className="mb-1 block text-muted">Each person, requests per day</span>
           <input id="budget-user-limit" type="number" min={1} className={field} value={userLimit} onChange={(e) => setUserLimit(e.target.value)} placeholder="no limit" /></label>
       </div>
-      <p className="text-[12.5px] text-muted">Set one or both. Days are UTC. Over a limit the gateway answers 429; every replica shares the same count.</p>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block"><span className="mb-1 block text-muted">Group dollars per day</span>
+          <input id="budget-group-dollars" inputMode="decimal" className={field} value={groupDollars} onChange={(e) => setGroupDollars(e.target.value)} placeholder="no limit" /></label>
+        <label className="block"><span className="mb-1 block text-muted">Per person dollars per day</span>
+          <input id="budget-user-dollars" inputMode="decimal" className={field} value={userDollars} onChange={(e) => setUserDollars(e.target.value)} placeholder="no limit" /></label>
+      </div>
+      <p className="text-[12.5px] text-muted">Set at least one. Days are UTC. Over a limit the gateway answers 429; every replica shares the same count.
+        Dollars are estimated from model prices. Once spending is above a limit, new requests are refused; answers already started still finish and are charged. Embeddings are not counted, and models without a price are refused to the group.</p>
       {save.isError && <p className="text-bad" role="alert">{save.error.message}</p>}
       <div className="flex gap-2">
         <Button type="submit" className="w-auto" disabled={save.isPending}>{editing ? "Save" : "Add budget"}</Button>
@@ -127,10 +154,18 @@ export function BudgetsPage() {
             <dl className="grid grid-cols-[150px_1fr] gap-x-3 gap-y-1.5">
               <dt className="text-muted">Whole group</dt><dd>{b.groupLimit ? <Bar used={b.groupUsed} limit={b.groupLimit} /> : <span className="text-muted">no group limit</span>}</dd>
               <dt className="text-muted">Each person</dt><dd>{b.userLimit ? `${b.userLimit} per day` : <span className="text-muted">no per-person limit</span>}</dd>
+              {b.groupDollarLimit && <><dt className="text-muted">Group spend</dt><dd><Spend spent={b.groupSpent} limit={b.groupDollarLimit} /></dd></>}
+              {b.userDollarLimit && <><dt className="text-muted">Each person spends</dt><dd>up to ${b.userDollarLimit} per day</dd></>}
             </dl>
-            {b.userLimit && b.users.length > 0 && (
+            {(b.userLimit != null || b.userDollarLimit) && b.users.length > 0 && (
               <ul className="mt-2 space-y-1">
-                {b.users.map((u) => <li key={u.email} className="flex items-center justify-between"><span>{u.email}</span><Bar used={u.used} limit={b.userLimit!} /></li>)}
+                {b.users.map((u) => (
+                  <li key={u.email} className="flex flex-wrap items-center justify-between gap-2"><span>{u.email}</span>
+                    <span className="flex flex-wrap items-center gap-3">
+                      {b.userLimit != null && <Bar used={u.used} limit={b.userLimit} />}
+                      {b.userDollarLimit && <Spend spent={u.spent} limit={b.userDollarLimit} />}
+                    </span>
+                  </li>))}
               </ul>
             )}
             <p className="mt-2 text-[12px] text-muted">Resets {new Date(b.resetsAt).toISOString().replace("T", " ").slice(0, 16)} UTC.</p>

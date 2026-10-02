@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { expect, test, type Page } from "@playwright/test";
 
 const password = process.env.AMBIT_ADMIN_PASSWORD ?? "";
@@ -203,4 +204,56 @@ test("Dependencies page shows each component, its failure mode and its health", 
   await expect(page.getByTestId("dep-ClickHouse").getByText("answers queries")).toBeVisible();
   await expect(page.getByTestId("dep-Valkey").getByText(/Fails (open|closed)\./)).toBeVisible();
   await expect(page.getByText("Everything answers")).toBeVisible();
+});
+
+test("Budgets page sets a dollar limit and shows estimated spend", async ({ page }) => {
+  await signInAsBootstrapAdmin(page);
+  await page.goto("/budgets");
+  await page.getByRole("button", { name: "New budget" }).click();
+  await page.getByLabel("Group (as your identity provider names it)").fill("ui-dollars");
+  await page.getByLabel("Group dollars per day").fill("50");
+  await page.getByRole("button", { name: "Add budget" }).click();
+  const row = page.getByTestId("budget-ui-dollars");
+  await expect(row.getByText("$0.00 of $50 (estimated)")).toBeVisible();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await row.getByRole("button", { name: "Remove budget" }).click();
+  await expect(row).toHaveCount(0);
+});
+
+test.describe("model prices", () => {
+  const kubectl = (args: string[], input?: string) => execFileSync("kubectl", ["-n", "ambit-system", ...args], { input });
+  test.beforeAll(() => {
+    kubectl(["apply", "-f", "-"], `apiVersion: ambitproject.dev/v1alpha1
+kind: Model
+metadata: { name: ui-gpt }
+spec: { provider: OpenAI, model: gpt-4o-mini, credentialsRef: { name: ambit-llm-mock } }
+`);
+  });
+  test.afterAll(() => { kubectl(["delete", "models.ambitproject.dev", "ui-gpt", "--ignore-not-found"]); });
+
+  test("Models page: an admin edits and removes a price", async ({ page }) => {
+    await signInAsBootstrapAdmin(page);
+    await page.goto("/models");
+    const row = page.getByTestId("model-mock-unpriced");
+    await expect(row.getByText("No price", { exact: true })).toBeVisible();
+    await row.getByRole("button", { name: "Edit price" }).click();
+    await row.getByLabel("Input $ per million").fill("1.00");
+    await row.getByLabel("Output $ per million").fill("4.00");
+    await row.getByRole("button", { name: "Save price" }).click();
+    await expect(row.getByText("$1.00 / $4.00 per million")).toBeVisible();
+    await row.getByRole("button", { name: "Edit price" }).click();
+    await row.getByRole("button", { name: "Remove price" }).click();
+    await expect(row.getByText("No price", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "LiteLLM licence" })).toBeVisible();
+  });
+
+  test("Models page: Use this price saves the suggested price", async ({ page }) => {
+    await signInAsBootstrapAdmin(page);
+    await page.goto("/models");
+    const row = page.getByTestId("model-ui-gpt");
+    await row.getByRole("button", { name: "Edit price" }).click();
+    await expect(row.getByText(/Suggested: \$0\.15 \/ \$0\.6 per million \(LiteLLM list of 2026-10-02, built in\)/)).toBeVisible();
+    await row.getByRole("button", { name: "Use this price" }).click();
+    await expect(row.getByText("$0.15 / $0.6 per million")).toBeVisible();
+  });
 });

@@ -14,5 +14,5 @@ assert len(rules) == 1, f"{len(rules)} PrometheusRules rendered"
 yaml.safe_dump({"groups": rules[0]["spec"]["groups"]}, open(f"{w}/rules.yaml", "w"))
 PY
 cp test/alerts/tests.yaml "$W/"
-docker run --rm -v "$W:/w" -w /w --entrypoint promtool prom/prometheus:v3.7.3 check rules rules.yaml
-docker run --rm -v "$W:/w" -w /w --entrypoint promtool prom/prometheus:v3.7.3 test rules tests.yaml
+docker run --rm --user "$(id -u):$(id -g)" -v "$W:/w" -w /w --entrypoint promtool prom/prometheus:v3.7.3 check rules rules.yaml
+docker run --rm --user "$(id -u):$(id -g)" -v "$W:/w" -w /w --entrypoint promtool prom/prometheus:v3.7.3 test rules tests.yaml

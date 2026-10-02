@@ -176,7 +176,7 @@ answer=$(command curl -s -H "Authorization: Bearer $(token mira)" -H 'X-Ambit-Us
 pass "C14 LLM requests parsed: model $model, $tin input and $tout output tokens logged; an unparsed path is refused (403); a client's X-Ambit-User does not reach the model"
 
 # C15 · dollar budgets: envoy ratelimit keeps spend under ambit-llm_spend_group_<group>_<day>, and the cost
-#       expression (integer arithmetic over price maps) runs in the gateway: one mock answer adds exactly 3 units.
+#       expression (integer arithmetic over price maps) and the include_usage rewrite run in the gateway: one mock answer adds exactly 3 units.
 trap 'rc=$?; kubectl -n "$NS" delete "budgets.$G" contract-ml --ignore-not-found >/dev/null 2>&1; on_exit $rc' EXIT
 kubectl -n "$NS" apply -f - >/dev/null <<YAML
 apiVersion: $G/v1alpha1
@@ -193,9 +193,15 @@ command curl -s -o /dev/null -H "Authorization: Bearer $(token mira)" -H 'Conten
   -d '{"model":"mock/echo","messages":[{"role":"user","content":"contract"}]}' http://llm.localtest.me:8080/v1/chat/completions
 for _ in $(seq 1 30); do [[ "$(vget "$gk")" == $(( ${g0:-0} + 3 )) && "$(vget "$uk")" == $(( ${u0:-0} + 3 )) ]] && break; sleep 1; done
 g1=$(vget "$gk"); u1=$(vget "$uk")
-kubectl -n "$NS" delete "budgets.$G" contract-ml --ignore-not-found >/dev/null
 [[ "$g1" == $(( ${g0:-0} + 3 )) && "$u1" == $(( ${u0:-0} + 3 )) ]] || fail "C15 spend keys or cost changed: $gk ${g0:-0}->$g1, $uk ${u0:-0}->$u1 (want +3 each)"
-pass "C15 spend counters: one answer added 3 units to $gk and to the person's key"
+# A stream that turns usage off is rewritten to report it (a conditional transformation) and charged.
+command curl -s -o /dev/null -H "Authorization: Bearer $(token mira)" -H 'Content-Type: application/json' \
+  -d '{"model":"mock/echo","stream":true,"stream_options":{"include_usage":false},"messages":[{"role":"user","content":"contract"}]}' http://llm.localtest.me:8080/v1/chat/completions
+for _ in $(seq 1 30); do [[ "$(vget "$gk")" == $(( g1 + 3 )) ]] && break; sleep 1; done
+g2=$(vget "$gk")
+kubectl -n "$NS" delete "budgets.$G" contract-ml --ignore-not-found >/dev/null
+[[ "$g2" == $(( g1 + 3 )) ]] || fail "C15 a stream with include_usage false was not charged: $gk $g1->$g2 (want +3); the usage rewrite stopped working"
+pass "C15 spend counters: one answer added 3 units to $gk and to the person's key; a stream with include_usage false was rewritten and charged"
 
 # C16 · agentgateway's control plane renews the certificate it serves to gateway pods 12 hours before expiry
 #       (24-hour lifetime), so more than 11 hours are always left. On 2026-10-02 it was not renewed, and new

@@ -16,7 +16,8 @@ spec:
   userRequestsPerDay: 500       # optional: also cap requests
 ```
 
-Admins can set the same fields on the console's Budgets page, which shows today's spend.
+Admins can set the same fields on the console's Budgets page, which shows today's spend. Per-person dollar
+limits count by the token's email, or by its subject (`sub`) when it has no email.
 
 ## How spending is counted
 
@@ -31,6 +32,7 @@ prices and contract prices are not applied, so spend is usually a little higher 
 | A stream cut off part-way | For the token counts received before it stopped |
 | `/v1/embeddings` | **No** (agentgateway v1.5.0 does not run the charge step for embeddings) |
 | An answer without token counts | **No** |
+| A streamed request that turns usage reporting off (`stream_options: {"include_usage": false}`) | **No** — agentgateway v1.5.0 keeps the client's choice, so the answer has no token counts. A client can avoid dollar charges this way; request limits still apply |
 | A refused or failed request | No (no tokens) |
 
 ## When a cap is passed
@@ -42,7 +44,8 @@ answer. Once the total is above the cap, new requests are refused.
 
 ## Models without a price
 
-A model without a price cannot be counted, so it is **refused (403) to every group with a dollar limit**;
+A model without a price cannot be counted, so it is **refused (403) to every group with a dollar limit**
+(so is a Model whose name has a wildcard, such as `gpt-*`, because requests name the real model);
 other groups can still use it. The Models page says which groups it is refused to. A price of `0` is a price:
 a free in-house model can be priced at `0` and used. If several Models share one model name with different
 prices, that name counts as having no price.

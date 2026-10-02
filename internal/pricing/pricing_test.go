@@ -59,3 +59,13 @@ func TestUnitsErrorsNameTheProblem(t *testing.T) {
 		}
 	}
 }
+
+// A wildcard model name ("gpt-*") matches requests for other names, which the cost map cannot price: it
+// counts as unpriced, so capped groups are refused rather than served for free.
+func TestWildcardModelNamesAreUnpriced(t *testing.T) {
+	p := &v1.ModelPrice{InputPerMillionTokens: "1", OutputPerMillionTokens: "1"}
+	got := ByModel([]v1.Model{{Spec: v1.ModelSpec{Model: "gpt-*", Price: p}}, {Spec: v1.ModelSpec{Model: "gpt-4.1", Price: p}}})
+	if _, ok := got["gpt-*"]; ok || len(got) != 1 {
+		t.Fatalf("%v", got)
+	}
+}

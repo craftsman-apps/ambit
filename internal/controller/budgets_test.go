@@ -110,7 +110,7 @@ domain: ambit-llm
 		}
 	}
 	user := ds[1].(map[string]any)["entries"].([]any)
-	if user[0].(map[string]any)["name"] != "spend_group" || user[1].(map[string]any)["name"] != "spend_user" || user[1].(map[string]any)["expression"] != "jwt.email" {
+	if user[0].(map[string]any)["name"] != "spend_group" || user[1].(map[string]any)["name"] != "spend_user" || user[1].(map[string]any)["expression"] != spendUser {
 		t.Fatalf("user entries %v", user)
 	}
 }
@@ -153,5 +153,13 @@ func TestEffectiveBudgetsFirstByName(t *testing.T) {
 	}
 	if g := DollarGroups([]v1.Budget{dollars("a", "eng", "2", ""), budget("r", "ops", ptr.To[int64](5), nil)}); strings.Join(g, ",") != "eng" {
 		t.Fatalf("dollar groups %v", g)
+	}
+}
+
+// A token without an email claim is still charged per person (by its subject); a failing expression would
+// make agentgateway skip both the check and the charge.
+func TestSpendUserFallsBackToSubject(t *testing.T) {
+	if spendUser != "has(jwt.email) ? jwt.email : jwt.sub" {
+		t.Fatal(spendUser)
 	}
 }

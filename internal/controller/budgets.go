@@ -36,6 +36,10 @@ func member(group string) string {
 	return "jwt.groups.exists(g, g == " + q + ") ? " + q + ` : ""`
 }
 
+// spendUser names the person a dollar cap charges: the email, or the subject when the token has no email
+// claim (a failing expression would make agentgateway skip both the check and the charge).
+const spendUser = "has(jwt.email) ? jwt.email : jwt.sub"
+
 // EffectiveBudgets returns the Budget that governs each group: the first by name. The reconciler reports
 // the others as DuplicateGroup.
 func EffectiveBudgets(budgets []v1.Budget) []v1.Budget {
@@ -125,7 +129,7 @@ func compileBudgets(budgets []v1.Budget, prices map[string]v1.ModelPrice, ns str
 				d["descriptors"] = []any{map[string]any{"key": "spend_user", "rate_limit": map[string]any{"unit": "day", "requests_per_unit": u}}}
 				gwDescriptors = append(gwDescriptors, map[string]any{"unit": "Tokens", "cost": cost, "entries": []any{
 					map[string]any{"name": "spend_group", "expression": member(g)},
-					map[string]any{"name": "spend_user", "expression": "jwt.email"}}})
+					map[string]any{"name": "spend_user", "expression": spendUser}}})
 			}
 			cfgDescriptors = append(cfgDescriptors, d)
 		}

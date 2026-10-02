@@ -14,10 +14,14 @@ import (
 const UnitsPerDollar = 100000
 
 // ByModel maps the model name clients send to its price. A name that several Models share with different
-// prices, or where one of them has no price, has no price: it is never charged from the wrong Model.
+// prices, or where one of them has no price, has no price: it is never charged from the wrong Model. A
+// wildcard name ("gpt-*") has no price either.
 func ByModel(models []v1.Model) map[string]v1.ModelPrice {
 	byName := map[string][]*v1.ModelPrice{}
 	for _, m := range models {
+		if strings.Contains(m.Spec.Model, "*") {
+			continue // a wildcard matches requests for other names, which a price map cannot charge
+		}
 		byName[m.Spec.Model] = append(byName[m.Spec.Model], m.Spec.Price)
 	}
 	out := map[string]v1.ModelPrice{}

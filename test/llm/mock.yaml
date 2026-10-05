@@ -32,7 +32,7 @@ data:
                 self.wfile.write(b"data: [DONE]\n\n")
                 return
             usage = None if last == "NO-USAGE" else USAGE
-            content = "pong" + (" x-ambit-user=" + self.headers["x-ambit-user"] if self.headers.get("x-ambit-user") else "")
+            content = "pong" + (" x-ambit-user=" + self.headers["x-ambit-user"] if self.headers.get("x-ambit-user") else "") + (" x-ambit-route=" + self.headers["x-ambit-route"] if self.headers.get("x-ambit-route") else "")
             if body.get("stream"):
                 self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
                 if not (body.get("stream_options") or {}).get("include_usage"):

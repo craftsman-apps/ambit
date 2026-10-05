@@ -166,3 +166,18 @@ func TestModelBaseURL(t *testing.T) {
 		t.Fatal("a provider model got a baseURL")
 	}
 }
+
+// An AccessRule grants a router like a Model; naming it is not an unknown model.
+func TestRuleNamingRouterIsKnown(t *testing.T) {
+	r := Compile([]v1.Model{model("gemma", "google/gemma")}, nil,
+		[]v1.AccessRule{rule("eng-auto", []string{"eng"}, false, "gemma", "auto")}, route, "auto")
+	if c := r.RuleConditions["eng-auto"]; c.Status != metav1.ConditionTrue {
+		t.Fatalf("rule naming a router: %s %s", c.Reason, c.Message)
+	}
+	if a := r.Access["auto"]; len(a.Groups) != 1 || a.Groups[0] != "eng" {
+		t.Fatalf("router access %+v", a)
+	}
+	if _, ok := byName(r.Objects)["auto"]; ok {
+		t.Fatal("an AgentgatewayModel was generated for a router name")
+	}
+}

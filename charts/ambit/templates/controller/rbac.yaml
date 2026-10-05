@@ -31,6 +31,11 @@ rules:
     resources: [configmaps]
     resourceNames: [ambit-ratelimit-config]
     verbs: [update, patch]
+  # agentgateway's xDS certificate: when it was not renewed, an annotation makes agentgateway renew it.
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [kgateway-xds-cert]
+    verbs: [patch]
   # Leader election: only one controller writes during a rolling update.
   - apiGroups: [coordination.k8s.io]
     resources: [leases]

@@ -64,6 +64,19 @@ type Call struct {
 	Error        string    `json:"error"`
 	InputTokens  int64     `json:"inputTokens"`
 	OutputTokens int64     `json:"outputTokens"`
+	// Router is the model name the client asked for when it differs from Model (a ModelRouter such as "auto").
+	Router string `json:"router"`
+	// Label and LabelReason are a classifier's label and why it was or was not set (empty for type Rules).
+	Label       string `json:"label"`
+	LabelReason string `json:"labelReason"`
+}
+
+// routerOf is the router a call went through: the requested name when it differs from the answering model.
+func routerOf(requested, model string) string {
+	if requested == "" || requested == model {
+		return ""
+	}
+	return requested
 }
 
 // status reads the HTTP status under both names agentgateway has used: http.status (v1.5) and the
@@ -74,7 +87,8 @@ var callsSQL = strings.Replace(`
 SELECT Timestamp,
        {email:String}, LogAttributes['route'], LogAttributes['mcp.method.name'], LogAttributes['mcp.target'],
        LogAttributes['gen_ai.tool.name'], LogAttributes['gen_ai.request.model'], {status}, LogAttributes['error'],
-       toInt64OrZero(LogAttributes['gen_ai.usage.input_tokens']), toInt64OrZero(LogAttributes['gen_ai.usage.output_tokens'])
+       toInt64OrZero(LogAttributes['gen_ai.usage.input_tokens']), toInt64OrZero(LogAttributes['gen_ai.usage.output_tokens']),
+       LogAttributes['ambit.router'], LogAttributes['ambit.route'], LogAttributes['ambit.routeReason']
 FROM otel_logs
 WHERE (LogAttributes['jwt.email'] = {email:String}
        -- Some refusals (e.g. a model the user may not use) are logged with the token's subject but
@@ -116,9 +130,12 @@ func (a *Audit) Calls(ctx context.Context, email string, from, to time.Time, lim
 	out := []Call{}
 	for rows.Next() {
 		var c Call
-		if err := rows.Scan(&c.Time, &c.Email, &c.Route, &c.Method, &c.Server, &c.Tool, &c.Model, &c.Status, &c.Error, &c.InputTokens, &c.OutputTokens); err != nil {
+		var requested string
+		if err := rows.Scan(&c.Time, &c.Email, &c.Route, &c.Method, &c.Server, &c.Tool, &c.Model, &c.Status, &c.Error, &c.InputTokens, &c.OutputTokens,
+			&requested, &c.Label, &c.LabelReason); err != nil {
 			return nil, err
 		}
+		c.Router = routerOf(requested, c.Model)
 		out = append(out, c)
 	}
 	return out, rows.Err()

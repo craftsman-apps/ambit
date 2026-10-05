@@ -44,4 +44,12 @@ pass "5 a client-sent x-ambit-route is removed at the Gateway"
 #     OpenAI-compatible providers), read the answering model from the access log instead of the response body.
 [[ "$(answered "$M" '{"model":"auto","max_tokens":5,"messages":[{"role":"user","content":"python"}]}' /messages | cut -d' ' -f2)" == mock/unpriced ]] || fail "8 /v1/messages → default: $(cat "$W/r")"
 pass "8 auto on /v1/messages goes to the default (only chat completions are routed)"
+# 9 · the audit records the router and the answering model
+row=""
+for _ in $(seq 1 30); do
+  row=$(kubectl -n "$NS" exec statefulset/ambit-clickhouse -- clickhouse-client -q "SELECT LogAttributes['ambit.router'], LogAttributes['gen_ai.request.model'] FROM otel.otel_logs WHERE LogAttributes['gen_ai.request.model'] = 'mock/echo' AND LogAttributes['ambit.router'] = 'auto' LIMIT 1")
+  [[ -n "$row" ]] && break; sleep 2
+done
+[[ "$row" == $'auto\tmock/echo' ]] || fail "9 audit row: '$row'"
+pass "9 audit: auto → mock/echo recorded"
 done_step 12

@@ -66,6 +66,11 @@ spec:
         add:
           - { name: jwt.email, expression: "jwt.email" }
           - { name: jwt.groups, expression: "jwt.groups" }
+          # The model name the client asked for (a ModelRouter such as "auto"); gen_ai.request.model is the one that answered.
+          - { name: ambit.router, expression: "metadata.agentgateway_user_model" }
+          # A classifier's label and its reason (set by ambit-router, PR 2); empty for type Rules.
+          - { name: ambit.route, expression: 'request.headers["x-ambit-route"]' }
+          - { name: ambit.routeReason, expression: 'request.headers["x-ambit-route-reason"]' }
       otlp:
         protocol: GRPC
         backendRef: { name: ambit-otel-collector, port: 4317 }

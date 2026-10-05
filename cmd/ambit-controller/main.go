@@ -8,6 +8,7 @@ import (
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/controller"
+	"github.com/craftsman-apps/ambit/internal/xdscert"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -25,6 +26,8 @@ func main() {
 	rlFailure := flag.String("ratelimit-failure-mode", "FailOpen", "FailOpen or FailClosed when the ratelimit service is down")
 	argLimits := flag.Bool("argument-limits", false, "ambit-guard runs and enforces argument limits in access rules")
 	toolsRefresh := flag.Duration("tools-refresh", 10*time.Minute, "how often each running server's tools are read again (changed tools are hidden until approved)")
+	xdsAddr := flag.String("xds-addr", "", "agentgateway control plane (xDS) host:port; its certificate is nudged when not renewed. Empty turns this off")
+	xdsSecret := flag.String("xds-secret", "kgateway-xds-cert", "agentgateway's Secret for the xDS certificate")
 	flag.Parse()
 	ctrl.SetLogger(zap.New())
 	log := ctrl.Log.WithName("setup")
@@ -57,6 +60,12 @@ func main() {
 		RateLimit: controller.RateLimit{Service: *rlService, Port: *rlPort, FailureMode: *rlFailure}, ToolsRefresh: *toolsRefresh, ArgumentLimits: *argLimits}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "set up controller")
 		os.Exit(1)
+	}
+	if *xdsAddr != "" {
+		if err := mgr.Add(&xdscert.Nudger{Client: mgr.GetClient(), Namespace: ns, Secret: *xdsSecret, Addr: *xdsAddr}); err != nil {
+			log.Error(err, "add xds certificate check")
+			os.Exit(1)
+		}
 	}
 	_ = mgr.AddHealthzCheck("healthz", healthz.Ping)
 	_ = mgr.AddReadyzCheck("readyz", healthz.Ping)

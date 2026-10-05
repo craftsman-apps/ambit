@@ -2,13 +2,12 @@ package console
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
-	"net"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/craftsman-apps/ambit/internal/xdscert"
 	appsv1 "k8s.io/api/apps/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -44,23 +43,15 @@ func (d *Dependencies) xdsCertificate(ctx context.Context) (bool, string) {
 	if d.Now != nil {
 		now = d.Now()
 	}
-	// Only the dates are read, so the chain is not verified; nothing is sent over the connection.
-	dialer := &tls.Dialer{NetDialer: &net.Dialer{}, Config: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec
-	conn, err := dialer.DialContext(ctx, "tcp", d.XDSAddr)
+	end, err := xdscert.Expiry(ctx, d.XDSAddr)
 	if err != nil {
 		return answered(err, "")
 	}
-	defer conn.Close()
-	certs := conn.(*tls.Conn).ConnectionState().PeerCertificates
-	if len(certs) == 0 {
-		return false, "no certificate from " + d.XDSAddr
-	}
-	end := certs[0].NotAfter.UTC()
 	at := end.Format("2006-01-02 15:04 UTC")
 	switch left := end.Sub(now); {
 	case left <= 0:
 		return false, "expired " + at + ". Restart the control plane: kubectl rollout restart deploy/ambit-agentgateway"
-	case left < 11*time.Hour:
+	case left < xdscert.Threshold:
 		return false, "not renewed: expires " + at + ". Restart the control plane before then: kubectl rollout restart deploy/ambit-agentgateway"
 	}
 	return true, "valid until " + at
@@ -127,7 +118,10 @@ func (d *Dependencies) checks() []depCheck {
 				d.workload(&appsv1.Deployment{}, "ambit-ratelimit")},
 			depCheck{Dependency{Name: "Valkey", Purpose: "Stores budget counters for every gateway replica", Mode: mode,
 				WhenDown: when + " The Budgets page cannot show today's use."},
-				func(ctx context.Context) (bool, string) { _, err := v.do(ctx, "PING"); return answered(err, "answers PING at "+v.Addr) }})
+				func(ctx context.Context) (bool, string) {
+					_, err := v.do(ctx, "PING")
+					return answered(err, "answers PING at "+v.Addr)
+				}})
 	}
 	if d.Protection {
 		out = append(out, depCheck{Dependency{Name: "ambit-guard", Purpose: "Tool pinning and masking of personal data",

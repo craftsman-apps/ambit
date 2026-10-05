@@ -413,5 +413,5 @@ type ServerRequestList struct {
 
 func init() {
 	SchemeBuilder.Register(&Model{}, &ModelList{}, &AccessRule{}, &AccessRuleList{}, &Server{}, &ServerList{},
-		&ServerRequest{}, &ServerRequestList{}, &Connection{}, &ConnectionList{}, &Budget{}, &BudgetList{})
+		&ServerRequest{}, &ServerRequestList{}, &Connection{}, &ConnectionList{}, &Budget{}, &BudgetList{}, &ModelRouter{}, &ModelRouterList{})
 }

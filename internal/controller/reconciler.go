@@ -111,7 +111,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&v1.Model{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1.Server{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1.AccessRule{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Watches(&v1.Budget{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{}))
+		Watches(&v1.Budget{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Watches(&v1.ModelRouter{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{}))
 	// Generated objects: status changes (agentgateway or ToolHive accepting them) and manual edits both matter.
 	for _, gvk := range generatedGVKs {
 		u := &unstructured.Unstructured{}
@@ -131,12 +132,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			return reconcile.Result{}, err
 		}
 	}
+	var routers v1.ModelRouterList
+	if err := r.Live.List(ctx, &routers, client.InNamespace(r.Namespace)); err != nil {
+		return reconcile.Result{}, err
+	}
+	var routerNames []string
+	for _, mr := range routers.Items {
+		routerNames = append(routerNames, mr.Name)
+	}
 	compiled := rules.Items
 	var dropped map[string][]string
 	if !r.ArgumentLimits {
 		compiled, dropped = WithoutArgumentLimits(rules.Items)
 	}
-	res := Compile(models.Items, servers.Items, compiled, r.Route)
+	res := Compile(models.Items, servers.Items, compiled, r.Route, routerNames...)
 	ApplyDropped(&res, dropped)
 	var budgets v1.BudgetList
 	if err := r.Live.List(ctx, &budgets, client.InNamespace(r.Namespace)); err != nil {
@@ -144,6 +153,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	}
 	prices := pricing.ByModel(models.Items)
 	refused := refuseUnpricedIfEnforced(r.RateLimit, &res, models.Items, prices, budgets.Items)
+	// After RefuseUnpriced: each router line repeats its target's final access expression.
+	routerConds := CompileRouters(routers.Items, models.Items, &res, r.Route)
 	budgetPolicy := false
 	if r.RateLimit.Service != "" {
 		cfg, p := compileBudgets(budgets.Items, prices, r.Namespace, r.RateLimit, r.Route.Name)
@@ -210,6 +221,31 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			if err := r.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
 				return reconcile.Result{}, err
 			}
+		}
+	}
+	// Virtual models of routers that are gone or now invalid. Read from the API server, not the cache: right after
+	// the apply loop the cache can still show a router's label on an object that a Model has just taken over (a
+	// Model named router-<name>).
+	desiredRouters := map[string]bool{}
+	for _, o := range res.Objects {
+		if o.GetLabels()[RouterLabel] != "" {
+			desiredRouters[o.GetName()] = true
+		}
+	}
+	var vms unstructured.UnstructuredList
+	vms.SetGroupVersionKind(AgentgatewayModelGVK)
+	if err := r.Live.List(ctx, &vms, client.InNamespace(r.Namespace), client.HasLabels{RouterLabel}); err != nil {
+		return reconcile.Result{}, err
+	}
+	for i := range vms.Items {
+		vm := &vms.Items[i]
+		if desiredRouters[vm.GetName()] || controllerOwnerKind(vm) != "ModelRouter" {
+			continue
+		}
+		uid := vm.GetUID() // delete exactly this object, not one that replaced it meanwhile
+		if err := r.Delete(ctx, vm, &client.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil &&
+			!apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
+			return reconcile.Result{}, err
 		}
 	}
 	// Look again while agentgateway or ToolHive has not decided yet: their status events can race
@@ -279,6 +315,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			return reconcile.Result{}, err
 		}
 	}
+	for i := range routers.Items {
+		mr := &routers.Items[i]
+		next := mr.DeepCopy()
+		c := routerConds[mr.Name]
+		// The gateway's verdict replaces "Compiled"; a validation warning (UnknownModel, DefaultNotAllowed) stays
+		// unless applying failed.
+		if applied, ok := conds["ModelRouter/"+mr.Name]; ok &&
+			(c.Status == metav1.ConditionTrue || applied.Reason == "NameConflict" || applied.Reason == "ApplyFailed") {
+			c = applied
+		}
+		setReady(&next.Status.Conditions, c, mr.Generation)
+		if err := r.updateStatus(ctx, mr.Status, next.Status, next); err != nil {
+			return reconcile.Result{}, err
+		}
+	}
 	for i := range rules.Items {
 		ar := &rules.Items[i]
 		next := ar.DeepCopy()
@@ -331,6 +382,8 @@ func conditionsOf(obj client.Object) []metav1.Condition {
 	case *v1.Server:
 		return o.Status.Conditions
 	case *v1.AccessRule:
+		return o.Status.Conditions
+	case *v1.ModelRouter:
 		return o.Status.Conditions
 	}
 	return nil
@@ -394,4 +447,9 @@ func acceptedCondition(o *unstructured.Unstructured) metav1.Condition {
 	}
 	return cond(metav1.ConditionUnknown, "Pending",
 		"waiting for agentgateway to accept the model; if this lasts, check agentgateway.agentgatewayModels.enabled")
+}
+
+// controllerOwnerKind is the Kind of the Ambit object that controls o, or "".
+func controllerOwnerKind(o *unstructured.Unstructured) string {
+	return strings.Split(controllerOwner(o), "/")[0]
 }

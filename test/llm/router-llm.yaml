@@ -1,0 +1,31 @@
+# Step 12 (type LLM): ModelRouter smart asks the mock classifier for a category; "coding" goes to mock-echo.
+apiVersion: ambitproject.dev/v1alpha1
+kind: Model
+metadata: { name: mock-classifier }
+spec:
+  displayName: Test classifier (deterministic labels)
+  provider: OpenAI
+  model: mock/classifier
+  baseURL: http://mock-classifier.ambit-system.svc.cluster.local:8080/v1
+  credentialsRef: { name: ambit-llm-mock }
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: ModelRouter
+metadata: { name: smart }
+spec:
+  default: mock-unpriced
+  classifier:
+    type: LLM
+    llm: { model: mock-classifier }
+    timeout: 1500ms
+    categories:
+      - { name: coding, description: "writing, fixing or explaining program code" }
+  routes:
+    - { model: mock-echo, category: coding }
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: AccessRule
+metadata: { name: smart-users }
+spec:
+  groups: [eng, ml-research]
+  models: [smart]

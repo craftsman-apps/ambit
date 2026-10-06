@@ -107,6 +107,8 @@ type ProposedObject struct {
 }
 
 // ProposeObjects opens one pull request, one commit, for several objects (e.g. an app and its server).
+// The caller must use a branch unique to one change (Task 13 uses one per operation ID): an existing
+// branch is reused as it is, and its content is not compared with objs.
 func (g *GitOps) ProposeObjects(ctx context.Context, branch, title, by string, objs []ProposedObject) (PullRequest, error) {
 	v, err := validator()
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -319,8 +320,8 @@ func TestOpenPullRequestFilesRetryReusesBranchAndPR(t *testing.T) {
 	if err != nil || pr.Number == 0 || fake.commits != 1 {
 		t.Fatalf("retry: pr %+v err %v commits %d", pr, err, fake.commits)
 	}
-	again, _ := gh.OpenPullRequestFiles(t.Context(), "ambit/add-github-op1abc", "t", "b", files)
-	if again.Number != pr.Number || fake.pulls != 1 {
+	again, err := gh.OpenPullRequestFiles(t.Context(), "ambit/add-github-op1abc", "t", "b", files)
+	if err != nil || again.Number != pr.Number || fake.pulls != 1 {
 		t.Fatalf("second retry opened another pull request: %+v", again)
 	}
 }
@@ -328,8 +329,8 @@ func TestOpenPullRequestFilesRetryReusesBranchAndPR(t *testing.T) {
 func TestOpenPullRequestFilesClosedPullRequestIsAnError(t *testing.T) {
 	gh, fake := newFakeGitHub(t)
 	fake.prsByBranch["ambit/add-x-1"] = PullRequestState{PullRequest: PullRequest{Number: 5, Branch: "ambit/add-x-1"}, Closed: true}
-	if _, err := gh.OpenPullRequestFiles(t.Context(), "ambit/add-x-1", "t", "b", []FileChange{{Path: "a", Content: []byte("a")}}); err == nil || fake.commits != 0 {
-		t.Fatalf("want an error and no commit, got %v, commits %d", err, fake.commits)
+	if _, err := gh.OpenPullRequestFiles(t.Context(), "ambit/add-x-1", "t", "b", []FileChange{{Path: "a", Content: []byte("a")}}); !errors.Is(err, ErrPullRequestClosed) || fake.commits != 0 {
+		t.Fatalf("want ErrPullRequestClosed and no commit, got %v, commits %d", err, fake.commits)
 	}
 }
 
@@ -353,5 +354,24 @@ func TestPullRequestByBranchFindsTimedOutPR(t *testing.T) {
 	}
 	if _, ok, _ := gh.PullRequestByBranch(t.Context(), "ambit/none"); ok {
 		t.Fatal("found a pull request that does not exist")
+	}
+}
+
+func TestBranchGuardRefusesBeforeCallingGitHub(t *testing.T) {
+	gh, fake := newFakeGitHub(t)
+	files := []FileChange{{Path: "a", Content: []byte("a")}}
+	for _, b := range []string{"main", "ambit/../../x", "ambit//x", "/ambit/x", "ambit/x/", "ambit/..", ""} {
+		if err := gh.DeleteBranch(t.Context(), b); err == nil {
+			t.Errorf("DeleteBranch(%q) was not refused", b)
+		}
+		if _, _, err := gh.PullRequestByBranch(t.Context(), b); err == nil {
+			t.Errorf("PullRequestByBranch(%q) was not refused", b)
+		}
+		if _, err := gh.OpenPullRequestFiles(t.Context(), b, "t", "b", files); err == nil {
+			t.Errorf("OpenPullRequestFiles(%q) was not refused", b)
+		}
+	}
+	if len(fake.calls) != 0 {
+		t.Fatalf("requests reached GitHub: %v", fake.calls)
 	}
 }

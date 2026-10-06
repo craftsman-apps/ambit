@@ -227,17 +227,39 @@ func (g *GitHub) OpenPullRequest(ctx context.Context, branch, title, body string
 	return PullRequest{Number: pr.Number, URL: pr.HTMLURL, Title: title, Branch: branch}, nil
 }
 
+// ErrPullRequestClosed means the branch's pull request was closed without merging.
+var ErrPullRequestClosed = errors.New("pull request closed")
+
+// checkBranch accepts only branches the console creates: ambit/..., with no empty or ".." segment.
+func checkBranch(branch string) error {
+	rest, ok := strings.CutPrefix(branch, branchPrefix)
+	if ok {
+		for _, seg := range strings.Split(rest, "/") {
+			if seg == "" || seg == ".." {
+				ok = false
+			}
+		}
+	}
+	if !ok {
+		return fmt.Errorf("branch %q is not a console branch (%s<name>)", branch, branchPrefix)
+	}
+	return nil
+}
+
 // OpenPullRequestFiles commits several files in one commit on a new branch and opens a pull request.
 // It is safe to repeat for one branch: an existing branch is reused (no second commit) and an
 // existing open or merged pull request for it is returned. A closed one is an error.
 func (g *GitHub) OpenPullRequestFiles(ctx context.Context, branch, title, body string, files []FileChange) (PullRequest, error) {
+	if err := checkBranch(branch); err != nil {
+		return PullRequest{}, err
+	}
 	repo := "/repos/" + g.Repository
 	st, found, err := g.PullRequestByBranch(ctx, branch)
 	if err != nil {
 		return PullRequest{}, err
 	}
 	if found && st.Closed {
-		return PullRequest{}, fmt.Errorf("the pull request for %s was closed; use a new branch", branch)
+		return PullRequest{}, fmt.Errorf("the pull request for %s was closed; use a new branch: %w", branch, ErrPullRequestClosed)
 	}
 	if found {
 		return st.PullRequest, nil
@@ -306,6 +328,9 @@ func (g *GitHub) openPull(ctx context.Context, branch, title, body string) (Pull
 
 // DeleteBranch removes a branch the console created; a missing branch is not an error.
 func (g *GitHub) DeleteBranch(ctx context.Context, branch string) error {
+	if err := checkBranch(branch); err != nil {
+		return err
+	}
 	err := g.api(ctx, http.MethodDelete, "/repos/"+g.Repository+"/git/refs/heads/"+escapePath(branch), nil, nil)
 	var ae *apiError
 	if isNotFound(err) || (errors.As(err, &ae) && ae.Status == http.StatusUnprocessableEntity) {
@@ -316,6 +341,9 @@ func (g *GitHub) DeleteBranch(ctx context.Context, branch string) error {
 
 // PullRequestByBranch finds the console's pull request for a branch, open or not.
 func (g *GitHub) PullRequestByBranch(ctx context.Context, branch string) (PullRequestState, bool, error) {
+	if err := checkBranch(branch); err != nil {
+		return PullRequestState{}, false, err
+	}
 	owner := strings.SplitN(g.Repository, "/", 2)[0]
 	var prs []struct {
 		Number int `json:"number"`

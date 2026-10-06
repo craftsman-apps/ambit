@@ -28,6 +28,9 @@ func main() {
 		jsonOut := fs.String("json", "", "write {id: [problems]} to this file")
 		fs.Parse(os.Args[2:])
 		err = contract(context.Background(), *jsonOut, fs.Args())
+	case "live":
+		fs.Parse(os.Args[2:])
+		err = runLive(context.Background(), fs.Args())
 	default:
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}

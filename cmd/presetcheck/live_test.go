@@ -1,0 +1,115 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/craftsman-apps/ambit/internal/presets"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+// fakeVendor: a TLS vendor with /token (refresh rotates rt1 → rt2) and /mcp (go-sdk server, tool "whoami",
+// requires the renewed access token). onCall runs at each MCP request.
+func fakeVendor(t *testing.T, toolError bool, onCall func()) (*httptest.Server, presets.Preset) {
+	s := mcp.NewServer(&mcp.Implementation{Name: "v", Version: "1"}, nil)
+	mcp.AddTool(s, &mcp.Tool{Name: "whoami"}, func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
+		return &mcp.CallToolResult{IsError: toolError, Content: []mcp.Content{&mcp.TextContent{Text: "alice"}}}, nil, nil
+	})
+	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, &mcp.StreamableHTTPOptions{Stateless: true})
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			r.ParseForm()
+			if r.PostForm.Get("refresh_token") != "rt1" {
+				w.WriteHeader(400)
+				w.Write([]byte(`{"error":"invalid_grant"}`))
+				return
+			}
+			w.Write([]byte(`{"access_token":"at2","refresh_token":"rt2","expires_in":3600}`))
+		case "/mcp":
+			if onCall != nil {
+				onCall()
+			}
+			if r.Header.Get("Authorization") != "Bearer at2" {
+				w.WriteHeader(401)
+				return
+			}
+			h.ServeHTTP(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, presets.Preset{ID: "v", Version: 1, Server: presets.ServerRef{URL: srv.URL + "/mcp", Transport: "streamable-http"},
+		AuthorizationURL: srv.URL + "/authorize", TokenURL: srv.URL + "/token", Live: presets.Live{Tool: "whoami"}}
+}
+
+func TestLiveSavesRotatedTokenBeforeMCPCalls(t *testing.T) {
+	pc := &PresetCreds{ClientID: "id", ClientSecret: "s", RefreshToken: "rt1"}
+	saved := ""
+	srv, p := fakeVendor(t, false, func() {
+		if saved != "rt2" {
+			t.Error("MCP call before the rotated token was saved")
+		}
+	})
+	res := liveCheck(t.Context(), srv.Client(), p, pc, func() error { saved = pc.RefreshToken; return nil })
+	if !res.Pass || pc.RefreshToken != "rt2" || len(res.Tools) != 1 {
+		t.Fatalf("result %+v token %s", res, pc.RefreshToken)
+	}
+}
+
+func TestLiveFailsOnToolErrorWithoutLeakingTokens(t *testing.T) {
+	srv, p := fakeVendor(t, true, nil)
+	res := liveCheck(t.Context(), srv.Client(), p, &PresetCreds{ClientID: "id", ClientSecret: "s", RefreshToken: "rt1"}, func() error { return nil })
+	if res.Pass || !strings.Contains(res.Error, "isError") || strings.Contains(res.Error, "rt1") || strings.Contains(res.Error, "at2") {
+		t.Fatalf("%+v", res)
+	}
+}
+
+func TestLiveWithoutRefreshTokenUsesAccessTokenAndReports(t *testing.T) {
+	srv, p := fakeVendor(t, false, nil)
+	pc := &PresetCreds{ClientID: "id", ClientSecret: "s", AccessToken: "at2", Expiry: time.Now().Add(time.Hour)}
+	res := liveCheck(t.Context(), srv.Client(), p, pc, func() error { return nil })
+	if !res.Pass || !res.NoRefreshToken {
+		t.Fatalf("%+v", res)
+	}
+}
+
+func TestLiveRenewErrorKeepsTheVendorCode(t *testing.T) {
+	srv, p := fakeVendor(t, false, nil)
+	res := liveCheck(t.Context(), srv.Client(), p, &PresetCreds{ClientID: "id", ClientSecret: "s", RefreshToken: "stale"}, func() error { return nil })
+	if res.Pass || !strings.Contains(res.Error, "invalid_grant") {
+		t.Fatalf("%+v", res)
+	}
+}
+
+func TestLiveSaveFailureStopsBeforeMCP(t *testing.T) {
+	called := false
+	srv, p := fakeVendor(t, false, func() { called = true })
+	res := liveCheck(t.Context(), srv.Client(), p, &PresetCreds{ClientID: "id", ClientSecret: "s", RefreshToken: "rt1"}, func() error { return errors.New("disk full") })
+	if res.Pass || called || !strings.Contains(res.Error, "save") {
+		t.Fatalf("%+v called=%v", res, called)
+	}
+}
+
+func TestSecondAccountDiffAndToolFile(t *testing.T) {
+	got := fingerprintDiff(map[string]string{"a": "1", "b": "2", "c": "3"}, map[string]string{"a": "1", "b": "9", "d": "4"})
+	if strings.Join(got, ",") != "b,c,d" {
+		t.Fatalf("diff %v", got)
+	}
+	path := filepath.Join(t.TempDir(), "tools", "v.txt")
+	if err := reportToolChanges(path, []string{"whoami", "search"}); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "search\nwhoami\n" {
+		t.Fatalf("file %q", b)
+	}
+	if redact("token abcdefgh1234 and s", "abcdefgh1234", "s", "") != "token [secret] and s" {
+		t.Fatal("redact")
+	}
+}

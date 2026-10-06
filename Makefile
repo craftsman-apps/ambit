@@ -11,7 +11,7 @@ CRDS := charts/ambit-crds
 KIND_CLUSTER ?= ambit
 IMAGE ?= ambit-console:dev
 
-.PHONY: verify-upgrade restore-pins contracts kind-up kind-down deps lint web test-go envtest-assets argocd metrics-server proto image install install-crds test test-ui generate vendor-crds
+.PHONY: preset-live verify-upgrade restore-pins contracts kind-up kind-down deps lint web test-go envtest-assets argocd metrics-server proto image install install-crds test test-ui generate vendor-crds
 
 # Browser tests (Playwright) against the running kind install; needs the LLM test catalog (make test STEPS=3).
 test-ui:
@@ -104,3 +104,7 @@ restore-pins: install-crds
 # The specific things Ambit relies on in the components it ships, against what is installed now.
 contracts:
 	test/contracts.sh
+
+# Live checks of every verified preset with the maintainer's test accounts (docs/presets.md).
+preset-live:
+	go run ./cmd/presetcheck live $(APP)

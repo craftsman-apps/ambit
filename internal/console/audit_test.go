@@ -86,3 +86,17 @@ func TestUsageCost(t *testing.T) {
 		t.Fatalf("ml %+v", ml)
 	}
 }
+
+func TestCallsSelectTheRouter(t *testing.T) {
+	for _, a := range []string{"ambit.router", "ambit.route", "ambit.routeReason"} {
+		if !strings.Contains(callsSQL, "LogAttributes['"+a+"']") {
+			t.Fatal("calls query does not read " + a)
+		}
+	}
+	if got := routerOf("auto", "mock/echo"); got != "auto" {
+		t.Fatalf("router %q", got)
+	}
+	if got := routerOf("mock/echo", "mock/echo"); got != "" { // a direct request: no router
+		t.Fatalf("direct request shows router %q", got)
+	}
+}

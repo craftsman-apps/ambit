@@ -33,10 +33,15 @@ type Result struct {
 
 // Compile is a pure function: the same inputs in any order give the same output.
 // A model, server or tool that no rule names is denied to everyone.
-func Compile(models []v1.Model, servers []v1.Server, rules []v1.AccessRule, route RouteRef) Result {
+// Router names (ModelRouter objects) count as known: rules grant them like Models, but no object is generated
+// for them here (see CompileRouters).
+func Compile(models []v1.Model, servers []v1.Server, rules []v1.AccessRule, route RouteRef, routers ...string) Result {
 	known := map[string]bool{}
 	for _, m := range models {
 		known[m.Name] = true
+	}
+	for _, name := range routers {
+		known[name] = true
 	}
 	knownServer := map[string]bool{}
 	for _, s := range servers {

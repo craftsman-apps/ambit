@@ -4,7 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Shell, Status } from "@/components/shell";
 import { csvRow } from "@/lib/csv";
 
-type Call = { time: string; email: string; route: string; method: string; server: string; tool: string; model: string; status: string; error: string; inputTokens: number; outputTokens: number };
+type Call = { time: string; email: string; route: string; method: string; server: string; tool: string; model: string; status: string; error: string; inputTokens: number; outputTokens: number; router: string; label: string; labelReason: string };
+// A routed call shows the router and the model that answered, e.g. "auto → mock/echo (coding)".
+const target = (c: Call) => c.router ? `${c.router} → ${c.model}${c.label || c.labelReason ? ` (${c.label || c.labelReason})` : ""}` : (c.server || c.model);
 type Usage = { day: string; group: string; requests: number; inputTokens: number; outputTokens: number; cost?: number; unpricedModels?: string[] };
 
 async function get<T>(url: string): Promise<T> {
@@ -30,7 +32,7 @@ const what = (c: Call) => c.method ? `${c.method}${c.tool ? ` · ${c.tool}` : ""
 const outcome = (c: Call) => refused(c) ? "Refused by policy" : failed(c) ? "Failed" : "OK";
 
 function csv(calls: Call[]) {
-  const rows = calls.map((c) => csvRow([utc(c.time), c.email, what(c), c.server || c.model, outcome(c), c.status, c.error, c.inputTokens, c.outputTokens]));
+  const rows = calls.map((c) => csvRow([utc(c.time), c.email, what(c), target(c), outcome(c), c.status, c.error, c.inputTokens, c.outputTokens]));
   return ["time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens", ...rows].join("\n") + "\n";
 }
 function download(name: string, text: string) {
@@ -91,7 +93,7 @@ export function AuditPage() {
                     <tr key={i} className="border-b border-line-soft align-top">
                       <td className="whitespace-nowrap px-3 py-2 font-mono text-[12px]">{utc(c.time)}</td>
                       <td className="px-3 py-2 font-mono">{what(c)}</td>
-                      <td className="px-3 py-2 font-mono text-[12px]">{c.server || c.model}</td>
+                      <td className="px-3 py-2 font-mono text-[12px]">{target(c)}</td>
                       <td className="px-3 py-2">{refused(c) ? <Status ready="False" text={`Refused by policy (${c.status})`} />
                         : failed(c) ? <Status ready="Unknown" text={`Failed (${c.status})`} /> : <Status ready="True" text={`OK (${c.status})`} />}
                         {c.error && <span className="block text-[12px] text-muted">{c.error}</span>}</td>

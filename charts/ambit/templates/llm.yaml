@@ -49,4 +49,20 @@ spec:
           jwks:
             remote:
               url: {{ $jwt.jwksURL | quote }}
+---
+# The routing label (x-ambit-route) is set only by Ambit (ambit-router, PR 2). A client's own copy is removed at
+# the Gateway, before routing. PreRouting matters: a Gateway-level transformation in the normal phase is replaced
+# by any route-level one (the budgets policy has one while a dollar cap exists), and the header then got through
+# (found 2026-10-06).
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: ambit-llm-route-headers
+spec:
+  targetRefs: [{ group: gateway.networking.k8s.io, kind: Gateway, name: ambit }]
+  traffic:
+    phase: PreRouting
+    transformation:
+      request:
+        remove: [x-ambit-route, x-ambit-route-reason]
 {{- end }}

@@ -92,22 +92,60 @@ func costCEL(prices map[string]v1.ModelPrice) string {
 		strings.Join(out, ", ") + "}[llm.requestModel] + 9999999u) / 10000000u"
 }
 
-// usageCondition matches a streamed chat request from a member of a dollar-capped group that turns usage
-// reporting off (include_usage false, or stream_options without it): without token counts the answer would
-// cost nothing. When stream_options is absent the gateway asks for usage itself. A condition that fails to
-// evaluate (a body that is not JSON, no groups claim) counts as false, so such requests pass unchanged.
+// UsagePolicyName is the generated policy that turns usage reporting on for dollar-capped groups.
+const UsagePolicyName = "ambit-llm-usage"
+
+// usageField is the expression for stream_options: for a streamed chat request from a member of a dollar-capped
+// group it sets include_usage to true (other stream options are kept); otherwise it keeps the field as sent.
+// Without token counts the answer would cost nothing. It reads llmRequest, the body the provider will get.
+// agentgateway removes the field when the expression fails: that is harmless when the client sent no
+// stream_options, and usageCondition never fails, so a client's own stream_options are never lost.
+func usageField(groups []string) string {
+	return usageCondition(groups) + ` ? ` +
+		`(has(llmRequest.stream_options) ? llmRequest.stream_options.merge({"include_usage": true}) : {"include_usage": true}) : ` +
+		`llmRequest.stream_options`
+}
+
+// usageCondition: a streamed chat request from a member of a dollar-capped group. It is false, never an error,
+// for a token without a groups claim or a request without "stream".
 func usageCondition(groups []string) string {
 	q := make([]string, len(groups))
 	for i, g := range groups {
 		q[i] = strconv.Quote(g)
 	}
-	return `request.path == "/v1/chat/completions" && jwt.groups.exists(g, g in [` + strings.Join(q, ", ") + `]) && ` +
-		`json(request.body).stream == true && ` +
-		`!(has(json(request.body).stream_options.include_usage) && json(request.body).stream_options.include_usage == true)`
+	return `request.path == "/v1/chat/completions" && has(llmRequest.stream) && llmRequest.stream == true && ` +
+		`has(jwt.groups) && jwt.groups.exists(g, g in [` + strings.Join(q, ", ") + `])`
 }
 
-// usageBody is the request with stream_options.include_usage set to true; other stream options are kept.
-const usageBody = `toJson(json(request.body).merge({"stream_options": json(request.body).stream_options.merge({"include_usage": true})}))`
+// defaultRouteTypes is agentgateway v1.5.0's default_route_types (crates/agentgateway/src/llm/model_router.rs).
+// A backend AI policy without routes drops those defaults and every request is parsed as chat (embeddings were
+// answered as chat, 2026-10-06), so the usage policy repeats them. Recheck on every agentgateway upgrade.
+var defaultRouteTypes = map[string]any{
+	"/v1/chat/completions": "Completions", "/v1/messages": "Messages", "/v1/messages/count_tokens": "AnthropicTokenCount",
+	":rawPredict": "Messages", ":streamRawPredict": "Messages", ":generateContent": "GenerateContent",
+	":streamGenerateContent": "GenerateContent", ":countTokens": "GeminiCountTokens", "/v1/responses": "Responses",
+	"/v1/images/generations": "Detect", "/v1/images/edits": "Detect", "/v1/images/variations": "Detect",
+	"/v1/responses/compact": "Detect", "/v1/embeddings": "Embeddings", "/v1/rerank": "Rerank", "/v2/rerank": "Rerank",
+	"*": "Passthrough",
+}
+
+// usagePolicy is a backend policy on the LLM route, so agentgateway applies it when it calls the chosen model:
+// after a ModelRouter has picked it. A route-level (traffic) rewrite was undone there, because the router rebuilds
+// the body from its original copy (agentgateway v1.5.0; found 2026-10-06: routed streams cost nothing). Nil
+// when no group has a dollar limit.
+func usagePolicy(budgets []v1.Budget, ns, llmRoute string) *unstructured.Unstructured {
+	groups := DollarGroups(budgets)
+	if len(groups) == 0 {
+		return nil
+	}
+	return generated("agentgateway.dev/v1alpha1", "AgentgatewayPolicy", UsagePolicyName, ns, map[string]any{
+		"targetRefs": []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": llmRoute}},
+		"backend": map[string]any{"ai": map[string]any{
+			"routes":          defaultRouteTypes,
+			"transformations": []any{map[string]any{"field": "stream_options", "expression": usageField(groups)}},
+		}},
+	})
+}
 
 // compileBudgets returns the ratelimit service's config (YAML) and the gateway policy, or a nil
 // policy when there are no budgets.
@@ -161,12 +199,6 @@ func compileBudgets(budgets []v1.Budget, prices map[string]v1.ModelPrice, ns str
 		"failureMode": rl.FailureMode,
 		"descriptors": gwDescriptors,
 	}}}
-	if groups := DollarGroups(budgets); len(groups) > 0 {
-		traffic["transformation"] = map[string]any{"conditional": []any{map[string]any{
-			"condition": usageCondition(groups),
-			"policy":    map[string]any{"request": map[string]any{"body": usageBody}},
-		}}}
-	}
 	p := generated("agentgateway.dev/v1alpha1", "AgentgatewayPolicy", BudgetPolicyName, ns, map[string]any{
 		"targetRefs": []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": llmRoute}},
 		"traffic":    traffic,

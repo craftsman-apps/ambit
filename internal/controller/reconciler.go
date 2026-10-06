@@ -226,11 +226,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	}
 	// Objects of refused Servers: no general prune exists, and owner references only collect on Server deletion.
 	for name := range refusedServers {
-		r.deleteGenerated(ctx, "AgentgatewayPolicy", "ambit-conn-"+name)
+		if err := r.deleteGenerated(ctx, "AgentgatewayPolicy", "ambit-conn-"+name); err != nil {
+			return reconcile.Result{}, err
+		}
 	}
 	if len(boundServers) == 0 && len(servers.Items) > 0 { // every Server refused: no shared backend either
-		r.deleteGenerated(ctx, "AgentgatewayBackend", MCPBackendName)
-		r.deleteGenerated(ctx, "AgentgatewayPolicy", MCPBackendName+"-access")
+		for _, o := range [][2]string{{"AgentgatewayBackend", MCPBackendName}, {"AgentgatewayPolicy", MCPBackendName + "-access"}} {
+			if err := r.deleteGenerated(ctx, o[0], o[1]); err != nil {
+				return reconcile.Result{}, err
+			}
+		}
 	}
 	// No budgets (or budgets off): stop asking the ratelimit service on every request. No dollar limit: stop
 	// rewriting requests for usage.
@@ -481,13 +486,14 @@ func controllerOwnerKind(o *unstructured.Unstructured) string {
 }
 
 // deleteGenerated removes one object Ambit generated, if present and owned by Ambit.
-func (r *Reconciler) deleteGenerated(ctx context.Context, kind, name string) {
+func (r *Reconciler) deleteGenerated(ctx context.Context, kind, name string) error {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(schema.GroupVersionKind{Group: "agentgateway.dev", Version: "v1alpha1", Kind: kind})
-	if err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: name}, u); err != nil || !ownedByAmbit(u) {
-		return
+	if err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: name}, u); err != nil {
+		return client.IgnoreNotFound(err)
 	}
-	if err := r.Delete(ctx, u); err != nil && !apierrors.IsNotFound(err) {
-		log.FromContext(ctx).Error(err, "delete generated object", "kind", kind, "name", name)
+	if !ownedByAmbit(u) {
+		return nil
 	}
+	return client.IgnoreNotFound(r.Delete(ctx, u))
 }

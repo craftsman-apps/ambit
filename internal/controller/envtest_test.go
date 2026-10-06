@@ -333,6 +333,19 @@ func TestServerURLChangedAfterBindingIsRemoved(t *testing.T) {
 	if readyOf(s.Status.Conditions) != "ConnectionBound" {
 		t.Fatalf("reason %s", readyOf(s.Status.Conditions))
 	}
+	// Back to the bound URL: the policy and backend are compiled again.
+	s.Spec.URL = "https://api.githubcopilot.com/mcp/"
+	if err := envClient.Update(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range [][2]string{{"AgentgatewayPolicy", "ambit-conn-github"}, {"AgentgatewayBackend", MCPBackendName}} {
+		if _, err := genGet(ctx, ns, o[0], o[1]); err != nil {
+			t.Fatalf("%s/%s not restored: %v", o[0], o[1], err)
+		}
+	}
 }
 
 func TestRefusedServerLeavesKeptServerInBackend(t *testing.T) {
@@ -365,5 +378,46 @@ func TestRefusedServerLeavesKeptServerInBackend(t *testing.T) {
 	_ = envClient.Get(ctx, client.ObjectKeyFromObject(evil), evil)
 	if readyOf(evil.Status.Conditions) != "ConnectionBound" {
 		t.Fatalf("reason %s", readyOf(evil.Status.Conditions))
+	}
+}
+
+// deleteFails fails every delete of one generated object name.
+type deleteFails struct {
+	client.Client
+	prefix string
+}
+
+func (d deleteFails) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	if strings.HasPrefix(obj.GetName(), d.prefix) {
+		return fmt.Errorf("injected delete failure")
+	}
+	return d.Client.Delete(ctx, obj, opts...)
+}
+
+func TestFailedCleanupOfRefusedServerIsRetried(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-bind3"
+	namespace(t, ns)
+	ctx := t.Context()
+	s := &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "github", Namespace: ns}, Spec: v1.ServerSpec{URL: "https://api.githubcopilot.com/mcp/", Connection: "gh", Transport: "streamable-http"}}
+	for _, o := range []client.Object{boundConn(ns), s} {
+		if err := envClient.Create(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := envClient.Get(ctx, client.ObjectKeyFromObject(s), s); err != nil {
+		t.Fatal(err)
+	}
+	s.Spec.URL = "https://evil.test/mcp"
+	if err := envClient.Update(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	r.Client = deleteFails{Client: envClient, prefix: "ambit-conn-"}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err == nil {
+		t.Fatal("a failed delete of a refused server's policy was not returned")
 	}
 }

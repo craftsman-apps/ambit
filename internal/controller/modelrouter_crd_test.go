@@ -3,6 +3,7 @@ package controller
 import (
 	"slices"
 	"testing"
+	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -49,6 +50,31 @@ func TestModelRouterCRDRules(t *testing.T) {
 		if err := envClient.Create(ctx, o); err == nil {
 			t.Errorf("%s accepted", name)
 		}
+	}
+	llm := &v1.ModelRouter{ObjectMeta: metav1.ObjectMeta{Name: "smart", Namespace: ns},
+		Spec: v1.ModelRouterSpec{Default: "gemma", Classifier: v1.RouterClassifier{Type: "LLM", LLM: &v1.RouterLLM{Model: "gemma-local"},
+			Categories: []v1.RouterCategory{{Name: "coding", Description: "writing, fixing or explaining program code"}}},
+			Routes: []v1.RouterRoute{{Model: "sonnet", Category: "coding"}}}}
+	if err := envClient.Create(ctx, llm); err != nil {
+		t.Fatalf("valid LLM router refused: %v", err)
+	}
+	m := &v1.RouterLLM{Model: "m"}
+	for name, spec := range map[string]v1.ModelRouterSpec{
+		"llm-without-model": {Default: "g", Classifier: v1.RouterClassifier{Type: "LLM"}},
+		"other-reserved":    {Default: "g", Classifier: v1.RouterClassifier{Type: "LLM", LLM: m, Categories: []v1.RouterCategory{{Name: "other", Description: "x"}}}},
+		"empty-description": {Default: "g", Classifier: v1.RouterClassifier{Type: "LLM", LLM: m, Categories: []v1.RouterCategory{{Name: "coding"}}}},
+		"zero-rate":         {Default: "g", Classifier: v1.RouterClassifier{Type: "LLM", LLM: m, RatePerMinute: ptr.To[int32](0)}},
+		"huge-maxbytes":     {Default: "g", Classifier: v1.RouterClassifier{Type: "LLM", LLM: m, MaxBytes: ptr.To[int64](3 << 20)}},
+		"too-many-cats":     {Default: "g", Classifier: v1.RouterClassifier{Type: "LLM", LLM: m, Categories: slices.Repeat([]v1.RouterCategory{{Name: "a", Description: "a"}}, 17)}},
+	} {
+		o := &v1.ModelRouter{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Spec: spec}
+		if err := envClient.Create(ctx, o); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	var c v1.RouterClassifier
+	if c.TimeoutOrDefault() != 1500*time.Millisecond || c.MaxBytesOrDefault() != 8000 || c.RateOrDefault() != 600 {
+		t.Fatal("defaults")
 	}
 	if (&v1.ModelRouter{ObjectMeta: metav1.ObjectMeta{Name: "auto"}}).WireName() != "auto" ||
 		(&v1.ModelRouter{ObjectMeta: metav1.ObjectMeta{Name: "auto"}, Spec: v1.ModelRouterSpec{Model: "smart"}}).WireName() != "smart" {

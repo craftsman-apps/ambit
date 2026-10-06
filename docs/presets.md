@@ -88,7 +88,7 @@ users. The live check reports such vendors when a second test account is configu
 | Level | Where it runs | Needs an account | What it checks |
 |---|---|---|---|
 | 1. Catalog | every CI run (`go test ./internal/presets`) | no | The catalog parses; ids are unique; URLs are valid after placeholders are filled; scopes follow RFC 6749; `setup` contains `{callbackURL}`; reserved `authorizeParams` refused; every verified preset has a `live` block. A pull request that changes a preset without raising its `version` fails. |
-| 2. Contract | nightly, `.github/workflows/presets-contract.yml` | no | The vendor's server answers an unauthenticated request with 401 (or the statuses the preset lists under `contract`); published metadata still matches the preset; the token URL answers an empty request with an OAuth error. A preset that fails two nights in a row opens one issue. |
+| 2. Contract | nightly, `.github/workflows/presets-contract.yml` | no | The vendor's server answers an unauthenticated request with 401 (or the statuses the preset lists under `contract`); published metadata still matches the preset; the token URL answers a dummy authorization-code request with a JSON OAuth error (any HTTP status; an HTML page fails). A preset that fails two nights in a row opens one issue. |
 | 3. Live | maintainer's laptop, `make preset-live` | yes, a test account per vendor | Sign-in, refresh, `initialize`, `tools/list`, and one read-only tool call. |
 
 Run one preset at a time: `go run ./cmd/presetcheck contract <id>`, `make preset-live APP=<id>`. `make preset-live`

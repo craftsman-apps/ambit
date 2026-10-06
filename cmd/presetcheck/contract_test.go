@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -72,9 +73,9 @@ func TestContractCatchesOpenServerAndNonOAuthTokenPage(t *testing.T) {
 
 func TestContractTokenAnswers(t *testing.T) {
 	for body, ok := range map[string]bool{
-		`{"ok":false,"error":"invalid_client_id"}`: true,  // Slack: HTTP 200, still an OAuth refusal
-		`{"ok":true}`:                              false, // no error indicator
-		`{"access_token":"x"}`:                     false, // a token for an empty request is not an OAuth endpoint
+		`{"ok":false,"error":"invalid_client_id"}`: true, // Slack: HTTP 200, still an OAuth refusal
+		`{"ok":true}`:          false, // no error indicator
+		`{"access_token":"x"}`: false, // a token for an empty request is not an OAuth endpoint
 	} {
 		srv, p := vendor(t, func(path string, w http.ResponseWriter) bool {
 			if path == "/token" {
@@ -193,5 +194,50 @@ func TestContractRefusesRedirectToAnotherHost(t *testing.T) {
 		if len(checkContract(t.Context(), hc, p, nil)) == 0 || other != 0 {
 			t.Fatalf("%s: redirect not refused (other host got %d requests)", redirected, other)
 		}
+	}
+}
+
+// The token endpoint is judged by its JSON OAuth error, at any status: GitHub answers an unknown client with
+// 404 {"error":"Not Found"}, while a wrong URL answers with an HTML page.
+func TestContractTokenAnswersByStatus(t *testing.T) {
+	for _, c := range []struct {
+		status int
+		body   string
+		ok     bool
+	}{
+		{404, `{"error":"Not Found"}`, true},
+		{404, `<!DOCTYPE html><html>Not Found</html>`, false},
+		{400, `{"error":"invalid_client"}`, true},
+	} {
+		srv, p := vendor(t, func(path string, w http.ResponseWriter) bool {
+			if path == "/token" {
+				w.WriteHeader(c.status)
+				w.Write([]byte(c.body))
+				return true
+			}
+			return false
+		})
+		got := !strings.Contains(strings.Join(checkContract(t.Context(), srv.Client(), p, nil), "\n"), "token URL")
+		if got != c.ok {
+			t.Fatalf("%d %s: ok=%v", c.status, c.body, got)
+		}
+	}
+}
+
+// The probe is a dummy authorization-code grant, not an empty body.
+func TestContractTokenProbeSendsADummyGrant(t *testing.T) {
+	var form url.Values
+	srv, p := vendor(t, func(path string, w http.ResponseWriter) bool { return false })
+	next := srv.Config.Handler
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			r.ParseForm()
+			form = r.PostForm
+		}
+		next.ServeHTTP(w, r)
+	})
+	checkContract(t.Context(), srv.Client(), p, nil)
+	if form.Get("grant_type") != "authorization_code" || form.Get("client_id") == "" || form.Get("code") == "" {
+		t.Fatalf("probe form %v", form)
 	}
 }

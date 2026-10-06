@@ -46,7 +46,8 @@ func checkContract(ctx context.Context, hc *http.Client, p presets.Preset, value
 			probs = append(probs, checkMetadata(ctx, hc, res.Server.URL, m[1], res.Connection.AuthorizationURL, res.Connection.TokenURL, res.Connection.RevocationURL)...)
 		}
 	}
-	a, err = do(ctx, hc, http.MethodPost, res.Connection.TokenURL, "application/x-www-form-urlencoded", "")
+	// A dummy grant, not an empty body: some vendors (GitHub) answer 404 when client_id is missing.
+	a, err = do(ctx, hc, http.MethodPost, res.Connection.TokenURL, "application/x-www-form-urlencoded", tokenProbe)
 	if err != nil {
 		probs = append(probs, "token URL: "+err.Error())
 	} else {
@@ -55,7 +56,7 @@ func checkContract(ctx context.Context, hc *http.Client, p presets.Preset, value
 			OK    *bool  `json:"ok"`
 		}
 		isOAuthError := json.Unmarshal(a.body, &o) == nil && (o.Error != "" || (o.OK != nil && !*o.OK))
-		if !isOAuthError || a.status == http.StatusNotFound {
+		if !isOAuthError { // judged by the JSON error, at any status: a wrong URL answers with HTML
 			probs = append(probs, fmt.Sprintf("token URL did not answer like an OAuth token endpoint (HTTP %d)", a.status))
 		}
 	}
@@ -63,6 +64,9 @@ func checkContract(ctx context.Context, hc *http.Client, p presets.Preset, value
 }
 
 // checkMetadata compares the vendor's published OAuth metadata with the preset (stable fields only).
+// tokenProbe is an authorization-code request no vendor can accept; a token endpoint answers it with an OAuth error.
+const tokenProbe = "grant_type=authorization_code&client_id=ambit-contract-check&code=ambit-contract-check&redirect_uri=https%3A%2F%2F127.0.0.1%2Fambit-contract"
+
 func checkMetadata(ctx context.Context, hc *http.Client, serverURL, prmURL, authURL, tokenURL, revURL string) []string {
 	if !sameHost(serverURL, prmURL) {
 		return []string{"resource metadata is on another host: " + prmURL}

@@ -44,3 +44,23 @@
   clientSecretLabel: Client secret
   docs: https://linear.app/developers/oauth-2-0-authentication
   live: { tool: list_teams }
+- id: asana
+  version: 1
+  displayName: Asana
+  category: Projects
+  server: { url: "https://mcp.asana.com/v2/mcp", transport: streamable-http }
+  authorizationURL: https://app.asana.com/-/oauth_authorize
+  tokenURL: https://app.asana.com/-/oauth_token
+  revocationURL: https://app.asana.com/-/oauth_revoke
+  resource: none
+  setup: |
+    1. Sign in to Asana and open the developer console at https://app.asana.com/0/my-apps.
+    2. Click "Create new app", enter an app name, select the app type "MCP app", and click "Create app".
+    3. Open the "OAuth" tab and add {callbackURL} as a redirect URL.
+    4. Open "Manage distribution" and choose "Specific workspaces" (select your workspace) or "Any workspace". Select at least one workspace.
+    5. Copy the Client ID and the Client secret from the OAuth tab.
+    6. An MCP app needs no scopes.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://developers.asana.com/docs/integrating-with-asanas-mcp-server
+  live: { tool: get_me, callback: https }

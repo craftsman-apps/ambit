@@ -164,3 +164,4 @@ Changing an existing preset needs a higher `version`; CI checks this.
 |---|---|---|---|---|---|
 | github | GitHub | api.githubcopilot.com | yes |  | not yet |
 | linear | Linear | mcp.linear.app | yes |  | not yet |
+| asana | Asana | mcp.asana.com | yes |  | not yet |

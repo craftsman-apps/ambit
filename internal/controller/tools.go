@@ -28,7 +28,7 @@ func ListTools(ctx context.Context, s v1.Server) ([]v1.Tool, error) {
 	if s.Spec.Connection != "" {
 		// Per-user servers need a user's token; without --console-tools-url their tools stay unlisted
 		// and rules grant "all tools". With it, WithConsoleTools sends them to the console instead.
-		return nil, nil
+		return nil, errToolsNotRead
 	}
 	switch {
 	case s.Spec.URL != "":
@@ -130,6 +130,9 @@ func listTools(ctx context.Context, t mcp.Transport) ([]v1.Tool, error) {
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
+
+// errToolsNotRead: this lister does not read the server's tools (per-user server, no console configured).
+var errToolsNotRead = errors.New("tools are not read")
 
 // ErrNoReader: a per-user server has no admin who agreed to have its tools read with their account.
 var ErrNoReader = errors.New("no tool reader")

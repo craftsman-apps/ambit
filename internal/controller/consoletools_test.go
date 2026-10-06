@@ -112,3 +112,76 @@ func TestReaderUnavailableKeepsLastList(t *testing.T) {
 		t.Fatalf("tools %v cond %+v", s.Status.Tools, c)
 	}
 }
+
+func toolsReadOf(t *testing.T, s *v1.Server) *metav1.Condition {
+	t.Helper()
+	if err := envClient.Get(t.Context(), client.ObjectKeyFromObject(s), s); err != nil {
+		t.Fatal(err)
+	}
+	return meta.FindStatusCondition(s.Status.Conditions, "ToolsRead")
+}
+
+func TestToolsReadFailedThenCleared(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-reader-fail"
+	namespace(t, ns)
+	ctx := t.Context()
+	s := perUserEnv(ns)
+	if err := envClient.Create(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	var next error = ErrNoReader
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}, ToolsRefresh: time.Nanosecond,
+		ListTools: func(context.Context, v1.Server) ([]v1.Tool, error) {
+			if next != nil {
+				return nil, next
+			}
+			return []v1.Tool{{Name: "get_issue", Fingerprint: "f1"}}, nil
+		}}
+	reconcileOnce := func() *metav1.Condition {
+		if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+			t.Fatal(err)
+		}
+		return toolsReadOf(t, s)
+	}
+	if c := reconcileOnce(); c == nil || c.Reason != "ReaderUnavailable" {
+		t.Fatalf("cond %+v", c)
+	}
+	next = errors.New("console tools: status 502")
+	if c := reconcileOnce(); c == nil || c.Status != metav1.ConditionFalse || c.Reason != "ReadFailed" {
+		t.Fatalf("cond %+v", c)
+	}
+	next = nil
+	if c := reconcileOnce(); c == nil || c.Reason != "Read" {
+		t.Fatalf("cond %+v", c)
+	}
+	// the Server becomes a plain one: no stale ToolsRead
+	if err := envClient.Get(ctx, client.ObjectKeyFromObject(s), s); err != nil {
+		t.Fatal(err)
+	}
+	s.Spec.Connection = ""
+	if err := envClient.Update(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if c := reconcileOnce(); c != nil {
+		t.Fatalf("stale %+v", c)
+	}
+}
+
+func TestNoConsoleURLSetsNoToolsRead(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-reader-nourl"
+	namespace(t, ns)
+	ctx := t.Context()
+	s := perUserEnv(ns)
+	if err := envClient.Create(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}, ToolsRefresh: time.Nanosecond, ListTools: ListTools}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if c := toolsReadOf(t, s); c != nil {
+		t.Fatalf("cond %+v", c)
+	}
+}

@@ -324,11 +324,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			if tc != nil {
 				tc.ObservedGeneration = s.Generation
 				meta.SetStatusCondition(&next.Status.Conditions, *tc)
+			} else {
+				meta.RemoveStatusCondition(&next.Status.Conditions, "ToolsRead")
 			}
 			if result.RequeueAfter == 0 {
 				result.RequeueAfter = r.refresh()
 			}
 			pinTools(next)
+		} else {
+			meta.RemoveStatusCondition(&next.Status.Conditions, "ToolsRead")
 		}
 		if err := r.updateStatus(ctx, s.Status, next.Status, next); err != nil {
 			return reconcile.Result{}, err
@@ -381,15 +385,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 
 // readTools returns the server's tools, reading them again when they are older than toolsRefresh.
 // On failure it keeps the last known list: a slow server must not make its tools vanish from the console.
-// For per-user servers it also returns the ToolsRead condition.
+// For per-user servers it also returns the ToolsRead condition; nil means the condition does not apply.
 func (r *Reconciler) readTools(ctx context.Context, s v1.Server) ([]v1.Tool, *metav1.Condition) {
 	if r.toolsRead == nil {
 		r.toolsRead = map[types.UID]time.Time{}
 	}
 	if t, ok := r.toolsRead[s.UID]; ok && time.Since(t) < r.refresh() && len(s.Status.Tools) > 0 {
-		return s.Status.Tools, nil
+		return s.Status.Tools, meta.FindStatusCondition(s.Status.Conditions, "ToolsRead").DeepCopy()
 	}
 	tools, err := r.ListTools(ctx, s)
+	if errors.Is(err, errToolsNotRead) {
+		return s.Status.Tools, nil
+	}
 	if errors.Is(err, ErrNoReader) {
 		c := cond(metav1.ConditionFalse, "ReaderUnavailable", "no admin's account is set to read this server's tools; choose one on the Servers page")
 		c.Type = "ToolsRead"
@@ -397,7 +404,12 @@ func (r *Reconciler) readTools(ctx context.Context, s v1.Server) ([]v1.Tool, *me
 	}
 	if err != nil {
 		log.FromContext(ctx).Error(err, "read tools", "server", s.Name)
-		return s.Status.Tools, nil
+		if s.Spec.Connection == "" {
+			return s.Status.Tools, nil
+		}
+		c := cond(metav1.ConditionFalse, "ReadFailed", "the last attempt to read this server's tools failed; the list shown is from an earlier read")
+		c.Type = "ToolsRead"
+		return s.Status.Tools, &c
 	}
 	r.toolsRead[s.UID] = time.Now()
 	if s.Spec.Connection == "" {

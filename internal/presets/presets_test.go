@@ -299,3 +299,25 @@ func TestDocMissingFindsAnAbsentID(t *testing.T) {
 		t.Fatal("a listed id was reported missing")
 	}
 }
+
+// The Google presets share one OAuth client: a second one must still enable its own MCP API (step 3) and
+// add its scopes (step 4), then reuse the client instead of creating another.
+func TestGoogleSetupReusesTheClientAfterEnablingTheProduct(t *testing.T) {
+	ps, err := All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, p := range ps {
+		if p.Category != "Google Workspace" {
+			continue
+		}
+		n++
+		if strings.Contains(p.Setup, "go to step 5") || !strings.Contains(p.Setup, "do steps 3 and 4") || !strings.Contains(p.Setup, "skip steps 5 and 6") {
+			t.Errorf("%s: a second Google preset must do steps 3 and 4, then reuse the client:\n%s", p.ID, p.Setup)
+		}
+	}
+	if n != 5 {
+		t.Fatalf("%d Google Workspace presets, want 5", n)
+	}
+}

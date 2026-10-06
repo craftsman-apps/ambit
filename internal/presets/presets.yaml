@@ -19,6 +19,7 @@
     6. Copy the Client ID from the app page.
     7. Click "Generate a new client secret" and copy the secret at once; GitHub shows it only once.
     8. If your organization restricts third-party apps, an organization owner must approve this app under Settings, Third-party access.
+    9. These scopes let the agent change data in GitHub: the repo scope gives read and write access to every repository the person can reach. GitHub OAuth Apps have no read-only scope for private repositories.
   clientIDLabel: Client ID
   clientSecretLabel: Client secret
   docs: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app
@@ -102,6 +103,7 @@
     5. Add a support email, a privacy policy URL and a terms of service URL, then click "Register integration".
     6. On the integration page, click "Generate client secret" and copy it at once; it cannot be shown again.
     7. Copy the Client ID from the same page.
+    8. These scopes let the agent change data in Airtable (records). This preset does not use a read-only set of scopes.
   clientIDLabel: Client ID
   clientSecretLabel: Client secret
   docs: https://airtable.com/developers/web/guides/oauth-integrations
@@ -122,6 +124,7 @@
     3. Add the integration credentials. Enter {callbackURL} as the Redirect URI.
     4. Save, then copy the generated Client ID and Client Secret.
     5. The scopes used are root_readwrite and ai.readwrite.
+    6. These scopes let the agent change data in Box. Box also has a read-only scope, root_readonly; Ambit has not checked whether the Box MCP server accepts it, so this preset does not use it.
   clientIDLabel: Client ID
   clientSecretLabel: Client Secret
   docs: https://developer.box.com/guides/box-mcp/remote/
@@ -143,6 +146,7 @@
     4. Open the "Settings" tab. Under "OAuth 2", add {callbackURL} as a redirect URI.
     5. On the same tab, copy the App key (the client ID) and the App secret (the client secret).
     6. Ambit asks for offline access, so Dropbox issues a refresh token. Ambit cannot revoke a Dropbox grant when a person leaves; Dropbox accepts a revoke request only with the user's own access token.
+    7. These scopes let the agent change data in Dropbox (files, shared links and file requests). This preset does not use a read-only set of scopes.
   clientIDLabel: App key
   clientSecretLabel: App secret
   docs: https://help.dropbox.com/integrations/connect-dropbox-mcp-server
@@ -228,6 +232,7 @@
     5. Select all nine scopes: spark:mcp, spark:messages_read, spark:messages_write, spark:rooms_read, spark:rooms_write, spark:memberships_read, spark:memberships_write, spark:webhooks_read, spark:webhooks_write.
     6. Click "Add Integration". Copy the Client ID and the Client Secret; Webex shows the secret only once.
     7. This preset covers the Messaging server. The meetings tools are a separate Webex MCP server.
+    8. These scopes let the agent change data in Webex (send messages and change rooms, memberships and webhooks). This preset requests all nine scopes listed in step 5.
   clientIDLabel: Client ID
   clientSecretLabel: Client Secret
   docs: https://developer.webex.com/mcp/docs/messaging-mcp-server
@@ -295,6 +300,7 @@
     5. Under "Additional settings", click "Add URI" and enter {callbackURL} as a redirect URI. Click "Save".
     6. The tools use these scopes: signature, adm_store_unified_repo_read, aow_manage. Each person must agree to them at first sign-in. The server acts with that person's own Docusign permissions.
     7. For a production account, Docusign requires the integration key to pass its Go-Live review before it can sign in people outside the developer account.
+    8. These scopes let the agent change data in Docusign (for example, send envelopes for signature). This preset does not use a read-only set of scopes.
   clientIDLabel: Integration Key
   clientSecretLabel: Secret Key
   docs: https://developers.docusign.com/platform/mcp-server/

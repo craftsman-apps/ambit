@@ -321,3 +321,23 @@ func TestGoogleSetupReusesTheClientAfterEnablingTheProduct(t *testing.T) {
 		t.Fatalf("%d Google Workspace presets, want 5", n)
 	}
 }
+
+// Presets whose scopes allow writing say so in plain words, so the admin knows before adding them.
+func TestWriteScopesAreStatedInSetup(t *testing.T) {
+	ps, err := All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"dropbox": true, "airtable": true, "box": true, "webex": true, "docusign": true, "github": true}
+	for _, p := range ps {
+		if want[p.ID] {
+			delete(want, p.ID)
+			if !strings.Contains(p.Setup, "These scopes let the agent change data in") {
+				t.Errorf("%s: setup does not say that its scopes allow changing data", p.ID)
+			}
+		}
+	}
+	if len(want) != 0 {
+		t.Fatalf("presets not found: %v", want)
+	}
+}

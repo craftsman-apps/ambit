@@ -570,7 +570,10 @@ func serverURLs(conn string, servers []v1.Server) []string {
 }
 
 // bindApp binds an older Connection to the one Server that uses it. Only serverURL is set: setting
-// resource would make every existing grant ask its user to reconnect.
+// resource would make every existing grant ask its user to reconnect. In Direct mode the existing grants
+// get the same serverURL (bindGrants), so their users keep working. In GitOps mode the controller applies
+// the change after merge, when the console cannot update the grants at the same moment: those users
+// connect again once (the UI says so before the admin binds).
 func (c *Catalog) bindApp(w http.ResponseWriter, r *http.Request, s Session) {
 	var conn v1.Connection
 	if err := c.Client.Get(r.Context(), client.ObjectKey{Namespace: c.Namespace, Name: r.PathValue("name")}, &conn); apierrors.IsNotFound(err) {
@@ -599,7 +602,14 @@ func (c *Catalog) bindApp(w http.ResponseWriter, r *http.Request, s Session) {
 		c.propose(w, r, s, "update", "Connection", "connections", conn.Name, conn.Spec, conn.Labels, consoleAnnotations(conn.Annotations))
 		return
 	}
-	if err := c.Client.Update(r.Context(), &conn); err != nil {
+	update := func() error { return c.Client.Update(r.Context(), &conn) }
+	var err error
+	if c.Conns != nil {
+		err = c.Conns.bindGrants(r.Context(), &conn, urls[0], update)
+	} else {
+		err = update()
+	}
+	if err != nil {
 		apiErr(w, err)
 		return
 	}

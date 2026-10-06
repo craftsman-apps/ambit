@@ -256,7 +256,7 @@ func TestBindOlderApp(t *testing.T) {
 	var conn v1.Connection
 	_ = e.cl.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "jira"}, &conn)
 	if conn.Spec.ServerURL != "https://mcp.jira.test/mcp" || conn.Spec.Resource != "" {
-		t.Fatalf("bind must set serverURL only (resource would break existing grants): %+v", conn.Spec)
+		t.Fatalf("bind must set serverURL and leave resource empty (a new resource would break every existing grant): %+v", conn.Spec)
 	}
 }
 
@@ -465,5 +465,25 @@ func TestServerAccessEndpoint(t *testing.T) {
 	}
 	if rec = do(t, e.h, "GET", "/api/servers/nope/access", e.ck, nil); rec.Code != 404 || !strings.Contains(rec.Body.String(), "no server named nope") {
 		t.Fatalf("unknown: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A user who connected before the bind keeps working: their grant was issued for the one server the app had.
+func TestBindKeepsGrantsIssuedBeforeIt(t *testing.T) {
+	e := presetFixture(t, false)
+	_ = e.cl.Create(t.Context(), &v1.Connection{ObjectMeta: metav1.ObjectMeta{Name: "jira", Namespace: testNS}, Spec: v1.ConnectionSpec{DisplayName: "Jira",
+		AuthorizationURL: "https://a.test/a", TokenURL: "https://a.test/t", ClientID: "c", ClientSecretRef: v1.SecretRef{Name: "ambit-conn-jira"}}})
+	_ = e.cl.Create(t.Context(), &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "jira", Namespace: testNS}, Spec: v1.ServerSpec{URL: "https://mcp.jira.test/mcp", Connection: "jira"}})
+	conns := e.cat.Conns
+	if err := conns.Store.Put(t.Context(), &Grant{Email: "alice@acme.test", Connection: "jira", AccessToken: "at-alice", RefreshToken: "rt-alice",
+		Expiry: time.Now().Add(time.Hour), State: grantConnectedState}); err != nil { // pre-bind grant: no ServerURL
+		t.Fatal(err)
+	}
+	if rec := do(t, e.h, "PUT", "/api/apps/jira/bind", e.ck, map[string]string{}); rec.Code != http.StatusOK {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	tok, g, err := conns.Token(t.Context(), "alice@acme.test", "jira")
+	if err != nil || tok != "at-alice" || g.ServerURL != "https://mcp.jira.test/mcp" {
+		t.Fatalf("a grant from before the bind must keep working: token %q grant %+v err %v", tok, g, err)
 	}
 }

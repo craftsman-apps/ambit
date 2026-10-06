@@ -352,6 +352,40 @@ func (c *Connections) Token(ctx context.Context, email, connName string) (string
 	return c.renewLocked(ctx, g, false)
 }
 
+// bindGrants runs update (which sets the Connection's serverURL) and gives every grant issued before it,
+// for the same resource, that serverURL: those tokens were issued while the app had that one server. It
+// holds the grants' locks throughout, so no renewal sees the bound Connection with an unbound grant.
+func (c *Connections) bindGrants(ctx context.Context, conn *v1.Connection, serverURL string, update func() error) error {
+	all, err := c.Store.List(ctx, "")
+	if err != nil {
+		return err
+	}
+	var grants []*Grant
+	for _, g := range all {
+		if g.Connection == conn.Name {
+			grants = append(grants, g)
+			defer c.lockGrant(g.Email, g.Connection)()
+		}
+	}
+	if err := update(); err != nil {
+		return err
+	}
+	for _, listed := range grants {
+		g, err := c.Store.Get(ctx, listed.Email, listed.Connection)
+		if err != nil {
+			return err
+		}
+		if g == nil || g.ServerURL != "" || g.Resource != conn.Spec.Resource {
+			continue
+		}
+		g.ServerURL = serverURL
+		if err := c.Store.Put(ctx, g); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // lockGrant locks one grant and returns the unlock function.
 // ponytail: the map keeps one small mutex per grant ever seen; prune it if grants number in the millions.
 func (c *Connections) lockGrant(email, conn string) func() {

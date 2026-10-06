@@ -153,7 +153,7 @@ export function AppsPage() {
   const close = () => { setAdding(false); setCustom(false); };
   const bind = useMutation({
     mutationFn: (name: string) => sendJSON("PUT", `/api/apps/${encodeURIComponent(name)}/bind`, {}),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["apps"] }),
+    onSuccess: (res) => { qc.invalidateQueries({ queryKey: ["apps"] }); if (isProposed(res)) setPR(res.pullRequest); },
   });
   const [confirm, setConfirm] = useState<string | null>(null);
   const [pr, setPR] = useState<PullRequest | null>(null);
@@ -189,7 +189,8 @@ export function AppsPage() {
                     {a.preset && <span className="block text-[12px] text-muted">preset {a.preset}</span>}
                     {a.newerPreset && <span className="block text-[12px] text-warn">A newer preset exists (version {a.newerPreset.version}): {a.newerPreset.changes.join("; ")}</span>}
                     {!a.bound && a.bindTo && <span className="block text-[12px]">Not bound to a server <Button variant="outline" className="ml-1 w-auto" disabled={bind.isPending} onClick={() => bind.mutate(a.name)}>Bind to its server</Button>
-                      <span className="mt-1 block break-all font-mono text-muted">{a.bindTo}</span></span>}</td>
+                      <span className="mt-1 block break-all font-mono text-muted">{a.bindTo}</span>
+                      {gitops && <span className="mt-1 block text-muted">After the change is merged, people who already connected this app must connect it again once.</span>}</span>}</td>
                   <td className="break-all px-3 py-2.5 font-mono text-[12px]">{a.tokenURL}</td>
                   <td className="px-3 py-2.5 font-mono text-[12px]">{a.scopes.join(" ") || <span className="font-sans text-muted">none</span>}</td>
                   <td className="px-3 py-2.5"><Revokes url={a.revocationURL} /></td>

@@ -219,7 +219,10 @@ func (c *Catalog) deleteApp(w http.ResponseWriter, r *http.Request, s Session) {
 		}
 		if revoked, err := c.Conns.Revoke(r.Context(), g); err != nil {
 			slog.Error("app removal: revoke failed; forgetting the grant anyway", "connection", conn.Name, "err", err)
-			if err := c.Conns.Store.Delete(r.Context(), g.Email, g.Connection); err != nil {
+			unlock := c.Conns.lockGrant(g.Email, g.Connection) // a renewal in flight must not save the grant back
+			err := c.Conns.Store.Delete(r.Context(), g.Email, g.Connection)
+			unlock()
+			if err != nil {
 				serverErr(w, err)
 				return
 			}

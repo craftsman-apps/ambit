@@ -147,3 +147,26 @@ call() {
 d=json.loads(sys.stdin.read())
 print("error "+d["error"]["message"] if "error" in d else "ok "+d["result"]["content"][0]["text"].replace("\n"," "))'
 }
+
+# wait_for SECS CMD: run CMD (eval) every 2 s until it succeeds; non-zero when SECS pass first.
+wait_for() {
+  local end=$((SECONDS + $1))
+  while ! eval "$2" >/dev/null 2>&1; do (( SECONDS < end )) || return 1; sleep 2; done
+}
+# connect_app NAME USER PASS: the browser flow for Connection NAME — console -> SaaS login -> console callback.
+connect_app() {
+  hop GET "$BASE/connections/$1/connect"; follow
+  local action; action=$(form_action)
+  [[ -n "$action" ]] || fail "no saas login form for $1 (HTTP $CODE)"
+  hop POST "$action" --data-urlencode "username=$2" --data-urlencode "password=$3"; follow
+  grep -q "connected=$1" "$W/all-headers" || fail "connect $1 for $2 did not return to /connections?connected=$1"
+}
+# pod_curl LABELS URL: HTTP status of URL seen from a short-lived pod with LABELS (comma separated,
+# e.g. "app.kubernetes.io/name=ambit-controller"); always 3 characters, 000 = no connection. Needs NS, CURL_IMAGE.
+pod_curl() {
+  local out
+  out=$(kubectl -n "$NS" run "probe-$RANDOM" --rm -i --restart=Never --quiet --image="$CURL_IMAGE" --labels="$1" --command -- \
+    curl -s -m 3 -o /dev/null -w '%{http_code}' "$2" 2>/dev/null) || true   # curl prints 000 itself on failure
+  out=${out: -3}
+  [[ $out =~ ^[0-9]{3}$ ]] && echo "$out" || echo 000
+}

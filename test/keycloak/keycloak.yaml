@@ -175,7 +175,24 @@ data:
           "standardFlowEnabled": true,
           "directAccessGrantsEnabled": false,
           "attributes": { "pkce.code.challenge.method": "S256" },
-          "redirectUris": ["http://console.localtest.me:8080/connections/callback"]
+          "redirectUris": ["http://console.localtest.me:8080/connections/callback"],
+          "protocolMappers": [
+            { "name": "whoami-audience", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+              "config": { "included.custom.audience": "http://whoami.ambit-system.svc:8080/mcp", "access.token.claim": "true", "id.token.claim": "false" } }
+          ]
+        },
+        {
+          "clientId": "other-app",
+          "enabled": true,
+          "publicClient": false,
+          "secret": "other-app-secret",
+          "serviceAccountsEnabled": true,
+          "standardFlowEnabled": false,
+          "directAccessGrantsEnabled": false,
+          "protocolMappers": [
+            { "name": "other-audience", "protocol": "openid-connect", "protocolMapper": "oidc-audience-mapper",
+              "config": { "included.custom.audience": "http://other.test/mcp", "access.token.claim": "true", "id.token.claim": "false" } }
+          ]
         }
       ],
       "users": [

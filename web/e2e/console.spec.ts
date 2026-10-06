@@ -315,7 +315,7 @@ test("admin adds an app from a preset, reads its tools with their own account, a
   await page.goto(`/settings/apps/add/whoami-test?app=${name}&step=tools`);
   await page.getByRole("button", { name: "Use my account to read tools" }).click();
   const rows = page.getByRole("checkbox");
-  await expect(rows).toHaveCount(1, { timeout: 40_000 }); // the whoami server has one tool
+  await expect(rows).toHaveCount(2, { timeout: 40_000 }); // the whoami server has two tools: whoami and whoami_admin
   for (const box of await rows.all()) await expect(box).not.toBeChecked(); // nothing granted by default
   await page.getByRole("checkbox", { name: "whoami", exact: true }).check();
   await page.getByLabel("Groups").fill("eng");

@@ -251,3 +251,27 @@
   clientSecretLabel: Client secret
   docs: https://developers.hubspot.com/docs/apps/developer-platform/build-apps/integrate-with-the-remote-hubspot-mcp-server
   live: { tool: get_user_details }
+- id: salesforce
+  version: 1
+  displayName: Salesforce
+  category: CRM
+  server: { url: "https://api.salesforce.com/platform/mcp/v1/platform/sobject-all", transport: streamable-http }
+  authorizationURL: https://login.salesforce.com/services/oauth2/authorize
+  tokenURL: https://login.salesforce.com/services/oauth2/token
+  revocationURL: https://login.salesforce.com/services/oauth2/revoke
+  resource: none
+  scopes: ["mcp_api", "refresh_token"]
+  requires: Salesforce Enterprise Edition or above, or a Developer Edition org, with the hosted MCP service turned on
+  setup: |
+    1. Sign in to your Salesforce production org as a system administrator. This preset uses login.salesforce.com, so it does not work for sandbox or scratch orgs.
+    2. Open Setup. In Quick Find, search for "MCP Service" and turn it on. Then search for "MCP Servers" (under API Catalog), open "platform/sobject-all" and enable it. This server can create, change and delete records, limited by each person's own Salesforce permissions. Wait up to 2 minutes.
+    3. In Quick Find, search for "External Client App Manager" and click "New External Client App". Enter a name and a contact email.
+    4. Under "API (Enable OAuth Settings)", turn on "Enable OAuth". Set the callback URL to {callbackURL}.
+    5. Under "Selected OAuth Scopes", add "Access MCP servers" (mcp_api) and "Perform requests at any time" (refresh_token). Do not add the standard "api" scope.
+    6. Under "Flow Enablement", turn on "Enable Authorization Code and Credentials Flow". Turn on "Require Proof Key for Code Exchange (PKCE)" and "Require secret for Web Server Flow". Turn off the other flows.
+    7. Click "Create". Open the app, then Settings, then OAuth Settings, then "Consumer Key and Secret", and copy the Consumer Key (Client ID) and the Consumer Secret (Client secret).
+    8. In the app's policies, set the permitted users to "Admin approved users are pre-authorized" and assign a permission set, or to "All users may self-authorize". Salesforce can take up to 30 minutes to activate a new app.
+  clientIDLabel: Consumer Key
+  clientSecretLabel: Consumer Secret
+  docs: https://developer.salesforce.com/docs/platform/hosted-mcp-servers/guide/sobject-all.html
+  live: { tool: getUserInfo }

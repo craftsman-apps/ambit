@@ -174,3 +174,4 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | zoom | Zoom | mcp.zoom.us | yes |  | not yet |
 | webex | Webex | mcp.webexapis.com | no | Control Hub admin enables the server | not yet |
 | hubspot | HubSpot | mcp.hubspot.com | yes |  | not yet |
+| salesforce | Salesforce | api.salesforce.com | yes | Enterprise Edition or above, or a Developer Edition org | not yet |

@@ -26,13 +26,16 @@ kc_admin() {
   command curl -s -X "$1" -H "Authorization: Bearer $tok" "${@:3}" "$KC/admin/realms/saas$2"
 }
 
-cleanup() {
-  kubectl -n "$NS" delete -f test/connections/objects.yaml --ignore-not-found >/dev/null 2>&1 || true
-  kubectl -n "$GRANTS" delete secret -l ambitproject.dev/connection=saas --ignore-not-found >/dev/null 2>&1 || true
+cleanup_preset() {
   kubectl -n "$NS" delete "accessrules.$G" whoami-p-users --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" delete "servers.$G,connections.$G" whoami-p --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$GRANTS" delete secret -l ambitproject.dev/connection=whoami-p --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$GRANTS" delete secret ambit-conn-whoami-p --ignore-not-found >/dev/null 2>&1 || true
+}
+cleanup() {
+  kubectl -n "$NS" delete -f test/connections/objects.yaml --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$GRANTS" delete secret -l ambitproject.dev/connection=saas --ignore-not-found >/dev/null 2>&1 || true
+  cleanup_preset
 }
 trap 'rc=$?; cleanup; on_exit $rc' EXIT
 
@@ -41,8 +44,9 @@ ensure_llm_setup "$NS"
 if [[ $(command curl -s -o /dev/null -w '%{http_code}' "$KC/realms/saas/.well-known/openid-configuration") != 200 ]]; then
   kubectl -n "$NS" rollout restart deploy/keycloak >/dev/null && kubectl -n "$NS" rollout status deploy/keycloak --timeout=300s >/dev/null
 fi
-# Realms are imported only when missing: a realm from before the other-app client (step 5, presets) is deleted and re-imported.
-if [[ $(command curl -s -o /dev/null -w '%{http_code}' -d grant_type=client_credentials -d client_id=other-app -d client_secret=other-app-secret "$KC/realms/saas/protocol/openid-connect/token") != 200 ]]; then
+# Realms are imported only when missing: a realm from before the other-app client or the password grant (step 5, presets) is deleted and re-imported.
+if [[ $(command curl -s -o /dev/null -w '%{http_code}' -d grant_type=client_credentials -d client_id=other-app -d client_secret=other-app-secret "$KC/realms/saas/protocol/openid-connect/token") != 200 ||
+      $(command curl -s -o /dev/null -w '%{http_code}' -d grant_type=password -d client_id=ambit-connect -d client_secret=saas-test-client-secret -d username=alice -d password=alice-saas-pass "$KC/realms/saas/protocol/openid-connect/token") != 200 ]]; then
   [[ $(kc_admin DELETE "" -o /dev/null -w '%{http_code}') == 204 ]] || fail "could not delete the old saas realm"
   kubectl -n "$NS" rollout restart deploy/keycloak >/dev/null && kubectl -n "$NS" rollout status deploy/keycloak --timeout=300s >/dev/null
   wait_for 120 "command curl -sf $KC/realms/saas/.well-known/openid-configuration" || fail "saas realm not re-imported"
@@ -116,6 +120,7 @@ pass "6 mira disconnected; the provider confirmed the revocation (RFC 7009)"
 # 7 · Presets: priya adds "Who am I (test preset)" from the preset list, reads its tools with her own
 #     SaaS account, grants one tool to eng.
 helm upgrade ambit charts/ambit -n "$NS" --reuse-values --set console.testPresets=true --wait --timeout 5m >/dev/null  # the test preset is off by default
+cleanup_preset  # leftovers of an interrupted run
 sign_in keycloak priya priya-test-pass
 CODE=$(api POST /api/apps/from-preset "{\"operation\":\"s5p$(date +%s)\",\"preset\":\"whoami-test\",\"version\":1,\"name\":\"whoami-p\",\"displayName\":\"Who am I (preset)\",\"clientID\":\"ambit-connect\",\"clientSecret\":\"saas-test-client-secret\",\"values\":{}}")
 [[ $CODE == 201 ]] || fail "7 add from preset: HTTP $CODE $(cat "$W/api")"
@@ -133,22 +138,28 @@ wait_for 90 'try_tools "$(token alice)"; [[ " $TOOLS " == *" whoami-p_whoami "* 
 pass "7 presets: added, tools read with priya's account, one tool granted to eng"
 
 # 8 · Binding: changing the server URL after users connected removes the gateway's token path.
+pol() { kubectl -n "$NS" get agentgatewaypolicy ambit-conn-whoami-p >/dev/null 2>&1; }
+pol || fail "8 connection policy missing before the URL change"
 kubectl -n "$NS" patch "servers.$G" whoami-p --type merge -p '{"spec":{"url":"http://whoami-other.ambit-system.svc:8080/mcp"}}' >/dev/null
 kubectl -n "$NS" wait "servers.$G" whoami-p --for=jsonpath='{.status.conditions[?(@.type=="Ready")].reason}'=ConnectionBound --timeout=60s >/dev/null || fail "8 no ConnectionBound"
-kubectl -n "$NS" get agentgatewaypolicy ambit-conn-whoami-p >/dev/null 2>&1 && fail "8 connection policy kept after rebinding"
+wait_for 60 '! pol' || fail "8 connection policy kept after rebinding"
 kubectl -n "$NS" patch "servers.$G" whoami-p --type merge -p '{"spec":{"url":"http://whoami.ambit-system.svc:8080/mcp"}}' >/dev/null
 kubectl -n "$NS" wait "servers.$G" whoami-p --for=condition=Ready --timeout=60s >/dev/null || fail "8 not Ready after restoring the URL"
+wait_for 60 pol || fail "8 connection policy not restored"
 pass "8 binding: a server URL change removes the token path; changing it back restores it"
 
 # 9 · whoami refuses a token issued for another audience.
 other=$(command curl -s -d grant_type=client_credentials -d client_id=other-app -d client_secret=other-app-secret "$KC/realms/saas/protocol/openid-connect/token" |
   uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)["access_token"])')
-code=$(pod_curl "app=probe" "http://whoami.$NS.svc:8080/mcp")  # positive control: reachable (401 without a token)
+mcp_list() { MCPARGS=(-H "Authorization: Bearer $1" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'); }
+code=$(pod_curl "app=probe" "http://whoami.$NS.svc:8080/mcp")  # reachable: 401 without a token
 [[ $code == 401 ]] || fail "9 whoami not reachable from a probe pod: $code"
-code=$(kubectl -n "$NS" run "aud-$RANDOM" --rm -i --restart=Never --quiet --image="$CURL_IMAGE" --command -- \
-  curl -s -m 3 -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $other" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' "http://whoami.$NS.svc:8080/mcp" 2>/dev/null) || true
-[[ ${code: -3} == 401 ]] || fail "9 wrong-audience token not refused: $code"
+good=$(command curl -s -d grant_type=password -d client_id=ambit-connect -d client_secret=saas-test-client-secret -d username=alice -d password=alice-saas-pass "$KC/realms/saas/protocol/openid-connect/token" |
+  uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)["access_token"])')
+mcp_list "$good"; code=$(pod_curl "app=probe" "http://whoami.$NS.svc:8080/mcp" "${MCPARGS[@]}")  # positive control: the right audience is accepted
+[[ $code == 200 ]] || fail "9 token with the whoami audience refused: $code"
+mcp_list "$other"; code=$(pod_curl "app=probe" "http://whoami.$NS.svc:8080/mcp" "${MCPARGS[@]}")
+[[ $code == 401 ]] || fail "9 wrong-audience token not refused: $code"
 pass "9 whoami verifies the token audience"
 
 # 10 · NetworkPolicy: only the controller reaches the tools port; the controller cannot reach the broker.

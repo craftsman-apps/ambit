@@ -3,7 +3,7 @@
 # alice/alice-test-pass (eng), mira/mira-test-pass (ml-research). Keycloak admin: admin/admin.
 # Client ambit-cli-test: password grant for tests only; access tokens carry groups and aud=ambit-gateway.
 # Realm saas (step 5) stands in for a SaaS app such as Jira: its own accounts alice/alice-saas-pass and
-# mira/mira-saas-pass, and the confidential client ambit-connect that Ambit's Connection uses.
+# mira/mira-saas-pass, and the confidential client ambit-connect that Ambit's Connection uses (password grant on, so a test can get a token with the whoami audience).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -173,7 +173,7 @@ data:
           "publicClient": false,
           "secret": "saas-test-client-secret",
           "standardFlowEnabled": true,
-          "directAccessGrantsEnabled": false,
+          "directAccessGrantsEnabled": true,
           "attributes": { "pkce.code.challenge.method": "S256" },
           "redirectUris": ["http://console.localtest.me:8080/connections/callback"],
           "protocolMappers": [

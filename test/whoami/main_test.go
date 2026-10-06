@@ -3,6 +3,8 @@ package main
 import (
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"testing"
 	"time"
@@ -38,6 +40,12 @@ func TestVerify(t *testing.T) {
 		return map[string]any{"iss": testIss, "aud": []string{"account", testAud}, "exp": now.Add(time.Hour).Unix(), "preferred_username": "alice"}
 	}
 	mod := func(f func(map[string]any)) map[string]any { c := good(); f(c); return c }
+	pubDER, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	hs, _ := jose.NewSigner(jose.SigningKey{Algorithm: jose.HS256, Key: pubDER}, nil)
+	hsTok, _ := jwt.Signed(hs).Claims(good()).Serialize()
+	enc := base64.RawURLEncoding.EncodeToString
+	payload, _ := json.Marshal(good())
+	noneTok := enc([]byte(`{"alg":"none"}`)) + "." + enc(payload) + "."
 	cases := []struct {
 		name  string
 		token string
@@ -51,6 +59,10 @@ func TestVerify(t *testing.T) {
 		{"wrong issuer", sign(t, key, mod(func(c map[string]any) { c["iss"] = "http://evil.test" })), false},
 		{"bad signature", sign(t, other, good()), false},
 		{"not a token", "abc", false},
+		{"HS256 with the public key as secret", hsTok, false},
+		{"alg none", noneTok, false},
+		{"no exp", sign(t, key, mod(func(c map[string]any) { delete(c, "exp") })), false},
+		{"nbf in the future", sign(t, key, mod(func(c map[string]any) { c["nbf"] = now.Add(time.Hour).Unix() })), false},
 	}
 	for _, c := range cases {
 		raw, err := verify(c.token, keys, testIss, testAud, now)

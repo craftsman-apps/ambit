@@ -161,12 +161,12 @@ connect_app() {
   hop POST "$action" --data-urlencode "username=$2" --data-urlencode "password=$3"; follow
   grep -q "connected=$1" "$W/all-headers" || fail "connect $1 for $2 did not return to /connections?connected=$1"
 }
-# pod_curl LABELS URL: HTTP status of URL seen from a short-lived pod with LABELS (comma separated,
+# pod_curl LABELS URL [CURL ARGS...]: HTTP status of URL seen from a short-lived pod with LABELS (comma separated,
 # e.g. "app.kubernetes.io/name=ambit-controller"); always 3 characters, 000 = no connection. Needs NS, CURL_IMAGE.
 pod_curl() {
-  local out
-  out=$(kubectl -n "$NS" run "probe-$RANDOM" --rm -i --restart=Never --quiet --image="$CURL_IMAGE" --labels="$1" --command -- \
-    curl -s -m 3 -o /dev/null -w '%{http_code}' "$2" 2>/dev/null) || true   # curl prints 000 itself on failure
+  local out labels=$1 url=$2; shift 2
+  out=$(kubectl -n "$NS" run "probe-$RANDOM" --rm -i --restart=Never --quiet --image="$CURL_IMAGE" --labels="$labels" --command -- \
+    curl -s -m 3 -o /dev/null -w '%{http_code}' "$@" "$url" 2>/dev/null) || true   # curl prints 000 itself on failure
   out=${out: -3}
   [[ $out =~ ^[0-9]{3}$ ]] && echo "$out" || echo 000
 }

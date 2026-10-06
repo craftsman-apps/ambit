@@ -41,7 +41,7 @@ const staleConfig = "this gateway configuration is out of date; it will refresh 
 // legacy serves Connections created before destination binding (no serverURL).
 func (b *Broker) legacy(w http.ResponseWriter, r *http.Request) {
 	conn, err := b.Conns.connection(r.Context(), r.PathValue("name"))
-	if err == nil && conn.Spec.ServerURL != "" {
+	if err != nil || conn.Spec.ServerURL != "" { // only a readable, unbound Connection may use this path
 		w.Header().Set("X-Ambit-Connect", staleConfig)
 		w.WriteHeader(http.StatusOK)
 		return

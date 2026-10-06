@@ -147,3 +147,24 @@
   clientSecretLabel: App secret
   docs: https://help.dropbox.com/integrations/connect-dropbox-mcp-server
   live: { tool: GetUsageAndQuota }
+- id: canva
+  version: 1
+  displayName: Canva
+  category: Design
+  server: { url: "https://mcp.canva.com/mcp", transport: streamable-http }
+  authorizationURL: https://mcp.canva.com/authorize
+  tokenURL: https://mcp.canva.com/token
+  resource: none
+  scopes: ["profile:read", "design:meta:read", "design:content:read", "folder:read", "asset:read", "brandkit:read", "comment:read"]
+  requires: Canva MCP access for your developer app (self-service enablement in the Developer Portal is announced but not yet available)
+  setup: |
+    1. Sign in to Canva and open the Developer Portal at https://www.canva.com/developers/.
+    2. Create an app (or open an existing one) and turn on Canva MCP for it. If the option is not shown, Canva has not enabled MCP access for your account yet; ask Canva for access first.
+    3. Under the app's redirect URLs, add {callbackURL}. Canva accepts local redirect URLs only with the numeric address 127.0.0.1, not "localhost".
+    4. Select the scopes: profile:read, design:meta:read, design:content:read, folder:read, asset:read, brandkit:read, comment:read.
+    5. Under "Credentials", copy the Client ID, then click "Generate secret" and copy the secret at once.
+    6. Each person who connects needs a Canva account. Some tools need a paid Canva plan.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://www.canva.dev/docs/apps/mcp/access/
+  live: { tool: search-designs, arguments: { query: "design" } }

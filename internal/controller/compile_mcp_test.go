@@ -257,3 +257,21 @@ func TestBoundConnectionGetsDestinationPath(t *testing.T) {
 		t.Fatalf("paths %v", paths)
 	}
 }
+
+func TestServerAccessSummary(t *testing.T) {
+	servers := []v1.Server{perUser("crm", "https://mcp.crm.test/mcp", "crm")}
+	rules := []v1.AccessRule{
+		{Spec: v1.AccessRuleSpec{AllSignedIn: true, Servers: []v1.ServerAccess{{Name: "crm", Tools: []string{"get_record"}}}}},
+		{Spec: v1.AccessRuleSpec{Groups: []string{"sales"}, Servers: []v1.ServerAccess{{Name: "crm"}}}},
+	}
+	a := ServerAccess(servers, rules, "crm")
+	if !a.AllTools || !a.AllSignedIn || len(a.Groups) != 1 || a.Groups[0] != "sales" || len(a.Tools["get_record"]) != 0 {
+		t.Fatalf("%+v", a)
+	}
+	if _, ok := a.Tools["get_record"]; !ok {
+		t.Fatalf("tool missing: %+v", a)
+	}
+	if b := ServerAccess(servers, rules, "nope"); b.AllTools || b.AllSignedIn || len(b.Tools) != 0 {
+		t.Fatalf("unknown server: %+v", b)
+	}
+}

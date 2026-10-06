@@ -23,6 +23,7 @@ import (
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/controller"
 	"github.com/craftsman-apps/ambit/internal/presets"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -606,4 +607,19 @@ func (c *Catalog) bindApp(w http.ResponseWriter, r *http.Request, s Session) {
 	v := appView(conn)
 	v.Preset, v.Bound = conn.Annotations[presetKey], true
 	writeJSON(w, http.StatusOK, v)
+}
+
+// serverAccess answers GET /api/servers/{name}/access from the same merge the gateway policy uses.
+func (c *Catalog) serverAccess(w http.ResponseWriter, r *http.Request, _ Session) {
+	_, rules, err := c.load(r)
+	if err != nil {
+		serverErr(w, err)
+		return
+	}
+	servers, err := c.servers(r)
+	if err != nil {
+		serverErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, controller.ServerAccess(servers, rules, r.PathValue("name")))
 }

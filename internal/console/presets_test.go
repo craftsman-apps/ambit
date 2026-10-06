@@ -11,6 +11,7 @@ import (
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/controller"
 	"github.com/craftsman-apps/ambit/internal/presets"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -429,5 +430,19 @@ func TestEmptyOrSameOverridesStayPreset(t *testing.T) {
 		if conn.Annotations[presetKey] != "acme-crm@1" {
 			t.Fatalf("%s: %q", in.Name, conn.Annotations[presetKey])
 		}
+	}
+}
+
+func TestServerAccessEndpoint(t *testing.T) {
+	e := presetFixture(t, false)
+	ctx := t.Context()
+	_ = e.cl.Create(ctx, &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "crm", Namespace: testNS}, Spec: v1.ServerSpec{URL: "https://mcp.crm.test/mcp", Connection: "crm"}})
+	_ = e.cl.Create(ctx, &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: testNS},
+		Spec: v1.AccessRuleSpec{Groups: []string{"sales"}, Servers: []v1.ServerAccess{{Name: "crm", Tools: []string{"get_record"}}}}})
+	rec := do(t, e.h, "GET", "/api/servers/crm/access", e.ck, nil)
+	var got controller.EffectiveAccess
+	_ = json.Unmarshal(rec.Body.Bytes(), &got)
+	if rec.Code != 200 || got.AllTools || len(got.Groups) != 1 || got.Tools["get_record"][0] != "sales" {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 }

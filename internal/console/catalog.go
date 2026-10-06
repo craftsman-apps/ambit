@@ -209,6 +209,7 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 		mux.HandleFunc("GET /api/apps", adminRead(c.listApps))
 		mux.HandleFunc("GET /api/presets", adminRead(c.listPresets))
 		mux.HandleFunc("GET /api/apps/unfinished", adminRead(c.unfinished))
+		mux.HandleFunc("GET /api/servers/{name}/access", adminRead(c.serverAccess))
 		mux.HandleFunc("POST /api/apps/from-preset", apps(c.addFromPreset))
 		mux.HandleFunc("POST /api/apps/unfinished/{op}/finish", apps(c.finishUnfinished))
 		mux.HandleFunc("DELETE /api/apps/unfinished/{op}", apps(c.removeUnfinished))

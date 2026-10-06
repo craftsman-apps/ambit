@@ -172,3 +172,4 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | canva | Canva | mcp.canva.com | no | Canva MCP access for the developer app | not yet |
 | slack | Slack | mcp.slack.com | yes |  | not yet |
 | zoom | Zoom | mcp-us.zoom.us | yes |  | not yet |
+| webex | Webex | mcp.webexapis.com | no | Control Hub admin enables the server | not yet |

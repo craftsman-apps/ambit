@@ -210,3 +210,25 @@
   clientSecretLabel: Client Secret
   docs: https://developers.zoom.us/docs/mcp/servers/connect-to-zoom-mcp-servers/
   live: { tool: search_meetings, arguments: { query: "meeting" } }
+- id: webex
+  version: 1
+  displayName: Webex
+  category: Meetings
+  server: { url: "https://mcp.webexapis.com/mcp/webex-messaging", transport: streamable-http }
+  authorizationURL: https://webexapis.com/v1/authorize
+  tokenURL: https://webexapis.com/v1/access_token
+  resource: none
+  scopes: ["spark:mcp", "spark:messages_read", "spark:messages_write", "spark:rooms_read", "spark:rooms_write", "spark:memberships_read", "spark:memberships_write", "spark:webhooks_read", "spark:webhooks_write"]
+  requires: A Webex Control Hub admin must enable the Messaging MCP server for the organization
+  setup: |
+    1. Ask a Webex Control Hub admin to enable the Webex Messaging MCP server for your organization (Control Hub, provisioning for MCP servers). The server refuses people until this is done.
+    2. Sign in to the Webex Developer Portal at https://developer.webex.com and open "My Webex Apps".
+    3. Click "Create a New App", then "Create an Integration".
+    4. Enter a name, an icon, a description, and {callbackURL} as the redirect URI.
+    5. Select all nine scopes: spark:mcp, spark:messages_read, spark:messages_write, spark:rooms_read, spark:rooms_write, spark:memberships_read, spark:memberships_write, spark:webhooks_read, spark:webhooks_write.
+    6. Click "Add Integration". Copy the Client ID and the Client Secret; Webex shows the secret only once.
+    7. This preset covers the Messaging server. The meetings tools are a separate Webex MCP server.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client Secret
+  docs: https://developer.webex.com/mcp/docs/messaging-mcp-server
+  live: { tool: webex-search-spaces }

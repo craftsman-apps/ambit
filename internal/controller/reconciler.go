@@ -112,7 +112,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&v1.Server{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1.AccessRule{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1.Budget{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Watches(&v1.ModelRouter{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{}))
+		Watches(&v1.ModelRouter{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Watches(&v1.Connection{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{}))
 	// Generated objects: status changes (agentgateway or ToolHive accepting them) and manual edits both matter.
 	for _, gvk := range generatedGVKs {
 		u := &unstructured.Unstructured{}
@@ -132,6 +133,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			return reconcile.Result{}, err
 		}
 	}
+	var conns v1.ConnectionList
+	if err := r.Live.List(ctx, &conns, client.InNamespace(r.Namespace)); err != nil {
+		return reconcile.Result{}, err
+	}
+	boundServers, refusedServers := BindServers(servers.Items, conns.Items)
 	var routers v1.ModelRouterList
 	if err := r.Live.List(ctx, &routers, client.InNamespace(r.Namespace)); err != nil {
 		return reconcile.Result{}, err
@@ -145,7 +151,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	if !r.ArgumentLimits {
 		compiled, dropped = WithoutArgumentLimits(rules.Items)
 	}
-	res := Compile(models.Items, servers.Items, compiled, r.Route, routerNames...)
+	res := Compile(models.Items, boundServers, compiled, r.Route, routerNames...)
 	ApplyDropped(&res, dropped)
 	var budgets v1.BudgetList
 	if err := r.Live.List(ctx, &budgets, client.InNamespace(r.Namespace)); err != nil {
@@ -217,6 +223,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		case "MCPServer":
 			conds[owner] = mcpServerCondition(current)
 		}
+	}
+	// Objects of refused Servers: no general prune exists, and owner references only collect on Server deletion.
+	for name := range refusedServers {
+		r.deleteGenerated(ctx, "AgentgatewayPolicy", "ambit-conn-"+name)
+	}
+	if len(boundServers) == 0 && len(servers.Items) > 0 { // every Server refused: no shared backend either
+		r.deleteGenerated(ctx, "AgentgatewayBackend", MCPBackendName)
+		r.deleteGenerated(ctx, "AgentgatewayPolicy", MCPBackendName+"-access")
 	}
 	// No budgets (or budgets off): stop asking the ratelimit service on every request. No dollar limit: stop
 	// rewriting requests for usage.
@@ -292,6 +306,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		c, ok := conds["Server/"+s.Name]
 		if !ok && s.Spec.URL != "" { // remote: no ToolHive object to report on
 			c = cond(metav1.ConditionTrue, "Remote", "served from "+s.Spec.URL+" through the gateway")
+		}
+		if msg, ok := refusedServers[s.Name]; ok {
+			c = cond(metav1.ConditionFalse, "ConnectionBound", msg)
 		}
 		setReady(&next.Status.Conditions, c, s.Generation)
 		if c.Status == metav1.ConditionTrue && r.ListTools != nil {
@@ -461,4 +478,16 @@ func acceptedCondition(o *unstructured.Unstructured) metav1.Condition {
 // controllerOwnerKind is the Kind of the Ambit object that controls o, or "".
 func controllerOwnerKind(o *unstructured.Unstructured) string {
 	return strings.Split(controllerOwner(o), "/")[0]
+}
+
+// deleteGenerated removes one object Ambit generated, if present and owned by Ambit.
+func (r *Reconciler) deleteGenerated(ctx context.Context, kind, name string) {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: "agentgateway.dev", Version: "v1alpha1", Kind: kind})
+	if err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: name}, u); err != nil || !ownedByAmbit(u) {
+		return
+	}
+	if err := r.Delete(ctx, u); err != nil && !apierrors.IsNotFound(err) {
+		log.FromContext(ctx).Error(err, "delete generated object", "kind", kind, "name", name)
+	}
 }

@@ -11,7 +11,7 @@ metadata:
   name: ambit-controller
 rules:
   - apiGroups: [ambitproject.dev]
-    resources: [models, servers, accessrules, budgets, modelrouters]
+    resources: [models, servers, accessrules, budgets, modelrouters, connections]
     verbs: [get, list, watch]
   - apiGroups: [ambitproject.dev]
     resources: [models/status, servers/status, accessrules/status, budgets/status, modelrouters/status]

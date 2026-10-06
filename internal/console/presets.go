@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -153,24 +154,32 @@ func (c *Catalog) build(in PresetAddInput, by string) (*v1.Connection, *v1.Serve
 	}
 	tag := p.ID + "@" + strconv.Itoa(p.Version)
 	if o := in.Overrides; o != nil {
-		tag = "custom from " + tag
+		// Only a value that differs from the preset's own makes the app custom.
+		custom := false
 		set := func(dst *string, v string) {
-			if v != "" {
-				*dst = v
+			if v != "" && v != *dst {
+				*dst, custom = v, true
 			}
 		}
-		set(&res.Server.URL, o.ServerURL)
+		serverURL := o.ServerURL
+		if serverURL == res.Server.URL {
+			serverURL = ""
+		}
+		set(&res.Server.URL, serverURL)
 		set(&res.Connection.AuthorizationURL, o.AuthorizationURL)
 		set(&res.Connection.TokenURL, o.TokenURL)
 		set(&res.Connection.RevocationURL, o.RevocationURL)
-		if len(o.Scopes) > 0 {
-			res.Connection.Scopes = o.Scopes
+		if len(o.Scopes) > 0 && !slices.Equal(o.Scopes, res.Connection.Scopes) {
+			res.Connection.Scopes, custom = o.Scopes, true
 		}
-		if o.ServerURL != "" {
-			if !strings.HasPrefix(o.ServerURL, "https://") || !validURL(o.ServerURL) {
+		if custom {
+			tag = "custom from " + tag
+		}
+		if serverURL != "" {
+			if !strings.HasPrefix(serverURL, "https://") || !validURL(serverURL) {
 				return nil, nil, errors.New("the server URL must be an https URL, without a query string or fragment")
 			}
-			res.Connection.ServerURL, res.Connection.Resource = o.ServerURL, o.ServerURL
+			res.Connection.ServerURL, res.Connection.Resource = serverURL, serverURL
 		}
 	}
 	// Resolve checked the preset's URLs; checkAppWith checks them again with any overrides. Only a test
@@ -378,6 +387,9 @@ func (c *Catalog) listUnfinished(ctx context.Context) ([]Unfinished, error) {
 		if op == "" {
 			continue // added before operation IDs; managed as before
 		}
+		if c.GitOps == nil && time.Since(sec.CreationTimestamp.Time) < 10*time.Second {
+			continue // an addition still in progress: its request is creating the objects now
+		}
 		miss, err := c.missing(ctx, app, op)
 		if err != nil || len(miss) == 0 {
 			if err != nil {
@@ -517,7 +529,7 @@ func (c *Catalog) newerPreset(conn v1.Connection, servers []v1.Server) *NewerPre
 		return nil
 	}
 	p, found := c.preset(id)
-	if v, _ := strconv.Atoi(ver); !found || p.Version <= v {
+	if v, err := strconv.Atoi(ver); err != nil || !found || p.Version <= v {
 		return nil
 	}
 	var values map[string]string

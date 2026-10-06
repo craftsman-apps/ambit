@@ -227,6 +227,24 @@ func (c *Catalog) deleteApp(w http.ResponseWriter, r *http.Request, s Session) {
 			slog.Info("app removal: grant ended", "connection", conn.Name, "revokedAtProvider", revoked)
 		}
 	}
+	// The Server a preset addition created with this app goes with it; other Servers stay.
+	if op := conn.Annotations[operationKey]; op != "" {
+		var servers v1.ServerList
+		if err := c.Client.List(r.Context(), &servers, client.InNamespace(c.Namespace)); err != nil {
+			serverErr(w, err)
+			return
+		}
+		for i := range servers.Items {
+			srv := &servers.Items[i]
+			if srv.Annotations[operationKey] != op {
+				continue
+			}
+			if err := c.Client.Delete(r.Context(), srv, client.Preconditions{UID: ptrUID(srv.UID)}); err != nil && !apierrors.IsNotFound(err) {
+				apiErr(w, err)
+				return
+			}
+		}
+	}
 	if err := c.Client.Delete(r.Context(), &conn); err != nil && !apierrors.IsNotFound(err) {
 		apiErr(w, err)
 		return

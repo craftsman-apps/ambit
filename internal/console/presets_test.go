@@ -372,3 +372,62 @@ func TestAddFromPresetDoubleClick(t *testing.T) {
 		t.Fatalf("%d connections, %d secrets", len(l.Items), len(secs.Items))
 	}
 }
+
+// Removing a preset app removes the Server its addition created; a Server an admin added for the same
+// Connection stays.
+func TestDeleteAppRemovesItsPresetServer(t *testing.T) {
+	e := presetFixture(t, false)
+	if rec := do(t, e.h, "POST", "/api/apps/from-preset", e.ck, addInput("opssssss")); rec.Code != http.StatusCreated {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	_ = e.cl.Create(t.Context(), &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "crm-extra", Namespace: testNS}, Spec: v1.ServerSpec{URL: "https://mcp.acme.crm.test/mcp", Connection: "crm"}})
+	if rec := do(t, e.h, "DELETE", "/api/apps/crm", e.ck, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	var srvs v1.ServerList
+	_ = e.cl.List(t.Context(), &srvs)
+	if len(srvs.Items) != 1 || srvs.Items[0].Name != "crm-extra" {
+		t.Fatalf("servers left: %+v", srvs.Items)
+	}
+	if rec := do(t, e.h, "POST", "/api/apps/from-preset", e.ck, addInput("opssssst")); rec.Code != http.StatusCreated {
+		t.Fatalf("add again after removal: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A Secret younger than 10 seconds belongs to an addition still in progress: not listed, so not removable.
+func TestUnfinishedSkipsAdditionInProgress(t *testing.T) {
+	e := presetFixture(t, false)
+	for op, age := range map[string]time.Duration{"opfresh1": 0, "opold111": time.Minute} {
+		_ = e.cl.Create(t.Context(), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ambit-conn-" + op, Namespace: "ambit-grants",
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-age)), Labels: map[string]string{appSecretLabel: op},
+			Annotations: map[string]string{operationKey: op}}})
+	}
+	var un []Unfinished
+	_ = json.Unmarshal(do(t, e.h, "GET", "/api/apps/unfinished", e.ck, nil).Body.Bytes(), &un)
+	if len(un) != 1 || un[0].Operation != "opold111" {
+		t.Fatalf("unfinished %+v", un)
+	}
+}
+
+func TestNewerPresetIgnoresUnparsableVersion(t *testing.T) {
+	e := presetFixture(t, false)
+	conn := v1.Connection{ObjectMeta: metav1.ObjectMeta{Name: "crm", Annotations: map[string]string{presetKey: "acme-crm@x"}}}
+	if np := e.cat.newerPreset(conn, nil); np != nil {
+		t.Fatalf("%+v", np)
+	}
+}
+
+func TestEmptyOrSameOverridesStayPreset(t *testing.T) {
+	e := presetFixture(t, false)
+	empty, same := addInput("opttttt1"), addInput("opttttt2")
+	empty.Overrides = &PresetOverrides{}
+	same.Name, same.Overrides = "crm2", &PresetOverrides{ServerURL: "https://mcp.acme.crm.test/mcp", TokenURL: "https://login.crm.test/token", Scopes: []string{"read"}}
+	for _, in := range []PresetAddInput{empty, same} {
+		_ = do(t, e.h, "POST", "/api/apps/from-preset", e.ck, in)
+		var conn v1.Connection
+		_ = e.cl.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: in.Name}, &conn)
+		if conn.Annotations[presetKey] != "acme-crm@1" {
+			t.Fatalf("%s: %q", in.Name, conn.Annotations[presetKey])
+		}
+	}
+}

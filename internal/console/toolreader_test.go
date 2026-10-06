@@ -299,3 +299,38 @@ func TestToolReaderAPI(t *testing.T) {
 		t.Fatal("reader kept after DELETE")
 	}
 }
+
+func TestServerViewShowsReader(t *testing.T) {
+	tr, c, _ := readerFixture(t)
+	a := &Auth{codec: Codec{Key: []byte("0123456789abcdef0123456789abcdef")}, ttl: time.Hour, Sessions: NewSessionStore()}
+	h := NewServer(a, testSPA, LoginOptions{}, &Catalog{Client: c, Namespace: testNS, Conns: tr.Conns, Tools: tr})
+	view := func() ServerView {
+		list := decodeAs[[]ServerView](t, do(t, h, "GET", "/api/servers", as(a, RoleAdmin), nil).Body.String())
+		for _, v := range list {
+			if v.Name == "jira-mcp" {
+				return v
+			}
+		}
+		t.Fatal("jira-mcp not listed")
+		return ServerView{}
+	}
+	if v := view(); v.Reader != "" || v.ToolsReadAt != nil {
+		t.Fatalf("no reader yet: %+v", v)
+	}
+	if err := tr.SetReader(t.Context(), "admin@acme.test", "jira-mcp"); err != nil {
+		t.Fatal(err)
+	}
+	when := metav1.NewTime(time.Date(2026, 10, 6, 9, 0, 0, 0, time.UTC))
+	var s v1.Server
+	if err := c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "jira-mcp"}, &s); err != nil {
+		t.Fatal(err)
+	}
+	s.Status.Conditions = []metav1.Condition{{Type: "ToolsRead", Status: metav1.ConditionTrue, Reason: "Read", LastTransitionTime: when}}
+	if err := c.Update(t.Context(), &s); err != nil {
+		t.Fatal(err)
+	}
+	v := view()
+	if v.Reader != "admin@acme.test" || v.ToolsReadAt == nil || !v.ToolsReadAt.Equal(when.Time) {
+		t.Fatalf("reader view: %+v", v)
+	}
+}

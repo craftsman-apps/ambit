@@ -3,6 +3,14 @@ import { expect, test, type Page } from "@playwright/test";
 
 const password = process.env.AMBIT_ADMIN_PASSWORD ?? "";
 
+// Screens for review: written only when AMBIT_SCREENSHOTS_DIR is set.
+async function snap(page: Page, name: string) {
+  const dir = process.env.AMBIT_SCREENSHOTS_DIR;
+  if (!dir) return;
+  await page.waitForLoadState("networkidle");
+  await page.screenshot({ path: `${dir}/${name}.png` });
+}
+
 // Fail any test whose page reports a Content-Security-Policy violation.
 test.beforeEach(async ({ page }) => {
   const violations: string[] = [];
@@ -176,6 +184,7 @@ test("Apps page adds an app for per-user sign-in and removes it", async ({ page 
   await signInAsBootstrapAdmin(page);
   await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Apps" }).click();
   await page.getByRole("button", { name: "Add an app" }).click();
+  await page.getByRole("button", { name: "Custom app…" }).click();
   await expect(page.getByText(/\/connections\/callback/)).toBeVisible();
   const name = `ui-app-${Date.now().toString(36)}`;
   await page.getByLabel("Name", { exact: true }).fill(name);
@@ -266,4 +275,68 @@ spec: { provider: OpenAI, model: gpt-4o-mini, credentialsRef: { name: ambit-llm-
     await row.getByRole("button", { name: "Use this price" }).click();
     await expect(row.getByText("$0.15 / $0.6 per million")).toBeVisible();
   });
+});
+
+const presetsE2E = !!process.env.AMBIT_PRESETS_E2E;
+
+// Step 5 removes its objects when it ends; these tests set up the whoami server and the saas app themselves.
+test.beforeAll(() => {
+  if (!presetsE2E) return;
+  const ns = process.env.AMBIT_NS ?? "ambit-system";
+  const secret = execFileSync("kubectl", ["-n", `${ns}-grants`, "create", "secret", "generic", "ambit-conn-saas", "--from-literal=clientSecret=saas-test-client-secret", "--dry-run=client", "-o", "yaml"], { encoding: "utf8" });
+  execFileSync("kubectl", ["apply", "-f", "-"], { input: secret });
+  execFileSync("kubectl", ["-n", ns, "apply", "-f", "../test/connections/objects.yaml"]);
+  execFileSync("kubectl", ["-n", ns, "rollout", "status", "deploy/whoami", "--timeout=120s"]);
+});
+
+test("admin adds an app from a preset, reads its tools with their own account, and grants one tool", async ({ page }) => {
+  test.skip(!presetsE2E, "needs console.testPresets=true and step 5 objects");
+  await signInAsBootstrapAdmin(page);
+  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Apps" }).click();
+  await page.getByRole("button", { name: "Add an app" }).click();
+  await expect(page.getByRole("link", { name: /Who am I \(test preset\)/ })).toBeVisible();
+  await snap(page, "1-apps-preset-grid");
+  await page.getByPlaceholder(/Search/).fill("who am i");
+  await page.getByRole("link", { name: /Who am I \(test preset\)/ }).click();
+  await expect(page.getByText("/connections/callback").first()).toBeVisible();
+  const name = `whoami-${Date.now().toString(36)}`;
+  await page.getByLabel("Name", { exact: true }).fill(name);
+  await page.getByLabel("Client ID").fill("ambit-connect");
+  await page.getByLabel("Client secret").fill("saas-test-client-secret");
+  await snap(page, "2-add-from-preset");
+  await page.getByRole("button", { name: /^Add Who am I/ }).click();
+  await expect(page.getByText("Nobody can use its tools yet")).toBeVisible();
+  // Connect with the admin's own SaaS account (Keycloak realm saas), then agree to read tools with it.
+  await page.getByRole("link", { name: "Connect your account" }).click();
+  await page.getByLabel("Username or email").fill("alice");
+  await page.getByLabel("Password", { exact: true }).fill("alice-saas-pass");
+  await page.getByRole("button", { name: "Sign In" }).click();
+  await page.goto(`/settings/apps/add/whoami-test?app=${name}&step=tools`);
+  await page.getByRole("button", { name: "Use my account to read tools" }).click();
+  const rows = page.getByRole("checkbox");
+  await expect(rows).toHaveCount(2, { timeout: 40_000 });
+  for (const box of await rows.all()) await expect(box).not.toBeChecked(); // nothing granted by default
+  await page.getByRole("checkbox", { name: "whoami", exact: true }).check();
+  await page.getByLabel("Groups").fill("eng");
+  await snap(page, "3-pick-tools");
+  await page.getByRole("button", { name: "Create access rule" }).click();
+  await expect(page.getByText(/Groups: eng/)).toBeVisible();
+  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: /Servers/ }).click();
+  await page.getByText(name, { exact: true }).first().click();
+  await expect(page.getByTestId(`reader-${name}`)).toContainText("Tools read with");
+  await snap(page, "4-servers-reader");
+});
+
+test("an unfinished addition can be removed", async ({ page }) => {
+  test.skip(!presetsE2E, "needs console.testPresets=true");
+  await signInAsBootstrapAdmin(page);
+  // Create a Secret-only addition through the API (the Server name is taken, so the Server create fails).
+  const res = await page.request.post("/api/apps/from-preset", { data: { operation: "e2eunfinished1", preset: "whoami-test", version: 1,
+    name: "whoami", displayName: "dup", clientID: "x", clientSecret: "y", values: {} } });
+  expect([409, 502]).toContain(res.status());
+  await page.goto("/settings/apps");
+  const row = page.getByTestId("unfinished-e2eunfinished1");
+  await row.getByRole("button", { name: "Remove" }).click();
+  await row.getByRole("button", { name: "Remove addition" }).click();
+  await expect(row).toHaveCount(0);
 });

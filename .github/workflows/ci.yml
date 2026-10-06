@@ -52,6 +52,8 @@ jobs:
         with: { config: kind/cluster.yaml, cluster_name: ambit, wait: 120s }
       - name: Install Ambit on kind
         run: make kind-up image install
+      - name: Show test presets in the console
+        run: helm upgrade ambit charts/ambit -n ambit-system --reuse-values --set console.testPresets=true --wait --timeout 5m
       - name: OpenRouter key (optional repository secret; free models only)
         env: { OPENROUTER_API_KEY: "${{ secrets.OPENROUTER_API_KEY }}" }
         run: |
@@ -61,7 +63,7 @@ jobs:
       - name: UI tests (Playwright)
         run: |
           cd web && npm ci --no-fund --no-audit && npx playwright install --with-deps chromium
-          cd .. && CI=true make test-ui
+          cd .. && CI=true AMBIT_PRESETS_E2E=1 make test-ui
       - name: Diagnostics on failure
         if: failure()
         run: |

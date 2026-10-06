@@ -180,7 +180,10 @@ func (c *Catalog) build(in PresetAddInput, by string) (*v1.Connection, *v1.Serve
 			if !strings.HasPrefix(serverURL, "https://") || !validURL(serverURL) {
 				return nil, nil, errors.New("the server URL must be an https URL, without a query string or fragment")
 			}
-			res.Connection.ServerURL, res.Connection.Resource = serverURL, serverURL
+			res.Connection.ServerURL = serverURL
+			if p.Resource == "" || p.Resource == "default" { // "none" and an explicit resource stay as Resolve set them
+				res.Connection.Resource = serverURL
+			}
 		}
 	}
 	// Resolve checked the preset's URLs; checkAppWith checks them again with any overrides. Only a test

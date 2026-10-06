@@ -139,6 +139,26 @@ func TestAdvancedOverridesMakeACustomApp(t *testing.T) {
 	}
 }
 
+// A server URL override keeps the preset's resource rule: "none" sends none, "default" (or empty) the
+// server URL, and an explicit URL stays that URL.
+func TestServerURLOverrideKeepsTheResourceRule(t *testing.T) {
+	for rule, want := range map[string]string{"none": "", "default": "https://mcp.eu.crm.test/mcp", "": "https://mcp.eu.crm.test/mcp",
+		"https://api.crm.test/": "https://api.crm.test/"} {
+		e := presetFixture(t, false)
+		e.cat.Presets[0].Resource = rule
+		in := addInput("opffffff")
+		in.Overrides = &PresetOverrides{ServerURL: "https://mcp.eu.crm.test/mcp"}
+		if rec := do(t, e.h, "POST", "/api/apps/from-preset", e.ck, in); rec.Code != http.StatusCreated {
+			t.Fatalf("%q: %d %s", rule, rec.Code, rec.Body)
+		}
+		var conn v1.Connection
+		_ = e.cl.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "crm"}, &conn)
+		if conn.Spec.Resource != want || conn.Spec.ServerURL != "https://mcp.eu.crm.test/mcp" {
+			t.Fatalf("resource rule %q: resource %q serverURL %q, want resource %q", rule, conn.Spec.Resource, conn.Spec.ServerURL, want)
+		}
+	}
+}
+
 func TestServerFailureLeavesUnfinishedAdditionThatFinishes(t *testing.T) {
 	e := presetFixture(t, false)
 	e.cat.Client = failOnCreate{Client: e.cl, kind: "Server"}

@@ -31,6 +31,8 @@ func main() {
 	case "live":
 		fs.Parse(os.Args[2:])
 		err = runLive(context.Background(), fs.Args())
+	case "gate":
+		err = gate()
 	default:
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}

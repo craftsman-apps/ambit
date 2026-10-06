@@ -2,14 +2,18 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/craftsman-apps/ambit/internal/presets"
 )
+
+var fullCommitRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 var watched = []string{"internal/console", "internal/presets", "cmd/presetcheck", "internal/controller/tools.go", "go.mod", "go.sum"}
 
@@ -36,12 +40,12 @@ func gateProblems(r Results, now time.Time, catalog []presets.Preset, changedSin
 	for _, f := range files {
 		p = append(p, "changed since the live run: "+f)
 	}
-	verified, passed := map[string]bool{}, map[string]bool{}
+	verified, passed, version := map[string]bool{}, map[string]bool{}, map[string]int{}
 	for _, c := range catalog {
-		verified[c.ID] = c.Verified
+		verified[c.ID], version[c.ID] = c.Verified, c.Version
 	}
 	for _, x := range r.Presets {
-		passed[x.Preset] = x.Pass
+		passed[x.Preset] = x.Pass && x.Version == version[x.Preset] // a pass for another version does not count
 		if !x.Pass && verified[x.Preset] {
 			p = append(p, x.Preset+" failed: "+x.Error)
 		}
@@ -62,19 +66,30 @@ func gateProblems(r Results, now time.Time, catalog []presets.Preset, changedSin
 // changedSinceIn lists watched files changed between the tested commit and HEAD in dir. Any Git error
 // (for example a shallow clone without the tested commit) is returned, never treated as "no change".
 func changedSinceIn(dir, commit string) ([]string, error) {
+	// A name such as HEAD, a branch or a tag would pass the checks below without testing anything.
+	if !fullCommitRE.MatchString(commit) {
+		return nil, fmt.Errorf("results.json must name a full commit id, got %q", commit)
+	}
 	git := func(args ...string) (string, error) {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
 		out, err := cmd.Output()
+		if ee := (*exec.ExitError)(nil); errors.As(err, &ee) && len(ee.Stderr) > 0 {
+			err = fmt.Errorf("%w: %s", err, strings.TrimSpace(string(ee.Stderr)))
+		}
 		return strings.TrimSpace(string(out)), err
 	}
-	if shallow, err := git("rev-parse", "--is-shallow-repository"); err != nil || shallow == "true" {
-		return nil, fmt.Errorf("the repository is shallow or unreadable (fetch-depth: 0 is required): %v", err)
+	shallow, err := git("rev-parse", "--is-shallow-repository")
+	if err != nil {
+		return nil, fmt.Errorf("the repository is unreadable: %w", err)
 	}
-	if _, err := git("merge-base", "--is-ancestor", commit, "HEAD"); err != nil {
+	if shallow == "true" {
+		return nil, errors.New("the repository is shallow (fetch-depth: 0 is required)")
+	}
+	if _, err := git("merge-base", "--is-ancestor", "--end-of-options", commit, "HEAD"); err != nil {
 		return nil, fmt.Errorf("the tested commit %s is not an ancestor of HEAD: %w", commit, err)
 	}
-	out, err := git(append([]string{"diff", "--name-only", commit, "HEAD", "--"}, watched...)...)
+	out, err := git(append([]string{"diff", "--name-only", "--end-of-options", commit, "HEAD", "--"}, watched...)...)
 	if err != nil {
 		return nil, err
 	}

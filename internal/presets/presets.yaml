@@ -126,3 +126,24 @@
   clientSecretLabel: Client Secret
   docs: https://developer.box.com/guides/box-mcp/remote/
   live: { tool: who_am_i }
+- id: dropbox
+  version: 1
+  displayName: Dropbox
+  category: Files
+  server: { url: "https://mcp.dropbox.com/mcp", transport: streamable-http }
+  authorizationURL: https://www.dropbox.com/oauth2/authorize
+  tokenURL: https://api.dropboxapi.com/oauth2/token
+  resource: none
+  scopes: ["account_info.read", "files.metadata.read", "files.content.read", "files.content.write", "sharing.read", "sharing.write", "file_requests.read", "file_requests.write"]
+  authorizeParams: { token_access_type: offline }
+  setup: |
+    1. Sign in to Dropbox and open the App Console at https://www.dropbox.com/developers/apps.
+    2. Click "Create app". Choose "Scoped access" and then "Full Dropbox" access. Enter a unique app name and click "Create app".
+    3. Open the "Permissions" tab and enable: account_info.read, files.metadata.read, files.content.read, files.content.write, sharing.read, sharing.write, file_requests.read, file_requests.write. Click "Submit".
+    4. Open the "Settings" tab. Under "OAuth 2", add {callbackURL} as a redirect URI.
+    5. On the same tab, copy the App key (the client ID) and the App secret (the client secret).
+    6. Ambit asks for offline access, so Dropbox issues a refresh token. Ambit cannot revoke a Dropbox grant when a person leaves; Dropbox accepts a revoke request only with the user's own access token.
+  clientIDLabel: App key
+  clientSecretLabel: App secret
+  docs: https://help.dropbox.com/integrations/connect-dropbox-mcp-server
+  live: { tool: GetUsageAndQuota }

@@ -168,3 +168,4 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | monday | monday.com | mcp.monday.com | yes |  | not yet |
 | airtable | Airtable | mcp.airtable.com | no |  | not yet |
 | box | Box | mcp.box.com | yes |  | not yet |
+| dropbox | Dropbox | mcp.dropbox.com | no |  | not yet |

@@ -421,13 +421,15 @@ func (c *Connections) refresh(ctx context.Context, conn *v1.Connection, g *Grant
 	if tok.RefreshToken != "" {
 		g.RefreshToken = tok.RefreshToken
 	}
-	// A rotated refresh token exists only here now: try hard to save it.
+	// A rotated refresh token exists only here now: try hard to save it, even if the caller gave up.
+	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
 	for i := 0; ; i++ {
-		if err = c.Store.Put(ctx, g); err == nil || i == 2 {
+		if err = c.Store.Put(saveCtx, g); err == nil || i == 2 {
 			break
 		}
 		select {
-		case <-ctx.Done():
+		case <-saveCtx.Done():
 		case <-time.After(time.Duration(i+1) * 100 * time.Millisecond):
 		}
 	}

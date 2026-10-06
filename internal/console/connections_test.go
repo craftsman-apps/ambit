@@ -602,3 +602,39 @@ func TestBlockedRenewalDoesNotDelayOtherUsers(t *testing.T) {
 		t.Fatalf("token %q err %v after %v", tok, err, took)
 	}
 }
+
+// cancelOnWrite cancels the caller's request when the first write starts, then honours the context like
+// a real API client does.
+type cancelOnWrite struct {
+	client.Client
+	cancel context.CancelFunc
+}
+
+func (f *cancelOnWrite) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	f.cancel()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return f.Client.Create(ctx, obj, opts...)
+}
+
+func (f *cancelOnWrite) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return f.Client.Update(ctx, obj, opts...)
+}
+
+func TestRotatedRefreshTokenIsSavedAfterTheRequestIsCancelled(t *testing.T) {
+	saas := newFakeSaaS(t)
+	saas.rotate = true
+	conns, c := connFixture(t, saas)
+	connect(t, conns, testAuthOnly(), "alice@acme.test", "alice")
+	expireAll(conns)
+	ctx, cancel := context.WithCancel(t.Context())
+	conns.Store.Client = &cancelOnWrite{Client: c, cancel: cancel}
+	conns.Token(ctx, "alice@acme.test", "jira")
+	if g, _ := conns.Store.Get(t.Context(), "alice@acme.test", "jira"); g.RefreshToken != "rt2-alice" {
+		t.Fatalf("refresh token %q", g.RefreshToken)
+	}
+}

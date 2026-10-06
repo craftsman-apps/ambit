@@ -43,7 +43,7 @@ func (b *Broker) token(w http.ResponseWriter, r *http.Request) {
 	token, g, err := b.Conns.Token(r.Context(), email, connName)
 	switch {
 	case err != nil && token != "": // a usable token with a failed save or renewal: use it
-		slog.Error("broker", "connection", connName, "user", email, "err", err)
+		slog.Warn("broker", "connection", connName, "user", email, "err", err)
 		w.Header().Set("Authorization", "Bearer "+token)
 	case err != nil:
 		slog.Error("broker", "connection", connName, "user", email, "err", err)

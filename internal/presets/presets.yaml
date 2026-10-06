@@ -383,6 +383,7 @@
   scopes: ["https://www.googleapis.com/auth/gmail.readonly"]
   authorizeParams: { prompt: consent, access_type: offline }
   preview: true
+  contract: { unauthenticated: [200] }
   requires: "Google Workspace Developer Preview Program"
   setup: |
     1. Join the Google Workspace Developer Preview Program with the Google Cloud project you will use (https://developers.google.com/workspace/preview). The Gmail MCP server works only for enrolled projects.
@@ -409,6 +410,7 @@
   scopes: ["https://www.googleapis.com/auth/calendar.calendarlist.readonly", "https://www.googleapis.com/auth/calendar.events.readonly", "https://www.googleapis.com/auth/calendar.events.freebusy"]
   authorizeParams: { prompt: consent, access_type: offline }
   preview: true
+  contract: { unauthenticated: [200] }
   requires: "Google Workspace Developer Preview Program"
   setup: |
     1. Join the Google Workspace Developer Preview Program with the Google Cloud project you will use (https://developers.google.com/workspace/preview). The Google Calendar MCP server works only for enrolled projects.
@@ -435,6 +437,7 @@
   scopes: ["https://www.googleapis.com/auth/drive.readonly"]
   authorizeParams: { prompt: consent, access_type: offline }
   preview: true
+  contract: { unauthenticated: [200] }
   requires: "Google Workspace Developer Preview Program"
   setup: |
     1. Join the Google Workspace Developer Preview Program with the Google Cloud project you will use (https://developers.google.com/workspace/preview). The Google Drive MCP server works only for enrolled projects.
@@ -461,6 +464,7 @@
   scopes: ["https://www.googleapis.com/auth/documents.readonly", "https://www.googleapis.com/auth/drive.readonly"]
   authorizeParams: { prompt: consent, access_type: offline }
   preview: true
+  contract: { unauthenticated: [200] }
   requires: "Google Workspace Developer Preview Program"
   setup: |
     1. Join the Google Workspace Developer Preview Program with the Google Cloud project you will use (https://developers.google.com/workspace/preview). The Google Docs MCP server works only for enrolled projects.
@@ -487,6 +491,7 @@
   scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly", "https://www.googleapis.com/auth/drive.readonly"]
   authorizeParams: { prompt: consent, access_type: offline }
   preview: true
+  contract: { unauthenticated: [200] }
   requires: "Google Workspace Developer Preview Program"
   setup: |
     1. Join the Google Workspace Developer Preview Program with the Google Cloud project you will use (https://developers.google.com/workspace/preview). The Google Sheets MCP server works only for enrolled projects.

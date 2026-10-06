@@ -21,12 +21,15 @@ import (
 
 // fakeSaaS is an OAuth 2.0 provider such as Jira: it issues tokens per code, renews them, revokes them.
 type fakeSaaS struct {
-	srv          *httptest.Server
-	mu           sync.Mutex
-	refuseRenew  bool
-	revoked      []string
-	issued       int
-	lastVerifier string
+	srv            *httptest.Server
+	mu             sync.Mutex
+	refuseRenew    bool
+	revoked        []string
+	issued         int
+	lastVerifier   string
+	rotate         bool // renewal returns a new refresh token "rt2-<user>"
+	noRefreshToken bool // the code exchange issues no refresh token
+	renewed        int
 }
 
 func newFakeSaaS(t *testing.T) *fakeSaaS {
@@ -46,15 +49,25 @@ func newFakeSaaS(t *testing.T) *fakeSaaS {
 			f.lastVerifier = r.PostForm.Get("code_verifier")
 			user := r.PostForm.Get("code") // the test uses the user's name as the code
 			f.issued++
-			json.NewEncoder(w).Encode(map[string]any{"access_token": "at-" + user, "refresh_token": "rt-" + user, "token_type": "Bearer", "expires_in": 3600})
+			out := map[string]any{"access_token": "at-" + user, "refresh_token": "rt-" + user, "token_type": "Bearer", "expires_in": 3600}
+			if f.noRefreshToken {
+				delete(out, "refresh_token")
+			}
+			json.NewEncoder(w).Encode(out)
 		case "refresh_token":
+			f.renewed++
 			if f.refuseRenew {
 				w.WriteHeader(http.StatusBadRequest)
 				json.NewEncoder(w).Encode(map[string]string{"error": "invalid_grant", "error_description": "Session not active"})
 				return
 			}
 			rt := r.PostForm.Get("refresh_token")
-			json.NewEncoder(w).Encode(map[string]any{"access_token": "renewed-" + strings.TrimPrefix(rt, "rt-"), "token_type": "Bearer", "expires_in": 3600})
+			user := strings.TrimPrefix(rt, "rt-")
+			out := map[string]any{"access_token": "renewed-" + user, "token_type": "Bearer", "expires_in": 3600}
+			if f.rotate {
+				out["refresh_token"] = "rt2-" + user
+			}
+			json.NewEncoder(w).Encode(out)
 		}
 	})
 	mux.HandleFunc("/revoke", func(w http.ResponseWriter, r *http.Request) {
@@ -415,5 +428,88 @@ func TestGrantForOldServerURLIsBroken(t *testing.T) {
 	_ = c.Update(t.Context(), &conn)
 	if tok, g, _ := conns.Token(t.Context(), "alice@acme.test", "jira"); tok != "" || g.State != grantBrokenState {
 		t.Fatalf("old grant used for a new server URL: %q %+v", tok, g)
+	}
+}
+
+func expireAll(conns *Connections) {
+	conns.Now = func() time.Time { return time.Now().Add(2 * time.Hour) }
+}
+
+func TestRefreshTransientErrorKeepsGrant(t *testing.T) {
+	saas := newFakeSaaS(t)
+	conns, _ := connFixture(t, saas)
+	connect(t, conns, testAuthOnly(), "alice@acme.test", "alice")
+	saas.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "down", 503) })
+	expireAll(conns)
+	_, g, err := conns.Token(t.Context(), "alice@acme.test", "jira")
+	if err == nil || g == nil || g.State != grantConnectedState {
+		t.Fatalf("grant %+v err %v", g, err)
+	}
+}
+
+func TestRotatedRefreshTokenIsStored(t *testing.T) {
+	saas := newFakeSaaS(t)
+	saas.rotate = true // fake returns refresh_token "rt2-<user>" on renewal (add this field to fakeSaaS)
+	conns, _ := connFixture(t, saas)
+	connect(t, conns, testAuthOnly(), "alice@acme.test", "alice")
+	expireAll(conns)
+	if _, _, err := conns.Token(t.Context(), "alice@acme.test", "jira"); err != nil {
+		t.Fatal(err)
+	}
+	g, _ := conns.Store.Get(t.Context(), "alice@acme.test", "jira")
+	if g.RefreshToken != "rt2-alice" {
+		t.Fatalf("refresh token %q", g.RefreshToken)
+	}
+}
+
+func TestNoRefreshTokenMeansReconnectAfterExpiry(t *testing.T) {
+	saas := newFakeSaaS(t)
+	saas.noRefreshToken = true // fake issues no refresh_token at the code exchange (add this field)
+	conns, _ := connFixture(t, saas)
+	connect(t, conns, testAuthOnly(), "alice@acme.test", "alice")
+	if tok, _, _ := conns.Token(t.Context(), "alice@acme.test", "jira"); tok != "at-alice" {
+		t.Fatalf("valid token refused: %q", tok)
+	}
+	conns.CheckAll(t.Context(), true) // a forced check must not break a still-valid grant it cannot renew
+	if g, _ := conns.Store.Get(t.Context(), "alice@acme.test", "jira"); g.State != grantConnectedState {
+		t.Fatalf("forced check broke a valid grant: %+v", g)
+	}
+	expireAll(conns)
+	tok, g, _ := conns.Token(t.Context(), "alice@acme.test", "jira")
+	if tok != "" || g.State != grantBrokenState || !strings.Contains(g.Error, "reconnect") {
+		t.Fatalf("token %q grant %+v", tok, g)
+	}
+}
+
+func TestCheckAllAppliesResourceRule(t *testing.T) {
+	saas := newFakeSaaS(t)
+	conns, c := connFixture(t, saas)
+	connect(t, conns, testAuthOnly(), "alice@acme.test", "alice")
+	var conn v1.Connection
+	_ = c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "jira"}, &conn)
+	conn.Spec.Resource = "https://mcp.jira.test/mcp"
+	_ = c.Update(t.Context(), &conn)
+	conns.CheckAll(t.Context(), true)
+	g, _ := conns.Store.Get(t.Context(), "alice@acme.test", "jira")
+	if g.State != grantBrokenState || saas.renewed != 0 { // add a renewal counter to fakeSaaS
+		t.Fatalf("grant %+v renewals %d", g, saas.renewed)
+	}
+}
+
+func TestRefreshAndRevokeNeverOverlap(t *testing.T) {
+	saas := newFakeSaaS(t)
+	conns, _ := connFixture(t, saas)
+	connect(t, conns, testAuthOnly(), "alice@acme.test", "alice")
+	expireAll(conns)
+	g, _ := conns.Store.Get(t.Context(), "alice@acme.test", "jira")
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); conns.Token(t.Context(), "alice@acme.test", "jira") }()
+	go func() { defer wg.Done(); conns.Revoke(t.Context(), g) }()
+	go func() { conns.CheckAll(t.Context(), true) }() // the hourly check racing the same grant
+	wg.Wait()
+	conns.CheckAll(t.Context(), true)
+	if g, _ := conns.Store.Get(t.Context(), "alice@acme.test", "jira"); g != nil {
+		t.Fatal("a renewal recreated the grant after it was revoked")
 	}
 }

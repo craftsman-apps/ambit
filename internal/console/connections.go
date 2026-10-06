@@ -33,6 +33,9 @@ type Connections struct {
 	Now       func() time.Time
 
 	mu sync.Mutex // one refresh per grant at a time (single console replica)
+
+	stylesMu sync.Mutex
+	styles   map[string]authStyle // client authentication that worked, per (Connection, client ID, secret)
 }
 
 const connCookie = "ambit_connect"
@@ -78,13 +81,6 @@ func (c *Connections) oauthConfig(ctx context.Context, conn *v1.Connection) (*oa
 	return &oauth2.Config{ClientID: conn.Spec.ClientID, ClientSecret: string(sec.Data["clientSecret"]),
 		Endpoint:    oauth2.Endpoint{AuthURL: conn.Spec.AuthorizationURL, TokenURL: conn.Spec.TokenURL},
 		RedirectURL: strings.TrimSuffix(c.PublicURL, "/") + "/connections/callback", Scopes: conn.Spec.Scopes}, nil
-}
-
-func (c *Connections) oauthCtx(ctx context.Context) context.Context {
-	if c.HTTP != nil {
-		return context.WithValue(ctx, oauth2.HTTPClient, c.HTTP)
-	}
-	return ctx
 }
 
 func (c *Connections) register(mux *http.ServeMux, auth *Auth) {
@@ -254,7 +250,8 @@ func (c *Connections) callback(w http.ResponseWriter, r *http.Request, s Session
 		http.Error(w, "this connection is not set up completely; ask an admin", http.StatusInternalServerError)
 		return
 	}
-	tok, err := cfg.Exchange(c.oauthCtx(r.Context()), r.URL.Query().Get("code"), oauth2.VerifierOption(st.Verifier))
+	tok, err := c.tokenRequest(r.Context(), conn, cfg.ClientSecret, url.Values{"grant_type": {"authorization_code"},
+		"code": {r.URL.Query().Get("code")}, "redirect_uri": {cfg.RedirectURL}, "code_verifier": {st.Verifier}})
 	if err != nil {
 		slog.Warn("connect: code exchange failed", "connection", conn.Name, "user", s.Email, "err", err)
 		http.Redirect(w, r, "/connections?error="+url.QueryEscape("the provider refused the approval; try again"), http.StatusFound)
@@ -292,8 +289,8 @@ func (c *Connections) Revoke(ctx context.Context, g *Grant) (bool, error) {
 		}
 		// Formats that send the access token need a current one: renew an expired token first. If renewal
 		// fails, the old token is sent and the provider's refusal is reported.
-		if revokesAccessToken(conn.Spec.RevocationURL) && g.RefreshToken != "" && !g.Expiry.IsZero() && !c.now().Before(g.Expiry) {
-			if _, renewed, rerr := c.refresh(ctx, g); rerr == nil && renewed != nil && renewed.State == grantConnectedState {
+		if revokesAccessToken(conn.Spec.RevocationURL) {
+			if _, renewed, rerr := c.renewLocked(ctx, g, false); rerr == nil && renewed != nil && renewed.State == grantConnectedState {
 				g = renewed
 			}
 		}
@@ -346,41 +343,58 @@ func (c *Connections) disconnect(w http.ResponseWriter, r *http.Request, s Sessi
 func (c *Connections) Token(ctx context.Context, email, connName string) (string, *Grant, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// A removed app hands out nothing, even while a stored token has not expired.
-	conn, err := c.connection(ctx, connName)
-	if apierrors.IsNotFound(err) {
-		return "", nil, nil
-	} else if err != nil {
-		return "", nil, err
-	}
 	g, err := c.Store.Get(ctx, email, connName)
-	if err != nil || g == nil || g.State == grantBrokenState {
+	if err != nil || g == nil {
 		return "", g, err
+	}
+	return c.renewLocked(ctx, g, false)
+}
+
+// renewLocked returns a usable access token for g, renewing it when needed (or always, with force). The
+// caller holds c.mu, so renewal, revocation and consent changes never interleave.
+func (c *Connections) renewLocked(ctx context.Context, g *Grant, force bool) (string, *Grant, error) {
+	conn, err := c.connection(ctx, g.Connection)
+	if apierrors.IsNotFound(err) {
+		return "", nil, nil // a removed app hands out nothing
+	} else if err != nil {
+		return "", g, err
+	}
+	if g.State == grantBrokenState {
+		return "", g, nil
 	}
 	if g.Resource != conn.Spec.Resource || g.ServerURL != conn.Spec.ServerURL {
 		g.State, g.Error = grantBrokenState, "the app's server changed; reconnect"
 		return "", g, c.Store.Put(ctx, g)
 	}
-	if g.Expiry.IsZero() || c.now().Add(time.Minute).Before(g.Expiry) {
+	valid := g.Expiry.IsZero() || c.now().Add(time.Minute).Before(g.Expiry)
+	if g.RefreshToken == "" {
+		if valid { // nothing to renew with: use it until it expires, even on a forced check
+			return g.AccessToken, g, nil
+		}
+		g.State, g.Error = grantBrokenState, "access expired and the app gave no way to renew it; reconnect"
+		return "", g, c.Store.Put(ctx, g)
+	}
+	if !force && valid {
 		return g.AccessToken, g, nil
 	}
-	return c.refresh(ctx, g)
+	return c.refresh(ctx, conn, g)
 }
 
-func (c *Connections) refresh(ctx context.Context, g *Grant) (string, *Grant, error) {
-	conn, err := c.connection(ctx, g.Connection)
-	if err != nil {
-		return "", g, err
-	}
+func (c *Connections) refresh(ctx context.Context, conn *v1.Connection, g *Grant) (string, *Grant, error) {
 	cfg, err := c.oauthConfig(ctx, conn)
 	if err != nil {
 		return "", g, err
 	}
 	g.CheckedAt = c.now()
-	tok, err := cfg.TokenSource(c.oauthCtx(ctx), &oauth2.Token{RefreshToken: g.RefreshToken, Expiry: time.Unix(1, 0)}).Token()
+	tok, err := c.tokenRequest(ctx, conn, cfg.ClientSecret, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {g.RefreshToken}})
+	var te *TokenError
+	if errors.As(err, &te) && te.Transient {
+		slog.Warn("grant renewal failed; will retry", "connection", g.Connection, "user", g.Email, "err", redactTokens(err.Error(), g))
+		return "", g, err
+	}
 	if err != nil {
-		g.State, g.Error = grantBrokenState, "the provider refused to renew access: "+short(err.Error())
-		slog.Warn("grant broken", "connection", g.Connection, "user", g.Email, "err", err)
+		g.State, g.Error = grantBrokenState, "the provider refused to renew access: "+short(redactTokens(err.Error(), g))
+		slog.Warn("grant broken", "connection", g.Connection, "user", g.Email, "err", redactTokens(err.Error(), g))
 		return "", g, c.Store.Put(ctx, g)
 	}
 	g.AccessToken, g.Expiry, g.State, g.Error = tok.AccessToken, tok.Expiry, grantConnectedState, ""
@@ -407,7 +421,11 @@ func (c *Connections) CheckAll(ctx context.Context, force bool) (checked, broken
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for _, g := range grants {
+	for _, listed := range grants {
+		g, err := c.Store.Get(ctx, listed.Email, listed.Connection) // re-read under the lock: it may be revoked by now
+		if err != nil || g == nil {
+			continue
+		}
 		if g.State == grantBrokenState {
 			broken++
 			continue
@@ -416,7 +434,7 @@ func (c *Connections) CheckAll(ctx context.Context, force bool) (checked, broken
 			continue
 		}
 		checked++
-		if _, g2, _ := c.refresh(ctx, g); g2 != nil && g2.State == grantBrokenState {
+		if _, g2, _ := c.renewLocked(ctx, g, true); g2 != nil && g2.State == grantBrokenState {
 			broken++
 		}
 	}

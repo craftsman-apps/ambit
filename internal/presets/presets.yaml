@@ -348,3 +348,26 @@
   clientSecretLabel: Client secret
   docs: https://docs.databricks.com/aws/en/agents/mcp-tools/connect-clients
   live: { tool: execute_sql_read_only, arguments: { query: "SELECT 1" } }
+- id: pagerduty
+  version: 1
+  displayName: PagerDuty
+  category: Developer
+  server: { url: "https://mcp.pagerduty.com/mcp", transport: streamable-http }
+  authorizationURL: https://app.pagerduty.com/global/oauth/authorize
+  tokenURL: https://app.pagerduty.com/global/oauth/token
+  revocationURL: https://app.pagerduty.com/global/oauth/revoke
+  resource: none
+  scopes: ["users.read", "incidents.read", "services.read", "teams.read", "schedules.read", "oncalls.read", "escalation_policies.read"]
+  requires: A PagerDuty account with Advanced Permissions (the US service region; the EU region uses a different MCP address)
+  setup: |
+    1. Sign in to PagerDuty as an account owner or admin.
+    2. Open Integrations, then "App Registration" (also called "Developer Tools", then "My Apps"), and click "Create New App". Enter a name and a description.
+    3. Under "Functionality", turn on "OAuth 2.0" and click "Save". Choose "Scoped OAuth".
+    4. Under "Redirect URLs", add {callbackURL}.
+    5. Under "Permission Scope", select the read scopes: users.read (required), incidents.read, services.read, teams.read, schedules.read, oncalls.read, escalation_policies.read.
+    6. Click "Register App". Copy the Client ID and the Client secret at once; PagerDuty shows the secret only once.
+    7. Each person signs in with their own PagerDuty user, and the server acts with that user's permissions.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://docs.pagerduty.com/developer/mcp-tooling-remote-server
+  live: { tool: browse_users }

@@ -178,3 +178,4 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | docusign | Docusign | mcp.docusign.com | no | Integration key (Go-Live review for production) | not yet |
 | servicenow | ServiceNow | your instance (service-now.com) | yes | MCP Server Console, Zurich Patch 9 or Australia Patch 2 or later | not yet |
 | databricks | Databricks | your workspace host | no | SQL warehouse; account admin creates the app connection | not yet |
+| pagerduty | PagerDuty | mcp.pagerduty.com | yes | Advanced Permissions | not yet |

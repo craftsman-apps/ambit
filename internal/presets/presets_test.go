@@ -1,6 +1,7 @@
 package presets
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -260,5 +261,41 @@ func TestValidateCatalogAuthorSafety(t *testing.T) {
 		if probs := strings.Join(Validate(ps), "\n"); !strings.Contains(probs, want) {
 			t.Fatalf("missing %q in %s", want, probs)
 		}
+	}
+}
+
+// docMissing lists the presets that have no row in the vendor table of the document.
+func docMissing(doc string, ps []Preset) []string {
+	var m []string
+	for _, p := range ps {
+		if !strings.Contains(doc, "| "+p.ID+" |") {
+			m = append(m, p.ID)
+		}
+	}
+	return m
+}
+
+func TestDocsListEveryPreset(t *testing.T) {
+	doc, err := os.ReadFile("../../docs/presets.md") // a missing file fails the test
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps, err := All()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := docMissing(string(doc), ps); len(m) > 0 {
+		t.Fatalf("docs/presets.md has no row for %v", m)
+	}
+}
+
+func TestDocMissingFindsAnAbsentID(t *testing.T) {
+	doc := "| id | Vendor |\n|---|---|\n| github | GitHub |\n"
+	got := docMissing(doc, []Preset{{ID: "github"}, {ID: "linear"}})
+	if len(got) != 1 || got[0] != "linear" {
+		t.Fatalf("missing = %v, want [linear]", got)
+	}
+	if len(docMissing(doc, []Preset{{ID: "github"}})) != 0 {
+		t.Fatal("a listed id was reported missing")
 	}
 }

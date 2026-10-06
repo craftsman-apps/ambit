@@ -76,7 +76,10 @@ func TestClientIDCannotChangeHost(t *testing.T) {
 	p := ps[0]
 	p.RevocationURL = "https://acme.my.salesforce.com/revoke/{clientID}"
 	r, err := p.Resolve(map[string]string{"myDomain": "acme"}, "a/b@evil.test?x#y", "https://cb")
-	if err == nil && r.Connection.RevocationURL != "https://acme.my.salesforce.com/revoke/a%2Fb@evil.test%3Fx%23y" {
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Connection.RevocationURL != "https://acme.my.salesforce.com/revoke/a%2Fb@evil.test%3Fx%23y" {
 		t.Fatalf("client ID not escaped: %s", r.Connection.RevocationURL)
 	}
 	if _, err := p.Resolve(map[string]string{"myDomain": "acme"}, "..", "https://cb"); err == nil {
@@ -91,10 +94,19 @@ func TestValidateCatchesBadPresets(t *testing.T) {
 	bad.Setup = "no callback here"
 	bad.TokenURL = "http://plain.example.com/token"
 	probs := strings.Join(Validate([]Preset{bad, ps[0]}), "\n")
-	for _, want := range []string{"redirect_uri", "{callbackURL}", "https", "duplicate id"} {
+	for _, want := range []string{"redirect_uri", "{callbackURL}", "duplicate id"} {
 		if !strings.Contains(probs, want) {
 			t.Fatalf("missing %q in %s", want, probs)
 		}
+	}
+}
+
+func TestValidateReportsPlainHTTPURL(t *testing.T) {
+	ps, _ := parse([]byte(sample))
+	ps[0].TokenURL = "http://plain.example.com/token"
+	want := `the token URL "http://plain.example.com/token" is not a valid https URL`
+	if probs := strings.Join(Validate(ps), "\n"); !strings.Contains(probs, want) {
+		t.Fatalf("missing %q in %s", want, probs)
 	}
 }
 
@@ -219,5 +231,34 @@ func TestHashIgnoresVerified(t *testing.T) {
 	b.Scopes = []string{"mcp_api"}
 	if Hash(a) == Hash(b) {
 		t.Fatal("scopes do not change the hash")
+	}
+}
+
+func TestResolveRefusesURLsTheCRDRefuses(t *testing.T) {
+	for _, u := range []string{"HTTPS://{myDomain}.x.test/a", "https://{myDomain}.x.test/a?", "https://{myDomain}.x.test/a#", "Https://{myDomain}.x.test/a"} {
+		ps, _ := parse([]byte(sample))
+		ps[0].TokenURL = u
+		if _, err := ps[0].Resolve(map[string]string{"myDomain": "acme"}, "id", "https://cb"); err == nil {
+			t.Fatalf("%q accepted", u)
+		}
+	}
+}
+
+func TestValidateCatalogAuthorSafety(t *testing.T) {
+	cases := map[string]func(p *Preset){
+		"pattern must start with ^": func(p *Preset) { p.Placeholders[0].Pattern = "[a-z0-9-]{1,80}" },
+		"end with $":                func(p *Preset) { p.Placeholders[0].Pattern = "^[a-z0-9-]{1,80}" },
+		"displayName is required":   func(p *Preset) { p.DisplayName = "" },
+		"duplicate placeholder myDomain": func(p *Preset) {
+			p.Placeholders = append(p.Placeholders, p.Placeholders[0])
+		},
+		"verified without a live check": func(p *Preset) { p.Live.Tool = ""; p.Placeholders[0].Pattern = "([" },
+	}
+	for want, mutate := range cases {
+		ps, _ := parse([]byte(sample))
+		mutate(&ps[0])
+		if probs := strings.Join(Validate(ps), "\n"); !strings.Contains(probs, want) {
+			t.Fatalf("missing %q in %s", want, probs)
+		}
 	}
 }

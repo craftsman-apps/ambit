@@ -149,8 +149,12 @@ func fill(s string, vals map[string]string, clientID string) (string, error) {
 
 func (p Preset) validURL(s string) bool {
 	u, err := url.Parse(s)
+	// The literal lowercase prefix is required (u.Scheme is lowercased and ? or # may leave RawQuery empty).
+	if !strings.HasPrefix(s, "https://") && !(p.Testing && strings.HasPrefix(s, "http://")) {
+		return false
+	}
 	if err != nil || u.Host == "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil || !hostRE.MatchString(u.Host) ||
-		strings.ContainsAny(s, "\\ \t\r\n") {
+		strings.ContainsAny(s, "\\ \t\r\n?#") {
 		return false
 	}
 	if u.Scheme == "https" {
@@ -281,9 +285,23 @@ func Validate(ps []Preset) []string {
 		if p.Server.Transport != "streamable-http" && p.Server.Transport != "sse" {
 			bad("server transport must be streamable-http or sse")
 		}
+		if p.DisplayName == "" {
+			bad("displayName is required")
+		}
+		if p.Verified && p.Live.Tool == "" {
+			bad("verified without a live check")
+		}
 		values := map[string]string{}
 		patternBad := false
+		names := map[string]bool{}
 		for _, ph := range p.Placeholders {
+			if names[ph.Name] {
+				bad("duplicate placeholder %s", ph.Name)
+			}
+			names[ph.Name] = true
+			if !strings.HasPrefix(ph.Pattern, "^") || !strings.HasSuffix(ph.Pattern, "$") {
+				bad("placeholder %s: pattern must start with ^ and end with $", ph.Name)
+			}
 			if !nameRE.MatchString(ph.Name) || ph.Name == "clientID" || ph.Name == "callbackURL" {
 				bad("placeholder name %q is not allowed", ph.Name)
 			}
@@ -298,10 +316,7 @@ func Validate(ps []Preset) []string {
 			continue // already reported; Resolve would only repeat it
 		}
 		if _, err := p.Resolve(values, "example-client", "https://ambit.example.test/connections/callback"); err != nil {
-			bad("with the example values: %v (all URLs must be https)", err)
-		}
-		if p.Verified && p.Live.Tool == "" {
-			bad("verified without a live check")
+			bad("with the example values: %v", err)
 		}
 	}
 	sort.Strings(probs)

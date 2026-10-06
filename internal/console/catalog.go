@@ -16,6 +16,7 @@ import (
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/controller"
+	"github.com/craftsman-apps/ambit/internal/presets"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -51,6 +52,8 @@ type Catalog struct {
 	Prices *PriceSource
 	// Tools reads per-user servers' tools with one consenting admin's grant; nil without Conns.
 	Tools *ToolReader
+	// Presets is the app preset catalog (presets.All, plus the test presets when enabled).
+	Presets []presets.Preset
 }
 
 // Config tells the console UI how changes are applied.
@@ -194,13 +197,22 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 		apps := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
 			return allow("only admins can manage apps", h, RoleAdmin)
 		}
-		mux.HandleFunc("GET /api/apps", read(func(w http.ResponseWriter, r *http.Request, s Session) {
-			if s.Role != RoleAdmin {
-				writeErr(w, http.StatusForbidden, "only admins can manage apps")
-				return
-			}
-			c.listApps(w, r, s)
-		}))
+		adminRead := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
+			return read(func(w http.ResponseWriter, r *http.Request, s Session) {
+				if s.Role != RoleAdmin {
+					writeErr(w, http.StatusForbidden, "only admins can manage apps")
+					return
+				}
+				h(w, r, s)
+			})
+		}
+		mux.HandleFunc("GET /api/apps", adminRead(c.listApps))
+		mux.HandleFunc("GET /api/presets", adminRead(c.listPresets))
+		mux.HandleFunc("GET /api/apps/unfinished", adminRead(c.unfinished))
+		mux.HandleFunc("POST /api/apps/from-preset", apps(c.addFromPreset))
+		mux.HandleFunc("POST /api/apps/unfinished/{op}/finish", apps(c.finishUnfinished))
+		mux.HandleFunc("DELETE /api/apps/unfinished/{op}", apps(c.removeUnfinished))
+		mux.HandleFunc("PUT /api/apps/{name}/bind", apps(c.bindApp))
 		mux.HandleFunc("POST /api/apps", apps(c.createApp))
 		mux.HandleFunc("DELETE /api/apps/{name}", apps(c.deleteApp))
 	}

@@ -55,11 +55,15 @@ rules:
   - apiGroups: [ambitproject.dev]
     resources: [models]
     verbs: [update]
-  # Anyone signed in may request a server; approving one creates the Server. The console never
-  # updates or deletes Servers, and records a decision only in the request's status.
+  # Anyone signed in may request a server; approving one creates the Server, and records a decision
+  # only in the request's status. Adding an app from a preset creates its Server too.
   - apiGroups: [ambitproject.dev]
     resources: [serverrequests, servers]
     verbs: [create]
+  # Removing an unfinished preset addition deletes the Server it created. The console never updates Servers.
+  - apiGroups: [ambitproject.dev]
+    resources: [servers]
+    verbs: [delete]
   {{- end }}
   - apiGroups: [ambitproject.dev]
     resources: [serverrequests/status]

@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -22,28 +24,33 @@ import (
 // namespace; the Connection only names it, so Git never holds it.
 
 type AppInput struct {
-	Name             string   `json:"name"`
-	DisplayName      string   `json:"displayName"`
-	AuthorizationURL string   `json:"authorizationURL"`
-	TokenURL         string   `json:"tokenURL"`
-	RevocationURL    string   `json:"revocationURL"`
-	ClientID         string   `json:"clientID"`
-	ClientSecret     string   `json:"clientSecret"`
-	Scopes           []string `json:"scopes"`
+	Name             string            `json:"name"`
+	DisplayName      string            `json:"displayName"`
+	AuthorizationURL string            `json:"authorizationURL"`
+	TokenURL         string            `json:"tokenURL"`
+	RevocationURL    string            `json:"revocationURL"`
+	ClientID         string            `json:"clientID"`
+	ClientSecret     string            `json:"clientSecret"`
+	Scopes           []string          `json:"scopes"`
+	AuthorizeParams  map[string]string `json:"authorizeParams"`
 }
 
 type AppView struct {
-	Name             string   `json:"name"`
-	DisplayName      string   `json:"displayName"`
-	AuthorizationURL string   `json:"authorizationURL"`
-	TokenURL         string   `json:"tokenURL"`
-	RevocationURL    string   `json:"revocationURL"`
-	ClientID         string   `json:"clientID"`
-	Scopes           []string `json:"scopes"`
-	Ready            string   `json:"ready"`
-	Message          string   `json:"message"`
-	GitManaged       bool     `json:"gitManaged"`
-	CreatedBy        string   `json:"createdBy"`
+	Name             string       `json:"name"`
+	DisplayName      string       `json:"displayName"`
+	AuthorizationURL string       `json:"authorizationURL"`
+	TokenURL         string       `json:"tokenURL"`
+	RevocationURL    string       `json:"revocationURL"`
+	ClientID         string       `json:"clientID"`
+	Scopes           []string     `json:"scopes"`
+	Ready            string       `json:"ready"`
+	Message          string       `json:"message"`
+	GitManaged       bool         `json:"gitManaged"`
+	CreatedBy        string       `json:"createdBy"`
+	Preset           string       `json:"preset,omitempty"`
+	NewerPreset      *NewerPreset `json:"newerPreset,omitempty"`
+	Bound            bool         `json:"bound"`
+	BindTo           string       `json:"bindTo,omitempty"` // the one Server URL an older app could be bound to
 }
 
 var (
@@ -71,15 +78,31 @@ func (c *Catalog) listApps(w http.ResponseWriter, r *http.Request, _ Session) {
 		serverErr(w, err)
 		return
 	}
+	var servers v1.ServerList
+	if err := c.Client.List(r.Context(), &servers, client.InNamespace(c.Namespace)); err != nil {
+		serverErr(w, err)
+		return
+	}
 	sort.Slice(l.Items, func(i, j int) bool { return l.Items[i].Name < l.Items[j].Name })
 	out := []AppView{}
 	for _, x := range l.Items {
-		out = append(out, appView(x))
+		v := appView(x)
+		v.Preset, v.NewerPreset, v.Bound = x.Annotations[presetKey], c.newerPreset(x, servers.Items), x.Spec.ServerURL != ""
+		if urls := serverURLs(x.Name, servers.Items); !v.Bound && len(urls) == 1 {
+			v.BindTo = urls[0]
+		}
+		out = append(out, v)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"callbackURL": c.callbackURL(), "apps": out})
 }
 
-func checkApp(in AppInput) error {
+func checkApp(in AppInput) error { return checkAppWith(in, false) }
+
+var reservedAuthorizeParams = []string{"client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "scope", "resource", "response_type", "response_mode", "request", "request_uri"}
+
+// checkAppWith checks an app; testHosts (a preset from presets.LoadTesting only) also accepts plain http
+// to *.localtest.me, where the kind tests run Keycloak.
+func checkAppWith(in AppInput, testHosts bool) error {
 	switch {
 	case !appNameRE.MatchString(in.Name):
 		return errors.New("name must be lowercase letters, digits and dashes, at most 40 characters")
@@ -95,8 +118,16 @@ func checkApp(in AppInput) error {
 		if !validURL(u) {
 			return fmt.Errorf("the %s must look like https://host/path, without a query string or fragment", label)
 		}
-		if strings.HasPrefix(u, "http://") && !plainHTTPOK(u) {
+		if strings.HasPrefix(u, "http://") && !plainHTTPOK(u) && !(testHosts && testHost(u)) {
 			return fmt.Errorf("the %s must use https: the client secret and users' tokens travel over it", label)
+		}
+	}
+	if len(in.AuthorizeParams) > 16 { // same cap as the Connection CRD
+		return errors.New("at most 16 authorize parameters")
+	}
+	for k := range in.AuthorizeParams {
+		if slices.Contains(reservedAuthorizeParams, k) {
+			return fmt.Errorf("authorize parameter %s is set by Ambit", k)
 		}
 	}
 	for _, sc := range in.Scopes {
@@ -141,7 +172,7 @@ func (c *Catalog) createApp(w http.ResponseWriter, r *http.Request, s Session) {
 	}
 	conn := &v1.Connection{ObjectMeta: metav1.ObjectMeta{Name: in.Name, Namespace: c.Namespace, Annotations: map[string]string{createdByKey: s.Email}},
 		Spec: v1.ConnectionSpec{DisplayName: strings.TrimSpace(in.DisplayName), AuthorizationURL: in.AuthorizationURL, TokenURL: in.TokenURL,
-			RevocationURL: in.RevocationURL, ClientID: in.ClientID, ClientSecretRef: v1.SecretRef{Name: secretName}, Scopes: in.Scopes}}
+			RevocationURL: in.RevocationURL, ClientID: in.ClientID, ClientSecretRef: v1.SecretRef{Name: secretName}, Scopes: in.Scopes, AuthorizeParams: in.AuthorizeParams}}
 	if c.GitOps != nil {
 		c.propose(w, r, s, "add", "Connection", "connections", in.Name, conn.Spec, conn.Labels, conn.Annotations)
 		return
@@ -206,4 +237,9 @@ func (c *Catalog) deleteApp(w http.ResponseWriter, r *http.Request, s Session) {
 	}
 	slog.Info("app removed", "connection", conn.Name, "by", s.Email)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func testHost(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	return err == nil && strings.HasSuffix(u.Hostname(), ".localtest.me")
 }

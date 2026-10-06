@@ -16,6 +16,7 @@ import (
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/console"
 	"github.com/craftsman-apps/ambit/internal/controller"
+	"github.com/craftsman-apps/ambit/internal/presets"
 	"github.com/craftsman-apps/ambit/internal/pricing"
 	"github.com/craftsman-apps/ambit/web"
 	"github.com/dexidp/dex/api/v2"
@@ -213,13 +214,25 @@ func run(ctx context.Context) error {
 	if conns != nil {
 		scim = &console.SCIM{Client: objects, Namespace: ns, Token: keys.SCIMToken, Conns: conns, Sessions: auth.Sessions}
 	}
+	catalogPresets, err := presets.All()
+	if err != nil {
+		return fmt.Errorf("app presets: %w", err)
+	}
+	if os.Getenv("AMBIT_TEST_PRESETS") == "1" {
+		test, err := presets.LoadTesting()
+		if err != nil {
+			return fmt.Errorf("test presets: %w", err)
+		}
+		catalogPresets = append(catalogPresets, test...)
+		slog.Warn("test presets enabled")
+	}
 	prices := &console.PriceSource{URL: os.Getenv("AMBIT_PRICES_URL")}
 	go prices.Run(ctx)
 	deps := &console.Dependencies{Client: objects, Namespace: ns, Audit: audit, Budgets: budgets,
 		RatelimitMode: os.Getenv("AMBIT_RATELIMIT_FAILURE_MODE"), Protection: os.Getenv("AMBIT_PROTECTION") == "true",
 		XDSAddr: os.Getenv("AMBIT_XDS_ADDR")}
 	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), console.LoginOptions{Bootstrap: bootstrapAdmin, SSO: sso},
-		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, Budgets: budgets, Dependencies: deps, Prices: prices, Tools: reader}), ReadHeaderTimeout: 10 * time.Second}
+		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, Budgets: budgets, Dependencies: deps, Prices: prices, Tools: reader, Presets: catalogPresets}), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)

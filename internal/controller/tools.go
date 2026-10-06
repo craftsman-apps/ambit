@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -24,11 +25,12 @@ type ToolLister func(ctx context.Context, s v1.Server) ([]v1.Tool, error)
 // and this controller reach the proxy.
 func ListTools(ctx context.Context, s v1.Server) ([]v1.Tool, error) {
 	endpoint := fmt.Sprintf("http://mcp-%s-proxy.%s.svc:%d/mcp", s.Name, s.Namespace, proxyPort)
-	switch {
-	case s.Spec.Connection != "":
-		// ponytail: tools of a per-user server need a user's token to read; they stay unlisted, so
-		// rules grant "all tools" for such servers. Read them with a service grant if needed.
+	if s.Spec.Connection != "" {
+		// Per-user servers need a user's token; without --console-tools-url their tools stay unlisted
+		// and rules grant "all tools". With it, WithConsoleTools sends them to the console instead.
 		return nil, nil
+	}
+	switch {
 	case s.Spec.URL != "":
 		endpoint = s.Spec.URL
 	case s.Spec.Transport == "sse":
@@ -127,4 +129,57 @@ func listTools(ctx context.Context, t mcp.Transport) ([]v1.Tool, error) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
+}
+
+// ErrNoReader: a per-user server has no admin who agreed to have its tools read with their account.
+var ErrNoReader = errors.New("no tool reader")
+
+// ConsoleTools asks the console (port 8083) for a per-user server's tools; the console reads them with
+// the consenting admin's grant and returns metadata only.
+type ConsoleTools struct {
+	URL  string // e.g. http://ambit-console.ambit-system.svc:8083
+	HTTP *http.Client
+}
+
+// List returns ErrNoReader when the console has no reader for the server: 404 (no reader, or the
+// console has not seen the Server yet) and 409 (not bound to its connection). Other failures are
+// ordinary errors, so the controller retries.
+func (c ConsoleTools) List(ctx context.Context, s v1.Server) ([]v1.Tool, error) {
+	hc := c.HTTP
+	if hc == nil {
+		hc = &http.Client{Timeout: 20 * time.Second}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(c.URL, "/")+"/v1/tools/"+url.PathEscape(s.Name), nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotFound, http.StatusConflict:
+		return nil, ErrNoReader
+	default:
+		return nil, fmt.Errorf("console tools: status %d", resp.StatusCode)
+	}
+	var out struct {
+		Tools []v1.Tool `json:"tools"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&out); err != nil {
+		return nil, err
+	}
+	return out.Tools, nil
+}
+
+// WithConsoleTools sends per-user servers to the console and every other server to base.
+func WithConsoleTools(base ToolLister, c ConsoleTools) ToolLister {
+	return func(ctx context.Context, s v1.Server) ([]v1.Tool, error) {
+		if s.Spec.Connection != "" {
+			return c.List(ctx, s)
+		}
+		return base(ctx, s)
+	}
 }

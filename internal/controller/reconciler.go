@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -318,7 +319,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		}
 		setReady(&next.Status.Conditions, c, s.Generation)
 		if c.Status == metav1.ConditionTrue && r.ListTools != nil {
-			next.Status.Tools = r.readTools(ctx, *s)
+			var tc *metav1.Condition
+			next.Status.Tools, tc = r.readTools(ctx, *s)
+			if tc != nil {
+				tc.ObservedGeneration = s.Generation
+				meta.SetStatusCondition(&next.Status.Conditions, *tc)
+			}
 			if result.RequeueAfter == 0 {
 				result.RequeueAfter = r.refresh()
 			}
@@ -375,20 +381,31 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 
 // readTools returns the server's tools, reading them again when they are older than toolsRefresh.
 // On failure it keeps the last known list: a slow server must not make its tools vanish from the console.
-func (r *Reconciler) readTools(ctx context.Context, s v1.Server) []v1.Tool {
+// For per-user servers it also returns the ToolsRead condition.
+func (r *Reconciler) readTools(ctx context.Context, s v1.Server) ([]v1.Tool, *metav1.Condition) {
 	if r.toolsRead == nil {
 		r.toolsRead = map[types.UID]time.Time{}
 	}
 	if t, ok := r.toolsRead[s.UID]; ok && time.Since(t) < r.refresh() && len(s.Status.Tools) > 0 {
-		return s.Status.Tools
+		return s.Status.Tools, nil
 	}
 	tools, err := r.ListTools(ctx, s)
+	if errors.Is(err, ErrNoReader) {
+		c := cond(metav1.ConditionFalse, "ReaderUnavailable", "no admin's account is set to read this server's tools; choose one on the Servers page")
+		c.Type = "ToolsRead"
+		return s.Status.Tools, &c
+	}
 	if err != nil {
 		log.FromContext(ctx).Error(err, "read tools", "server", s.Name)
-		return s.Status.Tools
+		return s.Status.Tools, nil
 	}
 	r.toolsRead[s.UID] = time.Now()
-	return tools
+	if s.Spec.Connection == "" {
+		return tools, nil
+	}
+	c := cond(metav1.ConditionTrue, "Read", fmt.Sprintf("%d tools", len(tools)))
+	c.Type = "ToolsRead"
+	return tools, &c
 }
 
 func setReady(conds *[]metav1.Condition, c metav1.Condition, generation int64) {

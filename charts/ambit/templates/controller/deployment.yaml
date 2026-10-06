@@ -25,6 +25,9 @@ spec:
             {{- end }}
             - --tools-refresh={{ .Values.protection.toolsRefresh }}
             - --xds-addr={{ .Release.Name }}-agentgateway.{{ .Release.Namespace }}.svc:9978
+            {{- if .Values.mcp.enabled }}
+            - --console-tools-url=http://ambit-console.{{ .Release.Namespace }}.svc:8083
+            {{- end }}
             {{- if .Values.limits.enabled }}
             - --ratelimit-service=ambit-ratelimit
             - --ratelimit-failure-mode={{ .Values.limits.failureMode }}

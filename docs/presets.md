@@ -183,3 +183,4 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | google-calendar | Google Calendar | calendarmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | not yet |
 | google-drive | Google Drive | drivemcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | not yet |
 | google-docs | Google Docs | docsmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | not yet |
+| google-sheets | Google Sheets | sheetsmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | not yet |

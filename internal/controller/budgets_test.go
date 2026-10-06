@@ -167,28 +167,43 @@ func TestSpendUserFallsBackToSubject(t *testing.T) {
 // A streamed chat request that turns usage reporting off would have no token counts and cost nothing. For
 // members of a group with a dollar limit the gateway turns it back on (the gateway itself does so only
 // when stream_options is absent).
+// The rewrite that turns usage reporting on for dollar-capped groups is a backend policy: agentgateway applies it
+// after a ModelRouter has picked the model. A route-level (traffic) rewrite was undone by the router, which
+// rebuilds the body from its original copy (agentgateway v1.5.0; found 2026-10-06: routed streams cost 0).
 func TestDollarBudgetForcesUsageInStreams(t *testing.T) {
-	_, p := compileBudgets([]v1.Budget{
+	budgets := []v1.Budget{
 		{ObjectMeta: metav1.ObjectMeta{Name: "ml"}, Spec: v1.BudgetSpec{Group: "ml-research", GroupDollarsPerDay: "50"}},
 		{ObjectMeta: metav1.ObjectMeta{Name: "eng"}, Spec: v1.BudgetSpec{Group: "eng", UserRequestsPerDay: ptr.To[int64](2)}},
-	}, testPrices, "ambit-system", rl, "ambit-llm")
-	c, _, _ := unstructured.NestedSlice(p.Object, "spec", "traffic", "transformation", "conditional")
-	if len(c) != 1 {
-		t.Fatalf("conditional %v", c)
 	}
-	rule := c[0].(map[string]any)
-	if rule["condition"] != usageCondition([]string{"ml-research"}) || !strings.Contains(rule["condition"].(string), `g in ["ml-research"]`) ||
-		strings.Contains(rule["condition"].(string), `"eng"`) {
-		t.Fatalf("condition %v", rule["condition"])
-	}
-	if body, _, _ := unstructured.NestedString(rule, "policy", "request", "body"); body != usageBody {
-		t.Fatalf("body %q", body)
-	}
-
-	// request limits only: nothing to charge, nothing rewritten
-	_, p = compileBudgets([]v1.Budget{{ObjectMeta: metav1.ObjectMeta{Name: "eng"}, Spec: v1.BudgetSpec{Group: "eng", UserRequestsPerDay: ptr.To[int64](2)}}},
-		testPrices, "ambit-system", rl, "ambit-llm")
+	_, p := compileBudgets(budgets, testPrices, "ambit-system", rl, "ambit-llm")
 	if _, found, _ := unstructured.NestedFieldNoCopy(p.Object, "spec", "traffic", "transformation"); found {
+		t.Fatal("the route policy still rewrites requests; a ModelRouter undoes that")
+	}
+	u := usagePolicy(budgets, "ambit-system", "ambit-llm")
+	if u == nil || u.GetName() != UsagePolicyName {
+		t.Fatalf("usage policy %v", u)
+	}
+	if ref, _, _ := unstructured.NestedSlice(u.Object, "spec", "targetRefs"); len(ref) != 1 || ref[0].(map[string]any)["name"] != "ambit-llm" {
+		t.Fatalf("targetRefs %v", ref)
+	}
+	tr, _, _ := unstructured.NestedSlice(u.Object, "spec", "backend", "ai", "transformations")
+	if len(tr) != 1 || tr[0].(map[string]any)["field"] != "stream_options" || tr[0].(map[string]any)["expression"] != usageField([]string{"ml-research"}) {
+		t.Fatalf("transformations %v", tr)
+	}
+	e := usageField([]string{"ml-research"})
+	if !strings.Contains(e, `g in ["ml-research"]`) || strings.Contains(e, `"eng"`) || !strings.Contains(e, `{"include_usage": true}`) {
+		t.Fatalf("expression %s", e)
+	}
+	// Without the explicit list, a backend AI policy drops agentgateway's default API types and every request is
+	// parsed as chat (embeddings were answered as chat, 2026-10-06).
+	routes, _, _ := unstructured.NestedStringMap(u.Object, "spec", "backend", "ai", "routes")
+	for path, typ := range map[string]string{"/v1/chat/completions": "Completions", "/v1/messages": "Messages", "/v1/responses": "Responses", "/v1/embeddings": "Embeddings", "*": "Passthrough"} {
+		if routes[path] != typ {
+			t.Errorf("route type for %s: %q, want %s", path, routes[path], typ)
+		}
+	}
+	// request limits only: nothing to charge, no rewrite
+	if usagePolicy(budgets[1:], "ambit-system", "ambit-llm") != nil {
 		t.Fatal("a request-only budget rewrites requests")
 	}
 }

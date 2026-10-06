@@ -113,3 +113,38 @@ func TestModelTakingRouterObjectNameSurvivesCleanup(t *testing.T) {
 		t.Fatalf("router-auto is controlled by %s, want the Model", controllerOwnerKind(vm))
 	}
 }
+
+// The usage policy exists exactly while some group has a dollar limit.
+func TestUsagePolicyFollowsDollarBudgets(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-usage-policy"
+	namespace(t, ns)
+	ctx := t.Context()
+	b := &v1.Budget{ObjectMeta: metav1.ObjectMeta{Name: "ml", Namespace: ns}, Spec: v1.BudgetSpec{Group: "ml-research", GroupDollarsPerDay: "5"}}
+	if err := envClient.Create(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
+		RateLimit: RateLimit{Service: "ambit-ratelimit", Port: 8081, FailureMode: "FailOpen"}}
+	exists := func() bool {
+		p := &unstructured.Unstructured{}
+		p.SetGroupVersionKind(AgentgatewayPolicyGVK)
+		err := envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: UsagePolicyName}, p)
+		return err == nil && p.GetDeletionTimestamp() == nil
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if !exists() {
+		t.Fatal("no usage policy with a dollar budget")
+	}
+	if err := envClient.Delete(ctx, b); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if exists() {
+		t.Fatal("usage policy kept after the last dollar budget was removed")
+	}
+}

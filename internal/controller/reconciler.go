@@ -155,13 +155,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	refused := refuseUnpricedIfEnforced(r.RateLimit, &res, models.Items, prices, budgets.Items)
 	// After RefuseUnpriced: each router line repeats its target's final access expression.
 	routerConds := CompileRouters(routers.Items, models.Items, &res, r.Route)
-	budgetPolicy := false
+	budgetPolicy, usage := false, false
 	if r.RateLimit.Service != "" {
 		cfg, p := compileBudgets(budgets.Items, prices, r.Namespace, r.RateLimit, r.Route.Name)
 		res.Objects = append(res.Objects, rateLimitConfigMap(r.Namespace, cfg))
 		if p != nil {
 			res.Objects = append(res.Objects, p)
 			budgetPolicy = true
+		}
+		if u := usagePolicy(budgets.Items, r.Namespace, r.Route.Name); u != nil {
+			res.Objects = append(res.Objects, u)
+			usage = true
 		}
 	}
 	var cm corev1.ConfigMap
@@ -214,10 +218,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			conds[owner] = mcpServerCondition(current)
 		}
 	}
-	if !budgetPolicy { // no budgets (or budgets off): stop asking the ratelimit service on every request
+	// No budgets (or budgets off): stop asking the ratelimit service on every request. No dollar limit: stop
+	// rewriting requests for usage.
+	for name, wanted := range map[string]bool{BudgetPolicyName: budgetPolicy, UsagePolicyName: usage} {
+		if wanted {
+			continue
+		}
 		stale := &unstructured.Unstructured{}
 		stale.SetGroupVersionKind(AgentgatewayPolicyGVK)
-		if err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: BudgetPolicyName}, stale); err == nil && ownedByAmbit(stale) {
+		if err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: name}, stale); err == nil && ownedByAmbit(stale) {
 			if err := r.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
 				return reconcile.Result{}, err
 			}

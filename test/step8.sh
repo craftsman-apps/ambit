@@ -233,6 +233,38 @@ d=$(( $(spent) - ${s0:-0} ))
   fail "15 include_usage false: mira $cm charged $d units (want 200, 3, usage in her stream); alice $ca, usage in hers: $(grep -c '"usage"' "$W/nu-a")"
 pass "15 include_usage false: mira's stream reported usage and was charged 3 units; alice's (no dollar cap) left unchanged"
 
+fresh
+kubectl -n "$NS" apply -f test/llm/router.yaml >/dev/null
+kubectl -n "$NS" wait modelrouters.ambitproject.dev/auto --for=condition=Ready --timeout=120s >/dev/null
+route_ask() { command curl -s -o "$W/$2" -w '%{http_code}' --max-time 60 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' -d "$3" "$MOCK/chat/completions"; }
+# 16 · a routed answer is charged at the answering model's price (mock-echo: 3 units)
+s0=$(spent)
+c=$(route_ask "$M" r16 '{"model":"auto","messages":[{"role":"user","content":"python"}]}')
+for _ in $(seq 1 30); do [[ "$(spent)" != "$s0" ]] && break; sleep 1; done
+d=$(( $(spent) - ${s0:-0} ))
+[[ "$c" == 200 && "$d" == 3 ]] && grep -q '"model": *"mock/echo"' "$W/r16" || fail "16 routed answer: status $c, charged $d units (want 3, by mock/echo)"
+pass "16 a routed answer (auto → mock-echo) is charged at mock-echo's price (3 units)"
+# 17 · a routed stream with include_usage false is charged (the usage rewrite runs before the router)
+s0=$(spent)
+c=$(route_ask "$M" r17 '{"model":"auto","stream":true,"stream_options":{"include_usage":false},"messages":[{"role":"user","content":"python"}]}')
+for _ in $(seq 1 30); do [[ "$(spent)" != "$s0" ]] && break; sleep 1; done
+d=$(( $(spent) - ${s0:-0} ))
+[[ "$c" == 200 && "$d" == 3 ]] || fail "17 routed stream without usage: status $c, charged $d (want 3)"
+pass "17 a routed stream with include_usage false is charged (3 units)"
+# 18 · a routed stream cut off before its token counts is not charged, like a direct one (check 11)
+s0=$(spent)
+route_ask "$M" r18 '{"model":"auto","stream":true,"messages":[{"role":"user","content":"python CUT"}]}' >/dev/null || true
+sleep 5
+[[ "$(spent)" == "$s0" ]] || fail "18 a cut-off routed stream was charged: $(( $(spent) - ${s0:-0} ))"
+pass "18 a routed stream cut off before its token counts is not charged (same as a direct one)"
+# 19 · while a dollar cap exists (its route policy has a transformation), a client's x-ambit-route is still removed
+#      ("python" routes to the priced mock-echo; the default, mock-unpriced, is refused to the capped group)
+c=$(command curl -s -o "$W/r19" -w '%{http_code}' --max-time 60 -H "Authorization: Bearer $M" -H 'Content-Type: application/json' -H 'x-ambit-route: coding' \
+  -d '{"model":"auto","messages":[{"role":"user","content":"python"}]}' "$MOCK/chat/completions")
+[[ "$c" == 200 ]] && ! grep -q 'x-ambit-route=' "$W/r19" || fail "19 with a dollar cap, a client's x-ambit-route reached the provider: $(cat "$W/r19")"
+pass "19 with a dollar cap active, a client-sent x-ambit-route is still removed (PreRouting)"
+kubectl -n "$NS" delete -f test/llm/router.yaml >/dev/null
+
 # 13 · parallel requests started under the cap may all finish (documented); once spend is above it, refused
 set_ml '{ group: ml-research, groupDollarsPerDay: "0.00005" }' 'spend_group_ml-research: unit=DAY requests_per_unit=5,'
 for i in 1 2 3 4 5 6; do ( c=$(ask "$M" mock/echo); echo "$c" >"$W/par$i" ) & done; wait

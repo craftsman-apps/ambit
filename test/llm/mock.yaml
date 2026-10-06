@@ -15,23 +15,24 @@ data:
             body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
             model = body.get("model")
             last = (body.get("messages") or [{}])[-1].get("content", "")
+            text = last if isinstance(last, str) else ""  # a multi-part message has a list content
             if self.path.endswith("/embeddings"):
                 out = json.dumps({"object": "list", "model": model, "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
                                   "usage": {"prompt_tokens": 12, "total_tokens": 12}}).encode()
                 self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(out)))
                 self.end_headers(); self.wfile.write(out); return
-            if last == "CUT" and body.get("stream"):
+            if text.endswith("CUT") and body.get("stream"):
                 self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
                 self.wfile.write(b'data: {"id":"c1","object":"chat.completion.chunk","model":"' + model.encode() + b'","choices":[{"index":0,"delta":{"content":"po"}}]}\n\n')
                 self.wfile.flush(); self.close_connection = True; return
-            if last == "SLOW" and body.get("stream"):  # usage 25 s after the first chunk (a price change in between)
+            if text == "SLOW" and body.get("stream"):  # usage 25 s after the first chunk (a price change in between)
                 self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
                 for chunk, wait in (({"choices": [{"index": 0, "delta": {"content": "pong"}}]}, 25), ({"choices": [], "usage": USAGE}, 0)):
                     chunk.update({"id": "c1", "object": "chat.completion.chunk", "model": model})
                     self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n"); self.wfile.flush(); time.sleep(wait)
                 self.wfile.write(b"data: [DONE]\n\n")
                 return
-            usage = None if last == "NO-USAGE" else USAGE
+            usage = None if text == "NO-USAGE" else USAGE
             content = "pong" + (" x-ambit-user=" + self.headers["x-ambit-user"] if self.headers.get("x-ambit-user") else "") + (" x-ambit-route=" + self.headers["x-ambit-route"] if self.headers.get("x-ambit-route") else "")
             if body.get("stream"):
                 self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()

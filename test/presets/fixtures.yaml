@@ -4,3 +4,5 @@
 docusign:
   mcpHost: mcp
   accountHost: account
+servicenow:
+  instance: example

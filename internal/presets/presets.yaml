@@ -300,3 +300,27 @@
   docs: https://developers.docusign.com/platform/mcp-server/
   contract: { unauthenticated: [403] }
   live: { tool: getWorkflowsList }
+- id: servicenow
+  version: 1
+  displayName: ServiceNow
+  category: Projects
+  server: { url: "https://{instance}.service-now.com/sncapps/mcp-server/mcp/sn_mcp_server_default", transport: streamable-http }
+  authorizationURL: "https://{instance}.service-now.com/oauth_auth.do"
+  tokenURL: "https://{instance}.service-now.com/oauth_token.do"
+  revocationURL: "https://{instance}.service-now.com/oauth_revoke_token.do"
+  resource: none
+  scopes: ["useraccount"]
+  placeholders:
+    - { name: instance, label: "ServiceNow instance name (the part before .service-now.com)", pattern: "^[a-z0-9][a-z0-9-]*$", example: example }
+  requires: ServiceNow MCP Server Console (Zurich Patch 9 or Australia Patch 2 or later), with MCP service access granted by ServiceNow
+  setup: |
+    1. Sign in to your ServiceNow instance as an administrator. Make sure the "Model Context Protocol Server" application (sn_mcp_server) and the MCP Server Console are installed. If MCP access is not enabled for the instance, ask ServiceNow to enable it.
+    2. Open All, then "MCP Server Console", and check that the "Quickstart Server" (id sn_mcp_server_default) is active. This preset connects to that server. To use another server, change the MCP server URL in Ambit to the URL the console shows for it.
+    3. Open All, then "System OAuth", then "Application Registry". Click "New" and choose "Create an OAuth API endpoint for external clients" (in newer releases this is under "Machine Identity Console", then "Inbound integrations", with the grant "OAuth - Authorization code grant").
+    4. Enter a name. Set "Redirect URL" to {callbackURL}. Set "Auth Scope" to useraccount.
+    5. Open "Advanced Options" and set "Token Format" to JWT. The default, Opaque, signs in but returns no tools.
+    6. Click "Submit". Open the record again and copy the Client ID. Click the lock icon next to "Client Secret" and copy the Client secret.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client Secret
+  docs: https://www.servicenow.com/community/developer-advocate-blog/building-an-mcp-server-on-servicenow-and-connecting-claude-to-it/ba-p/3588171
+  live: { tool: incident_summarization }

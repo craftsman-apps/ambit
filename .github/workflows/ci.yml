@@ -33,6 +33,8 @@ jobs:
           cmp /tmp/r1 /tmp/r2
       - name: Alert rules (promtool unit tests)
         run: test/alerts.sh
+      - name: Chart rules (ambit-router shape and RBAC)
+        run: test/chart.sh
 
   e2e:
     needs: build

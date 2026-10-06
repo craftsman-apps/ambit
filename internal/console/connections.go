@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -364,8 +365,11 @@ func (c *Connections) bindGrants(ctx context.Context, conn *v1.Connection, serve
 	for _, g := range all {
 		if g.Connection == conn.Name {
 			grants = append(grants, g)
-			defer c.lockGrant(g.Email, g.Connection)()
 		}
+	}
+	slices.SortFunc(grants, func(a, b *Grant) int { return strings.Compare(a.Email, b.Email) }) // one lock order for every bind
+	for _, g := range grants {
+		defer c.lockGrant(g.Email, g.Connection)()
 	}
 	if err := update(); err != nil {
 		return err

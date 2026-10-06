@@ -277,13 +277,19 @@ type EffectiveAccess struct {
 	Tools       map[string][]string `json:"tools"`    // tool → groups granted it by name
 }
 
-// ServerAccess reads the same merged access the gateway policy is built from (accessByServer).
-func ServerAccess(servers []v1.Server, rules []v1.AccessRule, name string) EffectiveAccess {
-	a := accessByServer(servers, rules)[name]
+// ServerAccess reads the same merged access the gateway policy is built from (accessByServer), and
+// is empty for a Server the reconciler leaves out: refused by BindServers, or with a URL that does not parse.
+func ServerAccess(servers []v1.Server, conns []v1.Connection, rules []v1.AccessRule, name string) EffectiveAccess {
 	out := EffectiveAccess{Groups: []string{}, Tools: map[string][]string{}}
-	if a == nil {
+	kept, _ := BindServers(servers, conns)
+	i := slices.IndexFunc(kept, func(s v1.Server) bool { return s.Name == name })
+	if i < 0 {
 		return out
 	}
+	if _, ok := target(kept[i]); !ok {
+		return out
+	}
+	a := accessByServer(kept, rules)[name]
 	groups := map[string]bool{}
 	add := func(x Access) {
 		out.AllSignedIn = out.AllSignedIn || x.AllSignedIn

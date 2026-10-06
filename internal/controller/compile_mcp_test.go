@@ -264,14 +264,27 @@ func TestServerAccessSummary(t *testing.T) {
 		{Spec: v1.AccessRuleSpec{AllSignedIn: true, Servers: []v1.ServerAccess{{Name: "crm", Tools: []string{"get_record"}}}}},
 		{Spec: v1.AccessRuleSpec{Groups: []string{"sales"}, Servers: []v1.ServerAccess{{Name: "crm"}}}},
 	}
-	a := ServerAccess(servers, rules, "crm")
+	a := ServerAccess(servers, nil, rules, "crm")
 	if !a.AllTools || !a.AllSignedIn || len(a.Groups) != 1 || a.Groups[0] != "sales" || len(a.Tools["get_record"]) != 0 {
 		t.Fatalf("%+v", a)
 	}
 	if _, ok := a.Tools["get_record"]; !ok {
 		t.Fatalf("tool missing: %+v", a)
 	}
-	if b := ServerAccess(servers, rules, "nope"); b.AllTools || b.AllSignedIn || len(b.Tools) != 0 {
+	if b := ServerAccess(servers, nil, rules, "nope"); b.AllTools || b.AllSignedIn || len(b.Tools) != 0 {
 		t.Fatalf("unknown server: %+v", b)
+	}
+}
+
+func TestServerAccessEmptyWhenReconcilerLeavesServerOut(t *testing.T) {
+	rules := []v1.AccessRule{{Spec: v1.AccessRuleSpec{AllSignedIn: true, Servers: []v1.ServerAccess{{Name: "crm"}}}}}
+	conns := []v1.Connection{{ObjectMeta: metav1.ObjectMeta{Name: "crm"}, Spec: v1.ConnectionSpec{ServerURL: "https://other.test/mcp"}}}
+	refused := []v1.Server{perUser("crm", "https://mcp.crm.test/mcp", "crm")}
+	if a := ServerAccess(refused, conns, rules, "crm"); a.AllTools || a.AllSignedIn {
+		t.Fatalf("bound elsewhere: %+v", a)
+	}
+	bad := []v1.Server{perUser("crm", "https://mcp.crm.test:bad/mcp", "crm")}
+	if a := ServerAccess(bad, nil, rules, "crm"); a.AllTools || a.AllSignedIn {
+		t.Fatalf("bad url: %+v", a)
 	}
 }

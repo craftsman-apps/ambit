@@ -609,7 +609,8 @@ func (c *Catalog) bindApp(w http.ResponseWriter, r *http.Request, s Session) {
 	writeJSON(w, http.StatusOK, v)
 }
 
-// serverAccess answers GET /api/servers/{name}/access from the same merge the gateway policy uses.
+// serverAccess answers GET /api/servers/{name}/access from the same merge the gateway policy uses,
+// over the Servers the reconciler keeps.
 func (c *Catalog) serverAccess(w http.ResponseWriter, r *http.Request, _ Session) {
 	_, rules, err := c.load(r)
 	if err != nil {
@@ -621,5 +622,15 @@ func (c *Catalog) serverAccess(w http.ResponseWriter, r *http.Request, _ Session
 		serverErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, controller.ServerAccess(servers, rules, r.PathValue("name")))
+	name := r.PathValue("name")
+	if !slices.ContainsFunc(servers, func(s v1.Server) bool { return s.Name == name }) {
+		writeErr(w, http.StatusNotFound, "no server named "+name)
+		return
+	}
+	var conns v1.ConnectionList
+	if err := c.Client.List(r.Context(), &conns, client.InNamespace(c.Namespace)); err != nil {
+		serverErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, controller.ServerAccess(servers, conns.Items, rules, name))
 }

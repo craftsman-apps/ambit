@@ -436,13 +436,34 @@ func TestEmptyOrSameOverridesStayPreset(t *testing.T) {
 func TestServerAccessEndpoint(t *testing.T) {
 	e := presetFixture(t, false)
 	ctx := t.Context()
-	_ = e.cl.Create(ctx, &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "crm", Namespace: testNS}, Spec: v1.ServerSpec{URL: "https://mcp.crm.test/mcp", Connection: "crm"}})
-	_ = e.cl.Create(ctx, &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: testNS},
-		Spec: v1.AccessRuleSpec{Groups: []string{"sales"}, Servers: []v1.ServerAccess{{Name: "crm", Tools: []string{"get_record"}}}}})
+	for _, o := range []client.Object{
+		&v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "crm", Namespace: testNS}, Spec: v1.ServerSpec{URL: "https://mcp.crm.test/mcp", Connection: "crm"}},
+		&v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "moved", Namespace: testNS}, Spec: v1.ServerSpec{URL: "https://mcp.moved.test/mcp", Connection: "moved"}},
+		&v1.Connection{ObjectMeta: metav1.ObjectMeta{Name: "moved", Namespace: testNS}, Spec: v1.ConnectionSpec{ServerURL: "https://elsewhere.test/mcp"}},
+		&v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: testNS},
+			Spec: v1.AccessRuleSpec{Groups: []string{"sales"}, Servers: []v1.ServerAccess{{Name: "crm", Tools: []string{"get_record"}}, {Name: "moved"}}}},
+	} {
+		if err := e.cl.Create(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+	}
 	rec := do(t, e.h, "GET", "/api/servers/crm/access", e.ck, nil)
 	var got controller.EffectiveAccess
-	_ = json.Unmarshal(rec.Body.Bytes(), &got)
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
 	if rec.Code != 200 || got.AllTools || len(got.Groups) != 1 || got.Tools["get_record"][0] != "sales" {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	rec = do(t, e.h, "GET", "/api/servers/moved/access", e.ck, nil)
+	got = controller.EffectiveAccess{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != 200 || got.AllTools || len(got.Groups) != 0 {
+		t.Fatalf("refused server: %d %s", rec.Code, rec.Body)
+	}
+	if rec = do(t, e.h, "GET", "/api/servers/nope/access", e.ck, nil); rec.Code != 404 || !strings.Contains(rec.Body.String(), "no server named nope") {
+		t.Fatalf("unknown: %d %s", rec.Code, rec.Body)
 	}
 }

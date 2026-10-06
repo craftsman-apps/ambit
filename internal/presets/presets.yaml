@@ -324,3 +324,27 @@
   clientSecretLabel: Client Secret
   docs: https://www.servicenow.com/community/developer-advocate-blog/building-an-mcp-server-on-servicenow-and-connecting-claude-to-it/ba-p/3588171
   live: { tool: incident_summarization }
+- id: databricks
+  version: 1
+  displayName: Databricks
+  category: Data
+  server: { url: "https://{workspace}/api/2.0/mcp/sql", transport: streamable-http }
+  authorizationURL: "https://{workspace}/oidc/v1/authorize"
+  tokenURL: "https://{workspace}/oidc/v1/token"
+  resource: none
+  scopes: ["sql", "offline_access"]
+  placeholders:
+    - { name: workspace, label: "Databricks workspace host (for example your-workspace.cloud.databricks.com)", pattern: "^[a-z0-9][a-z0-9.-]*\\.(cloud\\.databricks\\.com|azuredatabricks\\.net|gcp\\.databricks\\.com)$", example: example.cloud.databricks.com }
+  requires: A Databricks SQL warehouse, and a Databricks account admin to create the OAuth app connection
+  setup: |
+    1. Sign in to the Databricks account console (https://accounts.cloud.databricks.com, or accounts.azuredatabricks.net, or accounts.gcp.databricks.com) as an account admin.
+    2. Open Settings, then "App connections", and click "Add connection".
+    3. Enter a name. Add {callbackURL} as a redirect URL. Set the client type to confidential.
+    4. Under access scopes, select "SQL". The default scopes (openid, email, profile, offline_access) are added by Databricks. Leave the token lifetimes at their defaults.
+    5. Turn on "Generate a client secret", then click "Add". Copy the Client ID and the Client secret at once; Databricks does not show the secret again.
+    6. Wait up to 30 minutes for the change to apply. Dynamic client registration is not supported, so this registered app is required.
+    7. The server runs SQL as the signed-in person, so it can change data wherever that person's own permissions allow. If your network uses IP access lists, allow the Ambit gateway's outbound addresses.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://docs.databricks.com/aws/en/agents/mcp-tools/connect-clients
+  live: { tool: execute_sql_read_only, arguments: { query: "SELECT 1" } }

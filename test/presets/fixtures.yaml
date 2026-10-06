@@ -6,3 +6,5 @@ docusign:
   accountHost: account
 servicenow:
   instance: example
+databricks:
+  workspace: community.cloud.databricks.com

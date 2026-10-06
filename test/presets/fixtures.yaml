@@ -1,4 +1,6 @@
 # Placeholder values for `presetcheck contract`: preset id -> placeholder name -> value.
 # Use real test-tenant values for Salesforce, ServiceNow, Databricks and DocuSign; examples elsewhere.
 # Add an entry here with each preset that declares placeholders.
-{}
+docusign:
+  mcpHost: mcp
+  accountHost: account

@@ -175,3 +175,4 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | webex | Webex | mcp.webexapis.com | no | Control Hub admin enables the server | not yet |
 | hubspot | HubSpot | mcp.hubspot.com | yes |  | not yet |
 | salesforce | Salesforce | api.salesforce.com | yes | Enterprise Edition or above, or a Developer Edition org | not yet |
+| docusign | Docusign | mcp.docusign.com | no | Integration key (Go-Live review for production) | not yet |

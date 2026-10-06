@@ -154,7 +154,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	prices := pricing.ByModel(models.Items)
 	refused := refuseUnpricedIfEnforced(r.RateLimit, &res, models.Items, prices, budgets.Items)
 	// After RefuseUnpriced: each router line repeats its target's final access expression.
-	routerConds := CompileRouters(routers.Items, models.Items, &res, r.Route, refused)
+	routerConds, _ := CompileRouters(routers.Items, models.Items, &res, r.Route, refused, ClassifierInput{})
 	budgetPolicy, usage := false, false
 	if r.RateLimit.Service != "" {
 		cfg, p := compileBudgets(budgets.Items, prices, r.Namespace, r.RateLimit, r.Route.Name)

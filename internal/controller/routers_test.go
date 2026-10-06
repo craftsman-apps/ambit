@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/routerconfig"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -33,13 +34,18 @@ func targets(t *testing.T, o *unstructured.Unstructured) [][2]string {
 }
 
 func compileWithRouters(models []v1.Model, rules []v1.AccessRule, routers ...v1.ModelRouter) (Result, map[string]metav1.Condition) {
+	res, conds, _ := compileLLM(models, rules, ClassifierInput{}, routers...)
+	return res, conds
+}
+
+func compileLLM(models []v1.Model, rules []v1.AccessRule, ci ClassifierInput, routers ...v1.ModelRouter) (Result, map[string]metav1.Condition, routerconfig.Config) {
 	var names []string
 	for _, r := range routers {
 		names = append(names, r.Name)
 	}
 	res := Compile(models, nil, rules, route, names...)
-	conds := CompileRouters(routers, models, &res, route, nil)
-	return res, conds
+	conds, cfg := CompileRouters(routers, models, &res, route, nil, ci)
+	return res, conds, cfg
 }
 
 var (
@@ -110,7 +116,7 @@ func TestUnpricedTargetFallsThrough(t *testing.T) {
 	names := []string{"auto"}
 	res := Compile(catalog, nil, grants, route, names...)
 	RefuseUnpriced(&res, catalog, map[string]v1.ModelPrice{"google/gemma": {}, "google/pro": {}}, []string{"ml"})
-	CompileRouters([]v1.ModelRouter{router("auto", "Rules", "gemma", v1.RouterRoute{Model: "sonnet", Keywords: []string{"x"}})}, catalog, &res, route, nil)
+	CompileRouters([]v1.ModelRouter{router("auto", "Rules", "gemma", v1.RouterRoute{Model: "sonnet", Keywords: []string{"x"}})}, catalog, &res, route, nil, ClassifierInput{})
 	w := targets(t, byName(res.Objects)["router-auto"])[0][0]
 	if !strings.HasSuffix(w, `(`+`(`+mlCEL+`) && !jwt.groups.exists(g, g in ["ml"])`+`)`) {
 		t.Fatalf("unpriced refusal missing from the line: %s", w)
@@ -226,7 +232,7 @@ func TestDefaultNotAllowedCountsUnpricedRefusal(t *testing.T) {
 	rules := []v1.AccessRule{rule("ml-auto", []string{"ml"}, false, "auto"), rule("ml-sonnet", []string{"ml"}, false, "sonnet")}
 	res := Compile(catalog, nil, rules, route, "auto")
 	refused := RefuseUnpriced(&res, catalog, map[string]v1.ModelPrice{"google/gemma": {}, "google/pro": {}}, []string{"ml"})
-	conds := CompileRouters([]v1.ModelRouter{router("auto", "None", "sonnet")}, catalog, &res, route, refused)
+	conds, _ := CompileRouters([]v1.ModelRouter{router("auto", "None", "sonnet")}, catalog, &res, route, refused, ClassifierInput{})
 	if conds["auto"].Reason != "DefaultNotAllowed" {
 		t.Fatalf("got %s", conds["auto"].Reason)
 	}
@@ -239,5 +245,83 @@ func TestRouterWarningsAreAllShown(t *testing.T) {
 	c := conds["auto"]
 	if c.Reason != "UnknownModel" || !strings.Contains(c.Message, "missing") || !strings.Contains(c.Message, "no group may use both") {
 		t.Fatalf("got %s: %s", c.Reason, c.Message)
+	}
+}
+
+var local = v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "local", Namespace: "ambit-system"},
+	Spec: v1.ModelSpec{Provider: "OpenAI", Model: "qwen3-0.6b", BaseURL: "http://vllm:8000/v1", CredentialsRef: v1.SecretRef{Name: "ambit-llm-local"}}}
+var installed = ClassifierInput{Installed: true, HasKey: map[string]bool{"local": true}}
+
+func llmRouter(name string, cats ...string) v1.ModelRouter {
+	r := router(name, "LLM", "gemma", v1.RouterRoute{Model: "sonnet", Category: cats[0]}, v1.RouterRoute{Model: "sonnet", Keywords: []string{"python"}})
+	r.Spec.Classifier.LLM = &v1.RouterLLM{Model: "local"}
+	for _, c := range cats {
+		r.Spec.Classifier.Categories = append(r.Spec.Classifier.Categories, v1.RouterCategory{Name: c, Description: c + " prompts"})
+	}
+	return r
+}
+
+func TestLLMRouterCategoryLine(t *testing.T) {
+	models := append(slices.Clone(catalog), local)
+	res, conds, cfg := compileLLM(models, grants, installed, llmRouter("auto", "coding"))
+	if conds["auto"].Status != metav1.ConditionTrue {
+		t.Fatalf("%v", conds["auto"])
+	}
+	if len(cfg.Routers) != 1 {
+		t.Fatalf("config %+v", cfg)
+	}
+	r := cfg.Routers[0]
+	if cfg.Hash != routerconfig.HashOf(cfg.Routers) || r.LLM.Endpoint != "http://vllm:8000/v1" || r.LLM.Model != "qwen3-0.6b" ||
+		r.LLM.CredentialKey != "local" || r.TimeoutMillis != 1500 || r.MaxBytes != 8000 || r.RatePerMinute != 600 || !slices.Equal(r.Groups, []string{"eng", "ml"}) {
+		t.Fatalf("config %+v", cfg)
+	}
+	ts := targets(t, byName(res.Objects)["router-auto"])
+	want := `request.headers["x-ambit-config"] == "` + cfg.Hash + `" && request.headers["x-ambit-route"] == "coding"`
+	if len(ts) != 3 || !strings.Contains(ts[0][0], want) || strings.Contains(ts[1][0], "x-ambit") || ts[2][1] != "gemma" {
+		t.Fatalf("lines %q", ts)
+	}
+}
+
+func TestLLMRouterValidation(t *testing.T) {
+	anthropic := model("claude", "anthropic/claude-x")
+	anthropic.Spec.Provider = "Anthropic"
+	withAnthropic := llmRouter("auto", "coding")
+	withAnthropic.Spec.Classifier.LLM.Model = "claude"
+	undeclared := llmRouter("auto", "coding")
+	undeclared.Spec.Routes[0].Category = "maths"
+	base := append(slices.Clone(catalog), local)
+	for name, tc := range map[string]struct {
+		r      v1.ModelRouter
+		models []v1.Model
+		ci     ClassifierInput
+		reason string
+		inCfg  bool
+	}{
+		"missing classifier model": {llmRouter("auto", "coding"), catalog, installed, "ClassifierModelInvalid", false},
+		"no openai endpoint":       {withAnthropic, append(slices.Clone(base), anthropic), ClassifierInput{Installed: true, HasKey: map[string]bool{"claude": true}}, "ClassifierModelInvalid", false},
+		"key secret missing":       {llmRouter("auto", "coding"), base, ClassifierInput{Installed: true}, "ClassifierModelInvalid", false},
+		"category not declared":    {undeclared, base, installed, "UnknownCategory", true},
+		"not installed":            {llmRouter("auto", "coding"), base, ClassifierInput{}, "ClassifierNotInstalled", false},
+	} {
+		res, conds, cfg := compileLLM(tc.models, grants, tc.ci, tc.r)
+		if conds["auto"].Reason != tc.reason || (len(cfg.Routers) == 1) != tc.inCfg {
+			t.Errorf("%s: %s %s; configured=%v", name, conds["auto"].Reason, conds["auto"].Message, len(cfg.Routers) == 1)
+		}
+		if tc.reason == "ClassifierNotInstalled" { // served, category routes ignored
+			if ts := targets(t, byName(res.Objects)["router-auto"]); len(ts) != 2 {
+				t.Errorf("not installed: keyword line and default only, got %q", ts)
+			}
+		}
+	}
+}
+
+func TestCategoryConflict(t *testing.T) {
+	a, b := llmRouter("a", "coding"), llmRouter("b", "coding")
+	b.Spec.Model = "auto-b"
+	b.Spec.Classifier.Categories[0].Description = "something else"
+	ab := append(slices.Clone(grants), rule("ab-users", []string{"eng"}, false, "a", "b")) // routers need users, or DefaultNotAllowed
+	_, conds, cfg := compileLLM(append(slices.Clone(catalog), local), ab, installed, a, b)
+	if conds["b"].Reason != "CategoryConflict" || conds["a"].Status != metav1.ConditionTrue || len(cfg.Routers) != 1 {
+		t.Fatalf("a=%v b=%v", conds["a"], conds["b"])
 	}
 }

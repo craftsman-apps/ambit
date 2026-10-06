@@ -57,7 +57,7 @@ type PresetView struct {
 	ClientSecretLabel string                `json:"clientSecretLabel"`
 	Requires          string                `json:"requires,omitempty"`
 	Preview           bool                  `json:"preview"`
-	Revokes           bool                  `json:"revokes"`
+	Revokes           bool                  `json:"revokes"` // a revocation URL is set; Ambit learns whether it works only at offboarding
 	TestedOn          string                `json:"testedOn,omitempty"`
 	Docs              string                `json:"docs"`
 }

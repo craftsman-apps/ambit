@@ -82,7 +82,7 @@ function SetupForm({ p, onAdded }: { p: PresetView; onAdded: (app: string) => vo
           </div>
         </details>
         <p className={p.revokes ? "" : "text-warn"}>
-          {p.revokes ? `When someone leaves, Ambit revokes their access at ${p.displayName}.`
+          {p.revokes ? `When someone leaves, Ambit asks ${p.displayName} to revoke their access. If ${p.displayName} does not confirm it, the Offboarding page shows the error.`
             : `${p.displayName} offers no way to revoke a user's access. Ambit deletes its copy; access ends when the token expires.`}
         </p>
         <p className="text-[12px] text-muted">The secret goes straight into a Kubernetes Secret. It is never shown again and never goes to Git.</p>

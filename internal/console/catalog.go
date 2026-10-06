@@ -49,6 +49,8 @@ type Catalog struct {
 	Dependencies *Dependencies
 	// Prices suggests model prices (LiteLLM's list); nil offers no suggestions.
 	Prices *PriceSource
+	// Tools reads per-user servers' tools with one consenting admin's grant; nil without Conns.
+	Tools *ToolReader
 }
 
 // Config tells the console UI how changes are applied.
@@ -210,6 +212,24 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 			}
 			h(w, r, s)
 		})
+	}
+	if c.Tools != nil {
+		mux.HandleFunc("PUT /api/servers/{name}/tool-reader", allow("only admins can choose a tool reader", func(w http.ResponseWriter, r *http.Request, s Session) {
+			if err := c.Tools.SetReader(r.Context(), s.Email, r.PathValue("name")); err != nil {
+				writeErr(w, http.StatusBadRequest, err.Error())
+				return
+			}
+			slog.Info("tool reader set", "server", r.PathValue("name"), "reader", s.Email)
+			w.WriteHeader(http.StatusNoContent)
+		}, RoleAdmin))
+		mux.HandleFunc("DELETE /api/servers/{name}/tool-reader", allow("only admins can clear a tool reader", func(w http.ResponseWriter, r *http.Request, s Session) {
+			if err := c.Tools.ClearReader(r.Context(), r.PathValue("name")); err != nil {
+				serverErr(w, err)
+				return
+			}
+			slog.Info("tool reader cleared", "server", r.PathValue("name"), "by", s.Email)
+			w.WriteHeader(http.StatusNoContent)
+		}, RoleAdmin))
 	}
 	if c.Audit != nil {
 		c.Audit.register(mux, admin)

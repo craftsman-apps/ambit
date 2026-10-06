@@ -15,6 +15,7 @@ import (
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/console"
+	"github.com/craftsman-apps/ambit/internal/controller"
 	"github.com/craftsman-apps/ambit/internal/pricing"
 	"github.com/craftsman-apps/ambit/web"
 	"github.com/dexidp/dex/api/v2"
@@ -142,6 +143,7 @@ func run(ctx context.Context) error {
 	}
 
 	var conns *console.Connections
+	var reader *console.ToolReader
 	if gns := os.Getenv("AMBIT_GRANTS_NAMESPACE"); gns != "" {
 		conns = &console.Connections{Client: objects, Namespace: ns, PublicURL: publicURL, Codec: console.Codec{Key: keys.SessionKey},
 			Store: &console.GrantStore{Client: objects, Namespace: gns, Key: keys.GrantKey}}
@@ -156,6 +158,14 @@ func run(ctx context.Context) error {
 			}()
 			go func() { <-ctx.Done(); bsrv.Close() }()
 			slog.Info("token broker ready", "grants", gns)
+			reader = &console.ToolReader{Conns: conns, Namespace: ns, List: controller.ListToolsAt, TTL: 10 * time.Minute}
+			tsrv := &http.Server{Addr: ":8083", Handler: reader.Handler(), ReadHeaderTimeout: 10 * time.Second}
+			go func() {
+				if err := tsrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+					slog.Error("tools listener stopped", "err", err)
+				}
+			}()
+			go func() { <-ctx.Done(); tsrv.Close() }()
 		}
 	}
 	gitops, err := gitopsFromEnv()
@@ -209,7 +219,7 @@ func run(ctx context.Context) error {
 		RatelimitMode: os.Getenv("AMBIT_RATELIMIT_FAILURE_MODE"), Protection: os.Getenv("AMBIT_PROTECTION") == "true",
 		XDSAddr: os.Getenv("AMBIT_XDS_ADDR")}
 	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), console.LoginOptions{Bootstrap: bootstrapAdmin, SSO: sso},
-		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, Budgets: budgets, Dependencies: deps, Prices: prices}), ReadHeaderTimeout: 10 * time.Second}
+		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, Budgets: budgets, Dependencies: deps, Prices: prices, Tools: reader}), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)

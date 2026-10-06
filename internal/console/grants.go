@@ -34,6 +34,9 @@ type Grant struct {
 	Error       string    `json:"error,omitempty"`
 	ConnectedAt time.Time `json:"connectedAt"`
 	CheckedAt   time.Time `json:"checkedAt"`
+	// ToolReaderFor lists the Servers (by UID) whose tools this user agreed to have read with this grant.
+	// A new grant (reconnect) starts empty, which ends the consent.
+	ToolReaderFor []string `json:"toolReaderFor,omitempty"`
 }
 
 const (

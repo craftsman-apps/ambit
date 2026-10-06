@@ -167,3 +167,4 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | asana | Asana | mcp.asana.com | yes |  | not yet |
 | monday | monday.com | mcp.monday.com | yes |  | not yet |
 | airtable | Airtable | mcp.airtable.com | no |  | not yet |
+| box | Box | mcp.box.com | yes |  | not yet |

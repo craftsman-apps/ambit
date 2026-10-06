@@ -106,3 +106,23 @@
   clientSecretLabel: Client secret
   docs: https://airtable.com/developers/web/guides/oauth-integrations
   live: { tool: list_bases }
+- id: box
+  version: 1
+  displayName: Box
+  category: Files
+  server: { url: "https://mcp.box.com", transport: streamable-http }
+  authorizationURL: https://account.box.com/api/oauth2/authorize
+  tokenURL: https://api.box.com/oauth2/token
+  revocationURL: https://api.box.com/oauth2/revoke
+  resource: none
+  scopes: [root_readwrite, ai.readwrite]
+  setup: |
+    1. Sign in to the Box Admin Console as an admin and open Integrations.
+    2. Search for "Box MCP server" and click Configure to create an unlisted MCP server integration.
+    3. Add the integration credentials. Enter {callbackURL} as the Redirect URI.
+    4. Save, then copy the generated Client ID and Client Secret.
+    5. The scopes used are root_readwrite and ai.readwrite.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client Secret
+  docs: https://developer.box.com/guides/box-mcp/remote/
+  live: { tool: who_am_i }

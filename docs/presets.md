@@ -166,3 +166,4 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | linear | Linear | mcp.linear.app | yes |  | not yet |
 | asana | Asana | mcp.asana.com | yes |  | not yet |
 | monday | monday.com | mcp.monday.com | yes |  | not yet |
+| airtable | Airtable | mcp.airtable.com | no |  | not yet |

@@ -85,3 +85,24 @@
   clientSecretLabel: Client Secret
   docs: https://developer.monday.com/api-reference/docs/control-mcp-access-with-oauth-app
   live: { tool: get_user_context }
+- id: airtable
+  version: 1
+  displayName: Airtable
+  category: Data
+  server: { url: "https://mcp.airtable.com/mcp", transport: streamable-http }
+  authorizationURL: https://airtable.com/oauth2/v1/authorize
+  tokenURL: https://airtable.com/oauth2/v1/token
+  resource: https://mcp.airtable.com
+  scopes: ["data.records:read", "data.records:write", "schema.bases:read"]
+  setup: |
+    1. Sign in to Airtable and open https://airtable.com/create/oauth.
+    2. Click "Register new OAuth integration".
+    3. Enter a unique integration name and add {callbackURL} as the redirect URL.
+    4. Select the scopes data.records:read, data.records:write and schema.bases:read.
+    5. Add a support email, a privacy policy URL and a terms of service URL, then click "Register integration".
+    6. On the integration page, click "Generate client secret" and copy it at once; it cannot be shown again.
+    7. Copy the Client ID from the same page.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://airtable.com/developers/web/guides/oauth-integrations
+  live: { tool: list_bases }

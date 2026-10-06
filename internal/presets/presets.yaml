@@ -64,3 +64,24 @@
   clientSecretLabel: Client secret
   docs: https://developers.asana.com/docs/integrating-with-asanas-mcp-server
   live: { tool: get_me, callback: https }
+- id: monday
+  version: 1
+  displayName: monday.com
+  category: Projects
+  server: { url: "https://mcp.monday.com/mcp", transport: streamable-http }
+  authorizationURL: https://auth.monday.com/oauth2/authorize
+  tokenURL: https://auth.monday.com/oauth_ms/oauth/token
+  revocationURL: https://auth.monday.com/oauth_ms/oauth/revoke
+  resource: none
+  scopes: ["me:read", "boards:read", "workspaces:read", "users:read", "docs:read", "updates:read"]
+  setup: |
+    1. Sign in to monday.com as an admin and open the Developer Center (profile picture, then Developers).
+    2. Click "Create app" and enter an app name.
+    3. Open "OAuth" (OAuth & Permissions) in the app's left menu. Add {callbackURL} as a redirect URL.
+    4. In the same page, select the scopes: me:read, boards:read, workspaces:read, users:read, docs:read, updates:read.
+    5. Open "General Settings" and scroll to "App Credentials". Copy the Client ID and the Client Secret.
+    6. Make sure the app uses the current OAuth 2.1 flow (not the older flow); see the migration guide in the documentation.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client Secret
+  docs: https://developer.monday.com/api-reference/docs/control-mcp-access-with-oauth-app
+  live: { tool: get_user_context }

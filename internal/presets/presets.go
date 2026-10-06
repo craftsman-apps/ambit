@@ -58,9 +58,12 @@ type Preset struct {
 	Preview            bool              `json:"preview,omitempty"`
 	Docs               string            `json:"docs"`
 	Live               Live              `json:"live"`
-	Verified           bool              `json:"verified,omitempty"`
-	VerifiedOn         string            `json:"verifiedOn,omitempty"` // date of the passing live run; excluded from Hash like Verified
-	Testing            bool              `json:"-"`                    // set only by LoadTesting: plain http to *.svc, *.localtest.me, localhost
+	Contract           struct {
+		Unauthenticated []int `json:"unauthenticated,omitempty"` // HTTP statuses the server may answer without a token; default [401]
+	} `json:"contract,omitempty"`
+	Verified   bool   `json:"verified,omitempty"`
+	VerifiedOn string `json:"verifiedOn,omitempty"` // date of the passing live run; excluded from Hash like Verified
+	Testing    bool   `json:"-"`                    // set only by LoadTesting: plain http to *.svc, *.localtest.me, localhost
 }
 
 type ServerRef struct {

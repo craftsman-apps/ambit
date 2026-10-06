@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -23,6 +24,10 @@ func main() {
 		base := fs.String("base", "origin/main", "git ref of the base branch")
 		fs.Parse(os.Args[2:])
 		err = lockcheck(*base)
+	case "contract":
+		jsonOut := fs.String("json", "", "write {id: [problems]} to this file")
+		fs.Parse(os.Args[2:])
+		err = contract(context.Background(), *jsonOut, fs.Args())
 	default:
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}

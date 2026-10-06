@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"strings"
 	"testing"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
@@ -62,5 +63,44 @@ func TestCostIsExactAndRoundsUp(t *testing.T) {
 		if got := evalCost(t, p, c.model, c.in, c.out); got != c.want {
 			t.Errorf("%s in=%d out=%d: cost %d units, want %d", c.model, c.in, c.out, got, c.want)
 		}
+	}
+}
+
+// agentgateway removes the field when a transformation fails, so the usage condition must be false, never an
+// error: a token without a groups claim (or a request without "stream") would otherwise lose the client's own
+// stream_options (final review, 2026-10-06).
+func TestUsageConditionNeverFails(t *testing.T) {
+	env, err := cel.NewEnv(cel.Variable("request", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("llmRequest", cel.MapType(cel.StringType, cel.DynType)), cel.Variable("jwt", cel.MapType(cel.StringType, cel.DynType)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ast, iss := env.Compile(usageCondition([]string{"ml-research"}))
+	if iss.Err() != nil {
+		t.Fatal(iss.Err())
+	}
+	prg, _ := env.Program(ast)
+	chat := map[string]any{"path": "/v1/chat/completions"}
+	for name, c := range map[string]struct {
+		llm, jwt map[string]any
+		want     bool
+	}{
+		"capped stream":   {map[string]any{"stream": true}, map[string]any{"groups": []any{"ml-research"}}, true},
+		"other group":     {map[string]any{"stream": true}, map[string]any{"groups": []any{"eng"}}, false},
+		"no groups claim": {map[string]any{"stream": true}, map[string]any{"sub": "x"}, false},
+		"no stream field": {map[string]any{}, map[string]any{"groups": []any{"ml-research"}}, false},
+		"stream false":    {map[string]any{"stream": false}, map[string]any{"groups": []any{"ml-research"}}, false},
+	} {
+		v, _, err := prg.Eval(map[string]any{"request": chat, "llmRequest": c.llm, "jwt": c.jwt})
+		if err != nil {
+			t.Errorf("%s: condition failed (the client's stream_options would be removed): %v", name, err)
+			continue
+		}
+		if v.Value() != c.want {
+			t.Errorf("%s: %v, want %v", name, v.Value(), c.want)
+		}
+	}
+	if !strings.HasPrefix(usageField([]string{"ml-research"}), usageCondition([]string{"ml-research"})+" ? ") {
+		t.Fatal("usageField does not use usageCondition")
 	}
 }

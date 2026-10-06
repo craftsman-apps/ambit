@@ -38,7 +38,7 @@ func compileWithRouters(models []v1.Model, rules []v1.AccessRule, routers ...v1.
 		names = append(names, r.Name)
 	}
 	res := Compile(models, nil, rules, route, names...)
-	conds := CompileRouters(routers, models, &res, route)
+	conds := CompileRouters(routers, models, &res, route, nil)
 	return res, conds
 }
 
@@ -110,7 +110,7 @@ func TestUnpricedTargetFallsThrough(t *testing.T) {
 	names := []string{"auto"}
 	res := Compile(catalog, nil, grants, route, names...)
 	RefuseUnpriced(&res, catalog, map[string]v1.ModelPrice{"google/gemma": {}, "google/pro": {}}, []string{"ml"})
-	CompileRouters([]v1.ModelRouter{router("auto", "Rules", "gemma", v1.RouterRoute{Model: "sonnet", Keywords: []string{"x"}})}, catalog, &res, route)
+	CompileRouters([]v1.ModelRouter{router("auto", "Rules", "gemma", v1.RouterRoute{Model: "sonnet", Keywords: []string{"x"}})}, catalog, &res, route, nil)
 	w := targets(t, byName(res.Objects)["router-auto"])[0][0]
 	if !strings.HasSuffix(w, `(`+`(`+mlCEL+`) && !jwt.groups.exists(g, g in ["ml"])`+`)`) {
 		t.Fatalf("unpriced refusal missing from the line: %s", w)
@@ -203,5 +203,41 @@ func TestDefaultNotAllowed(t *testing.T) {
 	res, conds := compileWithRouters(catalog, rules, router("auto", "None", "sonnet"))
 	if conds["auto"].Reason != "DefaultNotAllowed" || byName(res.Objects)["router-auto"] == nil {
 		t.Fatalf("got %s", conds["auto"].Reason)
+	}
+}
+
+// A Model with the router's object name would share its AccessRules (rules name objects): a grant meant for the
+// router would also open the Model directly. The router is refused instead (final review, 2026-10-06).
+func TestModelWithRouterObjectNameIsNameTaken(t *testing.T) {
+	r := router("auto", "None", "gemma")
+	r.Spec.Model = "smart"
+	res, conds := compileWithRouters(append(slices.Clone(catalog), model("auto", "meta/llama")), grants, r)
+	if conds["auto"].Reason != "NameTaken" || !strings.Contains(conds["auto"].Message, "AccessRules") {
+		t.Fatalf("got %s: %s", conds["auto"].Reason, conds["auto"].Message)
+	}
+	if o := byName(res.Objects)["router-auto"]; o != nil {
+		t.Fatal("router served although a Model has its object name")
+	}
+}
+
+// The default's final access includes the unpriced refusal: when every group that may use the router is
+// refused the default (unpriced, dollar-capped), every unmatched request gets 400 (final review, 2026-10-06).
+func TestDefaultNotAllowedCountsUnpricedRefusal(t *testing.T) {
+	rules := []v1.AccessRule{rule("ml-auto", []string{"ml"}, false, "auto"), rule("ml-sonnet", []string{"ml"}, false, "sonnet")}
+	res := Compile(catalog, nil, rules, route, "auto")
+	refused := RefuseUnpriced(&res, catalog, map[string]v1.ModelPrice{"google/gemma": {}, "google/pro": {}}, []string{"ml"})
+	conds := CompileRouters([]v1.ModelRouter{router("auto", "None", "sonnet")}, catalog, &res, route, refused)
+	if conds["auto"].Reason != "DefaultNotAllowed" {
+		t.Fatalf("got %s", conds["auto"].Reason)
+	}
+}
+
+// Several warnings: the first sets the reason, the message names all of them.
+func TestRouterWarningsAreAllShown(t *testing.T) {
+	rules := []v1.AccessRule{rule("auto-users", []string{"eng"}, false, "auto"), rule("ml-sonnet", []string{"ml"}, false, "sonnet")}
+	_, conds := compileWithRouters(catalog, rules, router("auto", "Rules", "sonnet", v1.RouterRoute{Model: "missing", Keywords: []string{"x"}}))
+	c := conds["auto"]
+	if c.Reason != "UnknownModel" || !strings.Contains(c.Message, "missing") || !strings.Contains(c.Message, "no group may use both") {
+		t.Fatalf("got %s: %s", c.Reason, c.Message)
 	}
 }

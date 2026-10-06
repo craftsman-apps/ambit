@@ -30,7 +30,8 @@ func routerObjectName(name string) string { return "router-" + name }
 
 // CompileRouters adds one virtual AgentgatewayModel per valid router to res.Objects and returns each router's
 // Ready condition. Call it after RefuseUnpriced: each line repeats its target's final access expression.
-func CompileRouters(routers []v1.ModelRouter, models []v1.Model, res *Result, route RouteRef) map[string]metav1.Condition {
+// refused is RefuseUnpriced's result: the groups each unpriced Model is refused to (nil when budgets are off).
+func CompileRouters(routers []v1.ModelRouter, models []v1.Model, res *Result, route RouteRef, refused map[string][]string) map[string]metav1.Condition {
 	conds := map[string]metav1.Condition{}
 	byObject := map[string]v1.Model{}
 	for _, m := range models {
@@ -98,14 +99,20 @@ func CompileRouters(routers []v1.ModelRouter, models []v1.Model, res *Result, ro
 			"modelRef": map[string]any{"name": r.Spec.Default},
 		})
 		res.Objects = append(res.Objects, virtualModel(r, wire, lines, route))
+		// Warnings: the router is served; the first sets the reason and the message names every one.
+		var reasons, msgs []string
+		if len(missing) > 0 {
+			reasons, msgs = append(reasons, "UnknownModel"), append(msgs, "no Model named "+strings.Join(missing, ", ")+"; those routes are dropped, the rest is applied")
+		}
+		if needsClassifier {
+			reasons, msgs = append(reasons, "CategoryNeedsClassifier"), append(msgs, "routes with a category need a classifier (type VSR or LLM); they are ignored, the rest is applied")
+		}
+		if !mayShare(res.Access[r.Name], res.Access[r.Spec.Default], refused[r.Spec.Default]) {
+			reasons, msgs = append(reasons, "DefaultNotAllowed"), append(msgs, "no group may use both this router and its default "+r.Spec.Default+"; its users get 400 whenever no route they may use matches")
+		}
 		c := cond(metav1.ConditionTrue, "Compiled", fmt.Sprintf("%d routes and the default, served as %q", len(kept), wire))
-		switch {
-		case len(missing) > 0:
-			c = cond(metav1.ConditionFalse, "UnknownModel", "no Model named "+strings.Join(missing, ", ")+"; those routes are dropped, the rest is applied")
-		case needsClassifier:
-			c = cond(metav1.ConditionFalse, "CategoryNeedsClassifier", "routes with a category need a classifier (type VSR or LLM); they are ignored, the rest is applied")
-		case !mayShare(res.Access[r.Name], res.Access[r.Spec.Default]):
-			c = cond(metav1.ConditionFalse, "DefaultNotAllowed", "no group may use both this router and its default "+r.Spec.Default+"; its users get 400 whenever no route they may use matches")
+		if len(reasons) > 0 {
+			c = cond(metav1.ConditionFalse, reasons[0], strings.Join(msgs, "; "))
 		}
 		conds[r.Name] = c
 	}
@@ -115,6 +122,9 @@ func CompileRouters(routers []v1.ModelRouter, models []v1.Model, res *Result, ro
 func nameTaken(r v1.ModelRouter, wire string, models []v1.Model, taken map[string]string, byObject map[string]v1.Model) string {
 	if other, ok := taken[wire]; ok {
 		return "ModelRouter " + other + " already serves " + wire
+	}
+	if _, ok := byObject[r.Name]; ok { // AccessRules name objects: one grant would open both
+		return "a Model is also named " + r.Name + ", so AccessRules could not tell them apart; rename one"
 	}
 	if _, ok := byObject[routerObjectName(r.Name)]; ok {
 		return "a Model is named " + routerObjectName(r.Name) + ", the name of this router's generated object; rename one"
@@ -194,12 +204,29 @@ func routeCondition(rt v1.RouterRoute) string {
 }
 
 // mayShare reports whether some signed-in user may use both a and b.
-func mayShare(a, b Access) bool {
-	if (a.AllSignedIn && (b.AllSignedIn || len(b.Groups) > 0)) || (b.AllSignedIn && len(a.Groups) > 0) {
-		return true
+// mayShare reports whether some signed-in user may use both a and b, where members of the groups in refusedB
+// are refused b (an unpriced default for dollar-capped groups).
+func mayShare(a, b Access, refusedB []string) bool {
+	open := func(gs []string) []string {
+		var out []string
+		for _, g := range gs {
+			if !slices.Contains(refusedB, g) {
+				out = append(out, g)
+			}
+		}
+		return out
 	}
-	for _, g := range a.Groups {
-		if slices.Contains(b.Groups, g) {
+	aGroups, bGroups := open(a.Groups), open(b.Groups)
+	switch {
+	case a.AllSignedIn && b.AllSignedIn:
+		return true
+	case a.AllSignedIn:
+		return len(bGroups) > 0
+	case b.AllSignedIn:
+		return len(aGroups) > 0
+	}
+	for _, g := range aGroups {
+		if slices.Contains(bGroups, g) {
 			return true
 		}
 	}

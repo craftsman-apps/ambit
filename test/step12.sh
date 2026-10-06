@@ -33,8 +33,26 @@ pass "1 Rules: keywords (any case), length in bytes, default; multi-part content
 
 # 4 · Access
 [[ "$(answered "$A" "$(msg 'python')")" == "200 mock/unpriced" ]] || fail "4 alice may not use mock-echo → default, not an error: $(cat "$W/r")"
-[[ "$(answered "$S" "$(msg 'python')" | cut -d' ' -f1)" == 400 ]] || fail "4 sam may not use the router → 400: $(cat "$W/r")"
-pass "4 access: a user who may not use a route's model gets the default; a user who may not use the router gets 400"
+[[ "$(answered "$S" "$(msg 'python')" | cut -d' ' -f1)" == 400 ]] && grep -q virtual_model_no_matching_target "$W/r" || fail "4 sam may not use the router → 400 virtual_model_no_matching_target: $(cat "$W/r")"
+# a router alice may use whose default she may not (mock-free is ml-research only), and no route matches: 400
+kubectl -n "$NS" apply -f - >/dev/null <<YAML
+apiVersion: ambitproject.dev/v1alpha1
+kind: ModelRouter
+metadata: { name: auto-ml }
+spec: { default: mock-free }
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: AccessRule
+metadata: { name: router-users-ml }
+spec: { groups: [eng], models: [auto-ml] }
+YAML
+for _ in $(seq 1 30); do [[ "$(kubectl -n "$NS" get modelrouters.ambitproject.dev auto-ml -o jsonpath='{.status.conditions[0].reason}')" == DefaultNotAllowed ]] && break; sleep 2; done
+reason=$(kubectl -n "$NS" get modelrouters.ambitproject.dev auto-ml -o jsonpath='{.status.conditions[0].reason}')
+sleep 5
+code=$(answered "$A" '{"model":"auto-ml","messages":[{"role":"user","content":"hi"}]}' | cut -d' ' -f1)
+kubectl -n "$NS" delete modelrouters.ambitproject.dev auto-ml >/dev/null; kubectl -n "$NS" delete accessrules.ambitproject.dev router-users-ml >/dev/null
+[[ "$code" == 400 && "$reason" == DefaultNotAllowed ]] && grep -q virtual_model_no_matching_target "$W/r" || fail "4 alice, router allowed, default not: $code, reason $reason, $(cat "$W/r")"
+pass "4 access: a user who may not use a route's model gets the default; a user who may not use the router, or may use it but not its default, gets 400 virtual_model_no_matching_target (the router reports DefaultNotAllowed)"
 
 # 5 · a client cannot send the routing label: the Gateway removes it before anything reads it
 [[ "$(answered "$M" "$(msg 'hello')" "" 'x-ambit-route: coding')" == "200 mock/unpriced" ]] && ! grep -q 'x-ambit-route=' "$W/r" || fail "5 x-ambit-route reached the provider: $(cat "$W/r")"

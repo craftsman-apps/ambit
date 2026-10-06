@@ -65,7 +65,7 @@ token counts. The Audit page shows routed calls as `auto → claude-sonnet`, and
 | Reason | Meaning | What happens |
 |---|---|---|
 | `Accepted` | the gateway serves the router | — |
-| `NameTaken` | a Model (exactly or by a wildcard such as `gpt-*`) or another router already serves this name, or a Model is named `router-<name>` | the router is not served; rename one |
+| `NameTaken` | a Model (exactly or by a wildcard such as `gpt-*`) or another router already serves this name, or a Model has the same object name as the router (AccessRules could not tell them apart), or a Model is named `router-<name>` | the router is not served; rename one |
 | `UnknownDefault` | no Model with the default's name | the router is not served |
 | `AmbiguousTarget` | a route's Model serves a wildcard, or another Model serves the same name | the router is not served |
 | `TooManyRoutes` | more than 16 routes or 32 keywords | the router is not served |

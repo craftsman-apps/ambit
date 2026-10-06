@@ -96,17 +96,25 @@ func costCEL(prices map[string]v1.ModelPrice) string {
 const UsagePolicyName = "ambit-llm-usage"
 
 // usageField is the expression for stream_options: for a streamed chat request from a member of a dollar-capped
-// group it sets include_usage to true (other stream options are kept); otherwise it keeps the field as sent (an
-// expression that fails because the field is absent leaves it unset). Without token counts the answer would cost
-// nothing. It reads llmRequest, the body the provider will get.
+// group it sets include_usage to true (other stream options are kept); otherwise it keeps the field as sent.
+// Without token counts the answer would cost nothing. It reads llmRequest, the body the provider will get.
+// agentgateway removes the field when the expression fails: that is harmless when the client sent no
+// stream_options, and usageCondition never fails, so a client's own stream_options are never lost.
 func usageField(groups []string) string {
+	return usageCondition(groups) + ` ? ` +
+		`(has(llmRequest.stream_options) ? llmRequest.stream_options.merge({"include_usage": true}) : {"include_usage": true}) : ` +
+		`llmRequest.stream_options`
+}
+
+// usageCondition: a streamed chat request from a member of a dollar-capped group. It is false, never an error,
+// for a token without a groups claim or a request without "stream".
+func usageCondition(groups []string) string {
 	q := make([]string, len(groups))
 	for i, g := range groups {
 		q[i] = strconv.Quote(g)
 	}
-	return `request.path == "/v1/chat/completions" && llmRequest.stream == true && jwt.groups.exists(g, g in [` + strings.Join(q, ", ") + `]) ? ` +
-		`(has(llmRequest.stream_options) ? llmRequest.stream_options.merge({"include_usage": true}) : {"include_usage": true}) : ` +
-		`llmRequest.stream_options`
+	return `request.path == "/v1/chat/completions" && has(llmRequest.stream) && llmRequest.stream == true && ` +
+		`has(jwt.groups) && jwt.groups.exists(g, g in [` + strings.Join(q, ", ") + `])`
 }
 
 // defaultRouteTypes is agentgateway v1.5.0's default_route_types (crates/agentgateway/src/llm/model_router.rs).

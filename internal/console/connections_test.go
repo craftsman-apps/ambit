@@ -386,3 +386,34 @@ func TestCallbackRefusesChangedGeneration(t *testing.T) {
 		t.Fatalf("callback after edit: %d %s", rec.Code, rec.Body)
 	}
 }
+
+func TestGrantForOldResourceIsBroken(t *testing.T) {
+	saas := newFakeSaaS(t)
+	conns, c := connFixture(t, saas)
+	connect(t, conns, testAuthOnly(), "alice@acme.test", "alice") // grant issued with no resource
+	var conn v1.Connection
+	_ = c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "jira"}, &conn)
+	conn.Spec.Resource = "https://mcp.other.test/mcp"
+	_ = c.Update(t.Context(), &conn)
+	tok, g, err := conns.Token(t.Context(), "alice@acme.test", "jira")
+	if err != nil || tok != "" || g == nil || g.State != grantBrokenState || !strings.Contains(g.Error, "app's server changed") {
+		t.Fatalf("token %q grant %+v err %v", tok, g, err)
+	}
+}
+
+// A vendor may ignore resource (or the preset sends none): the server URL alone must also invalidate old grants.
+func TestGrantForOldServerURLIsBroken(t *testing.T) {
+	saas := newFakeSaaS(t)
+	conns, c := connFixture(t, saas)
+	var conn v1.Connection
+	_ = c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "jira"}, &conn)
+	conn.Spec.ServerURL = "https://mcp.jira.test/mcp"
+	_ = c.Update(t.Context(), &conn)
+	connect(t, conns, testAuthOnly(), "alice@acme.test", "alice")
+	_ = c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "jira"}, &conn)
+	conn.Spec.ServerURL = "https://mcp.elsewhere.test/mcp" // resource unchanged (empty)
+	_ = c.Update(t.Context(), &conn)
+	if tok, g, _ := conns.Token(t.Context(), "alice@acme.test", "jira"); tok != "" || g.State != grantBrokenState {
+		t.Fatalf("old grant used for a new server URL: %q %+v", tok, g)
+	}
+}

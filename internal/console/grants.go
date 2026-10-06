@@ -26,6 +26,9 @@ type Grant struct {
 	AccessToken  string    `json:"accessToken"`
 	RefreshToken string    `json:"refreshToken,omitempty"`
 	Expiry       time.Time `json:"expiry"`
+	// Resource and ServerURL are what the tokens were issued for; empty for grants from before them.
+	Resource  string `json:"resource,omitempty"`
+	ServerURL string `json:"serverURL,omitempty"`
 	// State is "connected" or "broken" (a refresh failed; the user must reconnect).
 	State       string    `json:"state"`
 	Error       string    `json:"error,omitempty"`

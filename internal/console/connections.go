@@ -262,7 +262,8 @@ func (c *Connections) callback(w http.ResponseWriter, r *http.Request, s Session
 	}
 	now := c.now()
 	g := &Grant{Email: s.Email, Connection: conn.Name, AccessToken: tok.AccessToken, RefreshToken: tok.RefreshToken,
-		Expiry: tok.Expiry, State: grantConnectedState, ConnectedAt: now, CheckedAt: now}
+		Expiry: tok.Expiry, State: grantConnectedState, ConnectedAt: now, CheckedAt: now,
+		Resource: conn.Spec.Resource, ServerURL: conn.Spec.ServerURL}
 	if err := c.Store.Put(r.Context(), g); err != nil {
 		serverErr(w, err)
 		return
@@ -346,7 +347,8 @@ func (c *Connections) Token(ctx context.Context, email, connName string) (string
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	// A removed app hands out nothing, even while a stored token has not expired.
-	if _, err := c.connection(ctx, connName); apierrors.IsNotFound(err) {
+	conn, err := c.connection(ctx, connName)
+	if apierrors.IsNotFound(err) {
 		return "", nil, nil
 	} else if err != nil {
 		return "", nil, err
@@ -354,6 +356,10 @@ func (c *Connections) Token(ctx context.Context, email, connName string) (string
 	g, err := c.Store.Get(ctx, email, connName)
 	if err != nil || g == nil || g.State == grantBrokenState {
 		return "", g, err
+	}
+	if g.Resource != conn.Spec.Resource || g.ServerURL != conn.Spec.ServerURL {
+		g.State, g.Error = grantBrokenState, "the app's server changed; reconnect"
+		return "", g, c.Store.Put(ctx, g)
 	}
 	if g.Expiry.IsZero() || c.now().Add(time.Minute).Before(g.Expiry) {
 		return g.AccessToken, g, nil

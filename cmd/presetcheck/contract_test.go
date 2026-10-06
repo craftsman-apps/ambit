@@ -124,3 +124,74 @@ func TestContractHonoursDocumentedUnauthenticatedAnswer(t *testing.T) {
 		t.Fatal(probs)
 	}
 }
+
+// tenantVendor: the authorization server's issuer has a path, so RFC 8414 puts the metadata under
+// /.well-known/oauth-authorization-server/tenant.
+func tenantVendor(t *testing.T, issuerInMetadata string) (*httptest.Server, presets.Preset) {
+	var srv *httptest.Server
+	srv, p := vendor(t, func(path string, w http.ResponseWriter) bool {
+		switch path {
+		case "/.well-known/oauth-protected-resource/mcp":
+			w.Write([]byte(`{"authorization_servers":["` + srv.URL + `/tenant"]}`))
+		case "/.well-known/oauth-authorization-server/tenant":
+			iss := issuerInMetadata
+			if iss == "" {
+				iss = srv.URL + "/tenant"
+			}
+			w.Write([]byte(`{"issuer":"` + iss + `","authorization_endpoint":"` + srv.URL + `/authorize","token_endpoint":"` + srv.URL + `/token"}`))
+		default:
+			return false
+		}
+		return true
+	})
+	return srv, p
+}
+
+func TestContractIssuerWithPath(t *testing.T) {
+	srv, p := tenantVendor(t, "")
+	if probs := checkContract(t.Context(), srv.Client(), p, nil); len(probs) != 0 {
+		t.Fatal(probs)
+	}
+	srv, p = tenantVendor(t, "https://elsewhere.example.test/tenant")
+	if !strings.Contains(strings.Join(checkContract(t.Context(), srv.Client(), p, nil), "\n"), "issuer") {
+		t.Fatal("wrong issuer not reported")
+	}
+}
+
+func TestContractRefusesResourceMetadataOnAnotherHost(t *testing.T) {
+	var other int
+	otherSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { other++ }))
+	t.Cleanup(otherSrv.Close)
+	srv, p := vendor(t, func(path string, w http.ResponseWriter) bool {
+		if path == "/mcp" {
+			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+otherSrv.URL+`/prm"`)
+			w.WriteHeader(401)
+			return true
+		}
+		return false
+	})
+	probs := strings.Join(checkContract(t.Context(), srv.Client(), p, nil), "\n")
+	if !strings.Contains(probs, "another host") || other != 0 {
+		t.Fatalf("other host got %d requests; problems: %s", other, probs)
+	}
+}
+
+func TestContractRefusesRedirectToAnotherHost(t *testing.T) {
+	for _, redirected := range []string{"/mcp", "/token"} {
+		var other int
+		otherSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { other++ }))
+		t.Cleanup(otherSrv.Close)
+		srv, p := vendor(t, func(path string, w http.ResponseWriter) bool {
+			if path == redirected {
+				http.Redirect(w, &http.Request{}, otherSrv.URL+"/x", http.StatusTemporaryRedirect)
+				return true
+			}
+			return false
+		})
+		hc := srv.Client() // the test servers share one certificate, so this client trusts both
+		hc.CheckRedirect = contractClient().CheckRedirect
+		if len(checkContract(t.Context(), hc, p, nil)) == 0 || other != 0 {
+			t.Fatalf("%s: redirect not refused (other host got %d requests)", redirected, other)
+		}
+	}
+}

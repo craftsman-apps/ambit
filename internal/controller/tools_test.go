@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -131,14 +133,14 @@ func TestListToolsAtSendsBearerAndKeepsHints(t *testing.T) {
 // An SSE server may name its message endpoint by absolute URL; a hostile one could name another host.
 func TestBearerOnlyGoesToTheServersOwnHost(t *testing.T) {
 	var leaked string
-	hits := 0
-	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++; leaked = r.Header.Get("Authorization") }))
+	var hits atomic.Int32
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1); leaked = r.Header.Get("Authorization") }))
 	defer other.Close()
 	hc := BearerClient(nil, "http://mcp.vendor.test/sse", "secret-token")
 	req, _ := http.NewRequest("POST", other.URL+"/messages", nil)
 	_, _ = hc.Do(req)
-	if hits != 1 || leaked != "" {
-		t.Fatalf("other host: %d hits, Authorization %q", hits, leaked)
+	if hits.Load() != 1 || leaked != "" {
+		t.Fatalf("other host: %d hits, Authorization %q", hits.Load(), leaked)
 	}
 	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, other.URL, http.StatusFound) }))
 	defer redirect.Close()
@@ -146,7 +148,16 @@ func TestBearerOnlyGoesToTheServersOwnHost(t *testing.T) {
 	if resp, err := hc.Get(redirect.URL); err == nil && resp.StatusCode != http.StatusFound {
 		t.Fatal("redirect followed")
 	}
-	if hits != 1 || leaked != "" {
-		t.Fatalf("redirect reached the other host: %d hits, Authorization %q", hits, leaked)
+	if hits.Load() != 1 || leaked != "" {
+		t.Fatalf("redirect reached the other host: %d hits, Authorization %q", hits.Load(), leaked)
+	}
+}
+
+func TestBearerClientKeepsCallerTimeout(t *testing.T) {
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { time.Sleep(300 * time.Millisecond) }))
+	defer slow.Close()
+	hc := BearerClient(&http.Client{Timeout: 50 * time.Millisecond}, slow.URL, "tok")
+	if _, err := hc.Get(slow.URL); err == nil {
+		t.Fatal("caller's timeout was dropped")
 	}
 }

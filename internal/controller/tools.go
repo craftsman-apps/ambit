@@ -70,8 +70,12 @@ func BearerClient(base *http.Client, endpoint, token string) *http.Client {
 	if u == nil {
 		u = &url.URL{} // unparsable endpoint matches no request, so no token is sent
 	}
-	return &http.Client{Transport: bearerTransport{token: token, scheme: u.Scheme, host: u.Host, next: next},
+	hc := &http.Client{Transport: bearerTransport{token: token, scheme: u.Scheme, host: u.Host, next: next},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	if base != nil {
+		hc.Timeout, hc.Jar = base.Timeout, base.Jar
+	}
+	return hc
 }
 
 // ListToolsAt lists the tools of an MCP server at a URL with one user's token (per-user servers). It
@@ -113,13 +117,13 @@ func listTools(ctx context.Context, t mcp.Transport) ([]v1.Tool, error) {
 			return nil, fmt.Errorf("tools/list: %w", err)
 		}
 		schema, _ := json.Marshal(tool.InputSchema)
-		t := v1.Tool{Name: tool.Name, Description: tool.Description, Fingerprint: Fingerprint(tool.Name, tool.Description, schema)}
+		vt := v1.Tool{Name: tool.Name, Description: tool.Description, Fingerprint: Fingerprint(tool.Name, tool.Description, schema)}
 		if a := tool.Annotations; a != nil {
 			ro := a.ReadOnlyHint
-			t.ReadOnlyHint = &ro
-			t.DestructiveHint = a.DestructiveHint
+			vt.ReadOnlyHint = &ro
+			vt.DestructiveHint = a.DestructiveHint
 		}
-		out = append(out, t)
+		out = append(out, vt)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil

@@ -232,3 +232,22 @@
   clientSecretLabel: Client Secret
   docs: https://developer.webex.com/mcp/docs/messaging-mcp-server
   live: { tool: webex-search-spaces }
+- id: hubspot
+  version: 1
+  displayName: HubSpot
+  category: CRM
+  server: { url: "https://mcp.hubspot.com", transport: streamable-http }
+  authorizationURL: https://mcp.hubspot.com/oauth/authorize/user
+  tokenURL: https://mcp.hubspot.com/oauth/v3/token
+  revocationURL: https://api.hubapi.com/oauth/v1/refresh-tokens
+  resource: none
+  setup: |
+    1. Sign in to HubSpot as a Super Admin.
+    2. Open Development, then "MCP Connectors" (called "MCP Auth Apps" in some accounts), and click "Create MCP Connector".
+    3. Enter a name and add {callbackURL} as the redirect URL. A description and an icon are optional.
+    4. Create the connector and copy the Client ID and the Client secret.
+    5. The connector needs no scope list. HubSpot decides the scopes from the MCP tools and from each person's own permissions.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://developers.hubspot.com/docs/apps/developer-platform/build-apps/integrate-with-the-remote-hubspot-mcp-server
+  live: { tool: get_user_details }

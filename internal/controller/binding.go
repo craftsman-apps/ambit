@@ -3,8 +3,11 @@ package controller
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"net/url"
+	"strconv"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // DestinationHash names a server URL in the broker path (Task 6). A gateway still running an older
@@ -31,4 +34,31 @@ func BindServers(servers []v1.Server, conns []v1.Connection) ([]v1.Server, map[s
 		kept = append(kept, s)
 	}
 	return kept, refused
+}
+
+// BrokerPath is the extAuth path for one per-user server: destination-checked for a bound Connection.
+func BrokerPath(s v1.Server, bound bool) string {
+	if !bound {
+		return "/v1/connection/" + s.Spec.Connection
+	}
+	return "/v1/connection/" + url.PathEscape(s.Spec.Connection) + "/server/" + url.PathEscape(s.Name) + "/" + DestinationHash(s.Spec.URL)
+}
+
+// SetBrokerPaths gives every per-user server whose Connection has serverURL the destination-checked path.
+func SetBrokerPaths(objs []*unstructured.Unstructured, servers []v1.Server, conns []v1.Connection) {
+	bound := map[string]bool{}
+	for _, c := range conns {
+		bound[c.Name] = c.Spec.ServerURL != ""
+	}
+	byPolicy := map[string]v1.Server{}
+	for _, s := range servers {
+		byPolicy["ambit-conn-"+s.Name] = s
+	}
+	for _, o := range objs {
+		s, ok := byPolicy[o.GetName()]
+		if !ok || o.GetKind() != "AgentgatewayPolicy" || s.Spec.Connection == "" {
+			continue
+		}
+		_ = unstructured.SetNestedField(o.Object, strconv.Quote(BrokerPath(s, bound[s.Spec.Connection])), "spec", "backend", "extAuth", "http", "path")
+	}
 }

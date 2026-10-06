@@ -152,6 +152,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		compiled, dropped = WithoutArgumentLimits(rules.Items)
 	}
 	res := Compile(models.Items, boundServers, compiled, r.Route, routerNames...)
+	SetBrokerPaths(res.Objects, boundServers, conns.Items)
 	ApplyDropped(&res, dropped)
 	var budgets v1.BudgetList
 	if err := r.Live.List(ctx, &budgets, client.InNamespace(r.Namespace)); err != nil {

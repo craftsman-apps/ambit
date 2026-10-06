@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -234,5 +235,25 @@ func TestArgumentLimitsWithoutTheGuardGrantNothing(t *testing.T) {
 	r = Compile(nil, servers, []v1.AccessRule{limited, plain}, route)
 	if e := mcpExpr(t, r); !strings.Contains(e, "convert_time") {
 		t.Fatalf("with the guard: %s", e)
+	}
+}
+
+func TestBoundConnectionGetsDestinationPath(t *testing.T) {
+	servers := []v1.Server{perUser("github", "https://api.githubcopilot.com/mcp/", "gh"), perUser("legacy", "https://x.test/mcp", "old")}
+	conns := []v1.Connection{
+		{ObjectMeta: metav1.ObjectMeta{Name: "gh"}, Spec: v1.ConnectionSpec{ServerURL: "https://api.githubcopilot.com/mcp/"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "old"}},
+	}
+	res := Compile(nil, servers, nil, RouteRef{Name: "ambit-llm"})
+	SetBrokerPaths(res.Objects, servers, conns)
+	paths := map[string]string{}
+	for _, o := range res.Objects {
+		if p, ok, _ := unstructured.NestedString(o.Object, "spec", "backend", "extAuth", "http", "path"); ok {
+			paths[o.GetName()] = p
+		}
+	}
+	want := strconv.Quote("/v1/connection/gh/server/github/" + DestinationHash("https://api.githubcopilot.com/mcp/"))
+	if paths["ambit-conn-github"] != want || paths["ambit-conn-legacy"] != `"/v1/connection/old"` {
+		t.Fatalf("paths %v", paths)
 	}
 }

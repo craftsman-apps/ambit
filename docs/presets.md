@@ -163,3 +163,4 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | id | Vendor | Server | Revokes at vendor | Needs | Live-checked |
 |---|---|---|---|---|---|
 | github | GitHub | api.githubcopilot.com | yes |  | not yet |
+| linear | Linear | mcp.linear.app | yes |  | not yet |

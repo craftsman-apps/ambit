@@ -23,3 +23,24 @@
   clientSecretLabel: Client secret
   docs: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app
   live: { tool: get_me }
+- id: linear
+  version: 1
+  displayName: Linear
+  category: Projects
+  server: { url: "https://mcp.linear.app/mcp", transport: streamable-http }
+  authorizationURL: https://linear.app/oauth/authorize
+  tokenURL: https://api.linear.app/oauth/token
+  revocationURL: https://api.linear.app/oauth/revoke
+  resource: none
+  scopes: [read]
+  setup: |
+    1. Sign in to Linear as a workspace admin.
+    2. Open Settings, then API (https://linear.app/settings/api), and click "Create new" under OAuth applications.
+    3. Enter an application name, a developer name and a developer URL.
+    4. Add {callbackURL} under "Callback URLs".
+    5. Leave "Public" off, so only your workspace can use the app, and save.
+    6. Copy the Client ID and the Client secret from the application page.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://linear.app/developers/oauth-2-0-authentication
+  live: { tool: list_teams }

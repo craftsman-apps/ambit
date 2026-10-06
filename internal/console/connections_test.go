@@ -295,3 +295,94 @@ func TestRevokeErrorsNeverContainTokens(t *testing.T) {
 		t.Fatalf("error: %v", err)
 	}
 }
+
+func TestAuthorizeSendsResourceAndParams(t *testing.T) {
+	saas := newFakeSaaS(t)
+	conns, c := connFixture(t, saas)
+	var conn v1.Connection
+	_ = c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "jira"}, &conn)
+	conn.Spec.Resource = "https://mcp.jira.test/mcp"
+	conn.Spec.AuthorizeParams = map[string]string{"prompt": "consent"}
+	if err := c.Update(t.Context(), &conn); err != nil {
+		t.Fatal(err)
+	}
+	a := testAuthOnly()
+	mux := http.NewServeMux()
+	conns.register(mux, a)
+	req := httptest.NewRequest("GET", "/connections/jira/connect", nil)
+	req.AddCookie(user(a, "alice@acme.test", RoleViewer))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	loc, _ := url.Parse(rec.Header().Get("Location"))
+	if loc.Query().Get("resource") != "https://mcp.jira.test/mcp" || loc.Query().Get("prompt") != "consent" {
+		t.Fatalf("authorize URL %s", loc)
+	}
+}
+
+// startThenChange starts a connect flow, runs change while the user is at the provider, then calls back.
+func startThenChange(t *testing.T, change func(c client.Client, saas *fakeSaaS)) (*httptest.ResponseRecorder, *fakeSaaS) {
+	t.Helper()
+	saas := newFakeSaaS(t)
+	conns, c := connFixture(t, saas)
+	a := testAuthOnly()
+	mux := http.NewServeMux()
+	conns.register(mux, a)
+	ck := user(a, "alice@acme.test", RoleViewer)
+	req := httptest.NewRequest("GET", "/connections/jira/connect", nil)
+	req.AddCookie(ck)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	loc, _ := url.Parse(rec.Header().Get("Location"))
+	change(c, saas)
+	req = httptest.NewRequest("GET", "/connections/callback?code=alice&state="+loc.Query().Get("state"), nil)
+	req.AddCookie(ck)
+	for _, k := range rec.Result().Cookies() {
+		req.AddCookie(k)
+	}
+	rec2 := httptest.NewRecorder()
+	mux.ServeHTTP(rec2, req)
+	return rec2, saas
+}
+
+func TestCallbackRefusesWhenAppChanged(t *testing.T) {
+	rec, saas := startThenChange(t, func(c client.Client, _ *fakeSaaS) {
+		// The admin changes the client secret while alice is at the provider.
+		var sec corev1.Secret
+		_ = c.Get(t.Context(), client.ObjectKey{Namespace: "ambit-grants", Name: "ambit-conn-jira"}, &sec)
+		sec.Data["clientSecret"] = []byte("rotated")
+		_ = c.Update(t.Context(), &sec)
+	})
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "changed while you were connecting") {
+		t.Fatalf("callback: %d %s", rec.Code, rec.Body)
+	}
+	if saas.issued != 0 {
+		t.Fatal("the code was exchanged with the new configuration")
+	}
+}
+
+func TestCallbackRefusesRecreatedApp(t *testing.T) {
+	rec, _ := startThenChange(t, func(c client.Client, _ *fakeSaaS) {
+		// The app is deleted and added again under the same name (new UID) while alice is at the provider.
+		var conn v1.Connection
+		_ = c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "jira"}, &conn)
+		_ = c.Delete(t.Context(), &conn)
+		conn.ResourceVersion, conn.UID = "", "new-uid"
+		_ = c.Create(t.Context(), &conn)
+	})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("callback after recreate: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestCallbackRefusesChangedGeneration(t *testing.T) {
+	rec, _ := startThenChange(t, func(c client.Client, _ *fakeSaaS) {
+		var conn v1.Connection
+		_ = c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "jira"}, &conn)
+		conn.Spec.Scopes = []string{"read", "write"}
+		conn.Generation++ // the fake client does not bump generation on spec changes
+		_ = c.Update(t.Context(), &conn)
+	})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("callback after edit: %d %s", rec.Code, rec.Body)
+	}
+}

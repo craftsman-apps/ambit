@@ -2,6 +2,7 @@ package console
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -151,9 +152,39 @@ func (c *Connections) list(w http.ResponseWriter, r *http.Request, s Session) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+var errAppChanged = errors.New("this app changed while you were connecting; connect again")
+
 type connectState struct {
 	State, Verifier, Connection string
 	Exp                         int64
+	// The configuration that started the flow; the callback refuses if any of it changed.
+	ConnUID  string
+	ConnGen  int64
+	SecretRV string
+}
+
+func (c *Connections) secretRV(ctx context.Context, conn *v1.Connection) (string, error) {
+	var sec corev1.Secret
+	if err := c.Store.Client.Get(ctx, client.ObjectKey{Namespace: c.Store.Namespace, Name: conn.Spec.ClientSecretRef.Name}, &sec); err != nil {
+		return "", err
+	}
+	return sec.ResourceVersion, nil
+}
+
+// snapshotMatches returns the Connection only if it is the one that started the flow, unchanged.
+func (c *Connections) snapshotMatches(ctx context.Context, st connectState) (*v1.Connection, error) {
+	conn, err := c.connection(ctx, st.Connection)
+	if err != nil {
+		return nil, err
+	}
+	rv, err := c.secretRV(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	if string(conn.UID) != st.ConnUID || conn.Generation != st.ConnGen || rv != st.SecretRV {
+		return nil, errAppChanged
+	}
+	return conn, nil
 }
 
 // start sends the user to the provider to approve access (authorization code with PKCE).
@@ -169,10 +200,29 @@ func (c *Connections) start(w http.ResponseWriter, r *http.Request, s Session) {
 		http.Error(w, "this connection is not set up completely; ask an admin", http.StatusInternalServerError)
 		return
 	}
-	st := connectState{State: randomString(), Verifier: oauth2.GenerateVerifier(), Connection: conn.Name, Exp: c.now().Add(10 * time.Minute).Unix()}
+	rv, err := c.secretRV(r.Context(), conn)
+	if err != nil {
+		slog.Error("connection secret", "connection", conn.Name, "err", err)
+		http.Error(w, "this connection is not set up completely; ask an admin", http.StatusInternalServerError)
+		return
+	}
+	st := connectState{State: randomString(), Verifier: oauth2.GenerateVerifier(), Connection: conn.Name, Exp: c.now().Add(10 * time.Minute).Unix(),
+		ConnUID: string(conn.UID), ConnGen: conn.Generation, SecretRV: rv}
 	http.SetCookie(w, &http.Cookie{Name: connCookie, Value: c.Codec.Encode(st), Path: "/connections/", HttpOnly: true,
 		Secure: strings.HasPrefix(c.PublicURL, "https://"), SameSite: http.SameSiteLaxMode, MaxAge: 600})
-	http.Redirect(w, r, cfg.AuthCodeURL(st.State, oauth2.AccessTypeOffline, oauth2.S256ChallengeOption(st.Verifier)), http.StatusFound)
+	opts := []oauth2.AuthCodeOption{oauth2.AccessTypeOffline, oauth2.S256ChallengeOption(st.Verifier)}
+	if conn.Spec.Resource != "" {
+		opts = append(opts, oauth2.SetAuthURLParam("resource", conn.Spec.Resource))
+	}
+	keys := make([]string, 0, len(conn.Spec.AuthorizeParams))
+	for k := range conn.Spec.AuthorizeParams {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		opts = append(opts, oauth2.SetAuthURLParam(k, conn.Spec.AuthorizeParams[k]))
+	}
+	http.Redirect(w, r, cfg.AuthCodeURL(st.State, opts...), http.StatusFound)
 }
 
 func (c *Connections) callback(w http.ResponseWriter, r *http.Request, s Session) {
@@ -190,7 +240,11 @@ func (c *Connections) callback(w http.ResponseWriter, r *http.Request, s Session
 		http.Redirect(w, r, "/connections?error="+url.QueryEscape(e), http.StatusFound)
 		return
 	}
-	conn, err := c.connection(r.Context(), st.Connection)
+	conn, err := c.snapshotMatches(r.Context(), st)
+	if errors.Is(err, errAppChanged) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if err != nil {
 		http.Error(w, "the connection was removed", http.StatusNotFound)
 		return

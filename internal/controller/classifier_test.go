@@ -22,13 +22,13 @@ func TestClassifierStateFromDeployment(t *testing.T) {
 		state  string
 		reason string
 	}{
-		"off":              {d(0, 0), false, time.Time{}, "Off", ""},
-		"starting":         {d(2, 0), true, now.Add(-time.Minute), "Starting", ""},
-		"ready":            {d(2, 2), true, time.Time{}, "Ready", ""},
-		"unhealthy":        {d(2, 1), true, time.Time{}, "Unhealthy", "ClassifierUnhealthy"},
-		"start fails":      {d(2, 0), true, now.Add(-16 * time.Minute), "Starting", "ClassifierStartFailed"},
-		"first time seen":  {d(2, 0), true, time.Time{}, "Starting", ""},
-		"missing":          {nil, true, time.Time{}, "Off", "ClassifierNotInstalled"},
+		"off":               {d(0, 0), false, time.Time{}, "Off", ""},
+		"starting":          {d(2, 0), true, now.Add(-time.Minute), "Starting", ""},
+		"ready":             {d(2, 2), true, time.Time{}, "Ready", ""},
+		"unhealthy":         {d(2, 1), true, time.Time{}, "Unhealthy", "ClassifierUnhealthy"},
+		"start fails":       {d(2, 0), true, now.Add(-16 * time.Minute), "Starting", "ClassifierStartFailed"},
+		"first time seen":   {d(2, 0), true, time.Time{}, "Starting", ""},
+		"missing":           {nil, true, time.Time{}, "Off", "ClassifierNotInstalled"},
 		"missing, unwanted": {nil, false, time.Time{}, "Off", ""},
 	} {
 		s, c := classifierState(tc.d, tc.wanted, tc.since, now)

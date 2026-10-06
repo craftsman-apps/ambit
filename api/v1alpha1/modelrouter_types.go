@@ -41,7 +41,9 @@ type RouterClassifier struct {
 	// LLM is the classifier model (type LLM).
 	// +optional
 	LLM *RouterLLM `json:"llm,omitempty"`
-	// Timeout of one classification. Default 1500ms.
+	// Timeout of one classification. Default 1500ms, at most 10s: ambit-router finishes held requests within its
+	// 25 s drain during a rollout, and a longer classification would be cut there.
+	// +kubebuilder:validation:XValidation:rule="duration(self) <= duration('10s')",message="timeout must be at most 10s"
 	// +optional
 	Timeout *metav1.Duration `json:"timeout,omitempty"`
 	// MaxBytes of the message sent to the classifier, cut on a UTF-8 boundary. Default 8000.

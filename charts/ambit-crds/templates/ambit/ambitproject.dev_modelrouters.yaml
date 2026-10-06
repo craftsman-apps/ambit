@@ -108,8 +108,13 @@ spec:
                     minimum: 1
                     type: integer
                   timeout:
-                    description: Timeout of one classification. Default 1500ms.
+                    description: 'Timeout of one classification. Default 1500ms, at most 10s: ambit-router finishes held requests within its
+
+                      25 s drain during a rollout, and a longer classification would be cut there.'
                     type: string
+                    x-kubernetes-validations:
+                    - message: timeout must be at most 10s
+                      rule: duration(self) <= duration('10s')
                   type:
                     default: None
                     description: 'Type None ignores every route; Rules uses keyword and length routes; LLM also asks a small LLM for a

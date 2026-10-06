@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/craftsman-apps/ambit/internal/routerconfig"
 )
@@ -97,5 +98,23 @@ func TestPrompt(t *testing.T) {
 	p := Prompt(auto)
 	if !strings.HasPrefix(p, "Classify the user's message") || !strings.Contains(p, "coding: code") || !strings.Contains(p, "other:") || !strings.Contains(p, "exactly one") {
 		t.Fatal(p)
+	}
+}
+
+// A failing classifier is diagnosable from ambit-router's log (wrong URL, revoked key), without the key, and at
+// most once per interval per router so a broken classifier cannot flood the log.
+func TestClassifierFailureIsLogged(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(prev)
+	cfg := cfgOf(auto)
+	h := handler(&fakeLLM{err: fmt.Errorf("classifier answered HTTP 401")}, cfg)
+	for i := 0; i < 3; i++ {
+		h.decide(t.Context(), time.Now(), h.Store.Snapshot(), Attrs{Groups: []string{"eng"}, Config: cfg.Hash}, body("auto", "code"))
+	}
+	out := buf.String()
+	if strings.Count(out, "classifier call failed") != 1 || !strings.Contains(out, "HTTP 401") || !strings.Contains(out, "router=auto") || strings.Contains(out, "sk") {
+		t.Fatalf("want one warning naming the router and the error, without the key:\n%s", out)
 	}
 }

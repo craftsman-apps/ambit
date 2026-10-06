@@ -66,11 +66,18 @@ func TestModelRouterCRDRules(t *testing.T) {
 		"zero-rate":         {Default: "g", Classifier: v1.RouterClassifier{Type: "LLM", LLM: m, RatePerMinute: ptr.To[int32](0)}},
 		"huge-maxbytes":     {Default: "g", Classifier: v1.RouterClassifier{Type: "LLM", LLM: m, MaxBytes: ptr.To[int64](3 << 20)}},
 		"too-many-cats":     {Default: "g", Classifier: v1.RouterClassifier{Type: "LLM", LLM: m, Categories: slices.Repeat([]v1.RouterCategory{{Name: "a", Description: "a"}}, 17)}},
+		// longer than this would outlast ambit-router's 25 s drain: rollouts would cut classifications (final review)
+		"timeout-over-10s": {Default: "g", Classifier: v1.RouterClassifier{Type: "LLM", LLM: m, Timeout: &metav1.Duration{Duration: 11 * time.Second}}},
 	} {
 		o := &v1.ModelRouter{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Spec: spec}
 		if err := envClient.Create(ctx, o); err == nil {
 			t.Errorf("%s accepted", name)
 		}
+	}
+	ten := &v1.ModelRouter{ObjectMeta: metav1.ObjectMeta{Name: "ten-seconds", Namespace: ns},
+		Spec: v1.ModelRouterSpec{Default: "g", Classifier: v1.RouterClassifier{Type: "LLM", LLM: m, Timeout: &metav1.Duration{Duration: 10 * time.Second}}}}
+	if err := envClient.Create(ctx, ten); err != nil {
+		t.Fatalf("a 10 s timeout is allowed: %v", err)
 	}
 	var c v1.RouterClassifier
 	if c.TimeoutOrDefault() != 1500*time.Millisecond || c.MaxBytesOrDefault() != 8000 || c.RateOrDefault() != 600 {

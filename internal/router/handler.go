@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -33,6 +34,27 @@ type Handler struct {
 
 	once sync.Once
 	sem  chan struct{}
+
+	logMu  sync.Mutex
+	logged map[string]time.Time // router -> last "classifier call failed" warning
+}
+
+// failureLogEvery limits the warning about a failing classifier to one per router per interval.
+const failureLogEvery = time.Minute
+
+// logFailure makes a broken classifier diagnosable (wrong URL, revoked key) without flooding the log. Classify's
+// errors carry the HTTP status or the endpoint, never the key.
+func (h *Handler) logFailure(router string, err error) {
+	h.logMu.Lock()
+	defer h.logMu.Unlock()
+	if h.logged == nil {
+		h.logged = map[string]time.Time{}
+	}
+	if time.Since(h.logged[router]) < failureLogEvery {
+		return
+	}
+	h.logged[router] = time.Now()
+	slog.Warn("classifier call failed", "router", router, "err", err.Error())
 }
 
 // Attrs are the values the gateway sends per request (the policy's requestAttributes).
@@ -119,6 +141,7 @@ func (h *Handler) decide(ctx context.Context, start time.Time, snap *Snapshot, a
 	case errors.Is(o.err, context.DeadlineExceeded):
 		return Result{Reason: "timeout"}
 	case o.err != nil:
+		h.logFailure(r.Name, o.err)
 		return Result{Reason: "error"}
 	}
 	name := strings.ToLower(strings.TrimSpace(o.answer))

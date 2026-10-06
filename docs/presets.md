@@ -40,7 +40,7 @@ Rules and limits:
   `client_id`, `redirect_uri`, `state`, `code_challenge`, `code_challenge_method`, `scope`, `resource`,
   `response_type`, `response_mode`, `request`, `request_uri`.
 - Production presets accept `https` URLs only. A testing preset (`AMBIT_TEST_PRESETS`, Helm value
-  `console.testPresets`) may also use plain `http`, only for hosts under `localtest.me` and in-cluster `.svc`
+  `console.testPresets`) may also use plain `http`, only for `localhost` and hosts under `localtest.me`, `.svc` or `.svc.cluster.local`
   hosts.
 
 ### Removing an app
@@ -55,7 +55,7 @@ lists these as unfinished additions with "Finish" and "Remove".
 
 - Direct mode hides additions younger than 10 seconds, because they may still be running.
 - Removing a complete addition is refused; use "Remove app" instead.
-- In GitOps mode "Remove" is offered only when no open pull request uses the branch.
+- In GitOps mode "Remove" is offered only when no open or merged pull request uses the branch.
 
 ## The tool reader
 
@@ -88,7 +88,7 @@ users. The live check reports such vendors when a second test account is configu
 | Level | Where it runs | Needs an account | What it checks |
 |---|---|---|---|
 | 1. Catalog | every CI run (`go test ./internal/presets`) | no | The catalog parses; ids are unique; URLs are valid after placeholders are filled; scopes follow RFC 6749; `setup` contains `{callbackURL}`; reserved `authorizeParams` refused; every verified preset has a `live` block. A pull request that changes a preset without raising its `version` fails. |
-| 2. Contract | nightly, `.github/workflows/presets-contract.yml` | no | The vendor's server answers an unauthenticated request with 401; published metadata still matches the preset; the token URL answers an empty request with an OAuth error. A preset that fails two nights in a row opens one issue. |
+| 2. Contract | nightly, `.github/workflows/presets-contract.yml` | no | The vendor's server answers an unauthenticated request with 401 (or the statuses the preset lists under `contract`); published metadata still matches the preset; the token URL answers an empty request with an OAuth error. A preset that fails two nights in a row opens one issue. |
 | 3. Live | maintainer's laptop, `make preset-live` | yes, a test account per vendor | Sign-in, refresh, `initialize`, `tools/list`, and one read-only tool call. |
 
 Run one preset at a time: `go run ./cmd/presetcheck contract <id>`, `make preset-live APP=<id>`. `make preset-live`
@@ -111,7 +111,7 @@ always checks every verified preset; `APP=<id>` adds one preset that is not veri
 - `test/presets/results.json` is committed. It holds the date, the commit, the catalog hash and each preset's
   result. For a failure it may hold up to 200 characters of the vendor's tool-error text. That text can
   include the test account's email address. Check it before you commit.
-- `test/presets/tools/<id>.txt` lists the tool names and fingerprints. A change is reported, not failed.
+- `test/presets/tools/<id>.txt` lists the tool names. A change is reported, not failed.
 
 ### Release gate
 

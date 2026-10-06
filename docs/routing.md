@@ -67,7 +67,7 @@ spec:
   classifier:
     type: LLM
     llm: { model: qwen-local }        # a Model with an OpenAI-compatible endpoint
-    timeout: 1500ms                   # default 1500ms
+    timeout: 1500ms                   # default 1500ms, at most 10s
     maxBytes: 8000                    # text sent to the classifier, default 8000
     ratePerMinute: 600                # classifier calls per ambit-router replica, default 600
     categories:

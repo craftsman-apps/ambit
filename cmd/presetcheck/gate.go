@@ -17,9 +17,9 @@ var fullCommitRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 var watched = []string{"api/v1alpha1", "internal/console", "internal/presets", "cmd/presetcheck", "internal/controller/tools.go", "go.mod", "go.sum"}
 
-// required: the 23 initial presets (the user's decision: all ship in the first release).
+// required: the 22 initial presets. PayPal waits for dynamic client registration (phase 2): its MCP server accepts only self-registered clients.
 var required = []string{"github", "linear", "asana", "monday", "airtable", "box", "dropbox", "canva", "gmail", "google-calendar",
-	"google-drive", "google-docs", "google-sheets", "slack", "zoom", "webex", "hubspot", "salesforce", "paypal", "docusign",
+	"google-drive", "google-docs", "google-sheets", "slack", "zoom", "webex", "hubspot", "salesforce", "docusign",
 	"servicenow", "databricks", "pagerduty"}
 
 func gateProblems(r Results, now time.Time, catalog []presets.Preset, changedSince func(string) ([]string, error), required []string) []string {
@@ -55,7 +55,7 @@ func gateProblems(r Results, now time.Time, catalog []presets.Preset, changedSin
 			p = append(p, id+" is not verified")
 		}
 	}
-	for _, c := range catalog { // every verified preset, not only the initial 23
+	for _, c := range catalog { // every verified preset, not only the initial 22
 		if c.Verified && !passed[c.ID] {
 			p = append(p, c.ID+" has no passing result")
 		}

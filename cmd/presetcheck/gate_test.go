@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -167,5 +168,15 @@ func TestChangedSinceInRealHistory(t *testing.T) {
 	run("checkout", "-q", "main")
 	if _, err := changedSinceIn(dir, side); err == nil || !strings.Contains(err.Error(), "not an ancestor") {
 		t.Fatalf("a non-ancestor commit must fail: %v", err)
+	}
+}
+
+// The initial release ships 22 presets; PayPal waits for dynamic client registration (phase 2).
+func TestRequiredAreTheInitial22(t *testing.T) {
+	want := []string{"github", "linear", "asana", "monday", "airtable", "box", "dropbox", "canva", "gmail",
+		"google-calendar", "google-drive", "google-docs", "google-sheets", "slack", "zoom", "webex", "hubspot",
+		"salesforce", "docusign", "servicenow", "databricks", "pagerduty"}
+	if !slices.Equal(required, want) {
+		t.Fatalf("required = %v", required)
 	}
 }

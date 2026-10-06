@@ -127,8 +127,8 @@ the release unless all of this holds:
   fields of the catalog.
 - The catalog hash matches the one in `results.json`.
 - Every preset with `verified: true` passed at its current `version`.
-- All 23 initial presets are verified: github, linear, asana, monday, airtable, box, dropbox, canva, gmail,
-  google-calendar, google-drive, google-docs, google-sheets, slack, zoom, webex, hubspot, salesforce, paypal,
+- All 22 initial presets are verified: github, linear, asana, monday, airtable, box, dropbox, canva, gmail,
+  google-calendar, google-drive, google-docs, google-sheets, slack, zoom, webex, hubspot, salesforce,
   docusign, servicenow, databricks, pagerduty.
 - The clone is not shallow. Any Git error fails the gate; it never skips the check.
 
@@ -152,7 +152,7 @@ Claude does not sign up for or sign in to vendor accounts; the maintainer does s
 7. Set `verified: true` and `verifiedOn: <date>`. Both are left out of the catalog hash, so the live result
    stays valid. Add the vendor's row to the table below. Commit with `test/presets`.
 8. If a vendor refuses access (the Google preview program, Canva) or its server does not work with a
-   company-registered client, stop, write the reason in this file, and tell the product owner. "All 23" then
+   company-registered client, stop, write the reason in this file, and tell the product owner. "All 22" then
    needs a decision.
 
 Changing an existing preset needs a higher `version`; CI checks this.
@@ -186,3 +186,6 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | google-drive | Google Drive | drivemcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | not yet |
 | google-docs | Google Docs | docsmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | not yet |
 | google-sheets | Google Sheets | sheetsmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | not yet |
+
+PayPal is not in the initial list: its MCP server accepts only clients that register themselves (dynamic client
+registration), which Ambit adds in phase 2.

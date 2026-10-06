@@ -24,7 +24,7 @@ type TokenResult struct {
 	Expiry                    time.Time
 }
 
-// TokenError is a refused or failed token request. Transient: network error or 5xx; the grant is kept.
+// TokenError is a refused or failed token request. Transient: network error, 5xx, 429 or 408; the grant is kept.
 type TokenError struct {
 	Status            int
 	Code, Description string
@@ -32,6 +32,9 @@ type TokenError struct {
 }
 
 func (e *TokenError) Error() string {
+	if e.Status == 0 {
+		return "could not reach the token endpoint: " + e.Description
+	}
 	if e.Code == "" {
 		return fmt.Sprintf("token endpoint answered %d %s", e.Status, e.Description)
 	}
@@ -131,7 +134,7 @@ func tokenOnce(ctx context.Context, hc *http.Client, conn *v1.Connection, secret
 	}
 	_ = json.Unmarshal(raw, &out)
 	switch {
-	case resp.StatusCode >= 500:
+	case resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusRequestTimeout:
 		return TokenResult{}, &TokenError{Status: resp.StatusCode, Transient: true}
 	case resp.StatusCode >= 400 || out.Error != "" || (out.OK != nil && !*out.OK) || out.AccessToken == "":
 		code := out.Error

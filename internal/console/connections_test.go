@@ -1,7 +1,9 @@
 package console
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -511,5 +513,92 @@ func TestRefreshAndRevokeNeverOverlap(t *testing.T) {
 	conns.CheckAll(t.Context(), true)
 	if g, _ := conns.Store.Get(t.Context(), "alice@acme.test", "jira"); g != nil {
 		t.Fatal("a renewal recreated the grant after it was revoked")
+	}
+}
+
+// failingUpdates makes the next n grant updates fail, as an API server outage would.
+type failingUpdates struct {
+	client.Client
+	mu sync.Mutex
+	n  int
+}
+
+func (f *failingUpdates) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.n > 0 {
+		f.n--
+		return errors.New("the API server is unavailable")
+	}
+	return f.Client.Update(ctx, obj, opts...)
+}
+
+func TestRotatedRefreshTokenSurvivesAFailedSave(t *testing.T) {
+	saas := newFakeSaaS(t)
+	saas.rotate = true
+	conns, c := connFixture(t, saas)
+	connect(t, conns, testAuthOnly(), "alice@acme.test", "alice")
+	expireAll(conns)
+	conns.Store.Client = &failingUpdates{Client: c, n: 1}
+	if tok, _, err := conns.Token(t.Context(), "alice@acme.test", "jira"); err != nil || tok != "renewed-alice" {
+		t.Fatalf("token %q err %v", tok, err)
+	}
+	if g, _ := conns.Store.Get(t.Context(), "alice@acme.test", "jira"); g.RefreshToken != "rt2-alice" {
+		t.Fatalf("refresh token %q", g.RefreshToken)
+	}
+}
+
+func TestBrokerUsesARenewedTokenThatCouldNotBeSaved(t *testing.T) {
+	saas := newFakeSaaS(t)
+	conns, c := connFixture(t, saas)
+	connect(t, conns, testAuthOnly(), "alice@acme.test", "alice")
+	expireAll(conns)
+	conns.Store.Client = &failingUpdates{Client: c, n: 3}
+	if r := brokerCall(t, &Broker{Conns: conns}, "alice@acme.test"); r.Header().Get("Authorization") != "Bearer renewed-alice" {
+		t.Fatalf("headers %v", r.Header())
+	}
+}
+
+func TestTransientErrorKeepsUsingAStillValidToken(t *testing.T) {
+	saas := newFakeSaaS(t)
+	conns, _ := connFixture(t, saas)
+	connect(t, conns, testAuthOnly(), "alice@acme.test", "alice")
+	saas.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "down", 503) })
+	conns.Now = func() time.Time { return time.Now().Add(time.Hour - 30*time.Second) } // inside the renewal minute
+	tok, g, err := conns.Token(t.Context(), "alice@acme.test", "jira")
+	if err == nil || tok != "at-alice" || g.State != grantConnectedState {
+		t.Fatalf("token %q grant %+v err %v", tok, g, err)
+	}
+}
+
+func TestBlockedRenewalDoesNotDelayOtherUsers(t *testing.T) {
+	saas := newFakeSaaS(t)
+	conns, _ := connFixture(t, saas)
+	a := testAuthOnly()
+	connect(t, conns, a, "alice@acme.test", "alice")
+	connect(t, conns, a, "bob@acme.test", "bob")
+	arrived, release := make(chan struct{}), make(chan struct{})
+	next := saas.srv.Config.Handler
+	saas.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		if r.PostForm.Get("refresh_token") == "rt-alice" {
+			close(arrived)
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+	done := make(chan struct{})
+	go func() { defer close(done); conns.CheckAll(t.Context(), true) }()
+	<-arrived
+	start := time.Now()
+	tok, _, err := conns.Token(t.Context(), "bob@acme.test", "jira")
+	took := time.Since(start)
+	close(release)
+	<-done
+	if err != nil || tok == "" || took > 2*time.Second {
+		t.Fatalf("token %q err %v after %v", tok, err, took)
 	}
 }

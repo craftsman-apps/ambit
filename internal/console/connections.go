@@ -32,7 +32,8 @@ type Connections struct {
 	HTTP      *http.Client
 	Now       func() time.Time
 
-	mu sync.Mutex // one refresh per grant at a time (single console replica)
+	locksMu sync.Mutex
+	locks   map[string]*sync.Mutex // one per grant: its renewals and revocation never interleave (single console replica)
 
 	stylesMu sync.Mutex
 	styles   map[string]authStyle // client authentication that worked, per (Connection, client ID, secret)
@@ -275,8 +276,7 @@ func (c *Connections) callback(w http.ResponseWriter, r *http.Request, s Session
 // It holds the connections lock throughout and re-reads the grant, so a renewal running at the same time
 // cannot be overwritten or leave a newer token unrevoked. Errors never contain the grant's tokens.
 func (c *Connections) Revoke(ctx context.Context, g *Grant) (bool, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	defer c.lockGrant(g.Email, g.Connection)()
 	if cur, err := c.Store.Get(ctx, g.Email, g.Connection); err == nil && cur != nil {
 		g = cur
 	}
@@ -341,8 +341,7 @@ func (c *Connections) disconnect(w http.ResponseWriter, r *http.Request, s Sessi
 // Token returns a valid access token for the user, refreshing it when it is close to expiry. A
 // failed refresh marks the grant broken, so the user sees "reconnect" before their agent fails again.
 func (c *Connections) Token(ctx context.Context, email, connName string) (string, *Grant, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	defer c.lockGrant(email, connName)()
 	g, err := c.Store.Get(ctx, email, connName)
 	if err != nil || g == nil {
 		return "", g, err
@@ -350,8 +349,26 @@ func (c *Connections) Token(ctx context.Context, email, connName string) (string
 	return c.renewLocked(ctx, g, false)
 }
 
+// lockGrant locks one grant and returns the unlock function.
+// ponytail: the map keeps one small mutex per grant ever seen; prune it if grants number in the millions.
+func (c *Connections) lockGrant(email, conn string) func() {
+	c.locksMu.Lock()
+	if c.locks == nil {
+		c.locks = map[string]*sync.Mutex{}
+	}
+	k := email + "\x00" + conn
+	m := c.locks[k]
+	if m == nil {
+		m = &sync.Mutex{}
+		c.locks[k] = m
+	}
+	c.locksMu.Unlock()
+	m.Lock()
+	return m.Unlock
+}
+
 // renewLocked returns a usable access token for g, renewing it when needed (or always, with force). The
-// caller holds c.mu, so renewal, revocation and consent changes never interleave.
+// caller holds the grant's lock (lockGrant), so renewal, revocation and consent changes never interleave.
 func (c *Connections) renewLocked(ctx context.Context, g *Grant, force bool) (string, *Grant, error) {
 	conn, err := c.connection(ctx, g.Connection)
 	if apierrors.IsNotFound(err) {
@@ -390,6 +407,9 @@ func (c *Connections) refresh(ctx context.Context, conn *v1.Connection, g *Grant
 	var te *TokenError
 	if errors.As(err, &te) && te.Transient {
 		slog.Warn("grant renewal failed; will retry", "connection", g.Connection, "user", g.Email, "err", redactTokens(err.Error(), g))
+		if c.now().Before(g.Expiry) { // the stored token still works
+			return g.AccessToken, g, err
+		}
 		return "", g, err
 	}
 	if err != nil {
@@ -401,7 +421,20 @@ func (c *Connections) refresh(ctx context.Context, conn *v1.Connection, g *Grant
 	if tok.RefreshToken != "" {
 		g.RefreshToken = tok.RefreshToken
 	}
-	return g.AccessToken, g, c.Store.Put(ctx, g)
+	// A rotated refresh token exists only here now: try hard to save it.
+	for i := 0; ; i++ {
+		if err = c.Store.Put(ctx, g); err == nil || i == 2 {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Duration(i+1) * 100 * time.Millisecond):
+		}
+	}
+	if err != nil {
+		slog.Error("a renewed refresh token could not be saved; the user may need to reconnect", "connection", g.Connection, "user", g.Email)
+	}
+	return g.AccessToken, g, err
 }
 
 func short(s string) string {
@@ -419,26 +452,36 @@ func (c *Connections) CheckAll(ctx context.Context, force bool) (checked, broken
 		slog.Error("grant check", "err", err)
 		return 0, 0
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
 	for _, listed := range grants {
-		g, err := c.Store.Get(ctx, listed.Email, listed.Connection) // re-read under the lock: it may be revoked by now
-		if err != nil || g == nil {
-			continue
-		}
-		if g.State == grantBrokenState {
-			broken++
-			continue
-		}
-		if !force && c.now().Add(CheckInterval+5*time.Minute).Before(g.Expiry) {
-			continue
-		}
-		checked++
-		if _, g2, _ := c.renewLocked(ctx, g, true); g2 != nil && g2.State == grantBrokenState {
-			broken++
-		}
+		c.checkOne(ctx, listed, force, &checked, &broken)
 	}
 	return checked, broken
+}
+
+// checkOne renews one grant under its own lock, so a slow provider delays only that grant.
+func (c *Connections) checkOne(ctx context.Context, listed *Grant, force bool, checked, broken *int) {
+	defer c.lockGrant(listed.Email, listed.Connection)()
+	g, err := c.Store.Get(ctx, listed.Email, listed.Connection) // re-read under the lock: it may be revoked by now
+	if err != nil || g == nil {
+		return
+	}
+	if g.State == grantBrokenState {
+		*broken++
+		return
+	}
+	if !force && c.now().Add(CheckInterval+5*time.Minute).Before(g.Expiry) {
+		return
+	}
+	*checked++
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second) // an HTTP client without a timeout cannot hold the lock for long
+	defer cancel()
+	_, g2, err := c.renewLocked(ctx, g, true)
+	if err != nil {
+		slog.Warn("grant check", "connection", g.Connection, "user", g.Email, "err", redactTokens(err.Error(), g))
+	}
+	if g2 != nil && g2.State == grantBrokenState {
+		*broken++
+	}
 }
 
 // CheckInterval is how often RunChecks renews grants.

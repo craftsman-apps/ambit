@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,5 +84,27 @@ func TestClientAuthIsRememberedAndForgottenWithTheSecret(t *testing.T) {
 	}
 	if _, err := c.tokenRequest(t.Context(), conn, "rotated-secret", form()); err != nil || calls != 5 {
 		t.Fatalf("a new secret must be probed again: calls %d err %v", calls, err)
+	}
+}
+
+func TestTooManyRequestsAndTimeoutAreTransient(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusRequestTimeout} {
+		conn := tokenServer(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "later", status) })
+		_, err := (&Connections{}).tokenRequest(t.Context(), conn, "s", url.Values{"grant_type": {"refresh_token"}})
+		var te *TokenError
+		if !errors.As(err, &te) || !te.Transient {
+			t.Fatalf("%d: err %v", status, err)
+		}
+	}
+}
+
+func TestUnreachableTokenEndpointSaysSo(t *testing.T) {
+	srv := httptest.NewServer(http.NotFoundHandler())
+	srv.Close()
+	conn := &v1.Connection{Spec: v1.ConnectionSpec{TokenURL: srv.URL + "/token", ClientID: "ambit"}}
+	_, err := (&Connections{}).tokenRequest(t.Context(), conn, "s", url.Values{"grant_type": {"refresh_token"}})
+	var te *TokenError
+	if !errors.As(err, &te) || !te.Transient || !strings.HasPrefix(err.Error(), "could not reach the token endpoint: ") {
+		t.Fatalf("err %v", err)
 	}
 }

@@ -53,11 +53,17 @@ func styleKey(conn *v1.Connection, secret string) string {
 	return conn.Name + "/" + conn.Spec.ClientID + "/" + hex.EncodeToString(sum[:8])
 }
 
+// tryOtherStyle: while the client auth style is unknown, any refusal that is not transient may mean the
+// vendor wants the other style (GitHub answers 404 "Not Found" to a Basic header), as golang.org/x/oauth2 does.
+func tryOtherStyle(err error) bool {
+	var te *TokenError
+	return errors.As(err, &te) && !te.Transient
+}
+
 // TokenRequest is the stateless form for tools (presetcheck): Basic first, then the secret in the body.
 func TokenRequest(ctx context.Context, hc *http.Client, conn *v1.Connection, secret string, form url.Values, now time.Time) (TokenResult, error) {
 	res, err := tokenOnce(ctx, hc, conn, secret, form, styleBasic, now)
-	var te *TokenError
-	if errors.As(err, &te) && te.Code == "invalid_client" {
+	if tryOtherStyle(err) {
 		res, err = tokenOnce(ctx, hc, conn, secret, form, styleBody, now)
 	}
 	return res, err
@@ -69,8 +75,7 @@ func (c *Connections) tokenRequest(ctx context.Context, conn *v1.Connection, sec
 	style, known := c.styles[key]
 	c.stylesMu.Unlock()
 	res, err := tokenOnce(ctx, c.HTTP, conn, secret, form, style, c.now())
-	var te *TokenError
-	if !known && errors.As(err, &te) && te.Code == "invalid_client" {
+	if !known && tryOtherStyle(err) {
 		style = styleBody
 		res, err = tokenOnce(ctx, c.HTTP, conn, secret, form, style, c.now())
 	}

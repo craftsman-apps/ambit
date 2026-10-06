@@ -87,6 +87,36 @@ func TestClientAuthIsRememberedAndForgottenWithTheSecret(t *testing.T) {
 	}
 }
 
+// GitHub answers 404 {"error":"Not Found"} to client credentials in a Basic header: while the style is
+// unknown, any refusal that is not transient tries the other style.
+func TestClientAuthFallsBackOnAnyRefusal(t *testing.T) {
+	var styles []string
+	conn := tokenServer(t, func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		if _, _, basic := r.BasicAuth(); basic {
+			styles = append(styles, "basic")
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":"Not Found"}`))
+			return
+		}
+		styles = append(styles, "body")
+		json.NewEncoder(w).Encode(map[string]any{"access_token": "gho_x", "token_type": "bearer"})
+	})
+	c := &Connections{}
+	for i := 0; i < 2; i++ {
+		if res, err := c.tokenRequest(t.Context(), conn, "s", url.Values{"grant_type": {"authorization_code"}, "code": {"x"}}); err != nil || res.AccessToken != "gho_x" {
+			t.Fatalf("request %d: %+v %v", i, res, err)
+		}
+	}
+	if strings.Join(styles, ",") != "basic,body,body" {
+		t.Fatalf("styles %v: the working style must be remembered", styles)
+	}
+	styles = nil
+	if _, err := TokenRequest(t.Context(), nil, conn, "s", url.Values{"grant_type": {"authorization_code"}}, time.Now()); err != nil {
+		t.Fatalf("stateless form: %v (styles %v)", err, styles)
+	}
+}
+
 func TestTooManyRequestsAndTimeoutAreTransient(t *testing.T) {
 	for _, status := range []int{http.StatusTooManyRequests, http.StatusRequestTimeout} {
 		conn := tokenServer(t, func(w http.ResponseWriter, r *http.Request) { http.Error(w, "later", status) })

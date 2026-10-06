@@ -95,6 +95,14 @@ function ServerRow({ s, open, onToggle }: { s: ServerView; open: boolean; onTogg
     mutationFn: () => sendJSON("POST", `/api/servers/${encodeURIComponent(s.name)}/approve-tools`, {}),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["servers"] }),
   });
+  const readTools = useMutation({
+    mutationFn: () => sendJSON("PUT", `/api/servers/${encodeURIComponent(s.name)}/tool-reader`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["servers"] }),
+  });
+  const clearReader = useMutation({
+    mutationFn: () => sendJSON("DELETE", `/api/servers/${encodeURIComponent(s.name)}/tool-reader`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["servers"] }),
+  });
   return (
     <>
       <tr onClick={onToggle} aria-expanded={open} className={cn("cursor-pointer border-b border-line-soft align-top hover:bg-sunken", open && "bg-selected")}>
@@ -127,6 +135,17 @@ function ServerRow({ s, open, onToggle }: { s: ServerView; open: boolean; onTogg
               {s.connection && <> · each call uses the caller's own <span className="font-mono">{s.connection}</span> grant</>}
               {s.requestedBy && <> · asked for by {s.requestedBy}</>}
             </p>
+            {s.connection && (
+              <p className="mb-2 flex flex-wrap items-center gap-2 text-[12.5px]" data-testid={`reader-${s.name}`}>
+                {s.reader ? <span>Tools read with {s.reader}'s account{s.toolsReadAt && `, ${new Date(s.toolsReadAt).toLocaleString()}`}</span>
+                  : <span className="text-muted">No account reads this server's tools yet</span>}
+                {me.data?.role === "admin" && <>
+                  <Button className="w-auto" disabled={readTools.isPending} onClick={() => readTools.mutate()}>Use my account to read tools</Button>
+                  {s.reader && <Button variant="outline" className="w-auto" disabled={clearReader.isPending} onClick={() => clearReader.mutate()}>Clear</Button>}
+                </>}
+                {(readTools.isError || clearReader.isError) && <span className="text-bad" role="alert">{(readTools.error ?? clearReader.error)?.message}</span>}
+              </p>
+            )}
             {s.tools.length === 0 && <p className="text-muted">{s.ready === "True" ? "Reading tools…" : s.message || "Tools appear once the server is running."}</p>}
             <ul className="grid grid-cols-2 gap-x-6 gap-y-1">
               {s.tools.map((t) => (

@@ -663,3 +663,18 @@ func TestNonExpiringTokenWithoutRefreshTokenStaysUsable(t *testing.T) {
 		t.Fatalf("token %q grant %+v err %v", tok, g, err)
 	}
 }
+
+// "Connect again" on a connected grant (a non-expiring token the provider cancelled) replaces it.
+func TestConnectAgainReplacesAConnectedGrant(t *testing.T) {
+	saas := newFakeSaaS(t)
+	conns, _ := connFixture(t, saas)
+	a := testAuthOnly()
+	connect(t, conns, a, "alice@acme.test", "alice")
+	if r := connect(t, conns, a, "alice@acme.test", "alice-again"); r.StatusCode != http.StatusFound || !strings.HasPrefix(r.Header.Get("Location"), "/connections?connected=jira") {
+		t.Fatalf("connect again: %d %s", r.StatusCode, r.Header.Get("Location"))
+	}
+	g, _ := conns.Store.Get(t.Context(), "alice@acme.test", "jira")
+	if g == nil || g.AccessToken != "at-alice-again" || g.RefreshToken != "rt-alice-again" || g.State != grantConnectedState {
+		t.Fatalf("grant %+v", g)
+	}
+}

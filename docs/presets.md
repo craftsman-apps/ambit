@@ -42,6 +42,8 @@ Rules and limits:
 - Production presets accept `https` URLs only. A testing preset (`AMBIT_TEST_PRESETS`, Helm value
   `console.testPresets`) may also use plain `http`, only for `localhost` and hosts under `localtest.me`, `.svc` or `.svc.cluster.local`
   hosts.
+- For apps whose tokens do not expire (for example GitHub), Ambit cannot tell when the app cancels a token.
+  If the agent loses access, choose Connect again on the Connections page.
 
 ### Removing an app
 

@@ -7,6 +7,9 @@ cd "$(dirname "$0")/.."
 source test/lib.sh
 ensure_llm_setup "$NS"
 kubectl -n "$NS" apply -f test/llm/router.yaml >/dev/null
+# Start without a router of type LLM (a previous run may have left smart): ambit-router must be at 0 for check 1.
+kubectl -n "$NS" delete -f test/llm/router-llm.yaml --ignore-not-found >/dev/null
+kubectl -n "$NS" wait pod -l app.kubernetes.io/name=ambit-router --for=delete --timeout=120s >/dev/null 2>&1 || true
 kubectl -n "$NS" wait modelrouters.ambitproject.dev/auto --for=condition=Ready --timeout=120s >/dev/null || fail "router not Ready: $(kubectl -n "$NS" get modelrouters.ambitproject.dev auto -o jsonpath='{.status.conditions}')"
 LLM=http://llm.localtest.me:8080/v1
 # answered TOKEN BODY [PATH] [HEADER]: prints "STATUS MODEL" (the mock answers with the model it was asked for)
@@ -246,12 +249,12 @@ wait_until 60 '[[ "$(ask smart "$M" "$coding")" == "200 mock/echo" ]]' >/dev/nul
 fresh; echo "$M" > "$LT"
 load 180s "$W/ans-roll" > "$W/load-roll" 2>&1 & lp=$!
 sleep 10
-helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --set "routing.router.podAnnotations.restart=$(date +%s)" --wait --timeout 5m >/dev/null
+helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --set-string "routing.router.podAnnotations.restart=$(date +%s)" --wait --timeout 5m >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-router --timeout=180s >/dev/null
 [[ $(replicas) == 2 ]] || fail "7 a Helm upgrade changed ambit-router's replicas to $(replicas)"
 kubectl -n "$NS" patch modelrouters.ambitproject.dev smart --type merge -p '{"spec":{"classifier":{"type":"Rules"}}}' >/dev/null
 wait_until 120 '[[ $(replicas) == 0 ]]' >/dev/null || fail "7 not scaled down"
-helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --set "routing.router.podAnnotations.restart=$(date +%s)" --wait --timeout 5m >/dev/null
+helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --set-string "routing.router.podAnnotations.restart=$(date +%s)" --wait --timeout 5m >/dev/null
 [[ $(replicas) == 0 ]] || fail "7 a Helm upgrade changed ambit-router's replicas from 0 to $(replicas)"
 wait $lp || fail "7 load run: $(cat "$W/load-roll")"
 uv run --no-project python -c "
@@ -280,8 +283,15 @@ fresh
 H0=$(hash_now)
 kubectl -n "$NS" patch modelrouters.ambitproject.dev smart --type merge -p '{"spec":{"classifier":{"timeout":"10s"}}}' >/dev/null
 wait_until 60 '[[ $(hash_now) != "$H0" ]]' >/dev/null || fail "9 timeout change not published"
+# signal SIG: to ambit-router's process in $POD, sent from the kind node. Inside the pod ambit-router is PID 1, and
+# Linux ignores SIGSTOP and SIGKILL sent to a namespace's PID 1 from inside it (found 2026-10-07: a debug container
+# could not stop or kill it).
+signal() {
+  local cid; cid=$(kubectl -n "$NS" get pod "$POD" -o jsonpath='{.status.containerStatuses[0].containerID}'); cid=${cid#containerd://}
+  docker exec "${KIND_CLUSTER:-ambit}-control-plane" sh -c "kill -$1 \$(crictl inspect --output go-template --template '{{.info.pid}}' $cid)"
+}
 restore_faults() {
-  kubectl -n "$NS" exec "$POD" -c debugger -- sh -c 'kill -CONT $(pgrep -f /ambit-router)' >/dev/null 2>&1 || true
+  [[ -n "${POD:-}" ]] && signal CONT >/dev/null 2>&1 || true
   kubectl -n "$NS" scale deploy/ambit-controller --replicas=1 >/dev/null
 }
 trap 'rc=$?; restore_faults; on_exit $rc' EXIT
@@ -293,26 +303,24 @@ kubectl -n "$NS" wait pod -l app.kubernetes.io/name=ambit-router --for=delete --
 kubectl -n "$NS" scale deploy/ambit-router --replicas=1 >/dev/null; kubectl -n "$NS" rollout status deploy/ambit-router --timeout=120s >/dev/null
 POD=$(router_pods)
 wait_until 30 '[[ "$(ask smart "$M" "$coding")" == "200 mock/echo" ]]' >/dev/null || fail "9 one replica not routing"
-cat > "$W/debug.json" <<'JSON'
-{"securityContext": {"runAsUser": 65532, "runAsNonRoot": true, "allowPrivilegeEscalation": false, "capabilities": {"drop": ["ALL"]}}}
-JSON
-kubectl -n "$NS" debug "$POD" --image=busybox:1.36 --target=router --container=debugger --profile=general --custom="$W/debug.json" -- sleep 3600 >/dev/null
-wait_until 60 '[[ $(kubectl -n "$NS" get pod "$POD" -o jsonpath="{.status.ephemeralContainerStatuses[0].state.running}") ]]' >/dev/null || fail "9 debug container not running"
 # paused while it holds a request: the request waits, then completes when the process continues
 c0=$(classified)
 ( ask smart "$M" CLASSIFY-SLOW > "$W/paused" ) & rp=$!
 wait_until 10 '(( $(classified) > c0 ))' >/dev/null || fail "9 the request did not reach the classifier"
-kubectl -n "$NS" exec "$POD" -c debugger -- sh -c 'kill -STOP $(pgrep -f /ambit-router)'
-sleep 2
-kubectl -n "$NS" exec "$POD" -c debugger -- sh -c 'kill -CONT $(pgrep -f /ambit-router)'
+signal STOP
+sleep 5 # longer than the 3 s classification: only a paused ambit-router keeps the request open this long
+kill -0 $rp 2>/dev/null || fail "9 the request finished while ambit-router was paused: the signal did not arrive ($(cat "$W/paused"))"
+signal CONT
 wait $rp
-[[ "$(cat "$W/paused" | cut -d' ' -f1)" == 200 ]] || fail "9 paused ambit-router: the request must complete after it continues: $(cat "$W/paused") $(cat "$W/r")"
+[[ "$(cut -d' ' -f1 "$W/paused")" == 200 ]] || fail "9 paused ambit-router: the request must complete after it continues: $(cat "$W/paused")"
 # killed (the process crashes) while it holds a request: that request fails, the next ones do not
+restarts=$(kubectl -n "$NS" get pod "$POD" -o jsonpath='{.status.containerStatuses[0].restartCount}')
 c0=$(classified)
 ( ask smart "$M" CLASSIFY-SLOW > "$W/killed" ) & rp=$!
 wait_until 10 '(( $(classified) > c0 ))' >/dev/null || fail "9 the request did not reach the classifier"
-kubectl -n "$NS" exec "$POD" -c debugger -- sh -c 'kill -KILL $(pgrep -f /ambit-router)' || true
+signal KILL
 wait $rp
+wait_until 60 '[[ $(kubectl -n "$NS" get pod "$POD" -o jsonpath="{.status.containerStatuses[0].restartCount}") -gt $restarts ]]' >/dev/null || fail "9 the kill did not reach ambit-router (no restart)"
 [[ "$(cut -d' ' -f1 "$W/killed")" == 500 ]] || fail "9 a request held by a killed ambit-router fails with 500 (fact 2), got $(cat "$W/killed")"
 wait_until 60 '[[ $(kubectl -n "$NS" get pod "$POD" -o jsonpath="{.status.containerStatuses[0].ready}") == true ]]' >/dev/null || fail "9 ambit-router did not restart"
 wait_until 30 '[[ "$(ask smart "$M" "$coding" | cut -d" " -f1)" == 200 ]]' >/dev/null || fail "9 the next request after the kill"

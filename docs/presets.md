@@ -170,3 +170,4 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | box | Box | mcp.box.com | yes |  | not yet |
 | dropbox | Dropbox | mcp.dropbox.com | no |  | not yet |
 | canva | Canva | mcp.canva.com | no | Canva MCP access for the developer app | not yet |
+| slack | Slack | mcp.slack.com | yes |  | not yet |

@@ -168,3 +168,24 @@
   clientSecretLabel: Client secret
   docs: https://www.canva.dev/docs/apps/mcp/access/
   live: { tool: search-designs, arguments: { query: "design" } }
+- id: slack
+  version: 1
+  displayName: Slack
+  category: Chat
+  server: { url: "https://mcp.slack.com/mcp", transport: streamable-http }
+  authorizationURL: https://slack.com/oauth/v2_user/authorize
+  tokenURL: https://slack.com/api/oauth.v2.user.access
+  revocationURL: https://slack.com/api/auth.revoke
+  resource: none
+  scopes: ["search:read.public", "search:read.private", "search:read.im", "search:read.mpim", "search:read.users", "search:read.files", "channels:history", "groups:history", "im:history", "mpim:history", "users:read"]
+  setup: |
+    1. Sign in to Slack as a workspace admin and open https://api.slack.com/apps. Click "Create New App" and choose "From scratch". Enter an app name and pick your workspace. Slack allows MCP only for apps that are internal to your workspace or published in the Slack Marketplace.
+    2. Open "OAuth & Permissions". Under "Redirect URLs", add {callbackURL}. Slack accepts only https redirect URLs.
+    3. Under "User Token Scopes", add: search:read.public, search:read.private, search:read.im, search:read.mpim, search:read.users, search:read.files, channels:history, groups:history, im:history, mpim:history, users:read.
+    4. Open "Agents & AI Apps" and turn on "Model Context Protocol". If you leave it off, sign-in works but the tool list is empty.
+    5. Open "Basic Information" and copy the Client ID and the Client Secret.
+    6. Install the app to your workspace ("Install App"), or reinstall it after any scope change.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client Secret
+  docs: https://docs.slack.dev/ai/slack-mcp-server/
+  live: { tool: read_user_profile, callback: https }

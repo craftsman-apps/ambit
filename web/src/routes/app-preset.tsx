@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useSearch } from "@tanstack/react-router";
 import { isProposed, sendJSON, useConfig, type EffectiveAccess, type PresetAddInput, type PresetView, type PullRequest, type ServerView } from "@/api";
@@ -30,7 +30,7 @@ function CopyLine({ text }: { text: string }) {
 function SetupForm({ p, onAdded }: { p: PresetView; onAdded: (app: string) => void }) {
   const qc = useQueryClient();
   const repository = useConfig().data?.repository;
-  const operation = useMemo(newOperation, []); // one per form: a retry reuses it
+  const [operation] = useState(newOperation); // one per form: a retry reuses it
   const [f, setF] = useState({ name: p.id, displayName: p.displayName, clientID: "", clientSecret: "" });
   const [values, setValues] = useState<Record<string, string>>({});
   const [serverURL, setServerURL] = useState(p.serverURL);
@@ -48,7 +48,7 @@ function SetupForm({ p, onAdded }: { p: PresetView; onAdded: (app: string) => vo
   const steps = (p.setup ?? "").split(/\n(?=\d+\.\s)/).map((s) => s.replace(/^\d+\.\s*/, ""));
   const callback = p.setup.match(/https?:\/\/\S+\/connections\/callback/)?.[0] ?? "";
   return (
-    <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); add.mutate(); }} aria-label={`Add ${p.displayName}`}>
+    <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); if (!add.isPending) add.mutate(); }} aria-label={`Add ${p.displayName}`}>
       <section className="space-y-2 rounded-md border border-line p-4">
         <h2 className="font-semibold">At {p.displayName}</h2>
         <ol className="list-decimal space-y-1 pl-5">{steps.map((s, i) => <li key={i}>{s}</li>)}</ol>
@@ -69,7 +69,7 @@ function SetupForm({ p, onAdded }: { p: PresetView; onAdded: (app: string) => vo
           <label className="block"><span className="mb-1 block text-muted">{p.clientIDLabel}</span>
             <input id="preset-client-id" aria-label="Client ID" className={field} value={f.clientID} onChange={(e) => setF({ ...f, clientID: e.target.value })} required /></label>
           <label className="block"><span className="mb-1 block text-muted">{p.clientSecretLabel}</span>
-            <input id="preset-client-secret" aria-label="Client secret" type="password" className={field} value={f.clientSecret} onChange={(e) => setF({ ...f, clientSecret: e.target.value })} required /></label>
+            <input id="preset-client-secret" aria-label="Client secret" type="password" autoComplete="new-password" className={field} value={f.clientSecret} onChange={(e) => setF({ ...f, clientSecret: e.target.value })} required /></label>
         </div>
         <details>
           <summary className="cursor-pointer text-accent-text">Advanced: server URL and scopes</summary>
@@ -114,7 +114,10 @@ function PickTools({ app }: { app: string }) {
   const waitedTooLong = asked !== null && Date.now() - asked > 30_000 && !srv?.tools.length;
   return (
     <section className="space-y-3 rounded-md border border-line p-4">
-      <p>{!a || (!a.allSignedIn && a.groups.length === 0) ? "Nobody can use its tools yet."
+      <p role={srv?.ready === "False" || access.isError ? "alert" : undefined}>{srv?.ready === "False" ? `This server is not ready: ${srv.message || "no reason given"}`
+        : access.isPending ? "Loading…"
+        : access.isError ? access.error.message
+        : !a || (!a.allSignedIn && a.groups.length === 0) ? "Nobody can use its tools yet."
         : `Groups: ${a.groups.join(", ") || "none"} · all signed-in users: ${a.allSignedIn ? "yes" : "no"} · a rule grants all tools: ${a.allTools ? "yes" : "no"}`}</p>
       {a?.allTools && <p className="text-warn">An existing access rule already grants every tool of this server, including tools it adds later.</p>}
       <h2 className="font-semibold">Pick tools</h2>
@@ -166,6 +169,7 @@ export function AppPresetPage() {
         {p && <p className="text-muted">Preset {p.id}, version {p.version}{p.testedOn ? ` · tested ${p.testedOn}` : ""}{p.preview ? " · preview" : ""}
           {p.requires ? ` · needs: ${p.requires}` : ""} · <a className="underline" href={p.docs} target="_blank" rel="noreferrer">vendor guide</a></p>}
         {q.isError && <p className="text-bad" role="alert">{q.error.message}</p>}
+        {q.isSuccess && !p && <p className="text-bad" role="alert">No preset named {id}.</p>}
         {p && !added && <SetupForm p={p} onAdded={setAdded} />}
         {added && <PickTools app={added} />}
       </section>

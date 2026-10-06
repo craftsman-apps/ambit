@@ -325,12 +325,12 @@ func TestServerViewShowsReader(t *testing.T) {
 	if err := c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "jira-mcp"}, &s); err != nil {
 		t.Fatal(err)
 	}
-	s.Status.Conditions = []metav1.Condition{{Type: "ToolsRead", Status: metav1.ConditionTrue, Reason: "Read", LastTransitionTime: when}}
+	s.Status.Conditions = []metav1.Condition{{Type: "ToolsRead", Status: metav1.ConditionTrue, Reason: "Read", Message: "1 tools", LastTransitionTime: when}}
 	if err := c.Update(t.Context(), &s); err != nil {
 		t.Fatal(err)
 	}
 	v := view()
-	if v.Reader != "admin@acme.test" || v.ToolsReadAt == nil || !v.ToolsReadAt.Equal(when.Time) {
+	if v.Reader != "admin@acme.test" || v.ToolsReadAt == nil || !v.ToolsReadAt.Equal(when.Time) || v.ToolsRead != "True" || v.ToolsReadMessage != "1 tools" {
 		t.Fatalf("reader view: %+v", v)
 	}
 }

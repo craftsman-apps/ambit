@@ -291,6 +291,8 @@ test.beforeAll(() => {
 
 test("admin adds an app from a preset, reads its tools with their own account, and grants one tool", async ({ page }) => {
   test.skip(!presetsE2E, "needs console.testPresets=true and step 5 objects");
+  const name = `whoami-${Date.now().toString(36)}`;
+  try {
   await signInAsBootstrapAdmin(page);
   await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Apps" }).click();
   await page.getByRole("button", { name: "Add an app" }).click();
@@ -299,7 +301,6 @@ test("admin adds an app from a preset, reads its tools with their own account, a
   await page.getByPlaceholder(/Search/).fill("who am i");
   await page.getByRole("link", { name: /Who am I \(test preset\)/ }).click();
   await expect(page.getByText("/connections/callback").first()).toBeVisible();
-  const name = `whoami-${Date.now().toString(36)}`;
   await page.getByLabel("Name", { exact: true }).fill(name);
   await page.getByLabel("Client ID").fill("ambit-connect");
   await page.getByLabel("Client secret").fill("saas-test-client-secret");
@@ -325,6 +326,19 @@ test("admin adds an app from a preset, reads its tools with their own account, a
   await page.getByText(name, { exact: true }).first().click();
   await expect(page.getByTestId(`reader-${name}`)).toContainText("Tools read with");
   await snap(page, "4-servers-reader");
+  } finally {
+    // Remove what this test created, also when it fails.
+    const ns = process.env.AMBIT_NS ?? "ambit-system";
+    for (const kind of ["accessrules", "servers", "connections"]) {
+      const obj = kind === "accessrules" ? `${name}-users` : name;
+      try { execFileSync("kubectl", ["-n", ns, "delete", `${kind}.ambitproject.dev`, obj, "--ignore-not-found"]); } catch { /* best effort */ }
+    }
+    try {
+      const secrets = execFileSync("kubectl", ["-n", `${ns}-grants`, "get", "secret", "-o", "name"], { encoding: "utf8" }).split("\n")
+        .filter((n) => n === `secret/ambit-conn-${name}` || n.startsWith(`secret/grant-${name}-`));
+      if (secrets.length) execFileSync("kubectl", ["-n", `${ns}-grants`, "delete", ...secrets, "--ignore-not-found"]);
+    } catch { /* best effort */ }
+  }
 });
 
 test("an unfinished addition can be removed", async ({ page }) => {

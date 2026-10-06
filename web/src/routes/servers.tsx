@@ -137,7 +137,9 @@ function ServerRow({ s, open, onToggle }: { s: ServerView; open: boolean; onTogg
             </p>
             {s.connection && (
               <p className="mb-2 flex flex-wrap items-center gap-2 text-[12.5px]" data-testid={`reader-${s.name}`}>
-                {s.reader ? <span>Tools read with {s.reader}'s account{s.toolsReadAt && `, ${new Date(s.toolsReadAt).toLocaleString()}`}</span>
+                {s.reader && s.toolsRead === "True" ? <span>Tools read with {s.reader}'s account{s.toolsReadAt && `, ${new Date(s.toolsReadAt).toLocaleString()}`}</span>
+                  : s.reader && s.toolsRead === "False" ? <span className="text-warn">{s.reader}'s account could not read the tools: {s.toolsReadMessage}</span>
+                  : s.reader ? <span className="text-muted">Waiting to read tools with {s.reader}'s account</span>
                   : <span className="text-muted">No account reads this server's tools yet</span>}
                 {me.data?.role === "admin" && <>
                   <Button className="w-auto" disabled={readTools.isPending} onClick={() => readTools.mutate()}>Use my account to read tools</Button>

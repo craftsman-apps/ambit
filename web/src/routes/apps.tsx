@@ -188,7 +188,8 @@ export function AppsPage() {
                   <td className="px-3 py-2.5"><span className="font-medium">{a.displayName}</span><span className="block font-mono text-[12px] text-muted">{a.name}</span>
                     {a.preset && <span className="block text-[12px] text-muted">preset {a.preset}</span>}
                     {a.newerPreset && <span className="block text-[12px] text-warn">A newer preset exists (version {a.newerPreset.version}): {a.newerPreset.changes.join("; ")}</span>}
-                    {!a.bound && a.bindTo && <span className="block text-[12px]">Not bound to a server <Button variant="outline" className="ml-1 w-auto" disabled={bind.isPending} onClick={() => bind.mutate(a.name)}>Bind to {a.bindTo}</Button></span>}</td>
+                    {!a.bound && a.bindTo && <span className="block text-[12px]">Not bound to a server <Button variant="outline" className="ml-1 w-auto" disabled={bind.isPending} onClick={() => bind.mutate(a.name)}>Bind to its server</Button>
+                      <span className="mt-1 block break-all font-mono text-muted">{a.bindTo}</span></span>}</td>
                   <td className="break-all px-3 py-2.5 font-mono text-[12px]">{a.tokenURL}</td>
                   <td className="px-3 py-2.5 font-mono text-[12px]">{a.scopes.join(" ") || <span className="font-sans text-muted">none</span>}</td>
                   <td className="px-3 py-2.5"><Revokes url={a.revocationURL} /></td>

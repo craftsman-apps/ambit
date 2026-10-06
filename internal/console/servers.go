@@ -46,9 +46,12 @@ type ServerView struct {
 	// Reader is the admin whose own account reads this per-user server's tools; ToolsReadAt is when the controller last changed the ToolsRead condition.
 	Reader      string     `json:"reader,omitempty"`
 	ToolsReadAt *time.Time `json:"toolsReadAt,omitempty"`
-	RequestedBy string     `json:"requestedBy"`
-	ApprovedBy  string     `json:"approvedBy"`
-	GitManaged  bool       `json:"gitManaged"`
+	// ToolsRead is the ToolsRead condition's status ("True", "False") and message; empty when the condition does not apply.
+	ToolsRead        string `json:"toolsRead,omitempty"`
+	ToolsReadMessage string `json:"toolsReadMessage,omitempty"`
+	RequestedBy      string `json:"requestedBy"`
+	ApprovedBy       string `json:"approvedBy"`
+	GitManaged       bool   `json:"gitManaged"`
 	// Rules that name this server.
 	Rules []string `json:"rules"`
 	// ChangedTools changed since approval (or are new); the gateway hides and refuses them.
@@ -176,6 +179,9 @@ func (c *Catalog) listServers(w http.ResponseWriter, r *http.Request, _ Session)
 		}
 		if cond := meta.FindStatusCondition(s.Status.Conditions, "ToolsRead"); cond != nil && !cond.LastTransitionTime.IsZero() {
 			v.ToolsReadAt = &cond.LastTransitionTime.Time
+		}
+		if cond := meta.FindStatusCondition(s.Status.Conditions, "ToolsRead"); cond != nil {
+			v.ToolsRead, v.ToolsReadMessage = string(cond.Status), cond.Message
 		}
 		for _, ar := range rules {
 			if slices.ContainsFunc(ar.Spec.Servers, func(sa v1.ServerAccess) bool { return sa.Name == s.Name }) {

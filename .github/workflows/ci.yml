@@ -52,14 +52,15 @@ jobs:
         with: { config: kind/cluster.yaml, cluster_name: ambit, wait: 120s }
       - name: Install Ambit on kind
         run: make kind-up image install
-      - name: Show test presets in the console
-        run: helm upgrade ambit charts/ambit -n ambit-system --reuse-values --set console.testPresets=true --wait --timeout 5m
       - name: OpenRouter key (optional repository secret; free models only)
         env: { OPENROUTER_API_KEY: "${{ secrets.OPENROUTER_API_KEY }}" }
         run: |
           if [ -n "$OPENROUTER_API_KEY" ]; then mkdir -p ~/.config/ambit && printf '%s' "$OPENROUTER_API_KEY" > ~/.config/ambit/openrouter-api-key; fi
       - name: Acceptance tests (every step)
         run: make test
+      # After `make test`: the step scripts run helm upgrade without --reuse-values, which resets this to false.
+      - name: Show test presets in the console
+        run: helm upgrade ambit charts/ambit -n ambit-system --reuse-values --set console.testPresets=true --wait --timeout 5m
       - name: UI tests (Playwright)
         run: |
           cd web && npm ci --no-fund --no-audit && npx playwright install --with-deps chromium

@@ -63,7 +63,7 @@ export type RuleInput = { name?: string; groups: string[]; allSignedIn: boolean;
 export type Tool = { name: string; description?: string; readOnlyHint?: boolean; destructiveHint?: boolean };
 export type ServerView = {
   name: string; displayName: string; image: string; url: string; connection: string; transport: string; ready: string; message: string;
-  tools: Tool[]; reader?: string; toolsReadAt?: string; requestedBy: string; approvedBy: string; gitManaged: boolean; rules: string[]; changedTools: string[];
+  tools: Tool[]; reader?: string; toolsReadAt?: string; toolsRead?: string; toolsReadMessage?: string; requestedBy: string; approvedBy: string; gitManaged: boolean; rules: string[]; changedTools: string[];
 };
 export type RequestView = {
   name: string; serverName: string; displayName: string; image: string; url: string; connection: string; transport: string; reason: string;

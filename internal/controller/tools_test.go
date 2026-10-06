@@ -97,3 +97,56 @@ func TestListToolsRefusesRedirects(t *testing.T) {
 		t.Fatalf("followed the redirect: %v %v", tools, err)
 	}
 }
+
+func TestListToolsAtSendsBearerAndKeepsHints(t *testing.T) {
+	s := mcp.NewServer(&mcp.Implementation{Name: "t", Version: "1"}, nil)
+	destructive := true
+	mcp.AddTool(s, &mcp.Tool{Name: "delete_record", Annotations: &mcp.ToolAnnotations{DestructiveHint: &destructive}},
+		func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
+			return &mcp.CallToolResult{}, nil, nil
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "get_record", Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
+			return &mcp.CallToolResult{}, nil, nil
+		})
+	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, &mcp.StreamableHTTPOptions{Stateless: true})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer reader-token" {
+			http.Error(w, "no", http.StatusUnauthorized)
+			return
+		}
+		h.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	tools, err := ListToolsAt(t.Context(), nil, srv.URL, "streamable-http", "reader-token")
+	if err != nil || len(tools) != 2 {
+		t.Fatalf("tools %v err %v", tools, err)
+	}
+	if tools[0].Name != "delete_record" || tools[0].DestructiveHint == nil || !*tools[0].DestructiveHint ||
+		tools[1].ReadOnlyHint == nil || !*tools[1].ReadOnlyHint {
+		t.Fatalf("hints %+v", tools)
+	}
+}
+
+// An SSE server may name its message endpoint by absolute URL; a hostile one could name another host.
+func TestBearerOnlyGoesToTheServersOwnHost(t *testing.T) {
+	var leaked string
+	hits := 0
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits++; leaked = r.Header.Get("Authorization") }))
+	defer other.Close()
+	hc := BearerClient(nil, "http://mcp.vendor.test/sse", "secret-token")
+	req, _ := http.NewRequest("POST", other.URL+"/messages", nil)
+	_, _ = hc.Do(req)
+	if hits != 1 || leaked != "" {
+		t.Fatalf("other host: %d hits, Authorization %q", hits, leaked)
+	}
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, other.URL, http.StatusFound) }))
+	defer redirect.Close()
+	hc = BearerClient(nil, redirect.URL, "secret-token")
+	if resp, err := hc.Get(redirect.URL); err == nil && resp.StatusCode != http.StatusFound {
+		t.Fatal("redirect followed")
+	}
+	if hits != 1 || leaked != "" {
+		t.Fatalf("redirect reached the other host: %d hits, Authorization %q", hits, leaked)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -45,6 +46,44 @@ var noRedirects = &http.Client{CheckRedirect: func(*http.Request, []*http.Reques
 	return errors.New("redirects are not followed: approve the final URL instead")
 }}
 
+type bearerTransport struct {
+	token, scheme, host string
+	next                http.RoundTripper
+}
+
+// RoundTrip adds the token only for the server's own scheme and host.
+func (b bearerTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Scheme == b.scheme && r.URL.Host == b.host {
+		r = r.Clone(r.Context())
+		r.Header.Set("Authorization", "Bearer "+b.token)
+	}
+	return b.next.RoundTrip(r)
+}
+
+// BearerClient sends token to endpoint's host only and follows no redirects.
+func BearerClient(base *http.Client, endpoint, token string) *http.Client {
+	next := http.DefaultTransport
+	if base != nil && base.Transport != nil {
+		next = base.Transport
+	}
+	u, _ := url.Parse(endpoint)
+	if u == nil {
+		u = &url.URL{} // unparsable endpoint matches no request, so no token is sent
+	}
+	return &http.Client{Transport: bearerTransport{token: token, scheme: u.Scheme, host: u.Host, next: next},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+}
+
+// ListToolsAt lists the tools of an MCP server at a URL with one user's token (per-user servers). It
+// follows no redirects, like ListTools.
+func ListToolsAt(ctx context.Context, base *http.Client, endpoint, transport, bearer string) ([]v1.Tool, error) {
+	hc := BearerClient(base, endpoint, bearer)
+	if transport == "sse" {
+		return listTools(ctx, &mcp.SSEClientTransport{Endpoint: endpoint, HTTPClient: hc})
+	}
+	return listTools(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint, MaxRetries: -1, DisableStandaloneSSE: true, HTTPClient: hc})
+}
+
 // Fingerprint identifies a tool definition: what a model reads (name, description) and what it may
 // send (input schema). The schema is decoded and re-encoded, so key order does not change it.
 // ambit-guard computes the same value from the gateway's tools/list response.
@@ -74,7 +113,13 @@ func listTools(ctx context.Context, t mcp.Transport) ([]v1.Tool, error) {
 			return nil, fmt.Errorf("tools/list: %w", err)
 		}
 		schema, _ := json.Marshal(tool.InputSchema)
-		out = append(out, v1.Tool{Name: tool.Name, Description: tool.Description, Fingerprint: Fingerprint(tool.Name, tool.Description, schema)})
+		t := v1.Tool{Name: tool.Name, Description: tool.Description, Fingerprint: Fingerprint(tool.Name, tool.Description, schema)}
+		if a := tool.Annotations; a != nil {
+			ro := a.ReadOnlyHint
+			t.ReadOnlyHint = &ro
+			t.DestructiveHint = a.DestructiveHint
+		}
+		out = append(out, t)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil

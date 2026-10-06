@@ -52,17 +52,19 @@ func verify(token string, keys *jose.JSONWebKeySet, iss, aud string, now time.Ti
 	return nil, errors.New("no key verifies the signature")
 }
 
-// jwks fetches the realm's keys once and keeps them; a failed fetch is retried on the next request.
+// jwks fetches the realm's keys and keeps them for 30 s (Keycloak in the test cluster makes new keys
+// whenever it restarts); a failed fetch is retried on the next request.
 type jwks struct {
 	url  string
 	mu   sync.Mutex
 	keys *jose.JSONWebKeySet
+	at   time.Time
 }
 
 func (j *jwks) get() (*jose.JSONWebKeySet, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if j.keys != nil {
+	if j.keys != nil && time.Since(j.at) < 30*time.Second {
 		return j.keys, nil
 	}
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Get(j.url)
@@ -77,7 +79,7 @@ func (j *jwks) get() (*jose.JSONWebKeySet, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&ks); err != nil {
 		return nil, err
 	}
-	j.keys = &ks
+	j.keys, j.at = &ks, time.Now()
 	return j.keys, nil
 }
 

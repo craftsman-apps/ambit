@@ -29,7 +29,8 @@ kc_admin() {
 cleanup() {
   kubectl -n "$NS" delete -f test/connections/objects.yaml --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$GRANTS" delete secret -l ambitproject.dev/connection=saas --ignore-not-found >/dev/null 2>&1 || true
-  kubectl -n "$NS" delete "accessrules.$G/whoami-p-users" "servers.$G,connections.$G" whoami-p --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete "accessrules.$G" whoami-p-users --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete "servers.$G,connections.$G" whoami-p --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$GRANTS" delete secret -l ambitproject.dev/connection=whoami-p --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$GRANTS" delete secret ambit-conn-whoami-p --ignore-not-found >/dev/null 2>&1 || true
 }
@@ -46,6 +47,8 @@ if [[ $(command curl -s -o /dev/null -w '%{http_code}' -d grant_type=client_cred
   kubectl -n "$NS" rollout restart deploy/keycloak >/dev/null && kubectl -n "$NS" rollout status deploy/keycloak --timeout=300s >/dev/null
   wait_for 120 "command curl -sf $KC/realms/saas/.well-known/openid-configuration" || fail "saas realm not re-imported"
 fi
+# Keycloak makes new signing keys on every restart; the gateway reloads them within a few minutes.
+wait_for 400 'try_tools "$(token mira)"; [[ "$TOOLS" != "<error>" ]]' || fail "0 the gateway does not accept Keycloak tokens"
 kubectl -n "$GRANTS" create secret generic ambit-conn-saas --from-literal=clientSecret=saas-test-client-secret --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 kubectl -n "$GRANTS" delete secret -l ambitproject.dev/connection=saas --ignore-not-found >/dev/null
 kubectl -n "$NS" apply -f test/connections/objects.yaml >/dev/null
@@ -66,7 +69,7 @@ pass "1 mira without a grant: whoami withheld; My connections offers $link"
 sign_in keycloak alice alice-test-pass
 connect_saas alice alice-saas-pass
 [[ $(state_of) == connected ]] || fail "2 alice state: $(cat "$W/api")"
-got=$(call_whoami "$(token alice)")
+for _ in $(seq 1 20); do got=$(call_whoami "$(token alice)"); [[ "$got" != "not listed" ]] && break; sleep 3; done  # right after a gateway restart
 [[ "$got" == "alice @ $KC/realms/saas" ]] || fail "2 alice's call reached whoami as: $got"
 pass "2 alice connected; her call reached the server as: $got"
 
@@ -112,6 +115,7 @@ pass "6 mira disconnected; the provider confirmed the revocation (RFC 7009)"
 
 # 7 · Presets: priya adds "Who am I (test preset)" from the preset list, reads its tools with her own
 #     SaaS account, grants one tool to eng.
+helm upgrade ambit charts/ambit -n "$NS" --reuse-values --set console.testPresets=true --wait --timeout 5m >/dev/null  # the test preset is off by default
 sign_in keycloak priya priya-test-pass
 CODE=$(api POST /api/apps/from-preset "{\"operation\":\"s5p$(date +%s)\",\"preset\":\"whoami-test\",\"version\":1,\"name\":\"whoami-p\",\"displayName\":\"Who am I (preset)\",\"clientID\":\"ambit-connect\",\"clientSecret\":\"saas-test-client-secret\",\"values\":{}}")
 [[ $CODE == 201 ]] || fail "7 add from preset: HTTP $CODE $(cat "$W/api")"

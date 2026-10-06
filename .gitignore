@@ -6,3 +6,4 @@ web/playwright-report/
 bin/
 .sbom/
 upgrade-report-*.txt
+.worktrees/

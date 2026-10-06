@@ -193,7 +193,7 @@
   version: 1
   displayName: Zoom
   category: Meetings
-  server: { url: "https://mcp-us.zoom.us/mcp/zoom/streamable", transport: streamable-http }
+  server: { url: "https://mcp.zoom.us/mcp/zoom/streamable", transport: streamable-http }
   authorizationURL: https://zoom.us/oauth/authorize
   tokenURL: https://zoom.us/oauth/token
   revocationURL: https://zoom.us/oauth/revoke

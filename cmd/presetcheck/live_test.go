@@ -96,6 +96,17 @@ func TestLiveWithNonExpiringAccessTokenUsesIt(t *testing.T) {
 	}
 }
 
+// A token that does not expire and that the vendor cancelled: the error says how to sign in again.
+func TestLiveRefusedNonExpiringTokenSaysHowToSignInAgain(t *testing.T) {
+	srv, p := fakeVendor(t, false, nil)
+	pc := &PresetCreds{ClientID: "id", ClientSecret: "s", AccessToken: "cancelled-token"}
+	res := liveCheck(t.Context(), srv.Client(), p, pc, func() error { return nil })
+	want := `remove "accessToken" from presets.v in ~/.config/ambit/presetcheck.json, then run: make preset-live APP=v`
+	if res.Pass || !strings.Contains(res.Error, "sign in again") || !strings.Contains(res.Error, want) || strings.Contains(res.Error, "cancelled-token") {
+		t.Fatalf("%+v", res)
+	}
+}
+
 func TestLiveRenewErrorKeepsTheVendorCode(t *testing.T) {
 	srv, p := fakeVendor(t, false, nil)
 	res := liveCheck(t.Context(), srv.Client(), p, &PresetCreds{ClientID: "id", ClientSecret: "s", RefreshToken: "stale"}, func() error { return nil })

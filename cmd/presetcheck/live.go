@@ -108,6 +108,10 @@ func liveCheck(ctx context.Context, hc *http.Client, p presets.Preset, pc *Prese
 		}
 	}
 	tools, err := controller.ListToolsAt(ctx, hc, res.Server.URL, res.Server.Transport, access)
+	if err != nil && pc.RefreshToken == "" && pc.Expiry.IsZero() && strings.Contains(err.Error(), "Unauthorized") {
+		// A token that does not expire (GitHub OAuth Apps) and that the vendor cancelled; nothing tells Ambit.
+		return fail(fmt.Errorf("tools/list: %w: the vendor refused a token that does not expire; sign in again: remove \"accessToken\" from presets.%s in ~/.config/ambit/presetcheck.json, then run: make preset-live APP=%s (for the second test account, remove it from presets.%s.second)", err, p.ID, p.ID, p.ID))
+	}
 	if err != nil {
 		return fail(fmt.Errorf("tools/list: %w", err))
 	}

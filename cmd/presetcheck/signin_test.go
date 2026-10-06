@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -86,5 +87,31 @@ func TestSelfSignedCertCovers127(t *testing.T) {
 	}
 	if _, err := loadOrCreateCert(dir); err != nil { // the second run loads the same files
 		t.Fatal(err)
+	}
+}
+
+func TestSignInKeepsWaitingWhenTheBrowserDoesNotOpen(t *testing.T) {
+	flow := signInFlow{Listen: net.Listen, Open: func(u string) error {
+		q, _ := url.Parse(u)
+		go http.Get(q.Query().Get("redirect_uri") + "?state=" + q.Query().Get("state") + "&error=access_denied")
+		return errors.New("no browser")
+	}}
+	p := presets.Preset{ID: "v", Server: presets.ServerRef{URL: "https://mcp.v.test/mcp"}, AuthorizationURL: "https://a.test/authorize", TokenURL: "https://a.test/token"}
+	// The callback still arrives: the run waited for it instead of stopping at the browser error.
+	if err := flow.run(t.Context(), p, &PresetCreds{ClientID: "id"}); err == nil || !strings.Contains(err.Error(), "access_denied") {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestCertRefusesAWideKeyFile(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := loadOrCreateCert(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(dir, "presetcheck-key.pem"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadOrCreateCert(dir); err == nil || !strings.Contains(err.Error(), "0600") {
+		t.Fatalf("wide key accepted: %v", err)
 	}
 }

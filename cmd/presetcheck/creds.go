@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -41,16 +42,27 @@ func lockCreds(dir string) (func(), error) {
 }
 
 func loadCreds(path string) (*Creds, error) {
-	st, err := os.Stat(path)
+	// One handle for the mode check and the read; O_NOFOLLOW refuses a symlink in place of the file.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return &Creds{Presets: map[string]*PresetCreds{}}, nil
+	} else if errors.Is(err, syscall.ELOOP) {
+		return nil, fmt.Errorf("%s is a symlink; keep the credentials in a plain file", path)
 	} else if err != nil {
 		return nil, err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a plain file", path)
 	}
 	if st.Mode().Perm()&0o077 != 0 {
 		return nil, fmt.Errorf("%s is readable by others; run chmod 0600 on it", path)
 	}
-	b, err := os.ReadFile(path)
+	b, err := io.ReadAll(f)
 	if err != nil {
 		return nil, err
 	}
@@ -74,20 +86,33 @@ func saveCreds(path string, c *Creds) error {
 		return err
 	}
 	tmp := path + ".tmp"
-	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	// A stale tmp file (from a crash) may have a wider mode; remove it and create a fresh one.
+	if err := os.Remove(tmp); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
-	if _, err := f.Write(b); err != nil {
-		f.Close()
+	_, err = f.Write(b)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp, path)
+	}
+	if err != nil {
+		os.Remove(tmp)
 		return err
 	}
-	if err := f.Sync(); err != nil {
-		f.Close()
+	// fsync the directory so the rename itself survives a crash.
+	d, err := os.Open(filepath.Dir(path))
+	if err != nil {
 		return err
 	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	defer d.Close()
+	return d.Sync()
 }

@@ -266,11 +266,7 @@ func runLive(ctx context.Context, ids []string) error {
 			if s.Values == nil {
 				s.Values = pc.Values
 			}
-			r2 := check(p, s)
-			if !r2.Pass {
-				r.Pass, r.Error = false, "second account: "+r2.Error
-			}
-			r.DiffersBySecondAccount = fingerprintDiff(r.fingerprints, r2.fingerprints)
+			r = withSecond(r, check(p, s))
 		}
 		if r.Pass {
 			if err := reportToolChanges(filepath.Join(root, "test", "presets", "tools", p.ID+".txt"), r.Tools); err != nil {
@@ -379,13 +375,25 @@ func askCreds(p presets.Preset) (*PresetCreds, error) {
 	return pc, nil
 }
 
+// openBrowser prints the address when no browser opens, and returns nil so the sign-in keeps waiting.
 func openBrowser(u string) error {
 	cmd := "xdg-open"
 	if runtime.GOOS == "darwin" {
 		cmd = "open"
 	}
 	if err := exec.Command(cmd, u).Start(); err != nil {
-		return fmt.Errorf("could not open the browser (%s); open this address yourself: %s", err, u)
+		fmt.Printf("could not open the browser (%v); open this address yourself:\n%s\n", err, u)
 	}
 	return nil
+}
+
+// withSecond folds the second account's result into the first: a failing second account fails the preset,
+// and tool definitions are compared only when both accounts listed their tools.
+func withSecond(r, r2 Result) Result {
+	if !r2.Pass {
+		r.Pass, r.Error = false, "second account: "+r2.Error
+		return r
+	}
+	r.DiffersBySecondAccount = fingerprintDiff(r.fingerprints, r2.fingerprints)
+	return r
 }

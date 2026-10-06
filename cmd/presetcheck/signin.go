@@ -95,8 +95,9 @@ func (f signInFlow) run(ctx context.Context, p presets.Preset, pc *PresetCreds) 
 	})}
 	go srv.Serve(ln)
 	defer srv.Close()
-	if err := f.Open(res.Connection.AuthorizationURL + "?" + q.Encode()); err != nil {
-		return err
+	authURL := res.Connection.AuthorizationURL + "?" + q.Encode()
+	if err := f.Open(authURL); err != nil { // keep waiting: the maintainer can open the address by hand
+		fmt.Printf("could not open the browser (%v); open this address yourself within 5 minutes:\n%s\n", err, authURL)
 	}
 	var o outcome
 	select {
@@ -126,6 +127,9 @@ func (f signInFlow) run(ctx context.Context, p presets.Preset, pc *PresetCreds) 
 // it (1 year) in dir on first use. The maintainer accepts it once in the browser.
 func loadOrCreateCert(dir string) (*tls.Config, error) {
 	certPath, keyPath := filepath.Join(dir, "presetcheck-cert.pem"), filepath.Join(dir, "presetcheck-key.pem")
+	if st, err := os.Lstat(keyPath); err == nil && st.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("%s is readable by others; run chmod 0600 on it", keyPath)
+	}
 	if c, err := tls.LoadX509KeyPair(certPath, keyPath); err == nil && time.Now().Before(c.Leaf.NotAfter) {
 		return &tls.Config{Certificates: []tls.Certificate{c}}, nil
 	}

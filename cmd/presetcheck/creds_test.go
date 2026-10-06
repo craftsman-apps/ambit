@@ -14,8 +14,8 @@ func TestCredsArePrivateAndOneRunAtATime(t *testing.T) {
 	if err := saveCreds(path, c); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
-		t.Fatalf("mode %v", st.Mode())
+	if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("stat %v err %v", st, err)
 	}
 	unlock, err := lockCreds(dir)
 	if err != nil {
@@ -40,5 +40,36 @@ func TestCredsArePrivateAndOneRunAtATime(t *testing.T) {
 	os.Chmod(path, 0o644)
 	if _, err := loadCreds(path); err == nil || !strings.Contains(err.Error(), "0600") {
 		t.Fatalf("readable file accepted: %v", err)
+	}
+}
+
+func TestLoadCredsRefusesSymlink(t *testing.T) {
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real.json")
+	if err := saveCreds(real, &Creds{Presets: map[string]*PresetCreds{}}); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "presetcheck.json")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadCreds(link); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("symlink accepted: %v", err)
+	}
+	if _, err := loadCreds(real); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSaveCredsReplacesAWideStaleTmpFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "presetcheck.json")
+	if err := os.WriteFile(path+".tmp", []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveCreds(path, &Creds{Presets: map[string]*PresetCreds{}}); err != nil {
+		t.Fatal(err)
+	}
+	if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o600 {
+		t.Fatalf("stat %v err %v", st, err)
 	}
 }

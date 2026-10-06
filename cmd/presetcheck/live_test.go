@@ -18,26 +18,32 @@ import (
 // fakeVendor: a TLS vendor with /token (refresh rotates rt1 → rt2) and /mcp (go-sdk server, tool "whoami",
 // requires the renewed access token). onCall runs at each MCP request.
 func fakeVendor(t *testing.T, toolError bool, onCall func()) (*httptest.Server, presets.Preset) {
+	return fakeVendorWith(t, "rt1", "at2", "rt2", toolError, "alice", onCall)
+}
+
+// fakeVendorWith is fakeVendor with chosen tokens: refresh rotates oldRT → newRT and issues access; the tool
+// answers text.
+func fakeVendorWith(t *testing.T, oldRT, access, newRT string, toolError bool, text string, onCall func()) (*httptest.Server, presets.Preset) {
 	s := mcp.NewServer(&mcp.Implementation{Name: "v", Version: "1"}, nil)
 	mcp.AddTool(s, &mcp.Tool{Name: "whoami"}, func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
-		return &mcp.CallToolResult{IsError: toolError, Content: []mcp.Content{&mcp.TextContent{Text: "alice"}}}, nil, nil
+		return &mcp.CallToolResult{IsError: toolError, Content: []mcp.Content{&mcp.TextContent{Text: text}}}, nil, nil
 	})
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, &mcp.StreamableHTTPOptions{Stateless: true})
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/token":
 			r.ParseForm()
-			if r.PostForm.Get("refresh_token") != "rt1" {
+			if r.PostForm.Get("refresh_token") != oldRT {
 				w.WriteHeader(400)
 				w.Write([]byte(`{"error":"invalid_grant"}`))
 				return
 			}
-			w.Write([]byte(`{"access_token":"at2","refresh_token":"rt2","expires_in":3600}`))
+			w.Write([]byte(`{"access_token":"` + access + `","refresh_token":"` + newRT + `","expires_in":3600}`))
 		case "/mcp":
 			if onCall != nil {
 				onCall()
 			}
-			if r.Header.Get("Authorization") != "Bearer at2" {
+			if r.Header.Get("Authorization") != "Bearer "+access {
 				w.WriteHeader(401)
 				return
 			}
@@ -111,5 +117,31 @@ func TestSecondAccountDiffAndToolFile(t *testing.T) {
 	}
 	if redact("token abcdefgh1234 and s", "abcdefgh1234", "s", "") != "token [secret] and s" {
 		t.Fatal("redact")
+	}
+}
+
+func TestLiveRedactsLongTokensInToolErrorText(t *testing.T) {
+	const oldRT, access, newRT = "refresh-old-1234567", "access-token-7654321", "refresh-new-1234567"
+	srv, p := fakeVendorWith(t, oldRT, access, newRT, true, "bad token "+access+" after "+oldRT+" now "+newRT, nil)
+	res := liveCheck(t.Context(), srv.Client(), p, &PresetCreds{ClientID: "id", ClientSecret: "s", RefreshToken: oldRT}, func() error { return nil })
+	if res.Pass || !strings.Contains(res.Error, "[secret]") {
+		t.Fatalf("%+v", res)
+	}
+	for _, tok := range []string{oldRT, access, newRT} {
+		if strings.Contains(res.Error, tok) {
+			t.Fatalf("token in error: %s", res.Error)
+		}
+	}
+}
+
+func TestSecondAccountDiffOnlyWhenItPassed(t *testing.T) {
+	first := Result{Pass: true, fingerprints: map[string]string{"a": "1"}}
+	r := withSecond(first, Result{Error: "renew: invalid_grant"})
+	if r.Pass || r.Error != "second account: renew: invalid_grant" || len(r.DiffersBySecondAccount) != 0 {
+		t.Fatalf("%+v", r)
+	}
+	r = withSecond(first, Result{Pass: true, fingerprints: map[string]string{"a": "2"}})
+	if !r.Pass || strings.Join(r.DiffersBySecondAccount, ",") != "a" {
+		t.Fatalf("%+v", r)
 	}
 }

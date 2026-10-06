@@ -174,10 +174,14 @@ func TestRevokeDuringAReadDiscardsTheResult(t *testing.T) {
 	}
 }
 
-// Many reads, consent changes and renewals at once: run with -race; no read may return another reader's list.
+// Many reads, consent changes by two admins, and renewals at once: run with -race. A read may return only
+// the list read with its own reader's token.
 func TestReaderConcurrentConsentChanges(t *testing.T) {
 	tr, _, _ := readerFixture(t)
 	tr.TTL = 0 // every call reads
+	tr.List = func(_ context.Context, _ *http.Client, _, _, bearer string) ([]v1.Tool, error) {
+		return []v1.Tool{{Name: bearer}}, nil // "at-admin", "renewed-lee", ...
+	}
 	var wg sync.WaitGroup
 	for i := range 8 {
 		wg.Add(1)
@@ -186,14 +190,15 @@ func TestReaderConcurrentConsentChanges(t *testing.T) {
 			for range 10 {
 				switch i % 4 {
 				case 0:
-					_ = tr.SetReader(t.Context(), "admin@acme.test", "jira-mcp")
+					_ = tr.SetReader(t.Context(), []string{"admin@acme.test", "lee@acme.test"}[i/4], "jira-mcp")
 				case 1:
 					_ = tr.ClearReader(t.Context(), "jira-mcp")
 				case 2:
 					tr.Conns.CheckAll(t.Context(), true)
 				default:
-					if res, err := tr.Tools(t.Context(), "jira-mcp"); err == nil && res.Reader != "admin@acme.test" {
-						t.Errorf("reader %q", res.Reader)
+					res, err := tr.Tools(t.Context(), "jira-mcp")
+					if err == nil && !strings.HasSuffix(res.Tools[0].Name, "-"+strings.TrimSuffix(res.Reader, "@acme.test")) {
+						t.Errorf("reader %q got the list read with %q", res.Reader, res.Tools[0].Name)
 					}
 				}
 			}
@@ -205,6 +210,65 @@ func TestReaderConcurrentConsentChanges(t *testing.T) {
 	tr.Conns.CheckAll(t.Context(), true)
 	if who, ok, err := tr.Reader(t.Context(), "jira-mcp"); !ok || who != "admin@acme.test" || err != nil {
 		t.Fatalf("consent lost by renewal: %q %v %v", who, ok, err)
+	}
+}
+
+// A reconnect while a renewal holds an older copy of the grant: the reconnected grant wins and carries no consent.
+func TestReconnectDuringRenewalKeepsTheNewGrant(t *testing.T) {
+	saas := newFakeSaaS(t)
+	conns, _ := connFixture(t, saas)
+	connect(t, conns, testAuthOnly(), "admin@acme.test", "admin")
+	g, _ := conns.Store.Get(t.Context(), "admin@acme.test", "jira")
+	g.ToolReaderFor = []string{"uid-jira-mcp"}
+	_ = conns.Store.Put(t.Context(), g)
+	inRenew, release := make(chan struct{}), make(chan struct{})
+	saas.mu.Lock()
+	saas.beforeRenew = func() { close(inRenew); <-release }
+	saas.mu.Unlock()
+	renewed := make(chan struct{})
+	go func() { conns.CheckAll(context.Background(), true); close(renewed) }()
+	<-inRenew // the renewal holds the old grant (with consent) and waits for the provider
+	reconnected := make(chan struct{})
+	go func() { connect(t, conns, testAuthOnly(), "admin@acme.test", "admin2"); close(reconnected) }()
+	time.Sleep(100 * time.Millisecond) // without the grant lock, the callback has saved the new grant by now
+	close(release)
+	<-renewed
+	<-reconnected
+	g, _ = conns.Store.Get(t.Context(), "admin@acme.test", "jira")
+	if g == nil || g.AccessToken != "at-admin2" || len(g.ToolReaderFor) != 0 {
+		t.Fatalf("stored grant %+v", g)
+	}
+}
+
+func TestToolsHandlerUnknownServer(t *testing.T) {
+	tr, _, _ := readerFixture(t)
+	rec := httptest.NewRecorder()
+	tr.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/v1/tools/nope", nil))
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), `"reason":"no such server"`) {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestToolReaderAPIErrors(t *testing.T) {
+	h, tr, a := readerAPIFixture(t)
+	key := tr.Conns.Store.Key
+	tr.Conns.Store.Key = []byte("short") // the grant store fails
+	if rec := do(t, h, "PUT", "/api/servers/jira-mcp/tool-reader", as(a, RoleAdmin), map[string]string{}); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("store failure on set: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(t, h, "DELETE", "/api/servers/jira-mcp/tool-reader", as(a, RoleAdmin), nil); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("store failure on clear: %d %s", rec.Code, rec.Body)
+	}
+	tr.Conns.Store.Key = key
+	if rec := do(t, h, "PUT", "/api/servers/nope/tool-reader", as(a, RoleAdmin), map[string]string{}); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown server: %d %s", rec.Code, rec.Body)
+	}
+	// The admin has not connected the app: a user error, not a server error.
+	g, _ := tr.Conns.Store.Get(t.Context(), "admin@acme.test", "jira")
+	_, _ = tr.Conns.Revoke(t.Context(), g)
+	if rec := do(t, h, "PUT", "/api/servers/jira-mcp/tool-reader", as(a, RoleAdmin), map[string]string{}); rec.Code != http.StatusConflict ||
+		!strings.Contains(rec.Body.String(), "connect jira") {
+		t.Fatalf("not connected: %d %s", rec.Code, rec.Body)
 	}
 }
 

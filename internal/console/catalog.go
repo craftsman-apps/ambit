@@ -216,7 +216,7 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	if c.Tools != nil {
 		mux.HandleFunc("PUT /api/servers/{name}/tool-reader", allow("only admins can choose a tool reader", func(w http.ResponseWriter, r *http.Request, s Session) {
 			if err := c.Tools.SetReader(r.Context(), s.Email, r.PathValue("name")); err != nil {
-				writeErr(w, http.StatusBadRequest, err.Error())
+				writeConsentErr(w, err)
 				return
 			}
 			slog.Info("tool reader set", "server", r.PathValue("name"), "reader", s.Email)
@@ -224,7 +224,7 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 		}, RoleAdmin))
 		mux.HandleFunc("DELETE /api/servers/{name}/tool-reader", allow("only admins can clear a tool reader", func(w http.ResponseWriter, r *http.Request, s Session) {
 			if err := c.Tools.ClearReader(r.Context(), r.PathValue("name")); err != nil {
-				serverErr(w, err)
+				writeConsentErr(w, err)
 				return
 			}
 			slog.Info("tool reader cleared", "server", r.PathValue("name"), "by", s.Email)

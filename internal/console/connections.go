@@ -262,7 +262,10 @@ func (c *Connections) callback(w http.ResponseWriter, r *http.Request, s Session
 	g := &Grant{Email: s.Email, Connection: conn.Name, AccessToken: tok.AccessToken, RefreshToken: tok.RefreshToken,
 		Expiry: tok.Expiry, State: grantConnectedState, ConnectedAt: now, CheckedAt: now,
 		Resource: conn.Spec.Resource, ServerURL: conn.Spec.ServerURL}
-	if err := c.Store.Put(r.Context(), g); err != nil {
+	unlock := c.lockGrant(g.Email, g.Connection) // a renewal holding the old grant must not save over the new one
+	err = c.Store.Put(r.Context(), g)
+	unlock()
+	if err != nil {
 		serverErr(w, err)
 		return
 	}

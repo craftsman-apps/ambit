@@ -42,11 +42,20 @@ type ToolsResult struct {
 var (
 	ErrNoReader = errors.New("no reader")
 	errNotBound = errors.New("server is not bound to its connection; set the app's server URL")
+	errNoServer = errors.New("no such server")
 )
+
+// consentErr is a reason the signed-in admin cannot give consent (not connected, connected for another URL).
+type consentErr string
+
+func (e consentErr) Error() string { return string(e) }
 
 func (t *ToolReader) server(ctx context.Context, name string) (*v1.Server, error) {
 	var s v1.Server
 	err := t.Conns.Client.Get(ctx, client.ObjectKey{Namespace: t.Namespace, Name: name}, &s)
+	if apierrors.IsNotFound(err) {
+		return nil, errNoServer
+	}
 	return &s, err
 }
 
@@ -72,10 +81,10 @@ func (t *ToolReader) changed() {
 // usableFor: a connected grant issued for this server's URL.
 func usableFor(g *Grant, s *v1.Server) error {
 	if g == nil || g.State != grantConnectedState {
-		return errors.New("connect " + s.Spec.Connection + " with your own account first")
+		return consentErr("connect " + s.Spec.Connection + " with your own account first")
 	}
 	if g.ServerURL != s.Spec.URL {
-		return errors.New("your connection to " + s.Spec.Connection + " was made for another server; reconnect it")
+		return consentErr("your connection to " + s.Spec.Connection + " was made for another server; reconnect it")
 	}
 	return nil
 }
@@ -290,6 +299,8 @@ func (t *ToolReader) Handler() http.Handler {
 		switch {
 		case errors.Is(err, ErrNoReader):
 			writeJSON(w, http.StatusNotFound, map[string]string{"reason": "no reader"})
+		case errors.Is(err, errNoServer):
+			writeJSON(w, http.StatusNotFound, map[string]string{"reason": "no such server"})
 		case errors.Is(err, errNotBound):
 			writeJSON(w, http.StatusConflict, map[string]string{"reason": "server is not bound to its connection"})
 		case err != nil:
@@ -300,4 +311,17 @@ func (t *ToolReader) Handler() http.Handler {
 		}
 	})
 	return mux
+}
+
+// writeConsentErr answers a failed SetReader/ClearReader: the admin's own mistakes as 404/409, the rest as 500.
+func writeConsentErr(w http.ResponseWriter, err error) {
+	var ce consentErr
+	switch {
+	case errors.Is(err, errNoServer):
+		writeErr(w, http.StatusNotFound, err.Error())
+	case errors.As(err, &ce), errors.Is(err, errNotBound), errors.Is(err, ErrNoReader):
+		writeErr(w, http.StatusConflict, err.Error())
+	default:
+		serverErr(w, err)
+	}
 }

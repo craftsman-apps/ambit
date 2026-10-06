@@ -32,6 +32,7 @@ type fakeSaaS struct {
 	rotate         bool // renewal returns a new refresh token "rt2-<user>"
 	noRefreshToken bool // the code exchange issues no refresh token
 	renewed        int
+	beforeRenew    func() // called before a renewal is answered, outside mu; set it under mu
 }
 
 func newFakeSaaS(t *testing.T) *fakeSaaS {
@@ -39,6 +40,12 @@ func newFakeSaaS(t *testing.T) *fakeSaaS {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
+		f.mu.Lock()
+		hook := f.beforeRenew
+		f.mu.Unlock()
+		if hook != nil && r.PostForm.Get("grant_type") == "refresh_token" {
+			hook()
+		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")

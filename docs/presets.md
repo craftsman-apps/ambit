@@ -179,3 +179,4 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | servicenow | ServiceNow | your instance (service-now.com) | yes | MCP Server Console, Zurich Patch 9 or Australia Patch 2 or later | not yet |
 | databricks | Databricks | your workspace host | no | SQL warehouse; account admin creates the app connection | not yet |
 | pagerduty | PagerDuty | mcp.pagerduty.com | yes | Advanced Permissions | not yet |
+| gmail | Gmail | gmailmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | not yet |

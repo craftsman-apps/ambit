@@ -371,3 +371,29 @@
   clientSecretLabel: Client secret
   docs: https://docs.pagerduty.com/developer/mcp-tooling-remote-server
   live: { tool: browse_users }
+- id: gmail
+  version: 1
+  displayName: Gmail
+  category: Google Workspace
+  server: { url: "https://gmailmcp.googleapis.com/mcp/v1", transport: streamable-http }
+  authorizationURL: https://accounts.google.com/o/oauth2/v2/auth
+  tokenURL: https://oauth2.googleapis.com/token
+  revocationURL: https://oauth2.googleapis.com/revoke
+  resource: none
+  scopes: ["https://www.googleapis.com/auth/gmail.readonly"]
+  authorizeParams: { prompt: consent, access_type: offline }
+  preview: true
+  requires: "Google Workspace Developer Preview Program"
+  setup: |
+    1. Join the Google Workspace Developer Preview Program with the Google Cloud project you will use (https://developers.google.com/workspace/preview). The Gmail MCP server works only for enrolled projects.
+    2. In the Google Cloud console (https://console.cloud.google.com), select or create a project. One project and one OAuth client can serve all five Google Workspace presets (Gmail, Calendar, Drive, Docs, Sheets); if you already made one, reuse it and go to step 5.
+    3. Open APIs & Services, then Library, and enable Gmail API and "Gmail MCP API" (gmailmcp.googleapis.com).
+    4. Open Google Auth Platform (or APIs & Services, then OAuth consent screen). Under Audience, select Internal (your Workspace organization only). Add the scopes gmail.readonly under Data Access.
+    5. Open Clients, click "Create client", and select the application type "Web application".
+    6. Under "Authorized redirect URIs", add {callbackURL}. Click "Create".
+    7. Copy the Client ID and the Client secret. Add the scopes of each other Google preset you plan to use to the consent screen (step 4) before you connect it.
+    8. Ambit asks for offline access so Google returns a refresh token. Ambit requests read-only scopes only, so tools that change data will be refused by Google.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://developers.google.com/workspace/gmail/api/guides/configure-mcp-server
+  live: { tool: list_labels }

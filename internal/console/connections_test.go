@@ -645,3 +645,21 @@ func TestRotatedRefreshTokenIsSavedAfterTheRequestIsCancelled(t *testing.T) {
 		t.Fatalf("refresh token %q", g.RefreshToken)
 	}
 }
+
+// GitHub OAuth Apps (and Slack without rotation) issue a token with no expires_in and no refresh token:
+// it stays valid until the provider refuses it, so Ambit must not break it after an assumed hour.
+func TestNonExpiringTokenWithoutRefreshTokenStaysUsable(t *testing.T) {
+	saas := newFakeSaaS(t)
+	conns, _ := connFixture(t, saas)
+	saas.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"access_token":"gho_16C7e42F292c6912E7710c838347Ae178B4a","token_type":"bearer","scope":"repo"}`))
+	})
+	connect(t, conns, testAuthOnly(), "alice@acme.test", "alice")
+	expireAll(conns) // two hours later
+	conns.CheckAll(t.Context(), false)
+	tok, g, err := conns.Token(t.Context(), "alice@acme.test", "jira")
+	if err != nil || tok != "gho_16C7e42F292c6912E7710c838347Ae178B4a" || g.State != grantConnectedState || !g.Expiry.IsZero() {
+		t.Fatalf("token %q grant %+v err %v", tok, g, err)
+	}
+}

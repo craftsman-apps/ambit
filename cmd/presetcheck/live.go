@@ -86,7 +86,7 @@ func liveCheck(ctx context.Context, hc *http.Client, p presets.Preset, pc *Prese
 	}
 	var access string
 	if pc.RefreshToken == "" { // a vendor that issues no refresh token: use the access token until it expires
-		if pc.AccessToken == "" || time.Now().After(pc.Expiry) {
+		if pc.AccessToken == "" || (!pc.Expiry.IsZero() && time.Now().After(pc.Expiry)) { // zero expiry: does not expire
 			return fail(errors.New("no refresh token and the access token expired; sign in again"))
 		}
 		access = pc.AccessToken
@@ -230,7 +230,7 @@ func runLive(ctx context.Context, ids []string) error {
 	// check runs liveCheck for one account, signing in first when there is no usable token and once more
 	// when the vendor refuses the refresh token.
 	check := func(p presets.Preset, pc *PresetCreds) Result {
-		if pc.RefreshToken == "" && (pc.AccessToken == "" || time.Now().After(pc.Expiry)) {
+		if pc.RefreshToken == "" && (pc.AccessToken == "" || (!pc.Expiry.IsZero() && time.Now().After(pc.Expiry))) {
 			if err := signIn(p, pc); err != nil {
 				return Result{Preset: p.ID, Version: p.Version, Error: redact(err.Error(), pc.ClientSecret)}
 			}

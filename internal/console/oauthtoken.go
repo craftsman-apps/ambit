@@ -143,7 +143,13 @@ func tokenOnce(ctx context.Context, hc *http.Client, conn *v1.Connection, secret
 		}
 		return TokenResult{}, &TokenError{Status: resp.StatusCode, Code: code, Description: out.Description}
 	}
-	exp := now.Add(time.Hour) // no expires_in: assume one hour (the broker gets no 401 feedback)
+	// No expires_in: with a refresh token (new or the one being used), assume one hour, since the broker
+	// gets no 401 feedback. With none at all (GitHub OAuth Apps, Slack without rotation) the token does
+	// not expire: a zero Expiry means "valid until the provider refuses it".
+	var exp time.Time
+	if out.RefreshToken != "" || form.Get("refresh_token") != "" {
+		exp = now.Add(time.Hour)
+	}
 	if n, err := out.ExpiresIn.Int64(); err == nil && n > 0 {
 		exp = now.Add(time.Duration(n) * time.Second)
 	}

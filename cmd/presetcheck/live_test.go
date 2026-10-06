@@ -86,6 +86,16 @@ func TestLiveWithoutRefreshTokenUsesAccessTokenAndReports(t *testing.T) {
 	}
 }
 
+// A zero expiry (no expires_in and no refresh token, as GitHub OAuth Apps answer) means the token does not expire.
+func TestLiveWithNonExpiringAccessTokenUsesIt(t *testing.T) {
+	srv, p := fakeVendor(t, false, nil)
+	pc := &PresetCreds{ClientID: "id", ClientSecret: "s", AccessToken: "at2"}
+	res := liveCheck(t.Context(), srv.Client(), p, pc, func() error { return nil })
+	if !res.Pass || !res.NoRefreshToken {
+		t.Fatalf("%+v", res)
+	}
+}
+
 func TestLiveRenewErrorKeepsTheVendorCode(t *testing.T) {
 	srv, p := fakeVendor(t, false, nil)
 	res := liveCheck(t.Context(), srv.Client(), p, &PresetCreds{ClientID: "id", ClientSecret: "s", RefreshToken: "stale"}, func() error { return nil })

@@ -15,7 +15,7 @@ import (
 
 var fullCommitRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
-var watched = []string{"internal/console", "internal/presets", "cmd/presetcheck", "internal/controller/tools.go", "go.mod", "go.sum"}
+var watched = []string{"api/v1alpha1", "internal/console", "internal/presets", "cmd/presetcheck", "internal/controller/tools.go", "go.mod", "go.sum"}
 
 // required: the 23 initial presets (the user's decision: all ship in the first release).
 var required = []string{"github", "linear", "asana", "monday", "airtable", "box", "dropbox", "canva", "gmail", "google-calendar",

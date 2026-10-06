@@ -142,6 +142,12 @@ func TestChangedSinceInRealHistory(t *testing.T) {
 		t.Fatalf("a console change must be reported: %v %v", files, err)
 	}
 
+	write("api/v1alpha1/types.go", "package v1alpha1\n") // TokenRequest reads the Connection type
+	commit("api change")
+	if files, err := changedSinceIn(dir, tested); err != nil || !strings.Contains(strings.Join(files, " "), "api/v1alpha1/types.go") {
+		t.Fatalf("an API type change must be reported: %v %v", files, err)
+	}
+
 	write("internal/presets/presets.yaml", catalogYAML("https://b.example/mcp", "2026-11-01"))
 	commit("url change")
 	files, err := changedSinceIn(dir, tested)

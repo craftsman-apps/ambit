@@ -120,8 +120,8 @@ the release unless all of this holds:
 
 - `results.json` is at most 7 days old and not dated in the future.
 - It names a full 40-character commit id that is an ancestor of the release commit.
-- Nothing under `internal/console`, `internal/presets`, `cmd/presetcheck`, `internal/controller/tools.go`,
-  `go.mod` or `go.sum` has changed since that commit. The one exception is the `verified` and `verifiedOn`
+- Nothing under `api/v1alpha1`, `internal/console`, `internal/presets`, `cmd/presetcheck`,
+  `internal/controller/tools.go`, `go.mod` or `go.sum` has changed since that commit. The one exception is the `verified` and `verifiedOn`
   fields of the catalog.
 - The catalog hash matches the one in `results.json`.
 - Every preset with `verified: true` passed at its current `version`.

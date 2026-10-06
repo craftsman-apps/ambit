@@ -314,14 +314,14 @@ test("admin adds an app from a preset, reads its tools with their own account, a
   await page.goto(`/settings/apps/add/whoami-test?app=${name}&step=tools`);
   await page.getByRole("button", { name: "Use my account to read tools" }).click();
   const rows = page.getByRole("checkbox");
-  await expect(rows).toHaveCount(2, { timeout: 40_000 });
+  await expect(rows).toHaveCount(1, { timeout: 40_000 }); // the whoami server has one tool
   for (const box of await rows.all()) await expect(box).not.toBeChecked(); // nothing granted by default
   await page.getByRole("checkbox", { name: "whoami", exact: true }).check();
   await page.getByLabel("Groups").fill("eng");
   await snap(page, "3-pick-tools");
   await page.getByRole("button", { name: "Create access rule" }).click();
   await expect(page.getByText(/Groups: eng/)).toBeVisible();
-  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: /Servers/ }).click();
+  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: /MCP servers/ }).click();
   await page.getByText(name, { exact: true }).first().click();
   await expect(page.getByTestId(`reader-${name}`)).toContainText("Tools read with");
   await snap(page, "4-servers-reader");
@@ -330,12 +330,20 @@ test("admin adds an app from a preset, reads its tools with their own account, a
 test("an unfinished addition can be removed", async ({ page }) => {
   test.skip(!presetsE2E, "needs console.testPresets=true");
   await signInAsBootstrapAdmin(page);
-  // Create a Secret-only addition through the API (the Server name is taken, so the Server create fails).
-  const res = await page.request.post("/api/apps/from-preset", { data: { operation: "e2eunfinished1", preset: "whoami-test", version: 1,
-    name: "whoami", displayName: "dup", clientID: "x", clientSecret: "y", values: {} } });
-  expect([409, 502]).toContain(res.status());
-  await page.goto("/settings/apps");
+  // The console refuses a taken name before it creates the Secret, so make the state a crashed request leaves: a Secret with no Connection or Server.
+  const ns = process.env.AMBIT_NS ?? "ambit-system";
+  const input = JSON.stringify({ operation: "e2eunfinished1", preset: "whoami-test", version: 1, name: "e2eunfin", displayName: "Unfinished", clientID: "x", clientSecret: "", values: {} });
+  const kubectl = (...a: string[]) => execFileSync("kubectl", ["-n", `${ns}-grants`, ...a]);
+  kubectl("delete", "secret", "ambit-conn-e2eunfin", "--ignore-not-found");
+  kubectl("create", "secret", "generic", "ambit-conn-e2eunfin", "--from-literal=clientSecret=y");
+  kubectl("label", "secret", "ambit-conn-e2eunfin", "ambitproject.dev/app-secret=e2eunfin");
+  kubectl("annotate", "secret", "ambit-conn-e2eunfin", "ambitproject.dev/operation=e2eunfinished1", `ambitproject.dev/preset-input=${input}`);
+  // Direct mode lists a Secret only after 10 seconds, so a request still in progress is not shown as unfinished.
   const row = page.getByTestId("unfinished-e2eunfinished1");
+  await expect(async () => {
+    await page.goto("/settings/apps");
+    await expect(row).toBeVisible({ timeout: 1000 });
+  }).toPass({ timeout: 30_000 });
   await row.getByRole("button", { name: "Remove" }).click();
   await row.getByRole("button", { name: "Remove addition" }).click();
   await expect(row).toHaveCount(0);

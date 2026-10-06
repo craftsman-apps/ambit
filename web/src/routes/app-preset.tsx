@@ -12,7 +12,8 @@ async function get<T>(url: string): Promise<T> {
   if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `${url} returned ${r.status}`);
   return r.json();
 }
-const newOperation = () => crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+// getRandomValues works on plain HTTP; randomUUID needs a secure context.
+const newOperation = () => Array.from(crypto.getRandomValues(new Uint8Array(8)), (b) => b.toString(16).padStart(2, "0")).join("");
 
 function CopyLine({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);

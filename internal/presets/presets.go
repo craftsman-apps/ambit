@@ -94,6 +94,9 @@ func parse(b []byte) ([]Preset, error) {
 	return ps, err
 }
 
+// Parse reads catalog YAML (used by presetcheck to read the base branch's catalog).
+func Parse(b []byte) ([]Preset, error) { return parse(b) }
+
 func All() ([]Preset, error) { return parse(catalog) }
 
 // LoadTesting returns the presets for the kind tests (AMBIT_TEST_PRESETS=1 only).

@@ -312,7 +312,7 @@
     1. Choose the environment. A Docusign developer (demo) account uses mcp-d and account-d. A production account uses mcp and account. Use the same environment for both values in Ambit.
     2. Sign in to Docusign as an administrator. Open Settings, then "Apps and Keys", and click "Add App and Integration Key". Enter an app name.
     3. Copy the Integration Key; it is the Client ID.
-    4. Under "Authentication", choose "Authorization Code Grant" and answer "Yes" to "Is this client able to keep a secret?". Click "Add Secret Key" and copy the secret at once; Docusign shows it only once.
+    4. Under "Authentication", choose "Authorization Code Grant" and answer "Yes" to "Is this client able to keep a secret?". Click "Add Secret Key" and copy the secret at once; Docusign shows it only once. Leave "Require Proof Key for Code Exchange (PKCE)" off: with it on, Docusign refuses to renew tokens (invalid_grant unauthorized_client). Ambit still sends PKCE.
     5. Under "Additional settings", click "Add URI" and enter {callbackURL} as a redirect URI. Click "Save".
     6. The tools use these scopes: signature, adm_store_unified_repo_read, aow_manage. Each person must agree to them at first sign-in. The server acts with that person's own Docusign permissions.
     7. For a production account, Docusign requires the integration key to pass its Go-Live review before it can sign in people outside the developer account.
@@ -321,7 +321,7 @@
   clientSecretLabel: Secret Key
   docs: https://developers.docusign.com/platform/mcp-server/
   contract: { unauthenticated: [403] }
-  live: { tool: getWorkflowsList }
+  live: { tool: getUserInfo }
 - id: servicenow
   version: 1
   displayName: ServiceNow

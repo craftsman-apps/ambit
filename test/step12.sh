@@ -213,7 +213,9 @@ wait_until 20 '[[ "$(ask smart "$M" "$coding")" == "200 mock/echo" ]]' >/dev/nul
 LT=$W/load-token
 uv run --no-project python -c 'import json;print(json.dumps({"model":"smart","user":"load","messages":[{"role":"user","content":"please fix this code"}]}))' > "$W/b-smart.json"
 uv run --no-project python -c 'import json;print(json.dumps({"model":"mock/unpriced","user":"load","messages":[{"role":"user","content":"hello"}]}))' > "$W/b-direct.json"
-load() { go run ./test/load -rate 20 -duration "$1" -warmup 0s -token-file "$LT" -body-file "$W/b-smart.json" -body-file2 "$W/b-direct.json" -answers-file "$2"; }
+# built once: `go run` compiles first, and on a slow runner the load then started after the change below
+go build -o "$W/load" ./test/load || fail "7 build the load tool"
+load() { "$W/load" -rate 20 -duration "$1" -warmup 0s -token-file "$LT" -body-file "$W/b-smart.json" -body-file2 "$W/b-direct.json" -answers-file "$2"; }
 # a) one edit changes the category's meaning (description → new hash) and its target (lines): a label made under
 #    H1 may only reach H1's target, one made under H2 only H2's target
 fresh; echo "$M" > "$LT"

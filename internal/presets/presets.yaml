@@ -168,18 +168,19 @@
   displayName: Canva
   category: Design
   server: { url: "https://mcp.canva.com/mcp", transport: streamable-http }
-  authorizationURL: https://mcp.canva.com/authorize
-  tokenURL: https://mcp.canva.com/token
+  authorizationURL: https://www.canva.com/api/oauth/authorize
+  tokenURL: https://api.canva.com/rest/v1/oauth/token
   resource: none
-  scopes: ["profile:read", "design:meta:read", "design:content:read", "folder:read", "asset:read", "brandkit:read", "comment:read"]
-  requires: Canva MCP access for your developer app (self-service enablement in the Developer Portal is announced but not yet available)
+  scopes: ["profile:read", "design:meta:read", "design:content:read", "folder:read", "asset:read", "comment:read"]
+  requires: Multi-factor authentication turned on for the Canva account that owns the developer app
   setup: |
-    1. Sign in to Canva and open the Developer Portal at https://www.canva.com/developers/.
-    2. Create an app (or open an existing one) and turn on Canva MCP for it. If the option is not shown, Canva has not enabled MCP access for your account yet; ask Canva for access first.
-    3. Under the app's redirect URLs, add {callbackURL}. Canva accepts local redirect URLs only with the numeric address 127.0.0.1, not "localhost".
-    4. Select the scopes: profile:read, design:meta:read, design:content:read, folder:read, asset:read, brandkit:read, comment:read.
-    5. Under "Credentials", copy the Client ID, then click "Generate secret" and copy the secret at once.
-    6. Each person who connects needs a Canva account. Some tools need a paid Canva plan.
+    1. Sign in to Canva and turn on multi-factor authentication (Settings, then "Login & security"). Canva does not let an app use Canva MCP until it is on.
+    2. Open the Developer Portal at https://www.canva.com/developers/apps and click "Create an app". Choose "Public" (Private needs Canva Enterprise); the app works for you without Canva's review.
+    3. Open "Outside Canva", then "Configuration". Turn on "Canva MCP".
+    4. Under the scopes, select read for: profile, design:meta, design:content, folder, asset, comment.
+    5. Open "Redirect URLs" and add {callbackURL}. Canva accepts local redirect URLs only with the numeric address 127.0.0.1, not "localhost".
+    6. In "Configuration", under "Credentials", copy the Client ID, then click "Generate secret" and copy the secret at once.
+    7. Each person who connects needs a Canva account. Some tools need a paid Canva plan.
   clientIDLabel: Client ID
   clientSecretLabel: Client secret
   docs: https://www.canva.dev/docs/apps/mcp/access/

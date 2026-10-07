@@ -2,6 +2,8 @@
 # verified: true only after a passing `make preset-live` (docs/presets.md).
 - id: github
   version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
   displayName: GitHub
   category: Developer
   server: { url: "https://api.githubcopilot.com/mcp/", transport: streamable-http }

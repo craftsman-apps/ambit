@@ -191,7 +191,7 @@ toolhive-operator:
 
 # Passed to the agentgateway subchart. Set agentgateway.image.registry for a private registry.
 agentgateway:
-  # AgentgatewayModel is experimental and off by default in v1.5.0 (on by default after upstream PR #3492).
+  # AgentgatewayModel is on by default since v1.6.0; kept explicit because Ambit cannot work without it.
   # Ambit needs it: per-model authorization only works on AgentgatewayModel, because route-level
   # authorization runs before the gateway reads the requested model.
   agentgatewayModels:

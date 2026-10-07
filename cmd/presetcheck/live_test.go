@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/craftsman-apps/ambit/internal/console"
 	"github.com/craftsman-apps/ambit/internal/presets"
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -200,5 +202,18 @@ func TestCredsWithAnEmptySecretAreAskedAgain(t *testing.T) {
 		if got := credsComplete(c.pc); got != c.want {
 			t.Fatalf("credsComplete(%+v) = %v", c.pc, got)
 		}
+	}
+}
+
+// A vendor that refuses the saved client (invalid_client) makes the run forget the secret, so the next run asks.
+func TestRefusedClientIsForgotten(t *testing.T) {
+	pc := &PresetCreds{ClientID: "xh1655l48q5vjiw", ClientSecret: "wrong-wrong-wrong", RefreshToken: "rt"}
+	refused := fmt.Errorf("sign-in: %w", &console.TokenError{Status: 400, Code: "invalid_client", Description: "Invalid client_id or client_secret"})
+	if !forgetRefusedClient(pc, refused) || pc.ClientSecret != "" || pc.RefreshToken != "" || credsComplete(pc) {
+		t.Fatalf("refused client kept: %+v", pc)
+	}
+	other := &PresetCreds{ClientID: "id", ClientSecret: "s3cret-value"}
+	if forgetRefusedClient(other, fmt.Errorf("sign-in: %w", &console.TokenError{Status: 400, Code: "invalid_grant"})) || other.ClientSecret == "" {
+		t.Fatal("an invalid_grant answer must not forget the client secret")
 	}
 }

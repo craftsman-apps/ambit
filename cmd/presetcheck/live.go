@@ -230,6 +230,12 @@ func runLive(ctx context.Context, ids []string) error {
 		}
 		fmt.Printf("%s: sign in with the test account in the browser\n", p.ID)
 		if err := (signInFlow{Open: openBrowser, HTTP: hc, Listen: net.Listen, TLS: cert}).run(ctx, p, pc); err != nil {
+			if forgetRefusedClient(pc, err) {
+				if serr := save(); serr != nil {
+					return serr
+				}
+				return fmt.Errorf("sign-in: %w (the saved client ID or secret was removed; the next run asks for them again)", err)
+			}
 			return fmt.Errorf("sign-in: %w", err)
 		}
 		return save()
@@ -350,6 +356,17 @@ func reportToolChanges(path string, tools []string) error {
 		return err
 	}
 	return os.WriteFile(path, []byte(strings.Join(sorted, "\n")+"\n"), 0o644)
+}
+
+// forgetRefusedClient clears the saved secret and tokens when the vendor refused the client (invalid_client),
+// so the next run asks for the client ID and secret again instead of reusing a wrong paste.
+func forgetRefusedClient(pc *PresetCreds, err error) bool {
+	var te *console.TokenError
+	if !errors.As(err, &te) || te.Code != "invalid_client" {
+		return false
+	}
+	pc.ClientSecret, pc.RefreshToken, pc.AccessToken, pc.Expiry = "", "", "", time.Time{}
+	return true
 }
 
 // credsComplete: a saved entry needs both a client ID and a client secret; otherwise the run asks again.

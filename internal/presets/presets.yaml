@@ -298,6 +298,8 @@
   live: { tool: getUserInfo }
 - id: docusign
   version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
   displayName: Docusign
   category: Files
   server: { url: "https://{mcpHost}.docusign.com/mcp", transport: streamable-http }

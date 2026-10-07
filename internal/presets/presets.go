@@ -35,6 +35,9 @@ type Live struct {
 	Tool      string         `json:"tool"`
 	Arguments map[string]any `json:"arguments,omitempty"`
 	Callback  string         `json:"callback,omitempty"` // "http" (default) or "https"
+	// Tunnel: the vendor refuses 127.0.0.1 and localhost redirects (Zoom). The maintainer runs an https tunnel
+	// (for example cloudflared) to http://127.0.0.1:8765 and gives the live check its public callback address.
+	Tunnel bool `json:"tunnel,omitempty"`
 }
 
 type Preset struct {

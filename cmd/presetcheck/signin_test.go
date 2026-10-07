@@ -115,3 +115,40 @@ func TestCertRefusesAWideKeyFile(t *testing.T) {
 		t.Fatalf("wide key accepted: %v", err)
 	}
 }
+
+// Zoom refuses loopback redirects: with a tunnel, the vendor sees the tunnel's public https address while the
+// check listens with plain http on 127.0.0.1:8765, where the tunnel forwards.
+func TestSignInThroughATunnel(t *testing.T) {
+	var addr, authURL string
+	flow := signInFlow{
+		RedirectURL: "https://presetcheck.example.com/callback",
+		Listen:      func(network, a string) (net.Listener, error) { addr = a; return nil, errors.New("stop here") },
+		Open:        func(u string) error { authURL = u; return nil },
+	}
+	p := presets.Preset{ID: "zoom", Server: presets.ServerRef{URL: "https://mcp.zoom.test/mcp", Transport: "streamable-http"},
+		AuthorizationURL: "https://zoom.test/oauth/authorize", TokenURL: "https://zoom.test/oauth/token",
+		Live: presets.Live{Tool: "t", Tunnel: true}}
+	_ = flow.run(t.Context(), p, &PresetCreds{ClientID: "id", ClientSecret: "s3cret-value"})
+	if addr != "127.0.0.1:8765" {
+		t.Fatalf("listened on %q, want 127.0.0.1:8765", addr)
+	}
+	_ = authURL
+}
+
+func TestValidTunnelURL(t *testing.T) {
+	for u, ok := range map[string]bool{
+		"https://presetcheck.example.com/callback":      true,
+		"https://abc-def.trycloudflare.com/callback":    true,
+		"http://presetcheck.example.com/callback":       false, // the tunnel gives https
+		"https://localhost/callback":                    false,
+		"https://127.0.0.1/callback":                    false,
+		"https://presetcheck.example.com/other":         false,
+		"https://presetcheck.example.com/callback?x=1":  false,
+		"https://user@presetcheck.example.com/callback": false,
+		"https://presetcheck.example.com:8443/callback": false,
+	} {
+		if validTunnelURL(u) != ok {
+			t.Fatalf("validTunnelURL(%q) = %v", u, !ok)
+		}
+	}
+}

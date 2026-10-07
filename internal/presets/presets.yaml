@@ -218,14 +218,14 @@
   setup: |
     1. Sign in to the Zoom App Marketplace (https://marketplace.zoom.us) as an account admin or developer.
     2. Click Develop, then "Build app". Choose "General app" and click "Create".
-    3. Under "Basic Information", set the app to user-managed OAuth. In "OAuth Information", add {callbackURL} as the OAuth Redirect URL and press Tab so Zoom saves it ("Saved" appears). Zoom accepts only https redirect URLs.
+    3. Under "Basic Information", set the app to user-managed OAuth. In "OAuth Information", add {callbackURL} as the OAuth Redirect URL and press Tab so Zoom saves it ("Saved" appears). Zoom accepts only https redirect URLs on a public hostname; it refuses localhost and 127.0.0.1.
     4. Under "Basic Information", then "App Credentials", copy the Client ID and the Client Secret.
     5. Open "Scopes", click "Add scopes", and add: meeting:read:search, meeting:read:assets, cloud_recording:read:list_user_recordings, cloud_recording:read:content, docs:read:export, hub:read:content, my_notes:read:content, agentic_search:read:search. Click "Done".
     6. Zoom MCP supports only apps registered by hand (no dynamic registration). Each person needs the Zoom licenses for the products the tools use.
   clientIDLabel: Client ID
   clientSecretLabel: Client Secret
   docs: https://developers.zoom.us/docs/mcp/servers/connect-to-zoom-mcp-servers/
-  live: { tool: search_meetings, arguments: { query: "meeting" }, callback: https }
+  live: { tool: search_meetings, arguments: { query: "meeting" }, tunnel: true }
 - id: webex
   version: 1
   displayName: Webex

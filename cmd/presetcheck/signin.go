@@ -34,6 +34,9 @@ type signInFlow struct {
 	HTTP   *http.Client
 	Listen func(network, addr string) (net.Listener, error)
 	TLS    *tls.Config // https callback (Slack, Asana): a self-signed certificate for 127.0.0.1
+	// RedirectURL: a tunnel's public https callback (live.tunnel presets). The vendor redirects there; the
+	// tunnel forwards to http://127.0.0.1:8765, where this flow listens.
+	RedirectURL string
 }
 
 func (f signInFlow) run(ctx context.Context, p presets.Preset, pc *PresetCreds) error {
@@ -42,11 +45,16 @@ func (f signInFlow) run(ctx context.Context, p presets.Preset, pc *PresetCreds) 
 		return err
 	}
 	cb, _ := url.Parse(callbackFor(p))
-	ln, err := f.Listen("tcp", cb.Host)
-	if err != nil {
-		return fmt.Errorf("listen on %s: %w", cb.Host, err)
+	addr, useTLS := cb.Host, cb.Scheme == "https"
+	if f.RedirectURL != "" {
+		cb, _ = url.Parse(f.RedirectURL)
+		addr, useTLS = "127.0.0.1:8765", false // the tunnel ends TLS and forwards here
 	}
-	if cb.Scheme == "https" {
+	ln, err := f.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", addr, err)
+	}
+	if useTLS {
 		if f.TLS == nil {
 			ln.Close()
 			return errors.New("https callback needs a certificate")

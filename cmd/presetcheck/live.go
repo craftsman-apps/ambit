@@ -255,7 +255,13 @@ func runLive(ctx context.Context, ids []string) error {
 			}
 		}
 		fmt.Printf("%s: sign in with the test account in the browser\n", p.ID)
-		if err := (signInFlow{Open: openBrowser, HTTP: hc, Listen: net.Listen, TLS: cert}).run(ctx, p, pc); err != nil {
+		flow := signInFlow{Open: openBrowser, HTTP: hc, Listen: net.Listen, TLS: cert}
+		if p.Live.Tunnel {
+			if flow.RedirectURL, err = askTunnelURL(p); err != nil {
+				return err
+			}
+		}
+		if err := flow.run(ctx, p, pc); err != nil {
 			if forgetRefusedClient(pc, err) {
 				if serr := save(); serr != nil {
 					return serr
@@ -401,6 +407,35 @@ func forgetRefusedClient(pc *PresetCreds, err error) bool {
 	}
 	pc.ClientSecret, pc.RefreshToken, pc.AccessToken, pc.Expiry = "", "", "", time.Time{}
 	return true
+}
+
+// validTunnelURL: a tunnel's public callback, https on the default port, a plain DNS name (not localhost or
+// an IP address, which the vendor refuses), path /callback, nothing else.
+func validTunnelURL(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Port() != "" || u.RawQuery != "" || u.Fragment != "" || u.Path != "/callback" {
+		return false
+	}
+	h := u.Hostname()
+	return strings.Contains(h, ".") && h != "localhost" && !strings.HasSuffix(h, ".localhost") && net.ParseIP(h) == nil
+}
+
+// askTunnelURL asks for the tunnel's public callback each time a live.tunnel preset needs a browser sign-in.
+// Not saved: a quick tunnel's address changes every time it starts.
+func askTunnelURL(p presets.Preset) (string, error) {
+	in := bufio.NewReader(os.Stdin)
+	fmt.Printf("%s: the vendor refuses 127.0.0.1 redirects. Start an https tunnel to http://127.0.0.1:8765, for example:\n  cloudflared tunnel --url http://127.0.0.1:8765\n", p.ID)
+	for {
+		fmt.Printf("%s: tunnel callback address (https://<tunnel host>/callback); register the same address in the vendor's OAuth app: ", p.ID)
+		s, err := in.ReadString('\n')
+		if err != nil {
+			return "", err
+		}
+		if u := strings.TrimSpace(s); validTunnelURL(u) {
+			return u, nil
+		}
+		fmt.Printf("%s: that is not an https address ending in /callback on a public hostname; try again.\n", p.ID)
+	}
 }
 
 // credsComplete: a saved entry needs both a client ID and a client secret; otherwise the run asks again.

@@ -1,6 +1,6 @@
 {
-  "date": "2026-10-07T06:56:58.284933Z",
-  "commit": "4e10c3ed6326589aee38a9861d5bef9e1d28ec96",
+  "date": "2026-10-07T07:02:22.630348Z",
+  "commit": "7195fa201db8a4589aba3ee6bf18cab981a0b174",
   "catalogHash": "7acbc64435bb0aa0ec6de106644c268ad6b5b98e7ade7cb2a3f6d2957e5c0e2f",
   "partial": true,
   "presets": [
@@ -179,6 +179,36 @@
         "update_issue_comment",
         "update_pull_request",
         "update_pull_request_branch"
+      ]
+    },
+    {
+      "preset": "hubspot",
+      "version": 1,
+      "pass": true,
+      "tools": [
+        "discover_hubspot_schema",
+        "get_aeo_metrics",
+        "get_campaign_attribution_reports",
+        "get_content_analytics_report",
+        "get_crm_objects",
+        "get_organization_details",
+        "get_properties",
+        "get_user_details",
+        "manage_aeo_prompts",
+        "manage_aeo_recommendations",
+        "manage_campaign_objects",
+        "manage_crm_objects",
+        "manage_landing_page",
+        "manage_onboarding",
+        "manage_segment",
+        "query_crm_data",
+        "read_campaign_data",
+        "search_crm_objects",
+        "search_intent_signals",
+        "search_owners",
+        "search_properties",
+        "submit_feedback",
+        "tool_guidance"
       ]
     },
     {

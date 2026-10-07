@@ -182,7 +182,7 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | slack | Slack | mcp.slack.com | yes |  | 2026-10-07 |
 | zoom | Zoom | mcp.zoom.us | yes |  | 2026-10-07 |
 | webex | Webex | mcp.webexapis.com | no | Control Hub admin enables the server | not yet |
-| hubspot | HubSpot | mcp.hubspot.com | yes |  | not yet |
+| hubspot | HubSpot | mcp.hubspot.com | yes |  | 2026-10-07 |
 | salesforce | Salesforce | api.salesforce.com | yes | Enterprise Edition or above, or a Developer Edition org | not yet |
 | docusign | Docusign | mcp.docusign.com | no | Integration key (Go-Live review for production) | not yet |
 | servicenow | ServiceNow | your instance (service-now.com) | yes | MCP Server Console, Zurich Patch 9 or Australia Patch 2 or later | not yet |

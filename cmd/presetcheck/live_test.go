@@ -185,3 +185,20 @@ func TestCallToolSendsAnEmptyObjectWithoutArguments(t *testing.T) {
 		t.Fatalf("arguments sent as %q, want {}", raw)
 	}
 }
+
+// A saved entry with an empty client ID or secret (a paste that did not register) is asked for again.
+func TestCredsWithAnEmptySecretAreAskedAgain(t *testing.T) {
+	for _, c := range []struct {
+		pc   *PresetCreds
+		want bool
+	}{
+		{nil, false},
+		{&PresetCreds{ClientID: "d6a5579187ebec82d5ab9970516c549f"}, false},
+		{&PresetCreds{ClientSecret: "s3cret-value"}, false},
+		{&PresetCreds{ClientID: "d6a5579187ebec82d5ab9970516c549f", ClientSecret: "s3cret-value"}, true},
+	} {
+		if got := credsComplete(c.pc); got != c.want {
+			t.Fatalf("credsComplete(%+v) = %v", c.pc, got)
+		}
+	}
+}

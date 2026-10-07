@@ -256,7 +256,7 @@ func runLive(ctx context.Context, ids []string) error {
 	failed := 0
 	for _, p := range todo {
 		pc := creds.Presets[p.ID]
-		if pc == nil {
+		if !credsComplete(pc) {
 			if pc, err = askCreds(p); err != nil {
 				return err
 			}
@@ -352,6 +352,11 @@ func reportToolChanges(path string, tools []string) error {
 	return os.WriteFile(path, []byte(strings.Join(sorted, "\n")+"\n"), 0o644)
 }
 
+// credsComplete: a saved entry needs both a client ID and a client secret; otherwise the run asks again.
+func credsComplete(pc *PresetCreds) bool {
+	return pc != nil && pc.ClientID != "" && pc.ClientSecret != ""
+}
+
 // askCreds asks on the terminal for a preset's test OAuth app and placeholder values. The secret is read
 // without echo.
 func askCreds(p presets.Preset) (*PresetCreds, error) {
@@ -367,13 +372,23 @@ func askCreds(p presets.Preset) (*PresetCreds, error) {
 	if pc.ClientID, err = ask("client ID"); err != nil {
 		return nil, err
 	}
-	fmt.Printf("%s: client secret (not shown): ", p.ID)
-	sec, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Println()
-	if err != nil {
-		return nil, fmt.Errorf("read the client secret: %w", err)
+	for pc.ClientID == "" {
+		fmt.Printf("%s: the client ID is empty; paste it again.\n", p.ID)
+		if pc.ClientID, err = ask("client ID"); err != nil {
+			return nil, err
+		}
 	}
-	pc.ClientSecret = strings.TrimSpace(string(sec))
+	for pc.ClientSecret == "" { // a paste into the hidden prompt can fail silently
+		fmt.Printf("%s: client secret (not shown): ", p.ID)
+		sec, err := term.ReadPassword(int(os.Stdin.Fd()))
+		fmt.Println()
+		if err != nil {
+			return nil, fmt.Errorf("read the client secret: %w", err)
+		}
+		if pc.ClientSecret = strings.TrimSpace(string(sec)); pc.ClientSecret == "" {
+			fmt.Printf("%s: the client secret is empty; paste it again.\n", p.ID)
+		}
+	}
 	for _, ph := range p.Placeholders {
 		if pc.Values[ph.Name], err = ask(fmt.Sprintf("%s (example: %s)", ph.Label, ph.Example)); err != nil {
 			return nil, err

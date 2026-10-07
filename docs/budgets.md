@@ -32,7 +32,7 @@ charged at the price from when it started.
 |---|---|
 | `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, streamed or not | Yes, when the answer reports token counts |
 | A stream cut off part-way | For the token counts received before it stopped |
-| `/v1/embeddings` | **No** (agentgateway v1.5.0 does not run the charge step for embeddings) |
+| `/v1/embeddings` | **No** (agentgateway v1.5.0 and v1.6.0 do not run the charge step for embeddings) |
 | An answer without token counts | **No** |
 | A streamed request that turns usage reporting off (`stream_options: {"include_usage": false}`) | Yes, for members of a group with a dollar limit: the gateway turns usage reporting back on, so the stream ends with one extra chunk carrying the token counts (standard OpenAI behavior). Other people's requests are left as sent |
 | A refused or failed request | No (no tokens) |

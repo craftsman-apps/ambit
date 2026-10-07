@@ -145,12 +145,18 @@ func (r *Reconciler) applyCredentials(ctx context.Context, o *unstructured.Unstr
 // The condition reads the requested model, so other chat requests skip the round trip (it cost +32 % gateway CPU
 // on direct chat, measured 2026-10-07; the gateway buffers the body for model routing anyway). The hash is a CEL
 // string literal: ambit-router labels only under the configuration this policy names.
+// classifyMaxBody: larger bodies skip ambit-router and get no label. agentgateway v1.6.0 buffers up to 32 MiB, and
+// ambit-router's gRPC server takes at most 4 MiB (4,194,304 bytes) per message, headers included; a larger body
+// would fail the request with 500 once it is sent (FailOpen ends when the body goes out).
+const classifyMaxBody = 4000000
+
 func classifyPolicy(ns, route, service string, cfg routerconfig.Config) *unstructured.Unstructured {
 	var wires []string
 	for _, r := range cfg.Routers {
 		wires = append(wires, strconv.Quote(r.Wire))
 	}
-	condition := routedPath + " && json(request.body).model in [" + strings.Join(wires, ", ") + "]"
+	condition := routedPath + " && size(request.body) <= " + strconv.Itoa(classifyMaxBody) +
+		" && json(request.body).model in [" + strings.Join(wires, ", ") + "]"
 	hash := cfg.Hash
 	o := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{
 		"targetRefs": []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": route}},

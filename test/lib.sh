@@ -146,5 +146,7 @@ call() {
   mcp_send "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$2}}" |
     uv run --no-project python -c 'import json,sys
 d=json.loads(sys.stdin.read())
-print("error "+d["error"]["message"] if "error" in d else "ok "+d["result"]["content"][0]["text"].replace("\n"," "))'
+# A refusal is a JSON-RPC error (agentgateway v1.5.0) or a result with isError (v1.6.0 for ExtMcp refusals).
+r=d.get("result",{}); t=r.get("content",[{}])[0].get("text","").replace("\n"," ")
+print("error "+d["error"]["message"] if "error" in d else ("error " if r.get("isError") else "ok ")+t)'
 }

@@ -117,22 +117,11 @@ func usageCondition(groups []string) string {
 		`has(jwt.groups) && jwt.groups.exists(g, g in [` + strings.Join(q, ", ") + `])`
 }
 
-// defaultRouteTypes is agentgateway v1.5.0's default_route_types (crates/agentgateway/src/llm/model_router.rs).
-// A backend AI policy without routes drops those defaults and every request is parsed as chat (embeddings were
-// answered as chat, 2026-10-06), so the usage policy repeats them. Recheck on every agentgateway upgrade.
-var defaultRouteTypes = map[string]any{
-	"/v1/chat/completions": "Completions", "/v1/messages": "Messages", "/v1/messages/count_tokens": "AnthropicTokenCount",
-	":rawPredict": "Messages", ":streamRawPredict": "Messages", ":generateContent": "GenerateContent",
-	":streamGenerateContent": "GenerateContent", ":countTokens": "GeminiCountTokens", "/v1/responses": "Responses",
-	"/v1/images/generations": "Detect", "/v1/images/edits": "Detect", "/v1/images/variations": "Detect",
-	"/v1/responses/compact": "Detect", "/v1/embeddings": "Embeddings", "/v1/rerank": "Rerank", "/v2/rerank": "Rerank",
-	"*": "Passthrough",
-}
-
 // usagePolicy is a backend policy on the LLM route, so agentgateway applies it when it calls the chosen model:
-// after a ModelRouter has picked it. A route-level (traffic) rewrite was undone there, because the router rebuilds
-// the body from its original copy (agentgateway v1.5.0; found 2026-10-06: routed streams cost nothing). Nil
-// when no group has a dollar limit.
+// after a ModelRouter has picked it. In agentgateway v1.5.0 a route-level (traffic) rewrite was undone there,
+// because the router rebuilt the body from its original copy (found 2026-10-06: routed streams cost nothing;
+// fixed in v1.6.0, upstream #3287). It sets no route types: v1.6.0 keeps its defaults (upstream #3391). Nil when
+// no group has a dollar limit.
 func usagePolicy(budgets []v1.Budget, ns, llmRoute string) *unstructured.Unstructured {
 	groups := DollarGroups(budgets)
 	if len(groups) == 0 {
@@ -141,7 +130,6 @@ func usagePolicy(budgets []v1.Budget, ns, llmRoute string) *unstructured.Unstruc
 	return generated("agentgateway.dev/v1alpha1", "AgentgatewayPolicy", UsagePolicyName, ns, map[string]any{
 		"targetRefs": []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": llmRoute}},
 		"backend": map[string]any{"ai": map[string]any{
-			"routes":          defaultRouteTypes,
 			"transformations": []any{map[string]any{"field": "stream_options", "expression": usageField(groups)}},
 		}},
 	})

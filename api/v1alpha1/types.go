@@ -19,7 +19,8 @@ type ModelSpec struct {
 	// +optional
 	DisplayName string `json:"displayName,omitempty"`
 	// BaseURL of a self-hosted, OpenAI-compatible server (vLLM, Ollama, LiteLLM ...), with provider
-	// OpenAI, e.g. http://vllm.models.svc:8000/v1. Without it, the provider's own endpoint is used.
+	// OpenAI, e.g. http://vllm.models.svc:8000/v1. Include the API path (usually /v1): a URL without a path
+	// sends requests to / (agentgateway v1.6.0). Without it, the provider's own endpoint is used.
 	// +optional
 	// +kubebuilder:validation:Pattern=`^https?://[^/?#\s]+(/[^?#\s]*)?$`
 	BaseURL string `json:"baseURL,omitempty"`

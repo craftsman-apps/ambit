@@ -290,6 +290,8 @@ func TestLLMRouterValidation(t *testing.T) {
 	undeclared := llmRouter("auto", "coding")
 	undeclared.Spec.Routes[0].Category = "maths"
 	base := append(slices.Clone(catalog), local)
+	noChat := local // ambit-router calls /chat/completions itself, without the gateway's conversion
+	noChat.Spec.Formats = []v1.ModelFormat{"Messages", "Responses"}
 	for name, tc := range map[string]struct {
 		r      v1.ModelRouter
 		models []v1.Model
@@ -300,6 +302,7 @@ func TestLLMRouterValidation(t *testing.T) {
 		"missing classifier model": {llmRouter("auto", "coding"), catalog, installed, "ClassifierModelInvalid", false},
 		"no openai endpoint":       {withAnthropic, append(slices.Clone(base), anthropic), ClassifierInput{Installed: true, HasKey: map[string]bool{"claude": true}}, "ClassifierModelInvalid", false},
 		"key secret missing":       {llmRouter("auto", "coding"), base, ClassifierInput{Installed: true}, "ClassifierModelInvalid", false},
+		"formats without chat":     {llmRouter("auto", "coding"), append(slices.Clone(catalog), noChat), installed, "ClassifierModelInvalid", false},
 		"category not declared":    {undeclared, base, installed, "UnknownCategory", true},
 		"not installed":            {llmRouter("auto", "coding"), base, ClassifierInput{}, "ClassifierNotInstalled", false},
 	} {

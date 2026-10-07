@@ -196,6 +196,9 @@ func llmConfig(r v1.ModelRouter, wire string, byObject map[string]v1.Model, ci C
 	if !ok {
 		return nil, "classifier Model " + m.Name + " has no OpenAI-compatible endpoint: set baseURL, or use provider OpenAI or Openrouter"
 	}
+	if len(m.Spec.Formats) > 0 && !slices.Contains(m.Spec.Formats, "Completions") {
+		return nil, "classifier Model " + m.Name + " does not list the Completions format; ambit-router calls /chat/completions"
+	}
 	if !ci.HasKey[m.Name] {
 		return nil, "the Secret " + m.Spec.CredentialsRef.Name + " of classifier Model " + m.Name + " is missing or has no Authorization entry"
 	}

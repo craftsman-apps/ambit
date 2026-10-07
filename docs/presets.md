@@ -168,7 +168,7 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | linear | Linear | mcp.linear.app | yes |  | not yet |
 | asana | Asana | mcp.asana.com | yes |  | 2026-10-07 |
 | monday | monday.com | mcp.monday.com | yes |  | 2026-10-07 |
-| airtable | Airtable | mcp.airtable.com | no |  | not yet |
+| airtable | Airtable | mcp.airtable.com | no |  | 2026-10-07 |
 | box | Box | mcp.box.com | yes |  | not yet |
 | dropbox | Dropbox | mcp.dropbox.com | no |  | not yet |
 | canva | Canva | mcp.canva.com | no | Canva MCP access for the developer app | not yet |

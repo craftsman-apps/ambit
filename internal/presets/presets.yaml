@@ -94,6 +94,8 @@
   live: { tool: get_user_context }
 - id: airtable
   version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
   displayName: Airtable
   category: Data
   server: { url: "https://mcp.airtable.com/mcp", transport: streamable-http }

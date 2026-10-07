@@ -1,6 +1,6 @@
 {
-  "date": "2026-10-07T05:50:06.679655Z",
-  "commit": "eafa0e679820d6d0f9b3b613480912f791079e69",
+  "date": "2026-10-07T05:58:21.721416Z",
+  "commit": "ce40226efb99a2d0e5aed648c952796f5f45c9b7",
   "catalogHash": "e7c152167a1ae2257d204f568f0fc485b2b33654ee7e0842963c099cb880282e",
   "presets": [
     {
@@ -194,6 +194,59 @@
         "vibe_rename",
         "vibe_update",
         "workspace_info"
+      ]
+    },
+    {
+      "preset": "airtable",
+      "version": 1,
+      "pass": true,
+      "tools": [
+        "analyze_table",
+        "create_automation",
+        "create_base",
+        "create_field",
+        "create_interface",
+        "create_page",
+        "create_record_comment",
+        "create_records_for_table",
+        "create_table",
+        "delete_automation",
+        "delete_interface",
+        "delete_page",
+        "delete_records_for_table",
+        "delete_table",
+        "describe_page_element",
+        "describe_page_type",
+        "fetch_automation_input_data",
+        "get_automation",
+        "get_create_automation_instructions",
+        "get_form_schema",
+        "get_record_for_page",
+        "get_table_schema",
+        "list_automation_runs",
+        "list_automations",
+        "list_bases",
+        "list_external_accounts",
+        "list_pages_for_base",
+        "list_record_comments",
+        "list_records_for_page",
+        "list_records_for_table",
+        "list_secrets",
+        "list_tables_for_base",
+        "list_views_for_table",
+        "list_workspaces",
+        "ping",
+        "publish_interface",
+        "revert_action",
+        "search_bases",
+        "search_candidate_linked_records",
+        "search_records",
+        "submit_form",
+        "test_automation_webhook_trigger",
+        "update_automation",
+        "update_field",
+        "update_records_for_table",
+        "update_table"
       ]
     }
   ]

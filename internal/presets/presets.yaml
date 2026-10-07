@@ -394,7 +394,7 @@
   clientIDLabel: Client ID
   clientSecretLabel: Client secret
   docs: https://docs.pagerduty.com/developer/mcp-tooling-remote-server
-  live: { tool: browse_users }
+  live: { tool: browse_users, arguments: { request: {} } }
 - id: gmail
   version: 1
   displayName: Gmail

@@ -140,7 +140,7 @@ func CompileRouters(routers []v1.ModelRouter, models []v1.Model, res *Result, ro
 		case typ == "LLM" && !ci.Installed:
 			c.reasons, c.msgs = append(c.reasons, "ClassifierNotInstalled"), append(c.msgs, "ambit-router is not installed (routing.router.enabled=false); routes with a category are ignored, the rest is applied")
 		case needsClassifier:
-			c.reasons, c.msgs = append(c.reasons, "CategoryNeedsClassifier"), append(c.msgs, "routes with a category need a classifier (type VSR or LLM); they are ignored, the rest is applied")
+			c.reasons, c.msgs = append(c.reasons, "CategoryNeedsClassifier"), append(c.msgs, "routes with a category need a classifier (type LLM); they are ignored, the rest is applied")
 		}
 		if !mayShare(res.Access[r.Name], res.Access[r.Spec.Default], refused[r.Spec.Default]) {
 			c.reasons, c.msgs = append(c.reasons, "DefaultNotAllowed"), append(c.msgs, "no group may use both this router and its default "+r.Spec.Default+"; its users get 400 whenever no route they may use matches")

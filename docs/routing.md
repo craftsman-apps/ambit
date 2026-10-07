@@ -50,7 +50,7 @@ or its default, gets HTTP 400 `virtual_model_no_matching_target`.
   two to four.
 - Only `/v1/chat/completions` is routed. A request for `auto` on `/v1/messages` or `/v1/responses` goes to the
   default.
-- Routes with a `category` need a classifier (type `LLM`; `VSR` comes in a later release). With `None` or
+- Routes with a `category` need a classifier (type `LLM`). With `None` or
   `Rules` they are ignored, and the router reports `CategoryNeedsClassifier`.
 
 ## Type LLM: a small model picks the category

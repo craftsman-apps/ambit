@@ -3,6 +3,7 @@ package v1alpha1
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 // ModelSpec is one entry in the model catalog: a model clients may request through the gateway.
+// +kubebuilder:validation:XValidation:rule="!has(self.formats) || has(self.baseURL)",message="formats need a baseURL: they describe a self-hosted server"
 type ModelSpec struct {
 	// Provider serving the model. Values follow agentgateway's AgentgatewayModel providers.
 	// +kubebuilder:validation:Enum=Anthropic;Azure;Bedrock;Gemini;OpenAI;Openrouter;VertexAI
@@ -24,10 +25,21 @@ type ModelSpec struct {
 	// +optional
 	// +kubebuilder:validation:Pattern=`^https?://[^/?#\s]+(/[^?#\s]*)?$`
 	BaseURL string `json:"baseURL,omitempty"`
+	// Formats are the APIs the server at baseURL implements; agentgateway converts requests in other formats to
+	// one of these. Default: Completions and Embeddings, which every OpenAI-compatible server implements. Add
+	// Responses or Messages when the server implements them natively (for example LiteLLM, or vLLM for Responses).
+	// +optional
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=4
+	// +listType=set
+	Formats []ModelFormat `json:"formats,omitempty"`
 	// Price of this model, for cost in Usage. Without it, Usage shows tokens only for this model.
 	// +optional
 	Price *ModelPrice `json:"price,omitempty"`
 }
+
+// +kubebuilder:validation:Enum=Completions;Messages;Responses;Embeddings
+type ModelFormat string
 
 // ModelPrice is what the provider charges, in US dollars per million tokens.
 type ModelPrice struct {

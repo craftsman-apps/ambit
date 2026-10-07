@@ -75,6 +75,14 @@ spec: { group: eng, groupDollarsPerDay: "1.000001" }`, "should match"},
 kind: Budget
 metadata: { name: eng }
 spec: { group: eng }`, "set at least one limit"},
+		{"formats without a baseURL", `apiVersion: ambitproject.dev/v1alpha1
+kind: Model
+metadata: { name: gemma }
+spec: { provider: OpenAI, model: gemma, credentialsRef: { name: ambit-llm-x }, formats: [Completions] }`, "formats need a baseURL"},
+		{"unknown format", `apiVersion: ambitproject.dev/v1alpha1
+kind: Model
+metadata: { name: llama }
+spec: { provider: OpenAI, model: llama, credentialsRef: { name: ambit-llm-x }, baseURL: "http://vllm:8000/v1", formats: [Realtime] }`, "Unsupported value"},
 		{"namespace in Git", `apiVersion: ambitproject.dev/v1alpha1
 kind: AccessRule
 metadata: { name: eng, namespace: ambit-system }

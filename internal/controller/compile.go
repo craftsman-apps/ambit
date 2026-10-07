@@ -146,6 +146,19 @@ func agentgatewayModel(m v1.Model, a Access, route RouteRef) *unstructured.Unstr
 	if m.Spec.BaseURL != "" {
 		unstructured.SetNestedField(o.Object, m.Spec.BaseURL, "spec", "baseURL")
 	}
+	if m.Spec.BaseURL != "" && m.Spec.Provider == "OpenAI" {
+		// A self-hosted server: agentgateway sends only the formats it lists and converts the others.
+		formats := m.Spec.Formats
+		if len(formats) == 0 {
+			formats = []v1.ModelFormat{"Completions", "Embeddings"}
+		}
+		var fs []any
+		for _, f := range formats {
+			fs = append(fs, map[string]any{"type": string(f)})
+		}
+		unstructured.SetNestedField(o.Object, "Custom", "spec", "provider")
+		unstructured.SetNestedSlice(o.Object, fs, "spec", "custom", "formats")
+	}
 	o.SetAPIVersion("agentgateway.dev/v1alpha1")
 	o.SetKind("AgentgatewayModel")
 	o.SetName(m.Name)

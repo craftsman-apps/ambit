@@ -82,6 +82,23 @@ spec:
               displayName:
                 description: DisplayName is shown in the console.
                 type: string
+              formats:
+                description: 'Formats are the APIs the server at baseURL implements; agentgateway converts requests in other formats to
+
+                  one of these. Default: Completions and Embeddings, which every OpenAI-compatible server implements. Add
+
+                  Responses or Messages when the server implements them natively (for example LiteLLM, or vLLM for Responses).'
+                items:
+                  enum:
+                  - Completions
+                  - Messages
+                  - Responses
+                  - Embeddings
+                  type: string
+                maxItems: 4
+                minItems: 1
+                type: array
+                x-kubernetes-list-type: set
               model:
                 description: Model is the exact name clients send in the request, e.g. "google/gemma-4-31b-it:free".
                 minLength: 1
@@ -115,6 +132,9 @@ spec:
             - model
             - provider
             type: object
+            x-kubernetes-validations:
+            - message: 'formats need a baseURL: they describe a self-hosted server'
+              rule: '!has(self.formats) || has(self.baseURL)'
           status:
             properties:
               allowAllSignedIn:

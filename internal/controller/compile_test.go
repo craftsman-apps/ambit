@@ -167,6 +167,41 @@ func TestModelBaseURL(t *testing.T) {
 	}
 }
 
+// A self-hosted server is a custom provider that lists the APIs it implements, so agentgateway converts the others
+// (agentgateway v1.6.0 would otherwise send Responses requests a vLLM or Ollama server may not implement). Without
+// spec.formats: Chat Completions and Embeddings, which every OpenAI-compatible server implements.
+func TestSelfHostedModelIsCustomProviderWithItsFormats(t *testing.T) {
+	plain := model("llama", "meta/llama-3-8b")
+	plain.Spec.Provider, plain.Spec.BaseURL = "OpenAI", "http://vllm.models.svc:8000/v1"
+	rich := model("qwen", "qwen/qwen3")
+	rich.Spec.Provider, rich.Spec.BaseURL, rich.Spec.Formats = "OpenAI", "http://litellm:4000/v1", []v1.ModelFormat{"Completions", "Responses", "Messages"}
+	r := Compile([]v1.Model{plain, rich, model("gemma", "google/gemma:free")}, nil, nil, route)
+	for name, want := range map[string][]string{"llama": {"Completions", "Embeddings"}, "qwen": {"Completions", "Responses", "Messages"}} {
+		o := find(t, r.Objects, "AgentgatewayModel", name).Object
+		if p, _, _ := unstructured.NestedString(o, "spec", "provider"); p != "Custom" {
+			t.Errorf("%s provider %q", name, p)
+		}
+		fs, _, _ := unstructured.NestedSlice(o, "spec", "custom", "formats")
+		var got []string
+		for _, f := range fs {
+			got = append(got, f.(map[string]any)["type"].(string))
+		}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%s formats %v, want %v", name, got, want)
+		}
+		if b, _, _ := unstructured.NestedString(o, "spec", "baseURL"); b == "" {
+			t.Errorf("%s lost its baseURL", name)
+		}
+	}
+	g := find(t, r.Objects, "AgentgatewayModel", "gemma").Object
+	if p, _, _ := unstructured.NestedString(g, "spec", "provider"); p == "Custom" {
+		t.Errorf("a provider model became %q", p)
+	}
+	if _, found, _ := unstructured.NestedFieldNoCopy(g, "spec", "custom"); found {
+		t.Error("a provider model got custom settings")
+	}
+}
+
 // An AccessRule grants a router like a Model; naming it is not an unknown model.
 func TestRuleNamingRouterIsKnown(t *testing.T) {
 	r := Compile([]v1.Model{model("gemma", "google/gemma")}, nil,

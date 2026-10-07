@@ -537,6 +537,11 @@ func (in *ModelRouterStatus) DeepCopy() *ModelRouterStatus {
 func (in *ModelSpec) DeepCopyInto(out *ModelSpec) {
 	*out = *in
 	out.CredentialsRef = in.CredentialsRef
+	if in.Formats != nil {
+		in, out := &in.Formats, &out.Formats
+		*out = make([]ModelFormat, len(*in))
+		copy(*out, *in)
+	}
 	if in.Price != nil {
 		in, out := &in.Price, &out.Price
 		*out = new(ModelPrice)

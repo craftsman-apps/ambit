@@ -14,8 +14,8 @@
     1. Sign in to GitHub as an owner of the organization (or as the account that will own the app).
     2. Open Settings, then Developer settings, then OAuth Apps, and click "New OAuth App". For an organization, use the organization's Settings, Developer settings, OAuth Apps.
     3. Enter an application name and your Ambit address as the homepage URL.
-    4. Set "Authorization callback URL" to {callbackURL}. GitHub accepts only one callback URL for an OAuth app.
-    5. Leave "Enable Device Flow" off and click "Register application".
+    4. Under "Redirect URIs", set the first redirect URI to {callbackURL}. Click "Add redirect URI" for any other address you need (an OAuth app accepts up to 10).
+    5. Leave "Enable Device Flow" off, leave "Expire user access tokens" on (Ambit then renews access with a refresh token), and click "Register application".
     6. Copy the Client ID from the app page.
     7. Click "Generate a new client secret" and copy the secret at once; GitHub shows it only once.
     8. If your organization restricts third-party apps, an organization owner must approve this app under Settings, Third-party access.

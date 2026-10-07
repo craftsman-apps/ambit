@@ -13,13 +13,6 @@ spec:
   {{- with .Values.gateway.resources }}
   resources: {{ toJson . }}
   {{- end }}
-  # agentgateway v1.6.0 sends /v1/messages to OpenAI-compatible Models as Responses requests; v1.5.0 used Chat
-  # Completions, which every self-hosted server (vLLM, Ollama, LiteLLM) implements. Keeps the v1.5.0 behavior.
-  # The setting is removed in agentgateway v1.7: before that, Models with a baseURL should become custom
-  # providers that list the formats their server supports.
-  env:
-    - name: AGENTGATEWAY_MESSAGES_PREFER_COMPLETIONS
-      value: "true"
   {{- if gt (int .Values.gateway.replicas) 1 }}
   # Voluntary disruptions (node drains, upgrades) leave at least one gateway pod serving.
   podDisruptionBudget:

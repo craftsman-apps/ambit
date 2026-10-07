@@ -49,6 +49,8 @@
   live: { tool: list_teams }
 - id: asana
   version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
   displayName: Asana
   category: Projects
   server: { url: "https://mcp.asana.com/v2/mcp", transport: streamable-http }

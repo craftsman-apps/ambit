@@ -1,6 +1,6 @@
 {
-  "date": "2026-10-07T05:15:56.853434Z",
-  "commit": "da0063753d0f4e1a0353c9ebefe7e40eb22588d5",
+  "date": "2026-10-07T05:33:01.805559Z",
+  "commit": "0e968f45938fb3a473826fe2a998d6646097275d",
   "catalogHash": "e7c152167a1ae2257d204f568f0fc485b2b33654ee7e0842963c099cb880282e",
   "presets": [
     {
@@ -54,6 +54,41 @@
         "update_issue_comment",
         "update_pull_request",
         "update_pull_request_branch"
+      ]
+    },
+    {
+      "preset": "asana",
+      "version": 1,
+      "pass": true,
+      "tools": [
+        "add_comment",
+        "create_project",
+        "create_project_from_template",
+        "create_project_status_update",
+        "create_task_from_template",
+        "create_tasks",
+        "delete_task",
+        "get_agent",
+        "get_attachments",
+        "get_items_for_portfolio",
+        "get_me",
+        "get_my_tasks",
+        "get_portfolio",
+        "get_portfolios",
+        "get_project",
+        "get_projects",
+        "get_status_overview",
+        "get_task",
+        "get_task_stories",
+        "get_tasks",
+        "get_teams",
+        "get_user",
+        "get_users",
+        "get_workspace_agents",
+        "search_objects",
+        "search_tasks",
+        "update_project",
+        "update_tasks"
       ]
     }
   ]

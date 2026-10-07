@@ -511,7 +511,8 @@
   clientIDLabel: Client ID
   clientSecretLabel: Client secret
   docs: https://developers.google.com/workspace/guides/configure-mcp-servers
-  live: { tool: read_doc }
+  # The live check reads a test document in the maintainer's Workspace (presetcheck only).
+  live: { tool: read_doc, arguments: { documentId: "1FbGsuTo5o1BCSS-mG3QL5n5LZyH4zB6PuAnQR1qGQRI" } }
 - id: google-sheets
   version: 1
   displayName: Google Sheets
@@ -538,4 +539,5 @@
   clientIDLabel: Client ID
   clientSecretLabel: Client secret
   docs: https://developers.google.com/workspace/guides/configure-mcp-servers
-  live: { tool: get_spreadsheet }
+  # The live check reads a test spreadsheet in the maintainer's Workspace (presetcheck only).
+  live: { tool: get_spreadsheet, arguments: { spreadsheetId: "15RDXZb9CYSFsvJSmeodD7Oyb62Xz9D0zuxH5fqOi7xI" } }

@@ -1,7 +1,7 @@
 {
-  "date": "2026-10-07T07:45:12.409941Z",
-  "commit": "643149fa50f5eb650c4f3cb89255b15bc9acfeaf",
-  "catalogHash": "602f7f091465e3d75bfa5dded59e7958cee34171565dffd3c5157a25bd88a985",
+  "date": "2026-10-07T07:59:12.204849Z",
+  "commit": "ace019d870ef78d3efd75240d743c6fb82206e1a",
+  "catalogHash": "a6fc293d24d69518e7e648d962726df95a69cf2933493fd3e4a5840a0157fc55",
   "partial": true,
   "presets": [
     {
@@ -363,6 +363,32 @@
         "vibe_rename",
         "vibe_update",
         "workspace_info"
+      ]
+    },
+    {
+      "preset": "pagerduty",
+      "version": 1,
+      "pass": false,
+      "error": "tool browse_users answered with isError: 1 validation error for call[browse_users]\nrequest\n  Unable to extract tag using discriminator 'action' [type=union_tag_not_found, input_value={}, input_type=dict]\n    For further information visit htt",
+      "tools": [
+        "browse_activity",
+        "browse_alert_grouping",
+        "browse_change_events",
+        "browse_escalation_policies",
+        "browse_event_orchestrations",
+        "browse_incidents",
+        "browse_schedules",
+        "browse_services",
+        "browse_status_pages",
+        "browse_teams",
+        "browse_users",
+        "manage_alert_grouping",
+        "manage_event_orchestrations",
+        "manage_incidents",
+        "manage_schedules",
+        "manage_services",
+        "manage_status_pages",
+        "manage_teams"
       ]
     },
     {

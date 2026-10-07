@@ -167,7 +167,7 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | github | GitHub | api.githubcopilot.com | yes |  | 2026-10-07 |
 | linear | Linear | mcp.linear.app | yes |  | not yet |
 | asana | Asana | mcp.asana.com | yes |  | 2026-10-07 |
-| monday | monday.com | mcp.monday.com | yes |  | not yet |
+| monday | monday.com | mcp.monday.com | yes |  | 2026-10-07 |
 | airtable | Airtable | mcp.airtable.com | no |  | not yet |
 | box | Box | mcp.box.com | yes |  | not yet |
 | dropbox | Dropbox | mcp.dropbox.com | no |  | not yet |

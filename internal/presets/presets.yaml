@@ -71,6 +71,8 @@
   live: { tool: get_me, callback: https }
 - id: monday
   version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
   displayName: monday.com
   category: Projects
   server: { url: "https://mcp.monday.com/mcp", transport: streamable-http }

@@ -178,7 +178,7 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | airtable | Airtable | mcp.airtable.com | no |  | 2026-10-07 |
 | box | Box | mcp.box.com | yes |  | not yet |
 | dropbox | Dropbox | mcp.dropbox.com | no |  | 2026-10-07 |
-| canva | Canva | mcp.canva.com | no | Multi-factor authentication on the developer's Canva account | not yet |
+| canva | Canva | mcp.canva.com | no | Multi-factor authentication on the developer's Canva account | 2026-10-07 |
 | slack | Slack | mcp.slack.com | yes |  | 2026-10-07 |
 | zoom | Zoom | mcp.zoom.us | yes |  | 2026-10-07 |
 | webex | Webex | mcp.webexapis.com | no | Control Hub admin enables the server | not yet |

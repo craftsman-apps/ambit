@@ -165,6 +165,8 @@
   live: { tool: get_usage_and_quota }
 - id: canva
   version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
   displayName: Canva
   category: Design
   server: { url: "https://mcp.canva.com/mcp", transport: streamable-http }

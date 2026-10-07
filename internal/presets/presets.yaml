@@ -252,7 +252,9 @@
   docs: https://developer.webex.com/mcp/docs/messaging-mcp-server
   live: { tool: webex-search-spaces }
 - id: hubspot
-  version: 1 verified: true verifiedOn: "2026-10-07"
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
   displayName: HubSpot
   category: CRM
   server: { url: "https://mcp.hubspot.com", transport: streamable-http }

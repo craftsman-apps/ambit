@@ -17,8 +17,8 @@ check 'n=one("NetworkPolicy","ambit-router")["spec"]["ingress"]
 assert any(f.get("podSelector",{}).get("matchLabels",{}).get("gateway.networking.k8s.io/gateway-name")=="ambit" for i in n for f in i.get("from",[]))' "only the gateway reaches port 9000"
 check 's=one("Service","ambit-router")["spec"]["ports"][0]
 assert s["port"]==9000 and s["appProtocol"]=="kubernetes.io/h2c"' "router Service is h2c on 9000"
-check 'e=one("AgentgatewayParameters","ambit")["spec"].get("env",[])
-assert not [x for x in e if x["name"]=="AGENTGATEWAY_MESSAGES_PREFER_COMPLETIONS"], e' "no AGENTGATEWAY_MESSAGES_PREFER_COMPLETIONS (removed in agentgateway v1.7; self-hosted Models list their formats)"
+check 'e=one("AgentgatewayParameters","ambit")["spec"]["env"]
+assert {"name":"AGENTGATEWAY_MESSAGES_PREFER_COMPLETIONS","value":"true"} in e, e' "gateway converts /v1/messages to Chat Completions, as in v1.5.0"
 grep -q 'x-ambit-config' <<<"$out" || { echo "FAIL chart: Gateway must strip x-ambit-config"; exit 1; }
 grep -q -- '--router-deployment=ambit-router' <<<"$out" || { echo "FAIL chart: controller flag"; exit 1; }
 off=$(helm template ambit charts/ambit -n ambit-system -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --set routing.router.enabled=false)

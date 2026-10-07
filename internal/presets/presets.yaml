@@ -184,6 +184,8 @@
   live: { tool: search-designs, arguments: { query: "design" } }
 - id: slack
   version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
   displayName: Slack
   category: Chat
   server: { url: "https://mcp.slack.com/mcp", transport: streamable-http }

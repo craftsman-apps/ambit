@@ -106,9 +106,9 @@
   setup: |
     1. Sign in to Airtable and open https://airtable.com/create/oauth.
     2. Click "Register new OAuth integration".
-    3. Enter a unique integration name and add {callbackURL} as the redirect URL.
-    4. Select the scopes data.records:read, data.records:write and schema.bases:read.
-    5. Add a support email, a privacy policy URL and a terms of service URL, then click "Register integration".
+    3. Enter a unique integration name and add {callbackURL} as the redirect URL. Airtable accepts plain http only for localhost, so use the https address of your Ambit console. Click "Register integration".
+    4. On the integration page that opens, select the scopes data.records:read, data.records:write and schema.bases:read.
+    5. Add a support email, a privacy policy URL and a terms of service URL; without them only you can authorize the integration. Click "Save changes".
     6. On the integration page, click "Generate client secret" and copy it at once; it cannot be shown again.
     7. Copy the Client ID from the same page.
     8. These scopes let the agent change data in Airtable (records). This preset does not use a read-only set of scopes.

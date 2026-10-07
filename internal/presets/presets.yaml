@@ -158,7 +158,7 @@
   clientIDLabel: App key
   clientSecretLabel: App secret
   docs: https://help.dropbox.com/integrations/connect-dropbox-mcp-server
-  live: { tool: GetUsageAndQuota }
+  live: { tool: get_usage_and_quota }
 - id: canva
   version: 1
   displayName: Canva

@@ -94,7 +94,8 @@ users. The live check reports such vendors when a second test account is configu
 | 3. Live | maintainer's laptop, `make preset-live` | yes, a test account per vendor | Sign-in, refresh, `initialize`, `tools/list`, and one read-only tool call. |
 
 Run one preset at a time: `go run ./cmd/presetcheck contract <id>`, `make preset-live APP=<id>`. `make preset-live`
-always checks every verified preset; `APP=<id>` adds one preset that is not verified yet.
+checks every verified preset. `APP=<id>` checks only that preset, updates its entry in `results.json` and marks the
+file partial; the release gate refuses partial results, so run `make preset-live` without `APP` before a release.
 
 ### Live check
 

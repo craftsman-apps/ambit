@@ -47,6 +47,7 @@ type Results struct {
 	Date        time.Time `json:"date"`
 	Commit      string    `json:"commit"`
 	CatalogHash string    `json:"catalogHash"`
+	Partial     bool      `json:"partial,omitempty"` // from make preset-live APP=<id>; the release gate refuses it
 	Presets     []Result  `json:"presets"`
 }
 
@@ -172,7 +173,37 @@ func callbackFor(p presets.Preset) string {
 	return "http://127.0.0.1:8765/callback"
 }
 
-// runLive checks every verified preset plus the ids given, with the maintainer's test accounts, and writes
+// selectPresets: with ids (make preset-live APP=<id>) only those presets; without, every verified preset.
+func selectPresets(all []presets.Preset, ids []string) []presets.Preset {
+	var todo []presets.Preset
+	for _, p := range all {
+		if (len(ids) == 0 && p.Verified) || slices.Contains(ids, p.ID) {
+			todo = append(todo, p)
+		}
+	}
+	return todo
+}
+
+// mergeResults: a partial run replaces only its own presets' entries and marks the file partial; a full run
+// replaces the file.
+func mergeResults(old, run Results, partial bool) Results {
+	if !partial {
+		run.Partial = false
+		return run
+	}
+	out := run
+	out.Partial, out.Presets = true, nil
+	for _, r := range old.Presets {
+		if !slices.ContainsFunc(run.Presets, func(n Result) bool { return n.Preset == r.Preset }) {
+			out.Presets = append(out.Presets, r)
+		}
+	}
+	out.Presets = append(out.Presets, run.Presets...)
+	slices.SortFunc(out.Presets, func(a, b Result) int { return strings.Compare(a.Preset, b.Preset) })
+	return out
+}
+
+// runLive checks every verified preset, or only the ids given, with the maintainer's test accounts, and writes
 // test/presets/results.json. It never prints a secret or a token.
 func runLive(ctx context.Context, ids []string) error {
 	if out, err := exec.Command("git", "status", "--porcelain", "--", "internal", "cmd", "go.mod", "go.sum").Output(); err != nil {
@@ -209,12 +240,7 @@ func runLive(ctx context.Context, ids []string) error {
 	if err != nil {
 		return err
 	}
-	var todo []presets.Preset
-	for _, p := range all {
-		if p.Verified || slices.Contains(ids, p.ID) {
-			todo = append(todo, p)
-		}
-	}
+	todo := selectPresets(all, ids)
 	for _, id := range ids {
 		if _, ok := presets.Get(id); !ok {
 			return fmt.Errorf("no preset %q in the catalog", id)
@@ -294,15 +320,23 @@ func runLive(ctx context.Context, ids []string) error {
 			fmt.Printf("  tools that differ for the second account: %s\n", strings.Join(r.DiffersBySecondAccount, ", "))
 		}
 		if r.NoRefreshToken {
-			fmt.Println("  the vendor issued no refresh token: users must reconnect when access expires")
+			fmt.Println("  the vendor issued no refresh token: Ambit uses the token until the vendor refuses it")
 		}
 		results.Presets = append(results.Presets, r)
+	}
+	resultsPath := filepath.Join(root, "test", "presets", "results.json")
+	if len(ids) > 0 {
+		var old Results
+		if b, err := os.ReadFile(resultsPath); err == nil {
+			_ = json.Unmarshal(b, &old) // a missing or unreadable file starts a new one
+		}
+		results = mergeResults(old, results, true)
 	}
 	b, err := json.MarshalIndent(results, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(root, "test", "presets", "results.json"), append(b, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(resultsPath, append(b, '\n'), 0o644); err != nil {
 		return err
 	}
 	if failed > 0 {

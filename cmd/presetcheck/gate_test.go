@@ -180,3 +180,15 @@ func TestRequiredAreTheInitial22(t *testing.T) {
 		t.Fatalf("required = %v", required)
 	}
 }
+
+// Results from a partial run (make preset-live APP=<id>) never pass the gate.
+func TestGateRefusesPartialResults(t *testing.T) {
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	cat := []presets.Preset{{ID: "gh", Version: 1, Verified: true}}
+	r := Results{Date: now.Add(-time.Hour), Commit: "abc", CatalogHash: catalogHash(cat), Partial: true,
+		Presets: []Result{{Preset: "gh", Version: 1, Pass: true}}}
+	p := gateProblems(r, now, cat, func(string) ([]string, error) { return nil, nil }, []string{"gh"})
+	if !strings.Contains(strings.Join(p, "\n"), "partial") {
+		t.Fatalf("partial results accepted: %v", p)
+	}
+}

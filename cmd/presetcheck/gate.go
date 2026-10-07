@@ -24,6 +24,9 @@ var required = []string{"github", "linear", "asana", "monday", "airtable", "box"
 
 func gateProblems(r Results, now time.Time, catalog []presets.Preset, changedSince func(string) ([]string, error), required []string) []string {
 	var p []string
+	if r.Partial {
+		p = append(p, "results.json comes from a partial run (APP=<id>); run make preset-live without APP")
+	}
 	switch {
 	case r.Date.After(now):
 		p = append(p, "results are dated in the future")

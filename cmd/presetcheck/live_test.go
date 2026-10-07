@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -215,5 +216,36 @@ func TestRefusedClientIsForgotten(t *testing.T) {
 	other := &PresetCreds{ClientID: "id", ClientSecret: "s3cret-value"}
 	if forgetRefusedClient(other, fmt.Errorf("sign-in: %w", &console.TokenError{Status: 400, Code: "invalid_grant"})) || other.ClientSecret == "" {
 		t.Fatal("an invalid_grant answer must not forget the client secret")
+	}
+}
+
+// APP=<id> checks only the named presets; a run without ids checks every verified preset.
+func TestSelectPresets(t *testing.T) {
+	all := []presets.Preset{{ID: "github", Verified: true}, {ID: "asana", Verified: true}, {ID: "slack"}}
+	ids := func(ps []presets.Preset) (out []string) {
+		for _, p := range ps {
+			out = append(out, p.ID)
+		}
+		return out
+	}
+	if got := ids(selectPresets(all, nil)); !slices.Equal(got, []string{"github", "asana"}) {
+		t.Fatalf("full run = %v", got)
+	}
+	if got := ids(selectPresets(all, []string{"slack"})); !slices.Equal(got, []string{"slack"}) {
+		t.Fatalf("APP=slack = %v", got)
+	}
+}
+
+// A partial run replaces only its own entries and marks the file partial; a full run replaces everything.
+func TestMergeResults(t *testing.T) {
+	old := Results{Commit: "aaa", Presets: []Result{{Preset: "github", Pass: true}, {Preset: "slack", Pass: false}}}
+	run := Results{Commit: "bbb", Presets: []Result{{Preset: "slack", Pass: true}}}
+	got := mergeResults(old, run, true)
+	if !got.Partial || got.Commit != "bbb" || len(got.Presets) != 2 || !got.Presets[0].Pass || got.Presets[0].Preset != "github" || !got.Presets[1].Pass {
+		t.Fatalf("partial merge = %+v", got)
+	}
+	full := mergeResults(got, Results{Commit: "ccc", Presets: []Result{{Preset: "github", Pass: true}}}, false)
+	if full.Partial || len(full.Presets) != 1 {
+		t.Fatalf("full run = %+v", full)
 	}
 }

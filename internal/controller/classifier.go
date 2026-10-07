@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
@@ -139,15 +141,23 @@ func (r *Reconciler) applyCredentials(ctx context.Context, o *unstructured.Unstr
 	return r.Patch(ctx, o, client.Apply, fieldOwner, client.ForceOwnership)
 }
 
-// classifyPolicy sends chat completions to ambit-router (spec, "The ExtProc policy"). The hash is a CEL string
-// literal: ambit-router labels only under the configuration this policy names.
-func classifyPolicy(ns, route, service, hash string) *unstructured.Unstructured {
+// classifyPolicy sends chat completions for the type-LLM routers to ambit-router (spec, "The ExtProc policy").
+// The condition reads the requested model, so other chat requests skip the round trip (it cost +32 % gateway CPU
+// on direct chat, measured 2026-10-07; the gateway buffers the body for model routing anyway). The hash is a CEL
+// string literal: ambit-router labels only under the configuration this policy names.
+func classifyPolicy(ns, route, service string, cfg routerconfig.Config) *unstructured.Unstructured {
+	var wires []string
+	for _, r := range cfg.Routers {
+		wires = append(wires, strconv.Quote(r.Wire))
+	}
+	condition := routedPath + " && json(request.body).model in [" + strings.Join(wires, ", ") + "]"
+	hash := cfg.Hash
 	o := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{
 		"targetRefs": []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": route}},
 		"traffic": map[string]any{
 			"phase": "PostRouting",
 			"extProc": map[string]any{"conditional": []any{map[string]any{
-				"condition": routedPath,
+				"condition": condition,
 				"policy": map[string]any{
 					"backendRef":        map[string]any{"name": service, "port": int64(9000)},
 					"failureMode":       "FailOpen",

@@ -179,7 +179,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		if err := r.scale(ctx, dep, r.Classifier.Replicas); err != nil {
 			return reconcile.Result{}, err
 		}
-		res.Objects = append(res.Objects, classifyPolicy(r.Namespace, r.Route.Name, r.Classifier.Deployment, routerCfg.Hash))
+		res.Objects = append(res.Objects, classifyPolicy(r.Namespace, r.Route.Name, r.Classifier.Deployment, routerCfg))
 	}
 	budgetPolicy, usage := false, false
 	if r.RateLimit.Service != "" {

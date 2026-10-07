@@ -202,7 +202,7 @@
   clientIDLabel: Client ID
   clientSecretLabel: Client Secret
   docs: https://docs.slack.dev/ai/slack-mcp-server/
-  live: { tool: read_user_profile, callback: https }
+  live: { tool: slack_search_users, arguments: { query: "a" }, callback: https }
 - id: zoom
   version: 1
   displayName: Zoom

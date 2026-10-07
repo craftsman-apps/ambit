@@ -81,6 +81,8 @@ spec:
   provider `OpenAI` or `Openrouter`. Otherwise the router reports `ClassifierModelInvalid`.
 - **What it sees**: the last user message (plain text only), cut to `maxBytes` on a character boundary, with a
   system prompt that lists the categories. It answers one name; anything else is no label.
+- **Large requests**: a request body over 4,000,000 bytes is not sent to the classifier and gets no label
+  (keyword and length lines can still match, otherwise the default answers).
 - **Where the text goes**: to the classifier Model's provider. Use a model in your cluster for sensitive prompts,
   and in air-gapped clusters.
 - **Cost**: the classifier's tokens are not charged to budgets. They are counted in the metric

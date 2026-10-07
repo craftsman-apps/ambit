@@ -53,11 +53,13 @@ func TestCredentialsObject(t *testing.T) {
 
 // Only requests for a router of type LLM go to ambit-router: the condition reads the requested model, so other chat
 // requests do not pay the round trip (performance row, direct chat CPU). Wire names are quoted like keywords.
+// Bodies over 4,000,000 bytes skip it (no label): agentgateway v1.6.0 buffers up to 32 MiB, and ambit-router's gRPC
+// server takes at most 4 MiB per message, so a larger body would fail the request with 500 once it is sent.
 func TestClassifyPolicyConditionNamesRouters(t *testing.T) {
 	cfg := routerconfig.Config{Hash: "h", Routers: []routerconfig.Router{{Name: "a", Wire: "auto"}, {Name: "b", Wire: `team/"x"`}}}
 	cs, _, _ := unstructured.NestedSlice(classifyPolicy("ns", "ambit-llm", "ambit-router", cfg).Object, "spec", "traffic", "extProc", "conditional")
 	got := cs[0].(map[string]any)["condition"]
-	want := `request.path == "/v1/chat/completions" && json(request.body).model in ["auto", "team/\"x\""]`
+	want := `request.path == "/v1/chat/completions" && size(request.body) <= 4000000 && json(request.body).model in ["auto", "team/\"x\""]`
 	if got != want {
 		t.Fatalf("condition\n got %s\nwant %s", got, want)
 	}

@@ -121,15 +121,16 @@ spec:
                 - outputPerMillionTokens
                 type: object
               provider:
-                description: Provider serving the model. Values follow agentgateway's AgentgatewayModel providers.
+                description: 'Provider serving the model. Values follow agentgateway''s AgentgatewayModel providers. Azure, Bedrock and
+
+                  VertexAI are not offered: agentgateway needs provider settings and cloud credentials for them that a Model
+
+                  cannot express yet.'
                 enum:
                 - Anthropic
-                - Azure
-                - Bedrock
                 - Gemini
                 - OpenAI
                 - Openrouter
-                - VertexAI
                 type: string
             required:
             - credentialsRef

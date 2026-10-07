@@ -139,6 +139,8 @@
   live: { tool: who_am_i }
 - id: dropbox
   version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
   displayName: Dropbox
   category: Files
   server: { url: "https://mcp.dropbox.com/mcp", transport: streamable-http }

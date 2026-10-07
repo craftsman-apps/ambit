@@ -170,7 +170,7 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | monday | monday.com | mcp.monday.com | yes |  | 2026-10-07 |
 | airtable | Airtable | mcp.airtable.com | no |  | 2026-10-07 |
 | box | Box | mcp.box.com | yes |  | not yet |
-| dropbox | Dropbox | mcp.dropbox.com | no |  | not yet |
+| dropbox | Dropbox | mcp.dropbox.com | no |  | 2026-10-07 |
 | canva | Canva | mcp.canva.com | no | Canva MCP access for the developer app | not yet |
 | slack | Slack | mcp.slack.com | yes |  | not yet |
 | zoom | Zoom | mcp.zoom.us | yes |  | not yet |

@@ -1,7 +1,7 @@
 {
-  "date": "2026-10-07T05:58:21.721416Z",
-  "commit": "ce40226efb99a2d0e5aed648c952796f5f45c9b7",
-  "catalogHash": "e7c152167a1ae2257d204f568f0fc485b2b33654ee7e0842963c099cb880282e",
+  "date": "2026-10-07T06:13:57.626352Z",
+  "commit": "0ad7fad44f5e27ac5debbbccf1aaf2a8ccde69f6",
+  "catalogHash": "60ca2b6db0d010bea458588d9f2a44aaae003a9b83a61f4bafcc0896856ad188",
   "presets": [
     {
       "preset": "github",
@@ -247,6 +247,42 @@
         "update_field",
         "update_records_for_table",
         "update_table"
+      ]
+    },
+    {
+      "preset": "dropbox",
+      "version": 1,
+      "pass": true,
+      "tools": [
+        "check_job_status",
+        "copy",
+        "create_file",
+        "create_file_request",
+        "create_folder",
+        "create_shared_link",
+        "delete",
+        "download_link",
+        "get_dropbox_operation",
+        "get_file_content",
+        "get_file_metadata",
+        "get_file_request",
+        "get_markdown",
+        "get_shared_link_metadata",
+        "get_transcript",
+        "get_usage_and_quota",
+        "list_dropbox_operations",
+        "list_file_requests",
+        "list_file_revisions",
+        "list_folder",
+        "list_restore_events",
+        "list_shared_links",
+        "move",
+        "restore_file_revision",
+        "restore_folder",
+        "run_read_dropbox_operation",
+        "run_write_dropbox_operation",
+        "search",
+        "who_am_i"
       ]
     }
   ]

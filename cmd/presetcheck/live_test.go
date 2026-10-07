@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/craftsman-apps/ambit/internal/presets"
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -164,5 +165,23 @@ func TestSecondAccountDiffOnlyWhenItPassed(t *testing.T) {
 	r = withSecond(first, Result{Pass: true, fingerprints: map[string]string{"a": "2"}})
 	if !r.Pass || strings.Join(r.DiffersBySecondAccount, ",") != "a" {
 		t.Fatalf("%+v", r)
+	}
+}
+
+// A preset with no live.arguments still sends `"arguments": {}`: GitHub refuses `null` ("arguments must be a JSON object").
+func TestCallToolSendsAnEmptyObjectWithoutArguments(t *testing.T) {
+	var raw string
+	s := mcp.NewServer(&mcp.Implementation{Name: "v", Version: "1"}, nil)
+	s.AddTool(&mcp.Tool{Name: "get_me", InputSchema: &jsonschema.Schema{Type: "object"}}, func(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		raw = string(req.Params.Arguments)
+		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "ok"}}}, nil
+	})
+	srv := httptest.NewTLSServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, &mcp.StreamableHTTPOptions{Stateless: true}))
+	defer srv.Close()
+	if err := callTool(t.Context(), srv.Client(), srv.URL, "streamable-http", "at", "get_me", nil); err != nil {
+		t.Fatal(err)
+	}
+	if raw != "{}" {
+		t.Fatalf("arguments sent as %q, want {}", raw)
 	}
 }

@@ -143,6 +143,9 @@ func callTool(ctx context.Context, base *http.Client, endpoint, transport, beare
 		return fmt.Errorf("connect: %w", err)
 	}
 	defer cs.Close()
+	if args == nil {
+		args = map[string]any{} // servers such as GitHub refuse `null`: arguments must be a JSON object
+	}
 	out, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
 	if err != nil {
 		return fmt.Errorf("tools/call %s: %w", name, err)

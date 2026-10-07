@@ -97,6 +97,12 @@ Run one preset at a time: `go run ./cmd/presetcheck contract <id>`, `make preset
 checks every verified preset. `APP=<id>` checks only that preset, updates its entry in `results.json` and marks the
 file partial; the release gate refuses partial results, so run `make preset-live` without `APP` before a release.
 
+Some vendors refuse `127.0.0.1` and `localhost` redirects (Zoom; presets with `live.tunnel`). For their browser
+sign-in, start an https tunnel to `http://127.0.0.1:8765`, for example `lt --port 8765 --local-host 127.0.0.1`
+(localtunnel) or `cloudflared tunnel --url http://127.0.0.1:8765`, register `https://<tunnel host>/callback` in the
+vendor's test OAuth app, and paste the same address when the live check asks. The address is not saved; later
+runs renew the token without a browser, so the tunnel is needed only for a new sign-in.
+
 ### Live check
 
 - Credentials are in `~/.config/ambit/presetcheck.json`, mode 0600. They are never in Git or CI. The command

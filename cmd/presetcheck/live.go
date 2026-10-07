@@ -424,7 +424,7 @@ func validTunnelURL(s string) bool {
 // Not saved: a quick tunnel's address changes every time it starts.
 func askTunnelURL(p presets.Preset) (string, error) {
 	in := bufio.NewReader(os.Stdin)
-	fmt.Printf("%s: the vendor refuses 127.0.0.1 redirects. Start an https tunnel to http://127.0.0.1:8765, for example:\n  cloudflared tunnel --url http://127.0.0.1:8765\n", p.ID)
+	fmt.Printf("%s: the vendor refuses 127.0.0.1 redirects. Start an https tunnel to http://127.0.0.1:8765, for example:\n  lt --port 8765 --local-host 127.0.0.1\n  cloudflared tunnel --url http://127.0.0.1:8765\n", p.ID)
 	for {
 		fmt.Printf("%s: tunnel callback address (https://<tunnel host>/callback); register the same address in the vendor's OAuth app: ", p.ID)
 		s, err := in.ReadString('\n')

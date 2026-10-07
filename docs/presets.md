@@ -174,7 +174,7 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | dropbox | Dropbox | mcp.dropbox.com | no |  | 2026-10-07 |
 | canva | Canva | mcp.canva.com | no | Canva MCP access for the developer app | not yet |
 | slack | Slack | mcp.slack.com | yes |  | 2026-10-07 |
-| zoom | Zoom | mcp.zoom.us | yes |  | not yet |
+| zoom | Zoom | mcp.zoom.us | yes |  | 2026-10-07 |
 | webex | Webex | mcp.webexapis.com | no | Control Hub admin enables the server | not yet |
 | hubspot | HubSpot | mcp.hubspot.com | yes |  | not yet |
 | salesforce | Salesforce | api.salesforce.com | yes | Enterprise Edition or above, or a Developer Edition org | not yet |

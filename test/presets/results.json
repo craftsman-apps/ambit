@@ -1,7 +1,7 @@
 {
-  "date": "2026-10-07T06:26:44.097768Z",
-  "commit": "5c41148e3617d1d6873c79d6cd3018b163d18421",
-  "catalogHash": "aa8746a7d8c176258670a8da9e8128e1dafdd4f87c6f01ea87e274b8e008dfa9",
+  "date": "2026-10-07T06:56:58.284933Z",
+  "commit": "4e10c3ed6326589aee38a9861d5bef9e1d28ec96",
+  "catalogHash": "7acbc64435bb0aa0ec6de106644c268ad6b5b98e7ade7cb2a3f6d2957e5c0e2f",
   "partial": true,
   "presets": [
     {
@@ -299,6 +299,33 @@
         "slack_search_users"
       ],
       "noRefreshToken": true
+    },
+    {
+      "preset": "zoom",
+      "version": 1,
+      "pass": true,
+      "tools": [
+        "ask",
+        "canvas_add_file_collaborators",
+        "canvas_list_file_collaborators",
+        "canvas_modify_file_collaborator_role",
+        "canvas_remove_file_collaborator",
+        "create_new_file_with_markdown",
+        "get_file_content",
+        "get_meeting_assets",
+        "get_recording_resource",
+        "hub_create_file_from_content",
+        "hub_get_file_content",
+        "in_meeting_control",
+        "meeting_create",
+        "meeting_delete",
+        "meeting_update",
+        "my_notes_get_note_content",
+        "recordings_list",
+        "search",
+        "search_describe_capabilities",
+        "search_meetings"
+      ]
     }
   ]
 }

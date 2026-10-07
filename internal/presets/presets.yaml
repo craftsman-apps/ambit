@@ -207,6 +207,8 @@
   live: { tool: slack_search_users, arguments: { query: "a" }, callback: https }
 - id: zoom
   version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
   displayName: Zoom
   category: Meetings
   server: { url: "https://mcp.zoom.us/mcp/zoom/streamable", transport: streamable-http }

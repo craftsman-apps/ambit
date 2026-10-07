@@ -83,11 +83,15 @@ spec:
                 description: DisplayName is shown in the console.
                 type: string
               formats:
-                description: 'Formats are the APIs the server at baseURL implements; agentgateway converts requests in other formats to
+                description: 'Formats are the APIs the server at baseURL implements (provider OpenAI only); agentgateway converts requests
 
-                  one of these. Default: Completions and Embeddings, which every OpenAI-compatible server implements. Add
+                  in other formats to one of these. Default: Completions and Embeddings. Before this field existed, requests
 
-                  Responses or Messages when the server implements them natively (for example LiteLLM, or vLLM for Responses).'
+                  for /v1/responses and /v1/messages were passed to the server unchanged; list Responses or Messages to keep
+
+                  that when the server implements them natively (for example LiteLLM, or vLLM for Responses). A classifier
+
+                  Model (ModelRouter type LLM) needs Completions.'
                 items:
                   enum:
                   - Completions
@@ -95,7 +99,7 @@ spec:
                   - Responses
                   - Embeddings
                   type: string
-                maxItems: 4
+                maxItems: 8
                 minItems: 1
                 type: array
                 x-kubernetes-list-type: set
@@ -133,8 +137,8 @@ spec:
             - provider
             type: object
             x-kubernetes-validations:
-            - message: 'formats need a baseURL: they describe a self-hosted server'
-              rule: '!has(self.formats) || has(self.baseURL)'
+            - message: 'formats describe a self-hosted server: they need provider OpenAI and a baseURL'
+              rule: '!has(self.formats) || (has(self.baseURL) && self.provider == ''OpenAI'')'
           status:
             properties:
               allowAllSignedIn:

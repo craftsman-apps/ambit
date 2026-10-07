@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/listtype"
 	"strings"
 
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
@@ -152,6 +153,9 @@ func (v *Validator) Object(ctx context.Context, obj map[string]any) ([]string, e
 		out = append(out, "unknown field "+p)
 	}
 	for _, e := range apivalidation.ValidateCustomResource(nil, obj, k.schema) {
+		out = append(out, e.Error())
+	}
+	for _, e := range listtype.ValidateListSetsAndMaps(nil, k.structural, obj) { // duplicates in a listType=set
 		out = append(out, e.Error())
 	}
 	errs, _ := k.cel.Validate(ctx, nil, k.structural, obj, nil, celconfig.RuntimeCELCostBudget)

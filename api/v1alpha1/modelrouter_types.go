@@ -1,6 +1,12 @@
 package v1alpha1
 
-import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+import (
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// +kubebuilder:validation:XValidation:rule="!has(self.classifier) || !has(self.classifier.type) || self.classifier.type != 'LLM' || has(self.classifier.llm)",message="type LLM needs classifier.llm.model"
 
 // ModelRouterSpec is a model name clients may ask for (for example "auto") whose answer comes from one of
 // several Models, chosen per request by ordered routes, within each user's access rules.
@@ -22,11 +28,70 @@ type ModelRouterSpec struct {
 }
 
 type RouterClassifier struct {
-	// Type None ignores every route (always the default); Rules uses keyword and length routes.
-	// +kubebuilder:validation:Enum=None;Rules
+	// Type None ignores every route; Rules uses keyword and length routes; LLM also asks a small LLM for a
+	// category (routes with a category).
+	// +kubebuilder:validation:Enum=None;Rules;LLM
 	// +kubebuilder:default=None
 	// +optional
 	Type string `json:"type,omitempty"`
+	// Categories the classifier may answer. A name means the same in every router.
+	// +kubebuilder:validation:MaxItems=16
+	// +optional
+	Categories []RouterCategory `json:"categories,omitempty"`
+	// LLM is the classifier model (type LLM).
+	// +optional
+	LLM *RouterLLM `json:"llm,omitempty"`
+	// Timeout of one classification. Default 1500ms, at most 10s: ambit-router finishes held requests within its
+	// 25 s drain during a rollout, and a longer classification would be cut there.
+	// +kubebuilder:validation:XValidation:rule="duration(self) <= duration('10s')",message="timeout must be at most 10s"
+	// +optional
+	Timeout *metav1.Duration `json:"timeout,omitempty"`
+	// MaxBytes of the message sent to the classifier, cut on a UTF-8 boundary. Default 8000.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=2097152
+	// +optional
+	MaxBytes *int64 `json:"maxBytes,omitempty"`
+	// RatePerMinute: classifier calls per ambit-router replica for this router. Default 600.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	RatePerMinute *int32 `json:"ratePerMinute,omitempty"`
+}
+
+// +kubebuilder:validation:XValidation:rule="self.name != 'other'",message="the category name other is reserved"
+type RouterCategory struct {
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9-]{0,62}$`
+	Name string `json:"name"`
+	// Description tells the classifier LLM what belongs here.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=200
+	Description string `json:"description"`
+}
+
+type RouterLLM struct {
+	// Model (object name) with an OpenAI-compatible endpoint.
+	// +kubebuilder:validation:MinLength=1
+	Model string `json:"model"`
+}
+
+func (c RouterClassifier) TimeoutOrDefault() time.Duration {
+	if c.Timeout != nil && c.Timeout.Duration > 0 {
+		return c.Timeout.Duration
+	}
+	return 1500 * time.Millisecond
+}
+
+func (c RouterClassifier) MaxBytesOrDefault() int64 {
+	if c.MaxBytes != nil {
+		return *c.MaxBytes
+	}
+	return 8000
+}
+
+func (c RouterClassifier) RateOrDefault() int32 {
+	if c.RatePerMinute != nil {
+		return *c.RatePerMinute
+	}
+	return 600
 }
 
 // +kubebuilder:validation:XValidation:rule="has(self.category) || has(self.keywords) || has(self.minBytes) || has(self.maxBytes)",message="a route needs a category, keywords, minBytes or maxBytes"
@@ -55,6 +120,9 @@ type RouterRoute struct {
 }
 
 type ModelRouterStatus struct {
+	// ClassifierState is read from the ambit-router Deployment: Off, Starting, Ready or Unhealthy (type LLM).
+	// +optional
+	ClassifierState string `json:"classifierState,omitempty"`
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
@@ -64,6 +132,7 @@ type ModelRouterStatus struct {
 // +kubebuilder:printcolumn:name="Model",type=string,JSONPath=`.spec.model`
 // +kubebuilder:printcolumn:name="Default",type=string,JSONPath=`.spec.default`
 // +kubebuilder:printcolumn:name="Classifier",type=string,JSONPath=`.spec.classifier.type`
+// +kubebuilder:printcolumn:name="Classifier State",type=string,JSONPath=`.status.classifierState`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 
 // ModelRouter lets clients ask for one model name and get the right Model per request.

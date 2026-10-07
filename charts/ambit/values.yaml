@@ -60,6 +60,18 @@ llm:
     audiences: []
     jwksURL: ""
 
+routing:
+  router:
+    # ambit-router labels prompts for ModelRouters of type LLM. Installed but at 0 replicas until such a router
+    # exists; the controller scales it (keep replicas out of Argo CD's diff, docs/routing.md).
+    enabled: true
+    replicas: 2
+    # Pod template annotations; changing one rolls ambit-router (tests use it to check a rollout under load).
+    podAnnotations: {}
+    resources:
+      requests: { cpu: 20m, memory: 32Mi }
+      limits: { memory: 128Mi }
+
 gitops:
   # GitOps mode: the console opens pull requests in your configuration repository instead of changing
   # the cluster, and Argo CD (or Flux) applies what is merged. See deploy/argocd/.

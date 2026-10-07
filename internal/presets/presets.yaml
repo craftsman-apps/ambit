@@ -28,6 +28,8 @@
   live: { tool: get_me }
 - id: linear
   version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
   displayName: Linear
   category: Projects
   server: { url: "https://mcp.linear.app/mcp", transport: streamable-http }

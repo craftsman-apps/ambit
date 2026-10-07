@@ -350,6 +350,8 @@
   live: { tool: incident_summarization }
 - id: databricks
   version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
   displayName: Databricks
   category: Data
   server: { url: "https://{workspace}/api/2.0/mcp/sql", transport: streamable-http }

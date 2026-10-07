@@ -186,7 +186,7 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | salesforce | Salesforce | api.salesforce.com | yes | Enterprise Edition or above, or a Developer Edition org | not yet |
 | docusign | Docusign | mcp.docusign.com | no | Integration key (Go-Live review for production) | 2026-10-07 |
 | servicenow | ServiceNow | your instance (service-now.com) | yes | MCP Server Console, Zurich Patch 9 or Australia Patch 2 or later | not yet |
-| databricks | Databricks | your workspace host | no | SQL warehouse; account admin creates the app connection | not yet |
+| databricks | Databricks | your workspace host | no | SQL warehouse; account admin creates the app connection | 2026-10-07 |
 | pagerduty | PagerDuty | mcp.pagerduty.com | yes | Advanced Permissions | 2026-10-07 |
 | gmail | Gmail | gmailmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | not yet |
 | google-calendar | Google Calendar | calendarmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | not yet |

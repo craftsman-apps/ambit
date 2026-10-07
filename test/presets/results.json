@@ -1,6 +1,6 @@
 {
-  "date": "2026-10-07T08:00:49.216682Z",
-  "commit": "a1a9fef35c6d714e83142e1f4462c38b7cfdeb4e",
+  "date": "2026-10-07T08:19:13.677637Z",
+  "commit": "f725ba5fd77f16ebd47c24f538f25f4803683816",
   "catalogHash": "77557fa12031f2c9fad3d8ee68314c802c6c336857bffaf61d29697de40965ee",
   "partial": true,
   "presets": [
@@ -90,6 +90,16 @@
         "search_tasks",
         "update_project",
         "update_tasks"
+      ]
+    },
+    {
+      "preset": "databricks",
+      "version": 1,
+      "pass": true,
+      "tools": [
+        "execute_sql",
+        "execute_sql_read_only",
+        "poll_sql_result"
       ]
     },
     {

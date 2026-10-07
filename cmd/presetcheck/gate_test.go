@@ -171,11 +171,11 @@ func TestChangedSinceInRealHistory(t *testing.T) {
 	}
 }
 
-// The initial release ships 22 presets; PayPal waits for dynamic client registration (phase 2).
-func TestRequiredAreTheInitial22(t *testing.T) {
+// The initial release ships 21 presets; PayPal (dynamic client registration) and Salesforce wait for phase 2.
+func TestRequiredAreTheInitial21(t *testing.T) {
 	want := []string{"github", "linear", "asana", "monday", "airtable", "box", "dropbox", "canva", "gmail",
 		"google-calendar", "google-drive", "google-docs", "google-sheets", "slack", "zoom", "webex", "hubspot",
-		"salesforce", "docusign", "servicenow", "databricks", "pagerduty"}
+		"docusign", "servicenow", "databricks", "pagerduty"}
 	if !slices.Equal(required, want) {
 		t.Fatalf("required = %v", required)
 	}

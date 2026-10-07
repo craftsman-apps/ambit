@@ -134,9 +134,9 @@ the release unless all of this holds:
   fields of the catalog.
 - The catalog hash matches the one in `results.json`.
 - Every preset with `verified: true` passed at its current `version`.
-- All 22 initial presets are verified: github, linear, asana, monday, airtable, box, dropbox, canva, gmail,
-  google-calendar, google-drive, google-docs, google-sheets, slack, zoom, webex, hubspot, salesforce,
-  docusign, servicenow, databricks, pagerduty.
+- All 21 initial presets are verified: github, linear, asana, monday, airtable, box, dropbox, canva, gmail,
+  google-calendar, google-drive, google-docs, google-sheets, slack, zoom, webex, hubspot, docusign,
+  servicenow, databricks, pagerduty.
 - The clone is not shallow. Any Git error fails the gate; it never skips the check.
 
 Setting `verified: false` is a deliberate change in Git. The release never does it.
@@ -159,7 +159,7 @@ Claude does not sign up for or sign in to vendor accounts; the maintainer does s
 7. Set `verified: true` and `verifiedOn: <date>`. Both are left out of the catalog hash, so the live result
    stays valid. Add the vendor's row to the table below. Commit with `test/presets`.
 8. If a vendor refuses access (the Google preview program, Canva) or its server does not work with a
-   company-registered client, stop, write the reason in this file, and tell the product owner. "All 22" then
+   company-registered client, stop, write the reason in this file, and tell the product owner. "All 21" then
    needs a decision.
 
 Changing an existing preset needs a higher `version`; CI checks this.
@@ -196,3 +196,7 @@ Changing an existing preset needs a higher `version`; CI checks this.
 
 PayPal is not in the initial list: its MCP server accepts only clients that register themselves (dynamic client
 registration), which Ambit adds in phase 2.
+
+Salesforce is in the catalog but not in the initial list (phase 2). Its hosted MCP servers (Setup, MCP Servers,
+"Salesforce Servers") exist only in Developer Edition orgs and Enterprise Edition or above; trial orgs show only
+"External servers". The preset is not live-checked yet.

@@ -38,7 +38,7 @@ func TestModelRouterCRDRules(t *testing.T) {
 	}
 	for name, spec := range map[string]v1.ModelRouterSpec{
 		"no-default":    {},
-		"vsr-not-yet":   {Default: "g", Classifier: v1.RouterClassifier{Type: "VSR"}},
+		"vsr-refused":   {Default: "g", Classifier: v1.RouterClassifier{Type: "VSR"}},
 		"empty-route":   {Default: "g", Routes: []v1.RouterRoute{{Model: "x"}}},
 		"bad-category":  {Default: "g", Routes: []v1.RouterRoute{{Model: "x", Category: "Coding!"}}},
 		"zero-bytes":    {Default: "g", Routes: []v1.RouterRoute{{Model: "x", MinBytes: ptr.To[int64](0)}}},

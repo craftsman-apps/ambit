@@ -99,7 +99,7 @@ type RouterRoute struct {
 	// Model (object name) that answers when this route matches.
 	// +kubebuilder:validation:MinLength=1
 	Model string `json:"model"`
-	// Category is a label from a classifier (types VSR and LLM, added later). With type Rules or None a route
+	// Category is a label from a classifier (type LLM). With type Rules or None a route
 	// with a category is ignored (condition CategoryNeedsClassifier).
 	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9-]{0,62}$`
 	// +optional

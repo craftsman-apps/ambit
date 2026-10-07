@@ -140,7 +140,7 @@ spec:
                 items:
                   properties:
                     category:
-                      description: 'Category is a label from a classifier (types VSR and LLM, added later). With type Rules or None a route
+                      description: 'Category is a label from a classifier (type LLM). With type Rules or None a route
 
                         with a category is ignored (condition CategoryNeedsClassifier).'
                       pattern: ^[a-z0-9][a-z0-9-]{0,62}$

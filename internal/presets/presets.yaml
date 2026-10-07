@@ -374,6 +374,8 @@
   live: { tool: execute_sql_read_only, arguments: { query: "SELECT 1" } }
 - id: pagerduty
   version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
   displayName: PagerDuty
   category: Developer
   server: { url: "https://mcp.pagerduty.com/mcp", transport: streamable-http }

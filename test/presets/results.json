@@ -1,7 +1,7 @@
 {
-  "date": "2026-10-07T07:59:12.204849Z",
-  "commit": "ace019d870ef78d3efd75240d743c6fb82206e1a",
-  "catalogHash": "a6fc293d24d69518e7e648d962726df95a69cf2933493fd3e4a5840a0157fc55",
+  "date": "2026-10-07T08:00:49.216682Z",
+  "commit": "a1a9fef35c6d714e83142e1f4462c38b7cfdeb4e",
+  "catalogHash": "77557fa12031f2c9fad3d8ee68314c802c6c336857bffaf61d29697de40965ee",
   "partial": true,
   "presets": [
     {
@@ -368,8 +368,7 @@
     {
       "preset": "pagerduty",
       "version": 1,
-      "pass": false,
-      "error": "tool browse_users answered with isError: 1 validation error for call[browse_users]\nrequest\n  Unable to extract tag using discriminator 'action' [type=union_tag_not_found, input_value={}, input_type=dict]\n    For further information visit htt",
+      "pass": true,
       "tools": [
         "browse_activity",
         "browse_alert_grouping",

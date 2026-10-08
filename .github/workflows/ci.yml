@@ -68,10 +68,10 @@ jobs:
         run: |
           if [ -n "$OPENROUTER_API_KEY" ]; then mkdir -p ~/.config/ambit && printf '%s' "$OPENROUTER_API_KEY" > ~/.config/ambit/openrouter-api-key; fi
       - name: Acceptance tests (every step)
-        env: { SOAK_SECONDS: "120" } # step 10's soak; 300 s locally, longer in soak runs
         run: make test
         env:
           AMBIT_SKIP_ARGO: "1"  # step 12's Argo CD check needs the GitHub App of step 4c, which CI does not have
+          SOAK_SECONDS: "120"   # step 10's soak; 300 s locally, longer in soak runs
       - name: UI tests (Playwright)
         run: |
           cd web && npm ci --no-fund --no-audit && npx playwright install --with-deps chromium

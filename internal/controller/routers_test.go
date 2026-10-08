@@ -300,6 +300,10 @@ func TestLLMRouterValidation(t *testing.T) {
 	bedrock.Spec.Provider, bedrock.Spec.CredentialsRef = "Bedrock", nil
 	withBedrock := llmRouter("auto", "coding")
 	withBedrock.Spec.Classifier.LLM.Model = "claude-role"
+	vx := model("gemini-vx", "gemini-2.5-pro")
+	vx.Spec.Provider, vx.Spec.VertexAI = "VertexAI", &v1.VertexAISettings{ProjectID: "acme-ml"}
+	withVertex := llmRouter("auto", "coding")
+	withVertex.Spec.Classifier.LLM.Model = "gemini-vx"
 	noRef := local
 	noRef.Spec.CredentialsRef = nil // invalid in the API; the message must still not panic
 	for name, tc := range map[string]struct {
@@ -316,6 +320,7 @@ func TestLLMRouterValidation(t *testing.T) {
 		"category not declared":    {undeclared, base, installed, "UnknownCategory", true},
 		"azure classifier":         {withAzure, append(slices.Clone(base), azure), ClassifierInput{Installed: true, HasKey: map[string]bool{"gpt": true}}, "ClassifierModelInvalid", false},
 		"bedrock classifier":       {withBedrock, append(slices.Clone(base), bedrock), installed, "ClassifierModelInvalid", false},
+		"vertexai classifier":      {withVertex, append(slices.Clone(base), vx), ClassifierInput{Installed: true, HasKey: map[string]bool{"gemini-vx": true}}, "ClassifierModelInvalid", false},
 		"no credentialsRef":        {llmRouter("auto", "coding"), append(slices.Clone(catalog), noRef), ClassifierInput{Installed: true}, "ClassifierModelInvalid", false},
 		"not installed":            {llmRouter("auto", "coding"), base, ClassifierInput{}, "ClassifierNotInstalled", false},
 	} {
@@ -348,14 +353,24 @@ func TestCloudModelsAsRouteTargets(t *testing.T) {
 	azure.Spec.Provider, azure.Spec.Azure = "Azure", &v1.AzureSettings{ResourceName: "acme-openai", ResourceType: "OpenAI"}
 	bedrock := model("claude-role", "anthropic.claude-sonnet-4-5-20250929-v1:0")
 	bedrock.Spec.Provider, bedrock.Spec.CredentialsRef = "Bedrock", nil
-	rules := append(slices.Clone(grants), rule("all-cloud", nil, true, "gpt", "claude-role"))
-	res, conds, _ := compileLLM([]v1.Model{azure, bedrock}, rules, ClassifierInput{},
-		router("auto", "Rules", "claude-role", v1.RouterRoute{Model: "gpt", Keywords: []string{"python"}}))
-	if conds["auto"].Status != metav1.ConditionTrue {
-		t.Fatalf("%s %s", conds["auto"].Reason, conds["auto"].Message)
+	vx := model("gemini-vx", "gemini-2.5-pro")
+	vx.Spec.Provider, vx.Spec.CredentialsRef = "VertexAI", nil
+	vx.Spec.VertexAI = &v1.VertexAISettings{ProjectID: "acme-ml"}
+	rules := append(slices.Clone(grants), rule("all-cloud", nil, true, "gpt", "claude-role", "gemini-vx", "auto2"))
+	res, conds, _ := compileLLM([]v1.Model{azure, bedrock, vx}, rules, ClassifierInput{},
+		router("auto", "Rules", "claude-role", v1.RouterRoute{Model: "gpt", Keywords: []string{"python"}},
+			v1.RouterRoute{Model: "gemini-vx", Keywords: []string{"gemini"}}),
+		router("auto2", "Rules", "gemini-vx", v1.RouterRoute{Model: "gpt", Keywords: []string{"python"}}))
+	for _, r := range []string{"auto", "auto2"} {
+		if conds[r].Status != metav1.ConditionTrue {
+			t.Fatalf("%s: %s %s", r, conds[r].Reason, conds[r].Message)
+		}
 	}
 	ts := targets(t, byName(res.Objects)["router-auto"])
-	if len(ts) != 2 || ts[0][1] != "gpt" || ts[1][1] != "claude-role" {
+	if len(ts) != 3 || ts[0][1] != "gpt" || ts[1][1] != "gemini-vx" || ts[2][1] != "claude-role" {
 		t.Fatalf("lines %q", ts)
+	}
+	if ts := targets(t, byName(res.Objects)["router-auto2"]); len(ts) != 2 || ts[1][1] != "gemini-vx" {
+		t.Fatalf("auto2 lines %q", ts)
 	}
 }

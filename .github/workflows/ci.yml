@@ -63,6 +63,12 @@ jobs:
           - { name: a, steps: "0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 9 ext args", ui: true }
           - { name: b, steps: "8 10 12", ui: false }
     steps:
+      # The runner's disk held the kind images, the build cache and Go's caches until "no space left on device"
+      # (2026-10-08). Preinstalled tools this job never uses are removed in the background.
+      - name: Free disk space
+        run: |
+          df -h / | tail -1
+          sudo nohup rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: 26, cache: npm, cache-dependency-path: web/package-lock.json }
@@ -88,7 +94,9 @@ jobs:
         run: |
           docker build -t ambit-whoami:dev -f test/whoami/Dockerfile .  # test-only MCP server (step 5)
           kind load docker-image ambit-console:dev ambit-whoami:dev --name ambit
+          docker buildx prune -af >/dev/null  # the layers are in the Actions cache; free the builder's copy
           make kind-up install
+          df -h / | tail -1
       - name: OpenRouter key (optional repository secret; free models only)
         env: { OPENROUTER_API_KEY: "${{ secrets.OPENROUTER_API_KEY }}" }
         run: |
@@ -121,6 +129,7 @@ jobs:
       - name: Diagnostics on failure
         if: failure()
         run: |
+          df -h /
           kubectl get pods -A
           cat "$RUNNER_TEMP/prepull.log" || true
           kubectl -n ambit-system logs deploy/ambit-console --tail=100 || true

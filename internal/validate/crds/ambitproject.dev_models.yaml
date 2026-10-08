@@ -108,13 +108,15 @@ spec:
               credentialsRef:
                 description: 'CredentialsRef names a Secret in this namespace with the provider''s credentials: an "Authorization" entry
 
-                  with the API key, or for Bedrock "accessKey", "secretKey" and optional "sessionToken". The credentials never
+                  with the API key; for Bedrock "accessKey", "secretKey" and optional "sessionToken"; for VertexAI a Google
 
-                  appear in this object, so the object is safe to keep in Git. Only Secrets named ambit-llm-* may be used, so
+                  service-account key file in "credentials.json". The credentials never appear in this object, so the object is
 
-                  a Model cannot send another Secret (e.g. console keys) to a provider. Required, except with Bedrock: without
+                  safe to keep in Git. Only Secrets named ambit-llm-* may be used, so a Model cannot send another Secret (e.g.
 
-                  it, the gateway uses its own AWS identity (IRSA or EKS Pod Identity).'
+                  console keys) to a provider. Required, except with Bedrock and VertexAI: without it, the gateway uses its own
+
+                  cloud identity (IRSA or EKS Pod Identity; GKE Workload Identity).'
                 properties:
                   name:
                     minLength: 1
@@ -152,7 +154,9 @@ spec:
               model:
                 description: 'Model is the exact name clients send in the request, e.g. "google/gemma-4-31b-it:free". For Azure, the
 
-                  deployment name; for Bedrock, the model or inference-profile ID, e.g. "us.anthropic.claude-sonnet-4-5-20250929-v1:0".'
+                  deployment name; for Bedrock, the model or inference-profile ID, e.g. "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+
+                  for VertexAI, the Vertex AI model name, e.g. "gemini-2.5-pro" or "claude-sonnet-4-5@20250929".'
                 minLength: 1
                 type: string
               price:
@@ -169,11 +173,11 @@ spec:
                 - outputPerMillionTokens
                 type: object
               provider:
-                description: 'Provider serving the model. Values follow agentgateway''s AgentgatewayModel providers. Azure and Bedrock also
+                description: 'Provider serving the model. Values follow agentgateway''s AgentgatewayModel providers. Azure, Bedrock and VertexAI
 
-                  need their settings block (azure, bedrock). VertexAI is not offered yet: it needs Google Cloud credentials.
+                  also need their settings block (azure, bedrock, vertexai). Ollama and other self-hosted servers: provider OpenAI
 
-                  Ollama and other self-hosted servers: provider OpenAI with a baseURL.'
+                  with a baseURL.'
                 enum:
                 - Anthropic
                 - Azure
@@ -192,8 +196,26 @@ spec:
                 - OpenAI
                 - Openrouter
                 - TogetherAI
+                - VertexAI
                 - XAI
                 type: string
+              vertexai:
+                description: Google Vertex AI project. Required with provider VertexAI, refused otherwise.
+                properties:
+                  projectId:
+                    description: ProjectID of the Google Cloud project, e.g. acme-ml (or a legacy domain-scoped ID, example.com:acme-ml).
+                    maxLength: 64
+                    pattern: ^([a-z0-9][a-z0-9.-]*[a-z0-9]:)?[a-z][a-z0-9-]{4,28}[a-z0-9]$
+                    type: string
+                  region:
+                    description: 'Region (location): global, the multi-regions us and eu, or a region such as europe-west4. Default
+
+                      (agentgateway): global. Whether a model is offered there shows only at request time.'
+                    pattern: ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$
+                    type: string
+                required:
+                - projectId
+                type: object
             required:
             - model
             - provider
@@ -205,10 +227,12 @@ spec:
               rule: has(self.azure) == (self.provider == 'Azure')
             - message: bedrock settings are only for provider Bedrock
               rule: '!has(self.bedrock) || self.provider == ''Bedrock'''
-            - message: credentialsRef is required (only Bedrock may use the gateway's AWS identity)
-              rule: has(self.credentialsRef) || self.provider == 'Bedrock'
-            - message: 'baseURL is not used with Azure or Bedrock: their settings define the endpoint'
-              rule: '!has(self.baseURL) || !(self.provider in [''Azure'', ''Bedrock''])'
+            - message: credentialsRef is required (only Bedrock and VertexAI may use the gateway's cloud identity)
+              rule: has(self.credentialsRef) || self.provider in ['Bedrock', 'VertexAI']
+            - message: 'baseURL is not used with Azure, Bedrock or VertexAI: their settings define the endpoint'
+              rule: '!has(self.baseURL) || !(self.provider in [''Azure'', ''Bedrock'', ''VertexAI''])'
+            - message: vertexai settings are required with provider VertexAI and only there
+              rule: has(self.vertexai) == (self.provider == 'VertexAI')
           status:
             properties:
               allowAllSignedIn:

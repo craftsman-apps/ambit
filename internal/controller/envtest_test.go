@@ -15,6 +15,7 @@ import (
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -274,4 +275,20 @@ func TestReconcilerAgainstAPIServer(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// The CRD's rules hold in the real API server, not only in `ambit validate`.
+func TestAPIServerRefusesVertexAIWithoutSettings(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-vertex-api"
+	namespace(t, ns)
+	err := envClient.Create(t.Context(), &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemini", Namespace: ns},
+		Spec: v1.ModelSpec{Provider: "VertexAI", Model: "gemini-2.5-pro"}})
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "vertexai settings are required") {
+		t.Fatalf("want an Invalid error naming the vertexai rule, got %v", err)
+	}
+	if err := envClient.Create(t.Context(), &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemini-ok", Namespace: ns},
+		Spec: v1.ModelSpec{Provider: "VertexAI", Model: "gemini-2.5-pro", VertexAI: &v1.VertexAISettings{ProjectID: "acme-ml"}}}); err != nil {
+		t.Fatalf("valid VertexAI Model refused: %v", err)
+	}
 }

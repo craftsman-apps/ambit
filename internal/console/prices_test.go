@@ -18,6 +18,12 @@ const sampleList = `{"_ambit": {"commit": "abc", "date": "2026-10-02"},
  "command-x": {"litellm_provider": "cohere_chat", "input_cost_per_token": 2.5e-06, "output_cost_per_token": 1e-05},
  "azure/gpt-4.1": {"litellm_provider": "azure", "input_cost_per_token": 2e-06, "output_cost_per_token": 8e-06},
  "us.anthropic.claude-sonnet-4-5-20250929-v1:0": {"litellm_provider": "bedrock_converse", "input_cost_per_token": 3.3e-06, "output_cost_per_token": 1.65e-05},
+ "gemini-2.5-pro": {"litellm_provider": "vertex_ai-language-models", "input_cost_per_token": 1.25e-06, "output_cost_per_token": 1e-05},
+ "vertex_ai/gemini-2.0-flash": {"litellm_provider": "vertex_ai", "input_cost_per_token": 1.5e-07, "output_cost_per_token": 6e-07},
+ "vertex_ai/gemini-3-flash-preview": {"litellm_provider": "vertex_ai", "input_cost_per_token": 5e-07, "output_cost_per_token": 3e-06},
+ "gemini-3-flash-preview": {"litellm_provider": "vertex_ai-language-models", "input_cost_per_token": 5e-07, "output_cost_per_token": 3e-06},
+ "vertex_ai/claude-sonnet-4-5@20250929": {"litellm_provider": "vertex_ai-anthropic_models", "input_cost_per_token": 3e-06, "output_cost_per_token": 1.5e-05},
+ "gemini/gemini-2.5-flash": {"litellm_provider": "gemini", "input_cost_per_token": 3e-07, "output_cost_per_token": 2.5e-06},
  "meta.llama3-70b-instruct-v1:0": {"litellm_provider": "bedrock", "input_cost_per_token": 2.65e-06, "output_cost_per_token": 3.5e-06}}`
 
 func model(provider, name, baseURL string) v1.Model {
@@ -41,6 +47,10 @@ func TestSuggest(t *testing.T) {
 		{model("Azure", "gpt-4.1", ""), "2", "8", "azure/gpt-4.1"},
 		{model("Bedrock", "us.anthropic.claude-sonnet-4-5-20250929-v1:0", ""), "3.3", "16.5", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"},
 		{model("Bedrock", "meta.llama3-70b-instruct-v1:0", ""), "2.65", "3.5", "meta.llama3-70b-instruct-v1:0"},
+		{model("VertexAI", "gemini-2.5-pro", ""), "1.25", "10", "gemini-2.5-pro"},
+		{model("VertexAI", "gemini-2.0-flash", ""), "0.15", "0.6", "vertex_ai/gemini-2.0-flash"},
+		{model("VertexAI", "gemini-3-flash-preview", ""), "0.5", "3", "vertex_ai/gemini-3-flash-preview"},
+		{model("VertexAI", "claude-sonnet-4-5@20250929", ""), "3", "15", "vertex_ai/claude-sonnet-4-5@20250929"},
 	} {
 		s, ok := l.Suggest(tc.m)
 		if !ok || s.Input != tc.in || s.Output != tc.out || s.Key != tc.key || s.Commit != "abc" || s.Date != "2026-10-02" {
@@ -48,7 +58,8 @@ func TestSuggest(t *testing.T) {
 		}
 	}
 	for _, m := range []v1.Model{model("Anthropic", "gpt-4.1", ""), model("OpenAI", "gpt-4.1", "http://vllm.local/v1"), model("OpenAI", "unknown", ""),
-		model("Azure", "my-gpt-deployment", ""), model("Bedrock", "gpt-4.1", "")} {
+		model("Azure", "my-gpt-deployment", ""), model("Bedrock", "gpt-4.1", ""),
+		model("VertexAI", "gemini-2.5-flash", ""), model("Gemini", "gemini-2.5-pro", ""), model("VertexAI", "gpt-4.1", "")} {
 		if s, ok := l.Suggest(m); ok {
 			t.Errorf("suggested for %+v: %+v", m.Spec, s)
 		}

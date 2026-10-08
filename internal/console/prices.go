@@ -61,6 +61,7 @@ var litellmProvider = map[string]struct {
 	"Groq": {"groq", []string{"groq"}}, "Cerebras": {"cerebras", []string{"cerebras"}},
 	"TogetherAI": {"together_ai", []string{"together_ai"}}, "Fireworks": {"fireworks_ai", []string{"fireworks_ai"}},
 	"Deepinfra": {"deepinfra", []string{"deepinfra"}}, "Baseten": {"baseten", []string{"baseten"}},
+	"VertexAI": {"vertex_ai", []string{"vertex_ai", "vertex_ai-language-models", "vertex_ai-anthropic_models"}},
 	// Huggingface: LiteLLM's list has no Hugging Face prices, so no suggestion.
 }
 

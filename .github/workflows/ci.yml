@@ -45,6 +45,20 @@ jobs:
           cmp /tmp/r1 /tmp/r2
       - name: Alert rules (promtool unit tests)
         run: test/alerts.sh
+      # The image for both e2e parts, built once: Go's cache is warm here (setup-go and the tests above), and web/dist
+      # is already built. Docker builds inside the e2e jobs compiled everything again (6.4 min each, 2026-10-08).
+      - name: Build the Ambit image for the e2e jobs
+        if: steps.changes.outputs.code == 'true' && !github.event.pull_request.draft
+        run: |
+          for c in ambit-console ambit-controller ambit ambit-guard ambit-router; do
+            CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "bin/$c" "./cmd/$c"
+          done
+          docker build --target prebuilt -t ambit-console:dev .
+          docker build -t ambit-whoami:dev -f test/whoami/Dockerfile .  # test-only MCP server (step 5)
+          docker save ambit-console:dev ambit-whoami:dev | gzip > "$RUNNER_TEMP/images.tar.gz"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.changes.outputs.code == 'true' && !github.event.pull_request.draft
+        with: { name: images, path: "${{ runner.temp }}/images.tar.gz", retention-days: 1 }
       - name: Chart rules (ambit-router shape and RBAC)
         run: test/chart.sh
 
@@ -86,16 +100,12 @@ jobs:
           kubectl create namespace ambit-system
           kubectl -n ambit-system apply -f test/keycloak/keycloak.yaml >/dev/null
           nohup test/prepull.sh > "$RUNNER_TEMP/prepull.log" 2>&1 &
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      # The Go and web build layers come from the Actions cache when their inputs did not change.
-      - name: Build the Ambit image (layer cache)
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with: { context: ., load: true, tags: "ambit-console:dev", cache-from: type=gha, cache-to: "type=gha,mode=max" }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: images, path: "${{ runner.temp }}" }
       - name: Install Ambit on kind
         run: |
-          docker build -t ambit-whoami:dev -f test/whoami/Dockerfile .  # test-only MCP server (step 5)
+          gunzip -c "$RUNNER_TEMP/images.tar.gz" | docker load
           kind load docker-image ambit-console:dev ambit-whoami:dev --name ambit
-          docker buildx prune -af >/dev/null  # the layers are in the Actions cache; free the builder's copy
           make kind-up install
           df -h / | tail -1
       - name: OpenRouter key (optional repository secret; free models only)

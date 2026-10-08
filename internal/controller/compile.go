@@ -128,6 +128,21 @@ func CEL(a Access) string {
 	return "jwt.groups.exists(g, g in [" + strings.Join(q, ", ") + "])"
 }
 
+// modelAuth is how the gateway authenticates to the provider (spec, Generation): AWS keys for Bedrock, or none so
+// agentgateway uses the pod's AWS identity; Azure's documented api-key header; otherwise Authorization: Bearer.
+func modelAuth(m v1.Model) map[string]any {
+	ref := m.Spec.CredentialsRef
+	switch {
+	case ref == nil:
+		return nil
+	case m.Spec.Provider == "Bedrock":
+		return map[string]any{"aws": map[string]any{"secretRef": map[string]any{"name": ref.Name}}}
+	case m.Spec.Provider == "Azure":
+		return map[string]any{"secretRef": map[string]any{"name": ref.Name}, "location": map[string]any{"header": map[string]any{"name": "api-key"}}}
+	}
+	return map[string]any{"secretRef": map[string]any{"name": ref.Name}}
+}
+
 func agentgatewayModel(m v1.Model, a Access, route RouteRef) *unstructured.Unstructured {
 	o := &unstructured.Unstructured{Object: map[string]any{
 		"spec": map[string]any{
@@ -135,7 +150,7 @@ func agentgatewayModel(m v1.Model, a Access, route RouteRef) *unstructured.Unstr
 			"provider":   m.Spec.Provider,
 			"match":      map[string]any{"model": m.Spec.Model},
 			"policies": map[string]any{
-				"auth": map[string]any{"secretRef": map[string]any{"name": m.Spec.CredentialsRef.Name}},
+				"auth": modelAuth(m),
 				"authorization": map[string]any{
 					"action": "Allow",
 					"policy": map[string]any{"matchExpressions": []any{CEL(a)}},
@@ -143,6 +158,26 @@ func agentgatewayModel(m v1.Model, a Access, route RouteRef) *unstructured.Unstr
 			},
 		},
 	}}
+	if modelAuth(m) == nil {
+		unstructured.RemoveNestedField(o.Object, "spec", "policies", "auth")
+	}
+	if az := m.Spec.Azure; az != nil {
+		s := map[string]any{"resourceName": az.ResourceName, "resourceType": az.ResourceType}
+		if az.APIVersion != "" {
+			s["apiVersion"] = az.APIVersion
+		}
+		if az.ProjectName != "" {
+			s["projectName"] = az.ProjectName
+		}
+		unstructured.SetNestedMap(o.Object, s, "spec", "azure")
+	}
+	if m.Spec.Provider == "Bedrock" { // agentgateway requires the block with Bedrock, even empty
+		s := map[string]any{}
+		if m.Spec.Bedrock != nil && m.Spec.Bedrock.Region != "" {
+			s["region"] = m.Spec.Bedrock.Region
+		}
+		unstructured.SetNestedMap(o.Object, s, "spec", "bedrock")
+	}
 	if m.Spec.BaseURL != "" {
 		unstructured.SetNestedField(o.Object, m.Spec.BaseURL, "spec", "baseURL")
 	}

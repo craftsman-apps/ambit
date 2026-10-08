@@ -13,7 +13,9 @@ import (
 const sampleList = `{"_ambit": {"commit": "abc", "date": "2026-10-02"},
  "gpt-4.1": {"litellm_provider": "openai", "input_cost_per_token": 2e-06, "output_cost_per_token": 8e-06},
  "claude-x": {"litellm_provider": "anthropic", "input_cost_per_token": 3e-06, "output_cost_per_token": 1.5e-05},
- "openrouter/deepseek/deepseek-v4-flash": {"litellm_provider": "openrouter", "input_cost_per_token": 4.186e-08, "output_cost_per_token": 8.372e-08}}`
+ "openrouter/deepseek/deepseek-v4-flash": {"litellm_provider": "openrouter", "input_cost_per_token": 4.186e-08, "output_cost_per_token": 8.372e-08},
+ "mistral/mistral-x": {"litellm_provider": "mistral", "input_cost_per_token": 5e-07, "output_cost_per_token": 1.5e-06},
+ "command-x": {"litellm_provider": "cohere_chat", "input_cost_per_token": 2.5e-06, "output_cost_per_token": 1e-05}}`
 
 func model(provider, name, baseURL string) v1.Model {
 	return v1.Model{Spec: v1.ModelSpec{Provider: provider, Model: name, BaseURL: baseURL}}
@@ -31,6 +33,8 @@ func TestSuggest(t *testing.T) {
 		{model("OpenAI", "gpt-4.1", ""), "2", "8", "gpt-4.1"},
 		{model("Anthropic", "claude-x", ""), "3", "15", "claude-x"},
 		{model("Openrouter", "deepseek/deepseek-v4-flash", ""), "0.04186", "0.08372", "openrouter/deepseek/deepseek-v4-flash"},
+		{model("Mistral", "mistral-x", ""), "0.5", "1.5", "mistral/mistral-x"},
+		{model("Cohere", "command-x", ""), "2.5", "10", "command-x"},
 	} {
 		s, ok := l.Suggest(tc.m)
 		if !ok || s.Input != tc.in || s.Output != tc.out || s.Key != tc.key || s.Commit != "abc" || s.Date != "2026-10-02" {

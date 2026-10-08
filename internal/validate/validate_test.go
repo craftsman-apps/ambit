@@ -118,3 +118,15 @@ func TestDollarOnlyBudgetIsValid(t *testing.T) {
 		t.Fatalf("%v", p)
 	}
 }
+
+// Providers that agentgateway serves with an API key alone (checked with a server-side dry run on v1.6.0).
+func TestKeyOnlyProvidersAreValid(t *testing.T) {
+	for _, p := range []string{"Anthropic", "Gemini", "OpenAI", "Openrouter", "Mistral", "Cohere", "XAI", "Deepseek", "Meta", "Groq",
+		"Cerebras", "TogetherAI", "Fireworks", "Deepinfra", "Baseten", "Huggingface"} {
+		doc := "apiVersion: ambitproject.dev/v1alpha1\nkind: Model\nmetadata: { name: m }\nspec: { provider: " + p +
+			", model: some-model, credentialsRef: { name: ambit-llm-x } }"
+		if probs := check(t, doc); len(probs) != 0 {
+			t.Errorf("provider %s refused: %v", p, probs)
+		}
+	}
+}

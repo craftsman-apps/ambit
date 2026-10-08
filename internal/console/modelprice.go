@@ -6,6 +6,7 @@ import (
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/craftsman-apps/ambit/internal/pricing"
@@ -59,9 +60,18 @@ func (c *Catalog) setModelPrice(w http.ResponseWriter, r *http.Request, s Sessio
 		c.propose(w, r, s, "update", "Model", "models", m.Name, m.Spec, m.Labels, consoleAnnotations(m.Annotations))
 		return
 	}
-	if err := c.Client.Update(r.Context(), &m); err != nil { // carries the read resourceVersion
+	// The controller writes the Model's status whenever budgets or rules change; a write between a read and an
+	// update is a conflict. The price applies to the newest object too, so read it again and retry.
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := c.Client.Get(r.Context(), client.ObjectKeyFromObject(&m), &m); err != nil {
+			return err
+		}
+		m.Spec.Price = price
+		return c.Client.Update(r.Context(), &m)
+	})
+	if err != nil {
 		if apierrors.IsConflict(err) {
-			writeErr(w, http.StatusConflict, "the model changed while you edited it; reload and try again")
+			writeErr(w, http.StatusConflict, "the model kept changing while the price was saved; try again")
 			return
 		}
 		apiErr(w, err)

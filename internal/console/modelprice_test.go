@@ -1,13 +1,18 @@
 package console
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func priceFixture(t *testing.T, gitops bool) (http.Handler, client.Client, *Auth, *recordingRepo) {
@@ -88,5 +93,33 @@ func TestPriceEditInGitOpsKeepsLabels(t *testing.T) {
 	}
 	if got := string(repo.files[0].Content); !strings.Contains(got, "labels:\n    team: x\n") {
 		t.Fatalf("labels dropped:\n%s", got)
+	}
+}
+
+// The controller writes a Model's status (for example "refused for groups …: no price") whenever budgets or rules
+// change. A status write between the handler's read and its update is a conflict, but the admin's price applies to
+// the newest object as well, so the handler retries instead of answering "the model changed while you edited it".
+func TestPriceSaveRetriesAStatusConflict(t *testing.T) {
+	_, c, a := serversFixture(t)
+	_ = c.Create(t.Context(), &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gpt", Namespace: testNS},
+		Spec: v1.ModelSpec{Provider: "OpenAI", Model: "gpt-4.1", CredentialsRef: v1.SecretRef{Name: "ambit-llm-openai"}}})
+	conflicts := 1
+	wc := interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+		Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if conflicts > 0 {
+				conflicts--
+				return apierrors.NewConflict(schema.GroupResource{Group: "ambitproject.dev", Resource: "models"}, obj.GetName(), errors.New("status changed"))
+			}
+			return cl.Update(ctx, obj, opts...)
+		},
+	})
+	h := NewServer(a, testSPA, LoginOptions{}, &Catalog{Client: wc, Namespace: testNS})
+	if r := do(t, h, "PUT", "/api/models/gpt/price", user(a, "priya@acme.test", RoleAdmin), map[string]string{"inputPerMillionTokens": "1", "outputPerMillionTokens": "4"}); r.Code != http.StatusOK {
+		t.Fatalf("%d %s", r.Code, r.Body)
+	}
+	var m v1.Model
+	_ = c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "gpt"}, &m)
+	if m.Spec.Price == nil || m.Spec.Price.OutputPerMillionTokens != "4" {
+		t.Fatalf("price not saved: %+v", m.Spec.Price)
 	}
 }

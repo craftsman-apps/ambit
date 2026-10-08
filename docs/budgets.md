@@ -44,6 +44,9 @@ exceeded: every request that started while the total was not yet above the cap f
 (for example several requests sent at the same moment), and a charge reaches the counter a moment after its
 answer. Once the total is above the cap, new requests are refused.
 
+A change to a Budget takes up to about a minute to apply: the rate limit service reads budgets from a mounted
+ConfigMap, which Kubernetes refreshes on the kubelet's sync cycle (1 minute by default).
+
 ## Models without a price
 
 A model without a price cannot be counted, so it is **refused (403) to every group with a dollar limit**

@@ -1,7 +1,9 @@
 name: ci
+# Cost: a pull request runs the full check; a merge to main does not run it again (the merge script merges only a
+# PR that already contains the current main). Draft PRs and documentation-only changes skip the e2e job.
 on:
-  push: { branches: [main, "step-*"] }
-  pull_request:
+  push: { branches: ["step-*"] }
+  pull_request: { types: [opened, synchronize, reopened, ready_for_review] }
 permissions: { contents: read }
 concurrency:
   group: ci-${{ github.ref }}
@@ -10,8 +12,18 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
+      - name: Does the change touch more than documentation?
+        id: changes
+        env: { BASE: "${{ github.event.pull_request.base.sha }}", HEAD: "${{ github.event.pull_request.head.sha }}" }
+        run: |
+          code=true
+          if [ -n "$BASE" ] && ! git diff --name-only "$BASE...$HEAD" | grep -qvE '^docs/|\.md$|^LICENSE$'; then code=false; fi
+          echo "code=$code" | tee -a "$GITHUB_OUTPUT"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version-file: go.mod }
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -38,6 +50,7 @@ jobs:
 
   e2e:
     needs: build
+    if: needs.build.outputs.code == 'true' && !github.event.pull_request.draft
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -48,8 +61,16 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
       - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
         with: { config: kind/cluster.yaml, cluster_name: ambit, wait: 120s }
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # The Go and web build layers come from the Actions cache when their inputs did not change.
+      - name: Build the Ambit image (layer cache)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with: { context: ., load: true, tags: "ambit-console:dev", cache-from: type=gha, cache-to: "type=gha,mode=max" }
       - name: Install Ambit on kind
-        run: make kind-up image install
+        run: |
+          docker build -t ambit-whoami:dev -f test/whoami/Dockerfile .  # test-only MCP server (step 5)
+          kind load docker-image ambit-console:dev ambit-whoami:dev --name ambit
+          make kind-up install
       - name: OpenRouter key (optional repository secret; free models only)
         env: { OPENROUTER_API_KEY: "${{ secrets.OPENROUTER_API_KEY }}" }
         run: |
@@ -58,10 +79,21 @@ jobs:
         run: make test
         env:
           AMBIT_SKIP_ARGO: "1"  # step 12's Argo CD check needs the GitHub App of step 4c, which CI does not have
+          SOAK_SECONDS: "120"   # step 10's soak; 300 s locally, longer in soak runs
+      - name: Playwright version
+        id: pw
+        run: echo "version=$(node -p "require('./web/package-lock.json').packages['node_modules/@playwright/test'].version")" >> "$GITHUB_OUTPUT"
+      - name: Playwright browsers (cache)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with: { path: ~/.cache/ms-playwright, key: "playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}" }
       - name: UI tests (Playwright)
         run: |
           cd web && npm ci --no-fund --no-audit && npx playwright install --with-deps chromium
           cd .. && CI=true make test-ui
+      - name: Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: playwright-traces, path: web/test-results, retention-days: 7, if-no-files-found: ignore }
       - name: Diagnostics on failure
         if: failure()
         run: |

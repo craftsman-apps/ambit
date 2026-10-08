@@ -17,7 +17,8 @@ SOAK_SECONDS=${SOAK_SECONDS:-300}
 # client; the gateway drops them after 30 idle minutes, so a 24-hour soak samples from 3600 s on:
 #   SOAK_SECONDS=86400 SOAK_WARMUP=3600 test/step10.sh
 SOAK_WARMUP=${SOAK_WARMUP:-45}
-gw_pods() { kubectl -n "$NS" get pods -l gateway.networking.k8s.io/gateway-name=ambit --field-selector=status.phase=Running -o name; }
+# Running gateway pods that are not shutting down: a pod replaced by a rollout stays Running while it terminates.
+gw_pods() { kubectl -n "$NS" get pods -l gateway.networking.k8s.io/gateway-name=ambit -o go-template='{{range .items}}{{if and (eq .status.phase "Running") (not .metadata.deletionTimestamp)}}pod/{{.metadata.name}}{{"\n"}}{{end}}{{end}}'; }
 outcome() { # blocked (the gateway refused on budget) or passed:<code>
   local code; code=$(command curl -s -D "$W/h" -o "$W/llm" -w '%{http_code}' --max-time 60 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
     -d '{"model":"google/gemma-4-31b-it:free","max_tokens":4,"messages":[{"role":"user","content":"hi"}]}' "$LLM")
@@ -54,6 +55,11 @@ kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
 # A 4-CPU CI node is nearly full at this point; a small CPU request lets the rollout's extra pod fit.
 helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --set gateway.replicas=3 \
   --set gateway.resources.requests.cpu=20m --wait --timeout 5m >/dev/null
+# The new CPU request changes the pod template, so the gateway rolls: wait until all 3 replicas are updated and
+# ready, then for the replaced pods to be gone.
+for _ in $(seq 1 90); do
+  [[ $(kubectl -n "$NS" get deploy -l gateway.networking.k8s.io/gateway-name=ambit -o jsonpath='{.items[0].status.updatedReplicas}/{.items[0].status.readyReplicas}/{.items[0].status.replicas}') == 3/3/3 ]] && break; sleep 2
+done
 for _ in $(seq 1 60); do [[ $(gw_pods | wc -l | tr -d ' ') == 3 ]] && break; sleep 2; done
 [[ $(gw_pods | wc -l | tr -d ' ') == 3 ]] || fail "0 gateway did not scale to 3: $(gw_pods)"
 [[ $(kubectl -n "$NS" get pdb -o jsonpath='{.items[*].spec.minAvailable}') == *1* ]] || fail "0 no PodDisruptionBudget for the gateway"

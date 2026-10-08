@@ -61,8 +61,16 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
       - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
         with: { config: kind/cluster.yaml, cluster_name: ambit, wait: 120s }
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # The Go and web build layers come from the Actions cache when their inputs did not change.
+      - name: Build the Ambit image (layer cache)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with: { context: ., load: true, tags: "ambit-console:dev", cache-from: type=gha, cache-to: "type=gha,mode=max" }
       - name: Install Ambit on kind
-        run: make kind-up image install
+        run: |
+          docker build -t ambit-whoami:dev -f test/whoami/Dockerfile .  # test-only MCP server (step 5)
+          kind load docker-image ambit-console:dev ambit-whoami:dev --name ambit
+          make kind-up install
       - name: OpenRouter key (optional repository secret; free models only)
         env: { OPENROUTER_API_KEY: "${{ secrets.OPENROUTER_API_KEY }}" }
         run: |
@@ -72,6 +80,12 @@ jobs:
         env:
           AMBIT_SKIP_ARGO: "1"  # step 12's Argo CD check needs the GitHub App of step 4c, which CI does not have
           SOAK_SECONDS: "120"   # step 10's soak; 300 s locally, longer in soak runs
+      - name: Playwright version
+        id: pw
+        run: echo "version=$(node -p "require('./web/package-lock.json').packages['node_modules/@playwright/test'].version")" >> "$GITHUB_OUTPUT"
+      - name: Playwright browsers (cache)
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with: { path: ~/.cache/ms-playwright, key: "playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}" }
       - name: UI tests (Playwright)
         run: |
           cd web && npm ci --no-fund --no-audit && npx playwright install --with-deps chromium

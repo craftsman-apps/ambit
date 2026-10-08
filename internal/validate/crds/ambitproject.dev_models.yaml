@@ -121,16 +121,28 @@ spec:
                 - outputPerMillionTokens
                 type: object
               provider:
-                description: 'Provider serving the model. Values follow agentgateway''s AgentgatewayModel providers. Azure, Bedrock and
+                description: 'Provider serving the model. Values follow agentgateway''s AgentgatewayModel providers that need only an API key.
 
-                  VertexAI are not offered: agentgateway needs provider settings and cloud credentials for them that a Model
+                  Azure, Bedrock and VertexAI are not offered yet: agentgateway needs provider settings and cloud credentials
 
-                  cannot express yet.'
+                  for them that a Model cannot express yet. Ollama and other self-hosted servers: provider OpenAI with a baseURL.'
                 enum:
                 - Anthropic
+                - Baseten
+                - Cerebras
+                - Cohere
+                - Deepinfra
+                - Deepseek
+                - Fireworks
                 - Gemini
+                - Groq
+                - Huggingface
+                - Meta
+                - Mistral
                 - OpenAI
                 - Openrouter
+                - TogetherAI
+                - XAI
                 type: string
             required:
             - credentialsRef

@@ -133,6 +133,14 @@ mcp_send() {
     -H 'Accept: application/json, text/event-stream' -d "$1" "$MCP" | awk '/^data: /{print substr($0, 7); next} /^\{/{print}'
 }
 # tools TOKEN: opens a session and sets TOOLS to the sorted tool names this user sees, space separated.
+# mcp_ready NS: the MCP test servers (test/mcp/objects.yaml) run and the gateway serves them. A step that applies
+# them must wait here: on a fresh cluster (CI runs steps in parallel parts) they are not ready at once.
+mcp_ready() {
+  kubectl -n "$1" wait "servers.ambitproject.dev" --all --for=condition=Ready --timeout=300s >/dev/null ||
+    fail "MCP servers not Ready: $(kubectl -n "$1" get servers.ambitproject.dev -o wide)"
+  kubectl -n "$1" wait "accessrules.ambitproject.dev" --all --for=condition=Ready --timeout=60s >/dev/null || fail "access rules not Ready"
+  kubectl -n "$1" wait agentgatewaybackend/ambit-mcp --for=condition=Accepted --timeout=60s >/dev/null || fail "MCP backend not accepted"
+}
 tools() {
   mcp_open "$1"
   TOOLS=$(mcp_send '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' |

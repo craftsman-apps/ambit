@@ -52,6 +52,7 @@ trap 'rc=$?; restore; on_exit $rc' EXIT
 ensure_llm_setup "$NS"
 make -s metrics-server >/dev/null
 kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
+mcp_ready "$NS"
 # A 4-CPU CI node is nearly full at this point; a small CPU request lets the rollout's extra pod fit.
 helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --set gateway.replicas=3 \
   --set gateway.resources.requests.cpu=20m --wait --timeout 5m >/dev/null

@@ -219,8 +219,8 @@ load() { "$W/load" -rate 20 -duration "$1" -warmup 0s -token-file "$LT" -body-fi
 # a) one edit changes the category's meaning (description → new hash) and its target (lines): a label made under
 #    H1 may only reach H1's target, one made under H2 only H2's target
 fresh; echo "$M" > "$LT"
-load 90s "$W/ans-config" > "$W/load-config" 2>&1 & lp=$!
-sleep 30
+load 60s "$W/ans-config" > "$W/load-config" 2>&1 & lp=$!
+sleep 20
 H1=$(hash_now)
 kubectl -n "$NS" patch modelrouters.ambitproject.dev smart --type merge -p '{"spec":{"classifier":{"categories":[{"name":"coding","description":"program code, version 2"}]},"routes":[{"model":"mock-free","category":"coding"}]}}' >/dev/null
 t0=$(date +%s.%N)
@@ -249,7 +249,7 @@ kubectl -n "$NS" patch modelrouters.ambitproject.dev smart --type json -p '[{"op
 # b) a rollout (Helm upgrade) and a scale-down under load: no 5xx; Helm leaves the replicas alone (2, then 0)
 wait_until 60 '[[ "$(ask smart "$M" "$coding")" == "200 mock/echo" ]]' >/dev/null || fail "7 not routing before the rollout"
 fresh; echo "$M" > "$LT"
-load 180s "$W/ans-roll" > "$W/load-roll" 2>&1 & lp=$!
+load 300s "$W/ans-roll" > "$W/load-roll" 2>&1 & lp=$!  # stopped 15 s after the last event below
 sleep 10
 helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --set-string "routing.router.podAnnotations.restart=$(date +%s)" --wait --timeout 5m >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-router --timeout=180s >/dev/null
@@ -258,6 +258,9 @@ kubectl -n "$NS" patch modelrouters.ambitproject.dev smart --type merge -p '{"sp
 wait_until 120 '[[ $(replicas) == 0 ]]' >/dev/null || fail "7 not scaled down"
 helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --set-string "routing.router.podAnnotations.restart=$(date +%s)" --wait --timeout 5m >/dev/null
 [[ $(replicas) == 0 ]] || fail "7 a Helm upgrade changed ambit-router's replicas from 0 to $(replicas)"
+# $lp is the subshell that runs the load() function; signal its child, the load tool, which stops sending, lets
+# requests in flight finish and writes its results; the subshell then exits with the tool's status.
+sleep 15; pkill -TERM -P $lp || kill -TERM $lp  # bash may run the tool itself as $lp (no subshell)
 wait $lp || fail "7 load run: $(cat "$W/load-roll")"
 uv run --no-project python -c "
 import json,sys

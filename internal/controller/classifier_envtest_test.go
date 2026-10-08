@@ -273,3 +273,18 @@ func reasonOf(t *testing.T, ns, name string) string {
 	}
 	return c.Reason
 }
+
+// A Bedrock classifier without credentialsRef is refused on its router; it must not fail the whole reconcile.
+func TestBedrockClassifierIsRefusedNotFatal(t *testing.T) {
+	ns := "ambit-classifier-bedrock"
+	rec := classifierSetup(t, ns)
+	if err := envClient.Create(t.Context(), &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "claude", Namespace: ns},
+		Spec: v1.ModelSpec{Provider: "Bedrock", Model: "anthropic.claude-sonnet-4-5-20250929-v1:0"}}); err != nil {
+		t.Fatal(err)
+	}
+	setLLM(t, ns, "auto", "claude", "coding")
+	rec() // fails the test on a reconcile error
+	if reasonOf(t, ns, "auto") != "ClassifierModelInvalid" {
+		t.Fatalf("reason %q", reasonOf(t, ns, "auto"))
+	}
+}

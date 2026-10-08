@@ -1,9 +1,17 @@
 package controller
 
 import (
+	"context"
 	"encoding/base64"
 	"testing"
 	"time"
+
+	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/craftsman-apps/ambit/internal/routerconfig"
 	appsv1 "k8s.io/api/apps/v1"
@@ -62,5 +70,39 @@ func TestClassifyPolicyConditionNamesRouters(t *testing.T) {
 	want := `request.path == "/v1/chat/completions" && size(request.body) <= 4000000 && json(request.body).model in ["auto", "team/\"x\""]`
 	if got != want {
 		t.Fatalf("condition\n got %s\nwant %s", got, want)
+	}
+}
+
+// Only classifiers ambit-router can call have their Secret read: Azure and Bedrock Secrets hold other kinds of
+// credentials (or none), and are never copied to ambit-router.
+func TestReadKeysOnlyForOpenAICompatibleClassifiers(t *testing.T) {
+	var read []string
+	c := fake.NewClientBuilder().WithObjects(
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ambit-llm-local", Namespace: "ambit-system"}, Data: map[string][]byte{"Authorization": []byte("sk-local")}},
+	).WithInterceptorFuncs(interceptor.Funcs{Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+		if _, ok := obj.(*corev1.Secret); ok {
+			read = append(read, key.Name)
+		}
+		return cl.Get(ctx, key, obj, opts...)
+	}}).Build()
+	azure := model("gpt", "gpt-4.1")
+	azure.Spec.Provider, azure.Spec.CredentialsRef = "Azure", &v1.SecretRef{Name: "ambit-llm-azure"}
+	keyed := model("claude-keys", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+	keyed.Spec.Provider, keyed.Spec.CredentialsRef = "Bedrock", &v1.SecretRef{Name: "ambit-llm-aws"}
+	role := model("claude-role", "anthropic.claude-sonnet-4-5-20250929-v1:0")
+	role.Spec.Provider, role.Spec.CredentialsRef = "Bedrock", nil
+	var routers []v1.ModelRouter
+	for _, m := range []string{"gpt", "claude-keys", "claude-role", "local"} {
+		r := llmRouter("auto-"+m, "coding")
+		r.Spec.Classifier.LLM.Model = m
+		routers = append(routers, r)
+	}
+	rec := &Reconciler{Live: c, Namespace: "ambit-system"}
+	keys, err := rec.readKeys(t.Context(), routers, []v1.Model{azure, keyed, role, local})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(read) != 1 || read[0] != "ambit-llm-local" || len(keys) != 1 || keys["local"] != "sk-local" {
+		t.Fatalf("secrets read %v, keys %v", read, keys)
 	}
 }

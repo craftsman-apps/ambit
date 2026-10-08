@@ -72,6 +72,9 @@ func (r *Reconciler) readKeys(ctx context.Context, routers []v1.ModelRouter, mod
 		if !ok {
 			continue
 		}
+		if _, callable := LLMEndpoint(m); !callable || m.Spec.CredentialsRef == nil {
+			continue // llmConfig refuses this classifier; its Secret (AWS keys, Azure key, or none) is not ambit-router's
+		}
 		if _, done := keys[m.Name]; done {
 			continue
 		}

@@ -292,6 +292,16 @@ func TestLLMRouterValidation(t *testing.T) {
 	base := append(slices.Clone(catalog), local)
 	noChat := local // ambit-router calls /chat/completions itself, without the gateway's conversion
 	noChat.Spec.Formats = []v1.ModelFormat{"Messages", "Responses"}
+	azure := model("gpt", "gpt-4.1")
+	azure.Spec.Provider, azure.Spec.Azure = "Azure", &v1.AzureSettings{ResourceName: "acme-openai", ResourceType: "OpenAI"}
+	withAzure := llmRouter("auto", "coding")
+	withAzure.Spec.Classifier.LLM.Model = "gpt"
+	bedrock := model("claude-role", "anthropic.claude-sonnet-4-5-20250929-v1:0")
+	bedrock.Spec.Provider, bedrock.Spec.CredentialsRef = "Bedrock", nil
+	withBedrock := llmRouter("auto", "coding")
+	withBedrock.Spec.Classifier.LLM.Model = "claude-role"
+	noRef := local
+	noRef.Spec.CredentialsRef = nil // invalid in the API; the message must still not panic
 	for name, tc := range map[string]struct {
 		r      v1.ModelRouter
 		models []v1.Model
@@ -304,6 +314,9 @@ func TestLLMRouterValidation(t *testing.T) {
 		"key secret missing":       {llmRouter("auto", "coding"), base, ClassifierInput{Installed: true}, "ClassifierModelInvalid", false},
 		"formats without chat":     {llmRouter("auto", "coding"), append(slices.Clone(catalog), noChat), installed, "ClassifierModelInvalid", false},
 		"category not declared":    {undeclared, base, installed, "UnknownCategory", true},
+		"azure classifier":         {withAzure, append(slices.Clone(base), azure), ClassifierInput{Installed: true, HasKey: map[string]bool{"gpt": true}}, "ClassifierModelInvalid", false},
+		"bedrock classifier":       {withBedrock, append(slices.Clone(base), bedrock), installed, "ClassifierModelInvalid", false},
+		"no credentialsRef":        {llmRouter("auto", "coding"), append(slices.Clone(catalog), noRef), ClassifierInput{Installed: true}, "ClassifierModelInvalid", false},
 		"not installed":            {llmRouter("auto", "coding"), base, ClassifierInput{}, "ClassifierNotInstalled", false},
 	} {
 		res, conds, cfg := compileLLM(tc.models, grants, tc.ci, tc.r)
@@ -326,5 +339,23 @@ func TestCategoryConflict(t *testing.T) {
 	_, conds, cfg := compileLLM(append(slices.Clone(catalog), local), ab, installed, a, b)
 	if conds["b"].Reason != "CategoryConflict" || conds["a"].Status != metav1.ConditionTrue || len(cfg.Routers) != 1 {
 		t.Fatalf("a=%v b=%v", conds["a"], conds["b"])
+	}
+}
+
+// Azure and Bedrock Models are ordinary route targets and defaults.
+func TestCloudModelsAsRouteTargets(t *testing.T) {
+	azure := model("gpt", "gpt-4.1")
+	azure.Spec.Provider, azure.Spec.Azure = "Azure", &v1.AzureSettings{ResourceName: "acme-openai", ResourceType: "OpenAI"}
+	bedrock := model("claude-role", "anthropic.claude-sonnet-4-5-20250929-v1:0")
+	bedrock.Spec.Provider, bedrock.Spec.CredentialsRef = "Bedrock", nil
+	rules := append(slices.Clone(grants), rule("all-cloud", nil, true, "gpt", "claude-role"))
+	res, conds, _ := compileLLM([]v1.Model{azure, bedrock}, rules, ClassifierInput{},
+		router("auto", "Rules", "claude-role", v1.RouterRoute{Model: "gpt", Keywords: []string{"python"}}))
+	if conds["auto"].Status != metav1.ConditionTrue {
+		t.Fatalf("%s %s", conds["auto"].Reason, conds["auto"].Message)
+	}
+	ts := targets(t, byName(res.Objects)["router-auto"])
+	if len(ts) != 2 || ts[0][1] != "gpt" || ts[1][1] != "claude-role" {
+		t.Fatalf("lines %q", ts)
 	}
 }

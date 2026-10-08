@@ -261,8 +261,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			return reconcile.Result{}, err
 		}
 	}
-	if !generates(res.Objects, "AgentgatewayBackend", MCPBackendName) && len(servers.Items) > 0 { // every Server refused or none running: no shared backend either
+	if len(servers.Items) > 0 { // every Server refused, or none running: no shared backend (or policy) either
 		for _, o := range [][2]string{{"AgentgatewayBackend", MCPBackendName}, {"AgentgatewayPolicy", MCPBackendName + "-access"}} {
+			if generates(res.Objects, o[0], o[1]) {
+				continue
+			}
 			if err := r.deleteGenerated(ctx, o[0], o[1]); err != nil {
 				return reconcile.Result{}, err
 			}
@@ -570,6 +573,7 @@ func (r *Reconciler) markRunning(ctx context.Context, servers []v1.Server) error
 		if !ok {
 			c = cond(metav1.ConditionUnknown, "Pending", "waiting for ToolHive to start the server")
 		}
+		c.ObservedGeneration = servers[i].Generation // as setReady writes it: no status write on an idle pass
 		meta.SetStatusCondition(&servers[i].Status.Conditions, c)
 	}
 	return nil

@@ -134,7 +134,7 @@ func TestGeneratedMCPObjects(t *testing.T) {
 	// A DNS host, not a Service backendRef: agentgateway rejects the whole shared backend while any referenced
 	// Service is missing, which ToolHive's proxy Service is around every create and delete (risk 16).
 	if st["protocol"] != "StreamableHTTP" || st["path"] != "/mcp" || st["port"] != int64(8080) ||
-		st["host"] != "mcp-time-proxy.ambit-system.svc.cluster.local" || st["backendRef"] != nil {
+		st["host"] != "mcp-time-proxy.ambit-system.svc" || st["backendRef"] != nil {
 		t.Fatalf("stdio target %v", timeT)
 	}
 	// Shared objects belong to every Server, so they are removed with the last one and never before.
@@ -318,14 +318,16 @@ func TestOnlyRunningImageServersAreTargets(t *testing.T) {
 	}
 }
 
-// agentgateway refuses an MCP backend without targets: while no server runs yet there is no shared backend.
+// agentgateway refuses an MCP backend without targets: while no server runs yet there is no shared backend. The
+// access policy stays: were it deleted too, the backend could come back before its policy, open to every user.
 func TestNoRunningServerGeneratesNoSharedBackend(t *testing.T) {
 	starting := server("time", "stdio")
 	starting.Status.Conditions = nil
 	r := Compile(nil, []v1.Server{starting}, nil, route)
 	find(t, r.Objects, "MCPServer", "time")
+	find(t, r.Objects, "AgentgatewayPolicy", MCPBackendName+"-access")
 	for _, o := range r.Objects {
-		if o.GetKind() == "AgentgatewayBackend" || o.GetName() == MCPBackendName+"-access" {
+		if o.GetKind() == "AgentgatewayBackend" {
 			t.Fatalf("generated %s %s with no running server", o.GetKind(), o.GetName())
 		}
 	}

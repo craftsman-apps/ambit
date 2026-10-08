@@ -500,9 +500,20 @@ func TestImageServerJoinsBackendWhenRunning(t *testing.T) {
 	}
 	setMCPServerReady(t, ns, "time", false) // ToolHive restarts it
 	rec()
-	for _, o := range [][2]string{{"AgentgatewayBackend", MCPBackendName}, {"AgentgatewayPolicy", MCPBackendName + "-access"}} {
-		if _, err := genGet(ctx, ns, o[0], o[1]); !apierrors.IsNotFound(err) {
-			t.Fatalf("%s/%s kept with no running server: %v", o[0], o[1], err)
-		}
+	if _, err := genGet(ctx, ns, "AgentgatewayBackend", MCPBackendName); !apierrors.IsNotFound(err) {
+		t.Fatalf("backend kept with no running server: %v", err)
+	}
+	// The access policy stays, so the backend can never come back without it (open to every user).
+	if _, err := genGet(ctx, ns, "AgentgatewayPolicy", MCPBackendName+"-access"); err != nil {
+		t.Fatalf("access policy deleted with no running server: %v", err)
+	}
+	// A pass that writes nothing new leaves the Server's status untouched (no write on every reconcile).
+	var before v1.Server
+	_ = envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "time"}, &before)
+	rec()
+	var after v1.Server
+	_ = envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "time"}, &after)
+	if before.ResourceVersion != after.ResourceVersion {
+		t.Fatalf("an idle reconcile rewrote the Server (resourceVersion %s -> %s)", before.ResourceVersion, after.ResourceVersion)
 	}
 }

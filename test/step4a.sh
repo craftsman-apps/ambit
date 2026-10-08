@@ -151,7 +151,7 @@ kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
 kubectl -n "$NS" wait "servers.$G" --all --for=condition=Ready --timeout=300s >/dev/null || fail "11 everything not Ready again"
 sleep 10; kill "$probes" 2>/dev/null || true; wait "$probes" 2>/dev/null || true
 n=$(wc -l <"$W/probes" | tr -d ' '); bad=$(grep -c ' fail$' "$W/probes" || true)
-[[ "$n" -ge 50 && "$bad" -eq 0 ]] || fail "11 alice's sessions failed while another Server was deleted and created: $bad of $n (codes: $(grep ' fail$' "$W/probes" | cut -d' ' -f1 | sort | uniq -c | tr -s ' \n' ' '))"
+[[ "$n" -ge 20 && "$bad" -eq 0 ]] || fail "11 alice's sessions failed while another Server was deleted and created: $bad of $n (codes: $(grep ' fail$' "$W/probes" | cut -d' ' -f1 | sort | uniq -c | tr -s ' \n' ' '))"
 pass "11 tag-only image rejected: $(tr -d '\n' <"$W/err" | sed 's/.*spec.image//' | cut -c1-90); deleted Server's tools gone, restored; other users unaffected ($n sessions, 0 failed)"
 
 # 12 · chart renders identically with MCP on

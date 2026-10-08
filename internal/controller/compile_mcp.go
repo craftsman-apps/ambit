@@ -64,9 +64,6 @@ func compileServers(servers []v1.Server, rules []v1.AccessRule) []*unstructured.
 		}
 		clauses = append(clauses, serverClauses(s.Name, access[s.Name])...)
 	}
-	if len(targets) == 0 {
-		return out // agentgateway refuses an MCP backend without targets; the reconciler deletes a previous one
-	}
 	expr := "false"
 	if len(clauses) > 0 {
 		expr = strings.Join(clauses, " || ")
@@ -88,7 +85,12 @@ func compileServers(servers []v1.Server, rules []v1.AccessRule) []*unstructured.
 			"policy": map[string]any{"matchExpressions": []any{expr}},
 		}}},
 	})
-	owners = append(owners, backend, policy)
+	// agentgateway refuses an MCP backend without targets: none while no server runs (the reconciler deletes a
+	// previous one). The policy stays, so the backend never comes back before its authorization.
+	owners = append(owners, policy)
+	if len(targets) > 0 {
+		owners = append(owners, backend)
+	}
 	for _, o := range owners {
 		o.SetOwnerReferences(refs) // not controller refs: garbage-collected only when the last Server is gone
 	}
@@ -141,8 +143,8 @@ func target(s v1.Server) (map[string]any, bool) {
 		// ToolHive's proxy Service by DNS name, not as a backendRef: agentgateway v1.6.0 rejects the whole shared
 		// backend (every user's MCP traffic) while any referenced Service is missing, which this one is for a moment
 		// around every create and delete. A host is resolved per connection, so only this server is affected.
-		// ponytail: assumes the cluster domain cluster.local; add a controller flag for clusters that change it.
-		host := "mcp-" + s.Name + "-proxy." + s.Namespace + ".svc.cluster.local"
+		// <ns>.svc, not .svc.cluster.local: the pod's DNS search list completes it for any cluster domain.
+		host := "mcp-" + s.Name + "-proxy." + s.Namespace + ".svc"
 		return map[string]any{"host": host, "port": int64(proxyPort), "path": path, "protocol": protocol}, true
 	}
 	// The CRD pattern still lets through a bad port ("host:bad") or escape ("%zz").

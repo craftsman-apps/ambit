@@ -15,7 +15,7 @@ var pricingByModel = pricing.ByModel
 func TestRefuseUnpriced(t *testing.T) {
 	m := func(name, model string, p *v1.ModelPrice) v1.Model {
 		return v1.Model{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: v1.ModelSpec{Model: model, Provider: "OpenAI",
-			CredentialsRef: v1.SecretRef{Name: "ambit-llm-x"}, Price: p}}
+			CredentialsRef: &v1.SecretRef{Name: "ambit-llm-x"}, Price: p}}
 	}
 	priced := &v1.ModelPrice{InputPerMillionTokens: "1", OutputPerMillionTokens: "4"}
 	models := []v1.Model{m("echo", "mock/echo", priced), m("free", "free", &v1.ModelPrice{InputPerMillionTokens: "0", OutputPerMillionTokens: "0"}),
@@ -52,7 +52,7 @@ func TestRefuseUnpriced(t *testing.T) {
 
 // With budgets off (no ratelimit service) no dollar cap is enforced, so nothing is refused for lack of a price.
 func TestUnpricedNotRefusedWhenBudgetsAreOff(t *testing.T) {
-	models := []v1.Model{{ObjectMeta: metav1.ObjectMeta{Name: "raw"}, Spec: v1.ModelSpec{Model: "raw", Provider: "OpenAI", CredentialsRef: v1.SecretRef{Name: "ambit-llm-x"}}}}
+	models := []v1.Model{{ObjectMeta: metav1.ObjectMeta{Name: "raw"}, Spec: v1.ModelSpec{Model: "raw", Provider: "OpenAI", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-x"}}}}
 	rules := []v1.AccessRule{{ObjectMeta: metav1.ObjectMeta{Name: "r"}, Spec: v1.AccessRuleSpec{Groups: []string{"eng"}, Models: []string{"raw"}}}}
 	budgets := []v1.Budget{{ObjectMeta: metav1.ObjectMeta{Name: "eng"}, Spec: v1.BudgetSpec{Group: "eng", GroupDollarsPerDay: "5"}}}
 	res := Compile(models, nil, rules, RouteRef{Name: "ambit-llm"})

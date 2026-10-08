@@ -200,6 +200,9 @@ func llmConfig(r v1.ModelRouter, wire string, byObject map[string]v1.Model, ci C
 		return nil, "classifier Model " + m.Name + " does not list the Completions format; ambit-router calls /chat/completions"
 	}
 	if !ci.HasKey[m.Name] {
+		if m.Spec.CredentialsRef == nil {
+			return nil, "classifier Model " + m.Name + " has no credentialsRef"
+		}
 		return nil, "the Secret " + m.Spec.CredentialsRef.Name + " of classifier Model " + m.Name + " is missing or has no Authorization entry"
 	}
 	out := &routerconfig.Router{Name: r.Name, Wire: wire, Type: "LLM", Groups: a.Groups, AllSignedIn: a.AllSignedIn,

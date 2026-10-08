@@ -26,8 +26,8 @@ func classifierSetup(t *testing.T, ns string) func() {
 	ctx := t.Context()
 	for _, o := range []client.Object{routerDeployment(ns),
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ambit-llm-local", Namespace: ns}, Data: map[string][]byte{"Authorization": []byte("sk-local")}},
-		&v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemma", Namespace: ns}, Spec: v1.ModelSpec{Provider: "Openrouter", Model: "google/gemma", CredentialsRef: v1.SecretRef{Name: "ambit-llm-k"}}},
-		&v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "local", Namespace: ns}, Spec: v1.ModelSpec{Provider: "OpenAI", Model: "qwen", BaseURL: "http://vllm:8000/v1", CredentialsRef: v1.SecretRef{Name: "ambit-llm-local"}}},
+		&v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemma", Namespace: ns}, Spec: v1.ModelSpec{Provider: "Openrouter", Model: "google/gemma", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-k"}}},
+		&v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "local", Namespace: ns}, Spec: v1.ModelSpec{Provider: "OpenAI", Model: "qwen", BaseURL: "http://vllm:8000/v1", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-local"}}},
 		&v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "all", Namespace: ns}, Spec: v1.AccessRuleSpec{AllSignedIn: true, Models: []string{"gemma", "auto", "auto2"}}},
 		&v1.ModelRouter{ObjectMeta: metav1.ObjectMeta{Name: "auto", Namespace: ns}, Spec: v1.ModelRouterSpec{Default: "gemma", Classifier: v1.RouterClassifier{Type: "Rules"}}},
 	} {
@@ -272,4 +272,19 @@ func reasonOf(t *testing.T, ns, name string) string {
 		return ""
 	}
 	return c.Reason
+}
+
+// A Bedrock classifier without credentialsRef is refused on its router; it must not fail the whole reconcile.
+func TestBedrockClassifierIsRefusedNotFatal(t *testing.T) {
+	ns := "ambit-classifier-bedrock"
+	rec := classifierSetup(t, ns)
+	if err := envClient.Create(t.Context(), &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "claude", Namespace: ns},
+		Spec: v1.ModelSpec{Provider: "Bedrock", Model: "anthropic.claude-sonnet-4-5-20250929-v1:0"}}); err != nil {
+		t.Fatal(err)
+	}
+	setLLM(t, ns, "auto", "claude", "coding")
+	rec() // fails the test on a reconcile error
+	if reasonOf(t, ns, "auto") != "ClassifierModelInvalid" {
+		t.Fatalf("reason %q", reasonOf(t, ns, "auto"))
+	}
 }

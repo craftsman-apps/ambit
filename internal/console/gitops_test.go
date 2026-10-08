@@ -1,6 +1,7 @@
 package console
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -134,5 +135,25 @@ func TestDirectModeReportsItself(t *testing.T) {
 	h, _, a := serversFixture(t)
 	if cfg := decodeAs[Config](t, do(t, h, "GET", "/api/config", user(a, "x@acme.test", RoleViewer), nil).Body.String()); cfg.Mode != "direct" {
 		t.Fatalf("%+v", cfg)
+	}
+}
+
+// A Bedrock Model that uses the gateway's AWS identity has no credentialsRef; writing it to Git must not add one.
+func TestManifestOmitsMissingCredentialsRef(t *testing.T) {
+	spec := v1.ModelSpec{Provider: "Bedrock", Model: "anthropic.claude-sonnet-4-5-20250929-v1:0",
+		Price: &v1.ModelPrice{InputPerMillionTokens: "3", OutputPerMillionTokens: "15"}}
+	b, err := Manifest("Model", "claude", nil, nil, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "credentialsRef") || strings.Contains(string(b), "azure") || strings.Contains(string(b), "bedrock:") {
+		t.Fatalf("manifest has fields the Model does not:\n%s", b)
+	}
+	v, err := validator() // the same check Propose runs before opening a pull request
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, _, err := v.File(t.Context(), bytes.NewReader(b)); err != nil || len(p) != 0 {
+		t.Fatalf("manifest is not valid: %v %v", p, err)
 	}
 }

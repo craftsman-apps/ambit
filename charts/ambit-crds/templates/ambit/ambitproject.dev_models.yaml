@@ -55,6 +55,38 @@ spec:
           spec:
             description: 'ModelSpec is one entry in the model catalog: a model clients may request through the gateway.'
             properties:
+              azure:
+                description: Azure OpenAI or Azure AI Foundry resource. Required with provider Azure, refused otherwise.
+                properties:
+                  apiVersion:
+                    description: 'APIVersion, e.g. v1 or 2025-04-01-preview. Default (agentgateway): v1.'
+                    maxLength: 64
+                    minLength: 1
+                    pattern: ^[A-Za-z0-9.-]+$
+                    type: string
+                  projectName:
+                    description: ProjectName of the Foundry project (resourceType Foundry only).
+                    maxLength: 256
+                    minLength: 1
+                    type: string
+                  resourceName:
+                    description: 'ResourceName is the resource''s name: <name>.openai.azure.com (OpenAI) or <name>.services.ai.azure.com (Foundry).'
+                    maxLength: 64
+                    minLength: 2
+                    pattern: ^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])$
+                    type: string
+                  resourceType:
+                    enum:
+                    - OpenAI
+                    - Foundry
+                    type: string
+                required:
+                - resourceName
+                - resourceType
+                type: object
+                x-kubernetes-validations:
+                - message: projectName is required for Foundry and only there
+                  rule: has(self.projectName) == (self.resourceType == 'Foundry')
               baseURL:
                 description: 'BaseURL of a self-hosted, OpenAI-compatible server (vLLM, Ollama, LiteLLM ...), with provider
 
@@ -63,12 +95,26 @@ spec:
                   sends requests to / (agentgateway v1.6.0). Without it, the provider''s own endpoint is used.'
                 pattern: ^https?://[^/?#\s]+(/[^?#\s]*)?$
                 type: string
+              bedrock:
+                description: Amazon Bedrock settings. Optional with provider Bedrock (the region defaults to us-east-1), refused otherwise.
+                properties:
+                  region:
+                    description: 'Region, e.g. eu-west-1. Default (agentgateway): us-east-1.'
+                    maxLength: 63
+                    minLength: 1
+                    pattern: ^[a-z0-9-]+$
+                    type: string
+                type: object
               credentialsRef:
-                description: 'CredentialsRef names a Secret in this namespace with the provider key in its "Authorization" entry.
+                description: 'CredentialsRef names a Secret in this namespace with the provider''s credentials: an "Authorization" entry
 
-                  The key itself never appears in this object, so the object is safe to keep in Git. Only Secrets
+                  with the API key, or for Bedrock "accessKey", "secretKey" and optional "sessionToken". The credentials never
 
-                  named ambit-llm-* may be used, so a Model cannot send another Secret (e.g. console keys) to a provider.'
+                  appear in this object, so the object is safe to keep in Git. Only Secrets named ambit-llm-* may be used, so
+
+                  a Model cannot send another Secret (e.g. console keys) to a provider. Required, except with Bedrock: without
+
+                  it, the gateway uses its own AWS identity (IRSA or EKS Pod Identity).'
                 properties:
                   name:
                     minLength: 1
@@ -104,7 +150,9 @@ spec:
                 type: array
                 x-kubernetes-list-type: set
               model:
-                description: Model is the exact name clients send in the request, e.g. "google/gemma-4-31b-it:free".
+                description: 'Model is the exact name clients send in the request, e.g. "google/gemma-4-31b-it:free". For Azure, the
+
+                  deployment name; for Bedrock, the model or inference-profile ID, e.g. "us.anthropic.claude-sonnet-4-5-20250929-v1:0".'
                 minLength: 1
                 type: string
               price:
@@ -121,14 +169,16 @@ spec:
                 - outputPerMillionTokens
                 type: object
               provider:
-                description: 'Provider serving the model. Values follow agentgateway''s AgentgatewayModel providers that need only an API key.
+                description: 'Provider serving the model. Values follow agentgateway''s AgentgatewayModel providers. Azure and Bedrock also
 
-                  Azure, Bedrock and VertexAI are not offered yet: agentgateway needs provider settings and cloud credentials
+                  need their settings block (azure, bedrock). VertexAI is not offered yet: it needs Google Cloud credentials.
 
-                  for them that a Model cannot express yet. Ollama and other self-hosted servers: provider OpenAI with a baseURL.'
+                  Ollama and other self-hosted servers: provider OpenAI with a baseURL.'
                 enum:
                 - Anthropic
+                - Azure
                 - Baseten
+                - Bedrock
                 - Cerebras
                 - Cohere
                 - Deepinfra
@@ -145,13 +195,20 @@ spec:
                 - XAI
                 type: string
             required:
-            - credentialsRef
             - model
             - provider
             type: object
             x-kubernetes-validations:
             - message: 'formats describe a self-hosted server: they need provider OpenAI and a baseURL'
               rule: '!has(self.formats) || (has(self.baseURL) && self.provider == ''OpenAI'')'
+            - message: azure settings are required with provider Azure and only there
+              rule: has(self.azure) == (self.provider == 'Azure')
+            - message: bedrock settings are only for provider Bedrock
+              rule: '!has(self.bedrock) || self.provider == ''Bedrock'''
+            - message: credentialsRef is required (only Bedrock may use the gateway's AWS identity)
+              rule: has(self.credentialsRef) || self.provider == 'Bedrock'
+            - message: 'baseURL is not used with Azure or Bedrock: their settings define the endpoint'
+              rule: '!has(self.baseURL) || !(self.provider in [''Azure'', ''Bedrock''])'
           status:
             properties:
               allowAllSignedIn:

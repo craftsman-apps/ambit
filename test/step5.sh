@@ -152,8 +152,9 @@ pass "8 binding: a server URL change removes the token path; changing it back re
 other=$(command curl -s -d grant_type=client_credentials -d client_id=other-app -d client_secret=other-app-secret "$KC/realms/saas/protocol/openid-connect/token" |
   uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)["access_token"])')
 mcp_list() { MCPARGS=(-H "Authorization: Bearer $1" -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'); }
-code=$(pod_curl "app=probe" "http://whoami.$NS.svc:8080/mcp")  # reachable: 401 without a token
-[[ $code == 401 ]] || fail "9 whoami not reachable from a probe pod: $code"
+# Reachable: 401 without a token. Retried: in CI the first probe once failed within 3 s (kubectl or DNS, not a timeout).
+wait_for 30 '[[ $(pod_curl "app=probe" "http://whoami.$NS.svc:8080/mcp") == 401 ]]' ||
+  fail "9 whoami not reachable from a probe pod: $(pod_curl "app=probe" "http://whoami.$NS.svc:8080/mcp") ($(tr '\n' ' ' < "$W/pod_curl.err" | cut -c1-300))"
 good=$(command curl -s -d grant_type=password -d client_id=ambit-connect -d client_secret=saas-test-client-secret -d username=alice -d password=alice-saas-pass "$KC/realms/saas/protocol/openid-connect/token" |
   uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)["access_token"])')
 mcp_list "$good"; code=$(pod_curl "app=probe" "http://whoami.$NS.svc:8080/mcp" "${MCPARGS[@]}")  # positive control: the right audience is accepted

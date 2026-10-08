@@ -166,7 +166,7 @@ connect_app() {
 pod_curl() {
   local out labels=$1 url=$2; shift 2
   out=$(kubectl -n "$NS" run "probe-$RANDOM" --rm -i --restart=Never --quiet --image="$CURL_IMAGE" --labels="$labels" --command -- \
-    curl -s -m 3 -o /dev/null -w '%{http_code}' "$@" "$url" 2>/dev/null) || true   # curl prints 000 itself on failure
+    curl -s -m 3 -o /dev/null -w '%{http_code}' "$@" "$url" 2>"$W/pod_curl.err") || true   # curl prints 000 itself on failure; kubectl errors stay in $W/pod_curl.err
   out=${out: -3}
   [[ $out =~ ^[0-9]{3}$ ]] && echo "$out" || echo 000
 }

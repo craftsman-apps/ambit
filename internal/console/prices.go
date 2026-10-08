@@ -54,9 +54,7 @@ var litellmProvider = map[string]struct {
 	providers []string
 }{
 	"OpenAI": {"openai", []string{"openai"}}, "Anthropic": {"anthropic", []string{"anthropic"}},
-	"Gemini": {"gemini", []string{"gemini"}}, "VertexAI": {"vertex_ai", []string{"vertex_ai"}},
-	"Azure": {"azure", []string{"azure"}}, "Bedrock": {"bedrock", []string{"bedrock", "bedrock_converse"}},
-	"Openrouter": {"openrouter", []string{"openrouter"}},
+	"Gemini": {"gemini", []string{"gemini"}}, "Openrouter": {"openrouter", []string{"openrouter"}},
 }
 
 // ParseLiteLLM reads LiteLLM's file (or the trimmed built-in copy). Every entry it keeps must have a
@@ -135,7 +133,7 @@ func (l *PriceList) Suggest(m v1.Model) (Suggestion, bool) {
 			continue
 		}
 		for _, p := range lp.providers {
-			if e.Provider == p || (p == "vertex_ai" && strings.HasPrefix(e.Provider, "vertex_ai-")) {
+			if e.Provider == p {
 				return Suggestion{Input: perMillion(e.In), Output: perMillion(e.Out), Key: key, Source: l.Source, Commit: l.Commit, Date: l.Date}, true
 			}
 		}

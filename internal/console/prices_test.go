@@ -13,9 +13,7 @@ import (
 const sampleList = `{"_ambit": {"commit": "abc", "date": "2026-10-02"},
  "gpt-4.1": {"litellm_provider": "openai", "input_cost_per_token": 2e-06, "output_cost_per_token": 8e-06},
  "claude-x": {"litellm_provider": "anthropic", "input_cost_per_token": 3e-06, "output_cost_per_token": 1.5e-05},
- "openrouter/deepseek/deepseek-v4-flash": {"litellm_provider": "openrouter", "input_cost_per_token": 4.186e-08, "output_cost_per_token": 8.372e-08},
- "vertex_ai/gemini-x": {"litellm_provider": "vertex_ai-language-models", "input_cost_per_token": 1e-07, "output_cost_per_token": 4e-07},
- "azure/gpt-4.1": {"litellm_provider": "azure", "input_cost_per_token": 2.2e-06, "output_cost_per_token": 8.8e-06}}`
+ "openrouter/deepseek/deepseek-v4-flash": {"litellm_provider": "openrouter", "input_cost_per_token": 4.186e-08, "output_cost_per_token": 8.372e-08}}`
 
 func model(provider, name, baseURL string) v1.Model {
 	return v1.Model{Spec: v1.ModelSpec{Provider: provider, Model: name, BaseURL: baseURL}}
@@ -33,8 +31,6 @@ func TestSuggest(t *testing.T) {
 		{model("OpenAI", "gpt-4.1", ""), "2", "8", "gpt-4.1"},
 		{model("Anthropic", "claude-x", ""), "3", "15", "claude-x"},
 		{model("Openrouter", "deepseek/deepseek-v4-flash", ""), "0.04186", "0.08372", "openrouter/deepseek/deepseek-v4-flash"},
-		{model("VertexAI", "gemini-x", ""), "0.1", "0.4", "vertex_ai/gemini-x"},
-		{model("Azure", "gpt-4.1", ""), "2.2", "8.8", "azure/gpt-4.1"},
 	} {
 		s, ok := l.Suggest(tc.m)
 		if !ok || s.Input != tc.in || s.Output != tc.out || s.Key != tc.key || s.Commit != "abc" || s.Date != "2026-10-02" {

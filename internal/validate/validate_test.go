@@ -91,6 +91,10 @@ spec: { provider: OpenAI, model: llama, credentialsRef: { name: ambit-llm-x }, b
 kind: Model
 metadata: { name: llama }
 spec: { provider: OpenAI, model: llama, credentialsRef: { name: ambit-llm-x }, baseURL: "http://vllm:8000/v1", formats: [Realtime] }`, "Unsupported value"},
+		{"provider Ambit cannot configure", `apiVersion: ambitproject.dev/v1alpha1
+kind: Model
+metadata: { name: gpt }
+spec: { provider: Azure, model: gpt-4.1, credentialsRef: { name: ambit-llm-x } }`, "Unsupported value"},
 		{"namespace in Git", `apiVersion: ambitproject.dev/v1alpha1
 kind: AccessRule
 metadata: { name: eng, namespace: ambit-system }

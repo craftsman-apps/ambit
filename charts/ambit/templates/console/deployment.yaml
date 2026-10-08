@@ -17,12 +17,15 @@ spec:
         - name: console
           image: "{{ .Values.console.image.repository }}:{{ .Values.console.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.console.image.pullPolicy }}
-          ports: [{ name: http, containerPort: 8080 }, { name: broker, containerPort: 8082 }]
+          ports: [{ name: http, containerPort: 8080 }, { name: broker, containerPort: 8082 }, { name: tools, containerPort: 8083 }]
           env:
             - { name: AMBIT_PUBLIC_URL, value: {{ .Values.console.url | quote }} }
             - { name: AMBIT_DEX_GRPC, value: "ambit-dex:5557" }
             - { name: AMBIT_SESSION_HOURS, value: {{ .Values.console.sessionHours | quote }} }
             - { name: AMBIT_BOOTSTRAP_ENABLED, value: {{ .Values.bootstrapAdmin.enabled | quote }} }
+            {{- if .Values.console.testPresets }}
+            - { name: AMBIT_TEST_PRESETS, value: "1" }
+            {{- end }}
             {{- $opts := list }}
             {{- range .Values.sso.connectors }}
             {{- $opts = append $opts (dict "id" .id "name" (.name | default .id)) }}

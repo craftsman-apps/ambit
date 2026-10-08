@@ -3,6 +3,7 @@ package console
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -23,6 +24,36 @@ func (r *recordingRepo) PullRequestState(context.Context, int) (PullRequestState
 	return PullRequestState{}, nil
 }
 func (r *recordingRepo) Contains(context.Context, string, string) (bool, error) { return false, nil }
+
+func (r *recordingRepo) OpenPullRequestFiles(_ context.Context, branch, title, _ string, files []FileChange) (PullRequest, error) {
+	r.files = append(r.files, files...)
+	return PullRequest{Number: 1, Title: title, Branch: branch}, nil
+}
+func (r *recordingRepo) PullRequestByBranch(context.Context, string) (PullRequestState, bool, error) {
+	return PullRequestState{}, false, nil
+}
+func (r *recordingRepo) DeleteBranch(context.Context, string) error { return nil }
+
+func TestProposeObjectsOpensOnePullRequestAndValidatesEach(t *testing.T) {
+	repo := &recordingRepo{}
+	g := &GitOps{Repo: repo, Branch: "main", Dir: "ambit"}
+	ok, _ := Manifest("AccessRule", "eng-time", nil, nil, map[string]any{"groups": []string{"eng"}, "models": []string{"gemma"}})
+	ok2, _ := Manifest("AccessRule", "ml-time", nil, nil, map[string]any{"groups": []string{"ml"}, "models": []string{"gemma"}})
+	pr, err := g.ProposeObjects(t.Context(), "ambit/add-x-1", "Ambit: add x", "priya@acme.test", []ProposedObject{
+		{Kind: "AccessRule", Plural: "accessrules", Name: "eng-time", Manifest: ok},
+		{Kind: "AccessRule", Plural: "accessrules", Name: "ml-time", Manifest: ok2},
+	})
+	if err != nil || pr.Branch != "ambit/add-x-1" || len(repo.files) != 2 || repo.files[1].Path != "ambit/accessrules/ml-time.yaml" {
+		t.Fatalf("pr %+v err %v files %v", pr, err, repo.files)
+	}
+	repo.files = nil
+	bad, _ := Manifest("AccessRule", "bad", nil, nil, map[string]any{"nonsense": true})
+	_, err = g.ProposeObjects(t.Context(), "ambit/add-y-1", "t", "p", []ProposedObject{{Kind: "AccessRule", Plural: "accessrules", Name: "eng-time", Manifest: ok}, {Kind: "AccessRule", Plural: "accessrules", Name: "bad", Manifest: bad}})
+	var inv *InvalidChange
+	if !errors.As(err, &inv) || len(repo.files) != 0 {
+		t.Fatalf("want InvalidChange and no pull request, got %v files %v", err, repo.files)
+	}
+}
 
 func gitopsFixture(t *testing.T) (http.Handler, client.Client, *Auth, *recordingRepo) {
 	t.Helper()

@@ -44,6 +44,8 @@ console:
   # Hours before a console session expires. Group changes in the IdP reach the console at the next
   # sign-in, so keep this short; sign-out and offboarding end sessions immediately regardless.
   sessionHours: 1
+  # kind tests only: shows test presets
+  testPresets: false
 
 bootstrapAdmin:
   # Local password sign-in (admin@ambit.local) for first setup. Set false once SSO works:

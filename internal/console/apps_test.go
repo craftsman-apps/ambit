@@ -125,3 +125,16 @@ func TestAppURLsMustParse(t *testing.T) {
 		}
 	}
 }
+
+func TestCustomAppRefusesReservedAuthorizeParams(t *testing.T) {
+	conns, c := connFixture(t, newFakeSaaS(t))
+	a := testAuthOnly()
+	h := NewServer(a, testSPA, LoginOptions{}, &Catalog{Client: c, Namespace: testNS, Conns: conns, PublicURL: "https://console.acme.test"})
+	in := AppInput{Name: "github", DisplayName: "GitHub", AuthorizationURL: "https://github.com/login/oauth/authorize",
+		TokenURL: "https://github.com/login/oauth/access_token", ClientID: "Iv1.abc", ClientSecret: "s3cret-value",
+		AuthorizeParams: map[string]string{"redirect_uri": "x"}}
+	r := do(t, h, "POST", "/api/apps", user(a, "priya@acme.test", RoleAdmin), in)
+	if r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), "redirect_uri") {
+		t.Fatalf("%d %s", r.Code, r.Body)
+	}
+}

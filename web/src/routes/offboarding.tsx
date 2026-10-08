@@ -23,7 +23,7 @@ export function OffboardingPage() {
       <section className="max-w-4xl space-y-5 p-5">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Offboarding</h1>
-          <p className="text-muted">When your identity provider deactivates someone, Ambit revokes every app grant they authorized at the app itself, ends their console sessions, and blocks their gateway tokens at once.</p>
+          <p className="text-muted">When your identity provider deactivates someone, Ambit asks each app to revoke the grants they authorized, ends their console sessions, and blocks their gateway tokens at once. A revocation that an app does not confirm is listed below with its error.</p>
         </div>
         {q.isError && <p className="text-bad">{q.error.message}</p>}
         {q.data && (

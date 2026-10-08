@@ -187,6 +187,31 @@ func TestDollarOnlyBudgetIsValid(t *testing.T) {
 	}
 }
 
+func TestConnectionAuthorizeParamsRefuseReservedKeys(t *testing.T) {
+	doc := `apiVersion: ambitproject.dev/v1alpha1
+kind: Connection
+metadata: { name: gh }
+spec:
+  displayName: GitHub
+  authorizationURL: https://github.com/login/oauth/authorize
+  tokenURL: https://github.com/login/oauth/access_token
+  clientID: abc
+  clientSecretRef: { name: ambit-conn-gh }
+  serverURL: https://api.githubcopilot.com/mcp/
+  resource: https://api.githubcopilot.com/mcp/
+  tokenRequestFormat: JSON
+  authorizeParams: { prompt: consent, redirect_uri: https://evil.test/cb }
+`
+	p := check(t, doc)
+	if len(p) != 1 || !strings.Contains(p[0].String(), "these parameters are set by Ambit") {
+		t.Fatalf("problems %v", p)
+	}
+	ok := strings.Replace(doc, ", redirect_uri: https://evil.test/cb", "", 1)
+	if p := check(t, ok); len(p) != 0 {
+		t.Fatalf("valid connection refused: %v", p)
+	}
+}
+
 // Providers that agentgateway serves with an API key alone (checked with a server-side dry run on v1.6.0).
 func TestKeyOnlyProvidersAreValid(t *testing.T) {
 	for _, p := range []string{"Anthropic", "Gemini", "OpenAI", "Openrouter", "Mistral", "Cohere", "XAI", "Deepseek", "Meta", "Groq",

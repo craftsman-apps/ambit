@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -234,5 +235,56 @@ func TestArgumentLimitsWithoutTheGuardGrantNothing(t *testing.T) {
 	r = Compile(nil, servers, []v1.AccessRule{limited, plain}, route)
 	if e := mcpExpr(t, r); !strings.Contains(e, "convert_time") {
 		t.Fatalf("with the guard: %s", e)
+	}
+}
+
+func TestBoundConnectionGetsDestinationPath(t *testing.T) {
+	servers := []v1.Server{perUser("github", "https://api.githubcopilot.com/mcp/", "gh"), perUser("legacy", "https://x.test/mcp", "old")}
+	conns := []v1.Connection{
+		{ObjectMeta: metav1.ObjectMeta{Name: "gh"}, Spec: v1.ConnectionSpec{ServerURL: "https://api.githubcopilot.com/mcp/"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "old"}},
+	}
+	res := Compile(nil, servers, nil, RouteRef{Name: "ambit-llm"})
+	SetBrokerPaths(res.Objects, servers, conns)
+	paths := map[string]string{}
+	for _, o := range res.Objects {
+		if p, ok, _ := unstructured.NestedString(o.Object, "spec", "backend", "extAuth", "http", "path"); ok {
+			paths[o.GetName()] = p
+		}
+	}
+	want := strconv.Quote("/v1/connection/gh/server/github/" + DestinationHash("https://api.githubcopilot.com/mcp/"))
+	if paths["ambit-conn-github"] != want || paths["ambit-conn-legacy"] != `"/v1/connection/old"` {
+		t.Fatalf("paths %v", paths)
+	}
+}
+
+func TestServerAccessSummary(t *testing.T) {
+	servers := []v1.Server{perUser("crm", "https://mcp.crm.test/mcp", "crm")}
+	rules := []v1.AccessRule{
+		{Spec: v1.AccessRuleSpec{AllSignedIn: true, Servers: []v1.ServerAccess{{Name: "crm", Tools: []string{"get_record"}}}}},
+		{Spec: v1.AccessRuleSpec{Groups: []string{"sales"}, Servers: []v1.ServerAccess{{Name: "crm"}}}},
+	}
+	a := ServerAccess(servers, nil, rules, "crm")
+	if !a.AllTools || !a.AllSignedIn || len(a.Groups) != 1 || a.Groups[0] != "sales" || len(a.Tools["get_record"]) != 0 {
+		t.Fatalf("%+v", a)
+	}
+	if _, ok := a.Tools["get_record"]; !ok {
+		t.Fatalf("tool missing: %+v", a)
+	}
+	if b := ServerAccess(servers, nil, rules, "nope"); b.AllTools || b.AllSignedIn || len(b.Tools) != 0 {
+		t.Fatalf("unknown server: %+v", b)
+	}
+}
+
+func TestServerAccessEmptyWhenReconcilerLeavesServerOut(t *testing.T) {
+	rules := []v1.AccessRule{{Spec: v1.AccessRuleSpec{AllSignedIn: true, Servers: []v1.ServerAccess{{Name: "crm"}}}}}
+	conns := []v1.Connection{{ObjectMeta: metav1.ObjectMeta{Name: "crm"}, Spec: v1.ConnectionSpec{ServerURL: "https://other.test/mcp"}}}
+	refused := []v1.Server{perUser("crm", "https://mcp.crm.test/mcp", "crm")}
+	if a := ServerAccess(refused, conns, rules, "crm"); a.AllTools || a.AllSignedIn {
+		t.Fatalf("bound elsewhere: %+v", a)
+	}
+	bad := []v1.Server{perUser("crm", "https://mcp.crm.test:bad/mcp", "crm")}
+	if a := ServerAccess(bad, nil, rules, "crm"); a.AllTools || a.AllSignedIn {
+		t.Fatalf("bad url: %+v", a)
 	}
 }

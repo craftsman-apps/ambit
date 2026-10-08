@@ -20,12 +20,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 var (
@@ -282,6 +284,149 @@ func TestReconcilerAgainstAPIServer(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+func genGet(ctx context.Context, ns, kind, name string) (*unstructured.Unstructured, error) {
+	var u unstructured.Unstructured
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: "agentgateway.dev", Version: "v1alpha1", Kind: kind})
+	err := envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &u)
+	return &u, err
+}
+
+func boundConn(ns string) *v1.Connection {
+	return &v1.Connection{ObjectMeta: metav1.ObjectMeta{Name: "gh", Namespace: ns}, Spec: v1.ConnectionSpec{DisplayName: "GitHub",
+		AuthorizationURL: "https://github.com/login/oauth/authorize", TokenURL: "https://github.com/login/oauth/access_token",
+		ClientID: "x", ClientSecretRef: v1.SecretRef{Name: "ambit-conn-gh"}, ServerURL: "https://api.githubcopilot.com/mcp/"}}
+}
+
+func TestServerURLChangedAfterBindingIsRemoved(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-bind"
+	namespace(t, ns)
+	ctx := t.Context()
+	s := &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "github", Namespace: ns}, Spec: v1.ServerSpec{URL: "https://api.githubcopilot.com/mcp/", Connection: "gh", Transport: "streamable-http"}}
+	for _, o := range []client.Object{boundConn(ns), s} {
+		if err := envClient.Create(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := genGet(ctx, ns, "AgentgatewayPolicy", "ambit-conn-github"); err != nil {
+		t.Fatalf("bound server not compiled: %v", err)
+	}
+	if _, err := genGet(ctx, ns, "AgentgatewayBackend", MCPBackendName); err != nil {
+		t.Fatalf("bound server not compiled: %v", err)
+	}
+	if err := envClient.Get(ctx, client.ObjectKeyFromObject(s), s); err != nil { // status was written
+		t.Fatal(err)
+	}
+	s.Spec.URL = "https://evil.test/mcp"
+	if err := envClient.Update(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	// The only Server is refused: its connection policy and the shared backend and access policy are gone.
+	for _, o := range [][2]string{{"AgentgatewayPolicy", "ambit-conn-github"}, {"AgentgatewayBackend", MCPBackendName}, {"AgentgatewayPolicy", MCPBackendName + "-access"}} {
+		if _, err := genGet(ctx, ns, o[0], o[1]); !apierrors.IsNotFound(err) {
+			t.Fatalf("%s/%s still present: %v", o[0], o[1], err)
+		}
+	}
+	_ = envClient.Get(ctx, client.ObjectKeyFromObject(s), s)
+	if readyOf(s.Status.Conditions) != "ConnectionBound" {
+		t.Fatalf("reason %s", readyOf(s.Status.Conditions))
+	}
+	// Back to the bound URL: the policy and backend are compiled again.
+	s.Spec.URL = "https://api.githubcopilot.com/mcp/"
+	if err := envClient.Update(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range [][2]string{{"AgentgatewayPolicy", "ambit-conn-github"}, {"AgentgatewayBackend", MCPBackendName}} {
+		if _, err := genGet(ctx, ns, o[0], o[1]); err != nil {
+			t.Fatalf("%s/%s not restored: %v", o[0], o[1], err)
+		}
+	}
+}
+
+func TestRefusedServerLeavesKeptServerInBackend(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-bind2"
+	namespace(t, ns)
+	ctx := t.Context()
+	good := &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "github", Namespace: ns}, Spec: v1.ServerSpec{URL: "https://api.githubcopilot.com/mcp/", Connection: "gh", Transport: "streamable-http"}}
+	evil := &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "evil", Namespace: ns}, Spec: v1.ServerSpec{URL: "https://evil.test/mcp", Connection: "gh", Transport: "streamable-http"}}
+	for _, o := range []client.Object{boundConn(ns), good, evil} {
+		if err := envClient.Create(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := genGet(ctx, ns, "AgentgatewayBackend", MCPBackendName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets, _, _ := unstructured.NestedSlice(b.Object, "spec", "mcp", "targets")
+	if len(targets) != 1 || !strings.Contains(fmt.Sprint(targets[0]), "github") || strings.Contains(fmt.Sprint(targets), "evil") {
+		t.Fatalf("targets %v", targets)
+	}
+	if _, err := genGet(ctx, ns, "AgentgatewayPolicy", "ambit-conn-evil"); !apierrors.IsNotFound(err) {
+		t.Fatalf("refused server's policy present: %v", err)
+	}
+	_ = envClient.Get(ctx, client.ObjectKeyFromObject(evil), evil)
+	if readyOf(evil.Status.Conditions) != "ConnectionBound" {
+		t.Fatalf("reason %s", readyOf(evil.Status.Conditions))
+	}
+}
+
+// deleteFails fails every delete of one generated object name.
+type deleteFails struct {
+	client.Client
+	prefix string
+}
+
+func (d deleteFails) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	if strings.HasPrefix(obj.GetName(), d.prefix) {
+		return fmt.Errorf("injected delete failure")
+	}
+	return d.Client.Delete(ctx, obj, opts...)
+}
+
+func TestFailedCleanupOfRefusedServerIsRetried(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-bind3"
+	namespace(t, ns)
+	ctx := t.Context()
+	s := &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "github", Namespace: ns}, Spec: v1.ServerSpec{URL: "https://api.githubcopilot.com/mcp/", Connection: "gh", Transport: "streamable-http"}}
+	for _, o := range []client.Object{boundConn(ns), s} {
+		if err := envClient.Create(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := envClient.Get(ctx, client.ObjectKeyFromObject(s), s); err != nil {
+		t.Fatal(err)
+	}
+	s.Spec.URL = "https://evil.test/mcp"
+	if err := envClient.Update(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	r.Client = deleteFails{Client: envClient, prefix: "ambit-conn-"}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err == nil {
+		t.Fatal("a failed delete of a refused server's policy was not returned")
+	}
 }
 
 // The CRD's rules hold in the real API server, not only in `ambit validate`.

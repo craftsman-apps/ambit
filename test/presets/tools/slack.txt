@@ -1,0 +1,6 @@
+slack_read_channel
+slack_read_thread
+slack_search_channels
+slack_search_public
+slack_search_public_and_private
+slack_search_users

@@ -43,7 +43,10 @@ export function ConnectionsPage() {
                 <td className="px-3 py-2.5 text-right">
                   {c.state !== "connected"
                     ? <a className="inline-block rounded-md bg-accent px-3 py-1.5 font-medium text-accent-ink" href={c.connectURL}>{c.state === "broken" ? "Reconnect" : "Connect"}</a>
-                    : <Button variant="outline" className="w-auto" disabled={disconnect.isPending} onClick={() => disconnect.mutate(c.name)}>Disconnect</Button>}
+                    : <span className="inline-flex flex-wrap justify-end gap-2">
+                        <a className="inline-block rounded-md border border-line px-3 py-1.5 font-medium" href={c.connectURL}>Connect again</a>
+                        <Button variant="outline" className="w-auto" disabled={disconnect.isPending} onClick={() => disconnect.mutate(c.name)}>Disconnect</Button>
+                      </span>}
                   {c.state === "connected" && !c.revocable && <span className="block text-[12px] text-muted">The provider has no revocation endpoint; disconnecting only forgets the grant.</span>}
                 </td>
               </tr>

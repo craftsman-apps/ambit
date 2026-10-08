@@ -46,6 +46,9 @@ spec:
             {{- if and .Values.mcp.enabled .Values.protection.enabled }}
             - { name: AMBIT_PROTECTION, value: "true" }
             {{- end }}
+            {{- if and .Values.llm.enabled .Values.routing.router.enabled }}
+            - { name: AMBIT_MODEL_ROUTING, value: "true" }
+            {{- end }}
             {{- if .Values.evidence.enabled }}
             - { name: AMBIT_CLICKHOUSE_ADDR, value: {{ include "ambit.clickhouse.http" . | quote }} }
             {{- with .Values.evidence.clickhouse.external }}{{ if .host }}

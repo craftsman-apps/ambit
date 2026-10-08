@@ -107,8 +107,9 @@ ensure_llm_setup() {
   # A fake OpenAI-compatible model with a price (test/llm/mock.yaml), for token counts and cost.
   kubectl -n "$ns" create secret generic ambit-llm-mock --from-literal=Authorization=not-used --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   kubectl -n "$ns" apply -f test/llm/mock.yaml >/dev/null
-  kubectl -n "$ns" rollout restart deploy/mock-llm >/dev/null
+  kubectl -n "$ns" rollout restart deploy/mock-llm deploy/mock-classifier >/dev/null
   kubectl -n "$ns" rollout status deploy/mock-llm --timeout=180s >/dev/null
+  kubectl -n "$ns" rollout status deploy/mock-classifier --timeout=180s >/dev/null
   kubectl -n "$ns" wait models.ambitproject.dev --all --for=condition=Ready --timeout=120s >/dev/null
 }
 me_field() { uv run --no-project python -c "import json,sys;v=json.load(open('$W/me')).get('$1');print(json.dumps(v))"; }
@@ -132,6 +133,14 @@ mcp_send() {
     -H 'Accept: application/json, text/event-stream' -d "$1" "$MCP" | awk '/^data: /{print substr($0, 7); next} /^\{/{print}'
 }
 # tools TOKEN: opens a session and sets TOOLS to the sorted tool names this user sees, space separated.
+# mcp_ready NS: the MCP test servers (test/mcp/objects.yaml) run and the gateway serves them. A step that applies
+# them must wait here: on a fresh cluster (CI runs steps in parallel parts) they are not ready at once.
+mcp_ready() {
+  kubectl -n "$1" wait "servers.ambitproject.dev" --all --for=condition=Ready --timeout=300s >/dev/null ||
+    fail "MCP servers not Ready: $(kubectl -n "$1" get servers.ambitproject.dev -o wide)"
+  kubectl -n "$1" wait "accessrules.ambitproject.dev" --all --for=condition=Ready --timeout=60s >/dev/null || fail "access rules not Ready"
+  kubectl -n "$1" wait agentgatewaybackend/ambit-mcp --for=condition=Accepted --timeout=60s >/dev/null || fail "MCP backend not accepted"
+}
 tools() {
   mcp_open "$1"
   TOOLS=$(mcp_send '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' |
@@ -145,7 +154,9 @@ call() {
   mcp_send "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":{\"name\":\"$1\",\"arguments\":$2}}" |
     uv run --no-project python -c 'import json,sys
 d=json.loads(sys.stdin.read())
-print("error "+d["error"]["message"] if "error" in d else "ok "+d["result"]["content"][0]["text"].replace("\n"," "))'
+# A refusal is a JSON-RPC error (agentgateway v1.5.0) or a result with isError (v1.6.0 for ExtMcp refusals).
+r=d.get("result",{}); t=r.get("content",[{}])[0].get("text","").replace("\n"," ")
+print("error "+d["error"]["message"] if "error" in d else ("error " if r.get("isError") else "ok ")+t)'
 }
 
 # wait_for SECS CMD: run CMD (eval) every 2 s until it succeeds; non-zero when SECS pass first.

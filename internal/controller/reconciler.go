@@ -11,6 +11,7 @@ import (
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/pricing"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -59,6 +60,10 @@ type Reconciler struct {
 	toolsRead map[types.UID]time.Time // when each Server's tools were last read (single worker, no lock)
 	// ArgumentLimits is true when ambit-guard runs (protection on) and enforces argument limits.
 	ArgumentLimits bool
+	// Classifier is ambit-router, which labels prompts for routers of type LLM.
+	Classifier Classifier
+	// Now is the clock (nil: time.Now); tests move it.
+	Now func() time.Time
 }
 
 // How often the tools of a running server are read again by default: servers may add or change tools.
@@ -115,6 +120,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&v1.Budget{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1.ModelRouter{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1.Connection{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{}))
+	if r.Classifier.Deployment != "" { // availability of ambit-router sets classifierState
+		b = b.Watches(&appsv1.Deployment{}, all)
+	}
 	// Generated objects: status changes (agentgateway or ToolHive accepting them) and manual edits both matter.
 	for _, gvk := range generatedGVKs {
 		u := &unstructured.Unstructured{}
@@ -161,8 +169,26 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	}
 	prices := pricing.ByModel(models.Items)
 	refused := refuseUnpricedIfEnforced(r.RateLimit, &res, models.Items, prices, budgets.Items)
+	dep, err := r.routerDeployment(ctx)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	keys, err := r.readKeys(ctx, routers.Items, models.Items)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
 	// After RefuseUnpriced: each router line repeats its target's final access expression.
-	routerConds := CompileRouters(routers.Items, models.Items, &res, r.Route, refused)
+	routerConds, routerCfg := CompileRouters(routers.Items, models.Items, &res, r.Route, refused, ClassifierInput{Installed: dep != nil, HasKey: hasKeys(keys)})
+	classify := dep != nil && len(routerCfg.Routers) > 0
+	if dep != nil {
+		res.Objects = append(res.Objects, configMapObject(r.Namespace, routerCfg))
+	}
+	if classify { // pods first, then the policy: a policy without ready pods fails open
+		if err := r.scale(ctx, dep, r.Classifier.Replicas); err != nil {
+			return reconcile.Result{}, err
+		}
+		res.Objects = append(res.Objects, classifyPolicy(r.Namespace, r.Route.Name, r.Classifier.Deployment, routerCfg))
+	}
 	budgetPolicy, usage := false, false
 	if r.RateLimit.Service != "" {
 		cfg, p := compileBudgets(budgets.Items, prices, r.Namespace, r.RateLimit, r.Route.Name)
@@ -241,7 +267,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	}
 	// No budgets (or budgets off): stop asking the ratelimit service on every request. No dollar limit: stop
 	// rewriting requests for usage.
-	for name, wanted := range map[string]bool{BudgetPolicyName: budgetPolicy, UsagePolicyName: usage} {
+	for name, wanted := range map[string]bool{BudgetPolicyName: budgetPolicy, UsagePolicyName: usage, ClassifyPolicyName: classify} {
 		if wanted {
 			continue
 		}
@@ -251,6 +277,20 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			if err := r.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
 				return reconcile.Result{}, err
 			}
+		}
+	}
+	if dep != nil {
+		if !classify { // the policy is gone (above), then the pods; they finish held requests on SIGTERM
+			if err := r.scale(ctx, dep, 0); err != nil {
+				return reconcile.Result{}, err
+			}
+		}
+		cred, err := credentialsObject(r.Namespace, routerCfg, keys)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		if err := r.applyCredentials(ctx, cred); err != nil {
+			return reconcile.Result{}, err
 		}
 	}
 	// Virtual models of routers that are gone or now invalid. Read from the API server, not the cache: right after
@@ -357,10 +397,43 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			return reconcile.Result{}, err
 		}
 	}
+	if classify && (result.RequeueAfter == 0 || result.RequeueAfter > time.Minute) {
+		// ponytail: re-reads the classifier Models' Secrets every minute instead of watching all Secrets; also
+		// notices a start that never finishes.
+		result.RequeueAfter = time.Minute
+	}
+	classified := map[string]bool{}
+	for _, rt := range routerCfg.Routers {
+		classified[rt.Name] = true
+	}
 	for i := range routers.Items {
 		mr := &routers.Items[i]
 		next := mr.DeepCopy()
 		c := routerConds[mr.Name]
+		next.Status.ClassifierState = ""
+		if classified[mr.Name] {
+			var since time.Time
+			if cr := meta.FindStatusCondition(mr.Status.Conditions, "ClassifierReady"); cr != nil && cr.Status == metav1.ConditionFalse && cr.Reason == "Starting" {
+				since = cr.LastTransitionTime.Time
+			}
+			state, cc := classifierState(dep, true, since, r.now())
+			next.Status.ClassifierState = state
+			ready := metav1.Condition{Type: "ClassifierReady", Status: metav1.ConditionTrue, Reason: "Ready", Message: "ambit-router is available",
+				ObservedGeneration: mr.Generation, LastTransitionTime: metav1.NewTime(r.now())}
+			if state != "Ready" {
+				ready.Status, ready.Reason, ready.Message = metav1.ConditionFalse, state, "ambit-router is "+strings.ToLower(state)
+			}
+			meta.SetStatusCondition(&next.Status.Conditions, ready) // keeps the time unless the status flips
+			if cc.Reason != "" {
+				if c.Status == metav1.ConditionTrue {
+					c = cc
+				} else {
+					c.Message += "; " + cc.Message
+				}
+			}
+		} else {
+			meta.RemoveStatusCondition(&next.Status.Conditions, "ClassifierReady")
+		}
 		// The gateway's verdict replaces "Compiled"; a validation warning (UnknownModel, DefaultNotAllowed) stays
 		// unless applying failed.
 		if applied, ok := conds["ModelRouter/"+mr.Name]; ok &&

@@ -1,7 +1,9 @@
 name: ci
+# Cost: a pull request runs the full check; a merge to main does not run it again (the merge script merges only a
+# PR that already contains the current main). Draft PRs and documentation-only changes skip the e2e job.
 on:
-  push: { branches: [main, "step-*"] }
-  pull_request:
+  push: { branches: ["step-*"] }
+  pull_request: { types: [opened, synchronize, reopened, ready_for_review] }
 permissions: { contents: read }
 concurrency:
   group: ci-${{ github.ref }}
@@ -10,9 +12,18 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0 }
+      - name: Does the change touch more than documentation?
+        id: changes
+        env: { BASE: "${{ github.event.pull_request.base.sha }}", HEAD: "${{ github.event.pull_request.head.sha }}" }
+        run: |
+          code=true
+          if [ -n "$BASE" ] && ! git diff --name-only "$BASE...$HEAD" | grep -qvE '^docs/|\.md$|^LICENSE$'; then code=false; fi
+          echo "code=$code" | tee -a "$GITHUB_OUTPUT"
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version-file: go.mod }
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -37,12 +48,45 @@ jobs:
           cmp /tmp/r1 /tmp/r2
       - name: Alert rules (promtool unit tests)
         run: test/alerts.sh
+      # The image for both e2e parts, built once: Go's cache is warm here (setup-go and the tests above), and web/dist
+      # is already built. Docker builds inside the e2e jobs compiled everything again (6.4 min each, 2026-10-08).
+      - name: Build the Ambit image for the e2e jobs
+        if: steps.changes.outputs.code == 'true' && !github.event.pull_request.draft
+        run: |
+          for c in ambit-console ambit-controller ambit ambit-guard ambit-router; do
+            CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "bin/$c" "./cmd/$c"
+          done
+          docker build --target prebuilt -t ambit-console:dev .
+          docker build -t ambit-whoami:dev -f test/whoami/Dockerfile .  # test-only MCP server (step 5)
+          docker save ambit-console:dev ambit-whoami:dev | gzip > "$RUNNER_TEMP/images.tar.gz"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.changes.outputs.code == 'true' && !github.event.pull_request.draft
+        with: { name: images, path: "${{ runner.temp }}/images.tar.gz", retention-days: 1 }
+      - name: Chart rules (ambit-router shape and RBAC)
+        run: test/chart.sh
 
+  # Two parallel parts, each on its own kind cluster: every step sets up what it needs. Measured 2026-10-08:
+  # steps 8, 10 and 12 take about 5 min each, all the others 7 together; part a keeps the original order and
+  # the UI tests (which need step 3's catalog), part b the two longest steps.
   e2e:
+    name: e2e (${{ matrix.part.name }})
     needs: build
+    if: needs.build.outputs.code == 'true' && !github.event.pull_request.draft
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        part:
+          - { name: a, steps: "0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 8 9 ext args", ui: true }
+          - { name: b, steps: "10 12", ui: false }
     steps:
+      # The runner's disk held the kind images, the build cache and Go's caches until "no space left on device"
+      # (2026-10-08). Preinstalled tools this job never uses are removed in the background.
+      - name: Free disk space
+        run: |
+          df -h / | tail -1
+          sudo nohup rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: 26, cache: npm, cache-dependency-path: web/package-lock.json }
@@ -50,24 +94,61 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
       - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
         with: { config: kind/cluster.yaml, cluster_name: ambit, wait: 120s }
+      # Keycloak needs about 100 s to start, and third-party images take time to pull: start both now, while the
+      # Ambit image builds.
+      - name: Start slow test services early
+        run: |
+          helm dependency build charts/ambit >/dev/null
+          make install-crds
+          kubectl create namespace ambit-system
+          kubectl -n ambit-system apply -f test/keycloak/keycloak.yaml >/dev/null
+          nohup test/prepull.sh > "$RUNNER_TEMP/prepull.log" 2>&1 &
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: images, path: "${{ runner.temp }}" }
       - name: Install Ambit on kind
-        run: make kind-up image install
+        run: |
+          gunzip -c "$RUNNER_TEMP/images.tar.gz" | docker load
+          kind load docker-image ambit-console:dev ambit-whoami:dev --name ambit
+          make kind-up install
+          df -h / | tail -1
       - name: OpenRouter key (optional repository secret; free models only)
         env: { OPENROUTER_API_KEY: "${{ secrets.OPENROUTER_API_KEY }}" }
         run: |
           if [ -n "$OPENROUTER_API_KEY" ]; then mkdir -p ~/.config/ambit && printf '%s' "$OPENROUTER_API_KEY" > ~/.config/ambit/openrouter-api-key; fi
-      - name: Acceptance tests (every step)
-        run: make test
-      # After `make test`: the step scripts run helm upgrade without --reuse-values, which resets this to false.
+      - name: Acceptance tests (part ${{ matrix.part.name }})
+        run: make test STEPS="${{ matrix.part.steps }}"
+        env:
+          AMBIT_SKIP_ARGO: "1"  # step 12's Argo CD check needs the GitHub App of step 4c, which CI does not have
+          # step 10's soak: 5 samples 10 s apart after 30 s (the growth check needs 4); 300 s locally
+          SOAK_SECONDS: "80"
+          SOAK_SAMPLE: "10"
+          SOAK_WARMUP: "30"
+      - name: Playwright version
+        if: matrix.part.ui
+        id: pw
+        run: echo "version=$(node -p "require('./web/package-lock.json').packages['node_modules/@playwright/test'].version")" >> "$GITHUB_OUTPUT"
+      - name: Playwright browsers (cache)
+        if: matrix.part.ui
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with: { path: ~/.cache/ms-playwright, key: "playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}" }
+      # After the step scripts: they run helm upgrade without --reuse-values, which resets this to false.
       - name: Show test presets in the console
+        if: matrix.part.ui
         run: helm upgrade ambit charts/ambit -n ambit-system --reuse-values --set console.testPresets=true --wait --timeout 5m
       - name: UI tests (Playwright)
+        if: matrix.part.ui
         run: |
           cd web && npm ci --no-fund --no-audit && npx playwright install --with-deps chromium
           cd .. && CI=true AMBIT_PRESETS_E2E=1 make test-ui
+      - name: Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: "playwright-traces-${{ matrix.part.name }}", path: web/test-results, retention-days: 7, if-no-files-found: ignore }
       - name: Diagnostics on failure
         if: failure()
         run: |
+          df -h /
           kubectl get pods -A
+          cat "$RUNNER_TEMP/prepull.log" || true
           kubectl -n ambit-system logs deploy/ambit-console --tail=100 || true
           kubectl -n ambit-system logs deploy/ambit-controller --tail=100 || true

@@ -64,5 +64,5 @@ spec:
     phase: PreRouting
     transformation:
       request:
-        remove: [x-ambit-route, x-ambit-route-reason]
+        remove: [x-ambit-route, x-ambit-route-reason, x-ambit-config]
 {{- end }}

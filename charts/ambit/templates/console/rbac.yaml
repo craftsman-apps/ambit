@@ -28,7 +28,7 @@ rules:
   # Dependencies page: whether each component of the chart has a ready pod.
   - apiGroups: [apps]
     resources: [deployments, statefulsets]
-    resourceNames: [ambit, ambit-dex, ambit-ratelimit, ambit-guard, ambit-otel-collector, ambit-clickhouse]
+    resourceNames: [ambit, ambit-dex, ambit-ratelimit, ambit-guard, ambit-otel-collector, ambit-clickhouse, ambit-router]
     verbs: [get]
   # Catalog screens: everyone signed in reads; admins change access rules (Direct mode).
   - apiGroups: [ambitproject.dev]

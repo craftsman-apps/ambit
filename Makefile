@@ -1,7 +1,7 @@
 NS ?= ambit-system
 CONTROLLER_GEN_VERSION ?= v0.22.0
 GATEWAY_API_VERSION ?= v1.6.2
-AGENTGATEWAY_VERSION ?= v1.5.0
+AGENTGATEWAY_VERSION ?= v1.6.0
 TOOLHIVE_VERSION ?= 0.51.4
 ARGOCD_CHART_VERSION ?= 10.9.4
 # API server and etcd binaries for the integration tests (controller-runtime envtest).

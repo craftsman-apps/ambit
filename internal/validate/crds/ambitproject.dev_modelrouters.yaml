@@ -25,6 +25,9 @@ spec:
     - jsonPath: .spec.classifier.type
       name: Classifier
       type: string
+    - jsonPath: .status.classifierState
+      name: Classifier State
+      type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
@@ -62,12 +65,65 @@ spec:
             properties:
               classifier:
                 properties:
+                  categories:
+                    description: Categories the classifier may answer. A name means the same in every router.
+                    items:
+                      properties:
+                        description:
+                          description: Description tells the classifier LLM what belongs here.
+                          maxLength: 200
+                          minLength: 1
+                          type: string
+                        name:
+                          pattern: ^[a-z0-9][a-z0-9-]{0,62}$
+                          type: string
+                      required:
+                      - description
+                      - name
+                      type: object
+                      x-kubernetes-validations:
+                      - message: the category name other is reserved
+                        rule: self.name != 'other'
+                    maxItems: 16
+                    type: array
+                  llm:
+                    description: LLM is the classifier model (type LLM).
+                    properties:
+                      model:
+                        description: Model (object name) with an OpenAI-compatible endpoint.
+                        minLength: 1
+                        type: string
+                    required:
+                    - model
+                    type: object
+                  maxBytes:
+                    description: MaxBytes of the message sent to the classifier, cut on a UTF-8 boundary. Default 8000.
+                    format: int64
+                    maximum: 2097152
+                    minimum: 1
+                    type: integer
+                  ratePerMinute:
+                    description: 'RatePerMinute: classifier calls per ambit-router replica for this router. Default 600.'
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  timeout:
+                    description: 'Timeout of one classification. Default 1500ms, at most 10s: ambit-router finishes held requests within its
+
+                      25 s drain during a rollout, and a longer classification would be cut there.'
+                    type: string
+                    x-kubernetes-validations:
+                    - message: timeout must be at most 10s
+                      rule: duration(self) <= duration('10s')
                   type:
                     default: None
-                    description: Type None ignores every route (always the default); Rules uses keyword and length routes.
+                    description: 'Type None ignores every route; Rules uses keyword and length routes; LLM also asks a small LLM for a
+
+                      category (routes with a category).'
                     enum:
                     - None
                     - Rules
+                    - LLM
                     type: string
                 type: object
               default:
@@ -84,7 +140,7 @@ spec:
                 items:
                   properties:
                     category:
-                      description: 'Category is a label from a classifier (types VSR and LLM, added later). With type Rules or None a route
+                      description: 'Category is a label from a classifier (type LLM). With type Rules or None a route
 
                         with a category is ignored (condition CategoryNeedsClassifier).'
                       pattern: ^[a-z0-9][a-z0-9-]{0,62}$
@@ -121,8 +177,14 @@ spec:
             required:
             - default
             type: object
+            x-kubernetes-validations:
+            - message: type LLM needs classifier.llm.model
+              rule: '!has(self.classifier) || !has(self.classifier.type) || self.classifier.type != ''LLM'' || has(self.classifier.llm)'
           status:
             properties:
+              classifierState:
+                description: 'ClassifierState is read from the ambit-router Deployment: Off, Starting, Ready or Unhealthy (type LLM).'
+                type: string
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current state of this API Resource.

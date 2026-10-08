@@ -89,8 +89,10 @@ probe() {
   kubectl -n "$NS" delete pod "$1" --ignore-not-found >/dev/null
   kubectl -n "$NS" run "$1" --restart=Never --image="$CURL_IMAGE" ${2:+--labels="$2"} --command -- \
     curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://ambit-console.$NS.svc:8082/v1/connection/saas" >/dev/null
-  kubectl -n "$NS" wait pod "$1" --for=jsonpath='{.status.phase}'=Succeeded --timeout=120s >/dev/null 2>&1 ||
-    kubectl -n "$NS" wait pod "$1" --for=jsonpath='{.status.phase}'=Failed --timeout=5s >/dev/null 2>&1 || true
+  # A blocked request times out, curl exits non-zero and the pod ends Failed: wait for either phase.
+  for _ in $(seq 1 120); do
+    [[ $(kubectl -n "$NS" get pod "$1" -o jsonpath='{.status.phase}' 2>/dev/null) =~ ^(Succeeded|Failed)$ ]] && break; sleep 1
+  done
   kubectl -n "$NS" logs "$1" 2>/dev/null | head -c 3
   kubectl -n "$NS" delete pod "$1" --wait=false >/dev/null
 }

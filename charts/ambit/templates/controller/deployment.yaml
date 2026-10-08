@@ -28,6 +28,10 @@ spec:
             {{- if .Values.mcp.enabled }}
             - --console-tools-url=http://ambit-console.{{ .Release.Namespace }}.svc:8083
             {{- end }}
+            {{- if and .Values.llm.enabled .Values.routing.router.enabled }}
+            - --router-deployment=ambit-router
+            - --router-replicas={{ .Values.routing.router.replicas }}
+            {{- end }}
             {{- if .Values.limits.enabled }}
             - --ratelimit-service=ambit-ratelimit
             - --ratelimit-failure-mode={{ .Values.limits.failureMode }}

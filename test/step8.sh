@@ -89,6 +89,7 @@ pass "4 FailClosed: ratelimit down -> refused ($closed); FailOpen restored"
 # 5 · S4, other dependencies: ClickHouse down does not affect traffic; the identity provider down does not
 #     affect tokens already issued (the gateway keeps the signing keys)
 kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
+mcp_ready "$NS"
 kubectl -n "$NS" scale statefulset/ambit-clickhouse --replicas=0 >/dev/null
 kubectl -n "$NS" wait pod ambit-clickhouse-0 --for=delete --timeout=120s >/dev/null 2>&1 || true
 tools "$A"

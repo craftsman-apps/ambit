@@ -3,9 +3,12 @@ package v1alpha1
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 // ModelSpec is one entry in the model catalog: a model clients may request through the gateway.
+// +kubebuilder:validation:XValidation:rule="!has(self.formats) || (has(self.baseURL) && self.provider == 'OpenAI')",message="formats describe a self-hosted server: they need provider OpenAI and a baseURL"
 type ModelSpec struct {
-	// Provider serving the model. Values follow agentgateway's AgentgatewayModel providers.
-	// +kubebuilder:validation:Enum=Anthropic;Azure;Bedrock;Gemini;OpenAI;Openrouter;VertexAI
+	// Provider serving the model. Values follow agentgateway's AgentgatewayModel providers. Azure, Bedrock and
+	// VertexAI are not offered: agentgateway needs provider settings and cloud credentials for them that a Model
+	// cannot express yet.
+	// +kubebuilder:validation:Enum=Anthropic;Gemini;OpenAI;Openrouter
 	Provider string `json:"provider"`
 	// Model is the exact name clients send in the request, e.g. "google/gemma-4-31b-it:free".
 	// +kubebuilder:validation:MinLength=1
@@ -19,14 +22,28 @@ type ModelSpec struct {
 	// +optional
 	DisplayName string `json:"displayName,omitempty"`
 	// BaseURL of a self-hosted, OpenAI-compatible server (vLLM, Ollama, LiteLLM ...), with provider
-	// OpenAI, e.g. http://vllm.models.svc:8000/v1. Without it, the provider's own endpoint is used.
+	// OpenAI, e.g. http://vllm.models.svc:8000/v1. Include the API path (usually /v1): a URL without a path
+	// sends requests to / (agentgateway v1.6.0). Without it, the provider's own endpoint is used.
 	// +optional
 	// +kubebuilder:validation:Pattern=`^https?://[^/?#\s]+(/[^?#\s]*)?$`
 	BaseURL string `json:"baseURL,omitempty"`
+	// Formats are the APIs the server at baseURL implements (provider OpenAI only); agentgateway converts requests
+	// in other formats to one of these. Default: Completions and Embeddings. Before this field existed, requests
+	// for /v1/responses and /v1/messages were passed to the server unchanged; list Responses or Messages to keep
+	// that when the server implements them natively (for example LiteLLM, or vLLM for Responses). A classifier
+	// Model (ModelRouter type LLM) needs Completions.
+	// +optional
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=8
+	// +listType=set
+	Formats []ModelFormat `json:"formats,omitempty"`
 	// Price of this model, for cost in Usage. Without it, Usage shows tokens only for this model.
 	// +optional
 	Price *ModelPrice `json:"price,omitempty"`
 }
+
+// +kubebuilder:validation:Enum=Completions;Messages;Responses;Embeddings
+type ModelFormat string
 
 // ModelPrice is what the provider charges, in US dollars per million tokens.
 type ModelPrice struct {

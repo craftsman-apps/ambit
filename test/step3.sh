@@ -131,4 +131,73 @@ helm template ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f te
 helm template ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml > "$W/r2"
 cmp -s "$W/r1" "$W/r2" || fail "11 two renders differ"
 pass "11 chart renders identically"
+# 12 · Azure and Bedrock Models (fake credentials, no request reaches a cloud): agentgateway accepts the generated
+# objects, an access rule naming them compiles, a dollar budget charges their prices; the gateway ServiceAccount is
+# annotated. The objects are removed on every exit, passed or failed.
+cleanup12() {
+  kubectl -n "$NS" delete "models.$G" test-azure test-bedrock-keys test-bedrock-role --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete "accessrules.$G" test-cloud --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete "budgets.$G" test-cloud --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete secret ambit-llm-azure-test ambit-llm-aws-test --ignore-not-found >/dev/null 2>&1 || true
+}
+trap 'rc=$?; cleanup12; on_exit $rc' EXIT   # test/lib.sh's handler still decides the exit code
+kubectl -n "$NS" create secret generic ambit-llm-azure-test --from-literal=Authorization=fake-azure-key --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n "$NS" create secret generic ambit-llm-aws-test --from-literal=accessKey=AKIAFAKE --from-literal=secretKey=fake --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n "$NS" apply -f - >/dev/null <<YAML
+apiVersion: $G/v1alpha1
+kind: Model
+metadata: { name: test-azure }
+spec: { provider: Azure, model: gpt-4.1, credentialsRef: { name: ambit-llm-azure-test }, azure: { resourceName: ambit-test, resourceType: OpenAI },
+        price: { inputPerMillionTokens: "2", outputPerMillionTokens: "8" } }
+---
+apiVersion: $G/v1alpha1
+kind: Model
+metadata: { name: test-bedrock-keys }
+spec: { provider: Bedrock, model: us.anthropic.claude-sonnet-4-5-20250929-v1:0, credentialsRef: { name: ambit-llm-aws-test }, bedrock: { region: eu-west-1 },
+        price: { inputPerMillionTokens: "3.3", outputPerMillionTokens: "16.5" } }
+---
+apiVersion: $G/v1alpha1
+kind: Model
+metadata: { name: test-bedrock-role }
+spec: { provider: Bedrock, model: anthropic.claude-sonnet-4-5-20250929-v1:0, price: { inputPerMillionTokens: "3", outputPerMillionTokens: "15" } }
+---
+apiVersion: $G/v1alpha1
+kind: AccessRule
+metadata: { name: test-cloud }
+spec: { groups: [test-cloud], models: [test-azure, test-bedrock-keys, test-bedrock-role] }
+---
+apiVersion: $G/v1alpha1
+kind: Budget
+metadata: { name: test-cloud }
+spec: { group: test-cloud, groupDollarsPerDay: "5" }
+YAML
+for m in test-azure test-bedrock-keys test-bedrock-role; do
+  kubectl -n "$NS" wait "models.$G" "$m" --for=condition=Ready --timeout=60s >/dev/null \
+    || fail "12 $m not accepted by agentgateway: $(kubectl -n "$NS" get "models.$G" "$m" -o jsonpath='{.status.conditions[0].message}')"
+done
+kubectl -n "$NS" wait "accessrules.$G" test-cloud --for=condition=Ready --timeout=60s >/dev/null || fail "12 access rule naming the cloud models not Ready"
+kubectl -n "$NS" wait "budgets.$G" test-cloud --for=condition=Ready --timeout=60s >/dev/null \
+  || fail "12 dollar budget not Ready: $(kubectl -n "$NS" get "budgets.$G" test-cloud -o jsonpath='{.status.conditions[0].message}')"
+# Budget Ready does not look at prices: the generated cost expression must charge each cloud model (prices in micros).
+ok=""
+for _ in $(seq 1 30); do
+  pol=$(kubectl -n "$NS" get agentgatewaypolicies -l app.kubernetes.io/managed-by=ambit -o json)
+  ok=$(uv run --no-project python -c 'import sys
+q = chr(34)
+s = sys.stdin.read().replace(chr(92) + q, q)  # undo JSON escaping of the CEL text
+prices = {"gpt-4.1": (2000000, 8000000), "us.anthropic.claude-sonnet-4-5-20250929-v1:0": (3300000, 16500000),
+          "anthropic.claude-sonnet-4-5-20250929-v1:0": (3000000, 15000000)}
+print("yes" if all(f"{q}{m}{q}: {p}u" in s for m, ps in prices.items() for p in ps) else "")' <<<"$pol")
+  [[ -n "$ok" ]] && break; sleep 1
+done
+[[ -n "$ok" ]] || fail "12 the cost expression does not charge the cloud models' prices"
+hdr=$(kubectl -n "$NS" get agentgatewaymodel test-azure -o jsonpath='{.spec.policies.auth.location.header.name}')
+noauth=$(kubectl -n "$NS" get agentgatewaymodel test-bedrock-role -o jsonpath='{.spec.policies.auth}')
+[[ "$hdr" == api-key && -z "$noauth" ]] || fail "12 auth: azure header '$hdr', bedrock-role auth '$noauth'"
+# The ServiceAccount the gateway pods actually run as carries exactly the configured annotation.
+sa=$(kubectl -n "$NS" get pods -l gateway.networking.k8s.io/gateway-name=ambit -o jsonpath='{.items[0].spec.serviceAccountName}')
+val=$(kubectl -n "$NS" get sa "$sa" -o jsonpath='{.metadata.annotations.ambitproject\.dev/test}')
+[[ -n "$sa" && "$val" == kind ]] || fail "12 gateway ServiceAccount '$sa' annotation ambitproject.dev/test is '$val', want 'kind'"
+cleanup12; trap 'on_exit $?' EXIT
+pass "12 Azure and Bedrock (keys and AWS identity) accepted by agentgateway; rule compiles; budget charges their prices; gateway ServiceAccount annotated"
 done_step 3a

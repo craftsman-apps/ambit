@@ -19,6 +19,10 @@ check 's=one("Service","ambit-router")["spec"]["ports"][0]
 assert s["port"]==9000 and s["appProtocol"]=="kubernetes.io/h2c"' "router Service is h2c on 9000"
 check 'e=one("AgentgatewayParameters","ambit")["spec"]["env"]
 assert {"name":"AGENTGATEWAY_MESSAGES_PREFER_COMPLETIONS","value":"true"} in e, e' "gateway converts /v1/messages to Chat Completions, as in v1.5.0"
+check 'sa=one("AgentgatewayParameters","ambit")["spec"]["serviceAccount"]["metadata"]["annotations"]
+assert sa=={"ambitproject.dev/test":"kind"}, sa' "gateway ServiceAccount carries gateway.serviceAccount.annotations"
+none=$(helm template ambit charts/ambit -n ambit-system -f charts/ambit/values-kind.yaml)
+! grep -q 'serviceAccount:' <<<"$(sed -n '/kind: AgentgatewayParameters/,/^---/p' <<<"$none")" || { echo "FAIL chart: no serviceAccount overlay without annotations"; exit 1; }
 grep -q 'x-ambit-config' <<<"$out" || { echo "FAIL chart: Gateway must strip x-ambit-config"; exit 1; }
 grep -q -- '--router-deployment=ambit-router' <<<"$out" || { echo "FAIL chart: controller flag"; exit 1; }
 off=$(helm template ambit charts/ambit -n ambit-system -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --set routing.router.enabled=false)

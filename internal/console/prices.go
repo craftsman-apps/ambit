@@ -54,6 +54,7 @@ var litellmProvider = map[string]struct {
 	providers []string
 }{
 	"OpenAI": {"openai", []string{"openai"}}, "Anthropic": {"anthropic", []string{"anthropic"}},
+	"Azure": {"azure", []string{"azure"}}, "Bedrock": {"bedrock", []string{"bedrock", "bedrock_converse"}},
 	"Gemini": {"gemini", []string{"gemini"}}, "Openrouter": {"openrouter", []string{"openrouter"}},
 	"Mistral": {"mistral", []string{"mistral"}}, "Cohere": {"cohere", []string{"cohere", "cohere_chat"}},
 	"XAI": {"xai", []string{"xai"}}, "Deepseek": {"deepseek", []string{"deepseek"}}, "Meta": {"meta", []string{"meta"}},

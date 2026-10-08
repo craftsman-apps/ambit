@@ -9,6 +9,11 @@ gateway:
   resources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { memory: 512Mi }
+  # Annotations on the gateway's ServiceAccount. For Amazon Bedrock through IRSA:
+  #   eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/ambit-bedrock
+  # EKS Pod Identity needs none. See docs/providers.md.
+  serviceAccount:
+    annotations: {}
   # Listener port of the Ambit Gateway. Also the port of the generated Service.
   port: 8080
   service:

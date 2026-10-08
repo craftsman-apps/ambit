@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -14,7 +15,7 @@ func model(name, id string) v1.Model {
 	return v1.Model{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ambit-system", UID: types.UID("uid-" + name),
 		Annotations: map[string]string{"argocd.argoproj.io/tracking-id": "ambit-config:ambitproject.dev/Model:ambit-system/" + name},
 		Labels:      map[string]string{"app.kubernetes.io/instance": "ambit-config"}},
-		Spec: v1.ModelSpec{Provider: "Openrouter", Model: id, CredentialsRef: v1.SecretRef{Name: "ambit-llm-openrouter"}}}
+		Spec: v1.ModelSpec{Provider: "Openrouter", Model: id, CredentialsRef: &v1.SecretRef{Name: "ambit-llm-openrouter"}}}
 }
 
 func rule(name string, groups []string, all bool, models ...string) v1.AccessRule {
@@ -214,5 +215,62 @@ func TestRuleNamingRouterIsKnown(t *testing.T) {
 	}
 	if _, ok := byName(r.Objects)["auto"]; ok {
 		t.Fatal("an AgentgatewayModel was generated for a router name")
+	}
+}
+
+// Azure and Bedrock: the settings blocks are copied and the auth form follows the provider (spec, Generation).
+func TestCloudProviderModels(t *testing.T) {
+	azure := model("gpt", "gpt-4.1")
+	azure.Spec.Provider, azure.Spec.CredentialsRef = "Azure", &v1.SecretRef{Name: "ambit-llm-azure"}
+	azure.Spec.Azure = &v1.AzureSettings{ResourceName: "acme-openai", ResourceType: "OpenAI"}
+	foundry := model("gpt-foundry", "gpt-4.1")
+	foundry.Spec.Provider, foundry.Spec.CredentialsRef = "Azure", &v1.SecretRef{Name: "ambit-llm-azure"}
+	foundry.Spec.Azure = &v1.AzureSettings{ResourceName: "acme-ai", ResourceType: "Foundry", APIVersion: "2025-04-01-preview", ProjectName: "research"}
+	keyed := model("claude-keys", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+	keyed.Spec.Provider, keyed.Spec.CredentialsRef = "Bedrock", &v1.SecretRef{Name: "ambit-llm-aws"}
+	keyed.Spec.Bedrock = &v1.BedrockSettings{Region: "eu-west-1"}
+	role := model("claude-role", "anthropic.claude-sonnet-4-5-20250929-v1:0")
+	role.Spec.Provider, role.Spec.CredentialsRef = "Bedrock", nil
+
+	r := Compile([]v1.Model{azure, foundry, keyed, role}, nil, nil, route)
+	want := map[string]map[string]any{
+		"gpt": {"provider": "Azure", "azure": map[string]any{"resourceName": "acme-openai", "resourceType": "OpenAI"},
+			"auth": map[string]any{"secretRef": map[string]any{"name": "ambit-llm-azure"}, "location": map[string]any{"header": map[string]any{"name": "api-key"}}}},
+		"gpt-foundry": {"provider": "Azure", "azure": map[string]any{"resourceName": "acme-ai", "resourceType": "Foundry", "apiVersion": "2025-04-01-preview", "projectName": "research"},
+			"auth": map[string]any{"secretRef": map[string]any{"name": "ambit-llm-azure"}, "location": map[string]any{"header": map[string]any{"name": "api-key"}}}},
+		"claude-keys": {"provider": "Bedrock", "bedrock": map[string]any{"region": "eu-west-1"},
+			"auth": map[string]any{"aws": map[string]any{"secretRef": map[string]any{"name": "ambit-llm-aws"}}}},
+		"claude-role": {"provider": "Bedrock", "bedrock": map[string]any{}, "auth": nil},
+	}
+	for name, w := range want {
+		spec := find(t, r.Objects, "AgentgatewayModel", name).Object["spec"].(map[string]any)
+		if spec["provider"] != w["provider"] {
+			t.Errorf("%s provider %v", name, spec["provider"])
+		}
+		for _, block := range []string{"azure", "bedrock"} {
+			if !reflect.DeepEqual(spec[block], w[block]) {
+				t.Errorf("%s %s = %#v, want %#v", name, block, spec[block], w[block])
+			}
+		}
+		auth, found, _ := unstructured.NestedFieldNoCopy(spec, "policies", "auth")
+		if w["auth"] == nil && found {
+			t.Errorf("%s has an auth key (%#v); it must be absent", name, auth)
+		}
+		if !reflect.DeepEqual(auth, w["auth"]) {
+			t.Errorf("%s auth = %#v, want %#v", name, auth, w["auth"])
+		}
+		for _, stray := range []string{"baseURL", "custom"} {
+			if _, ok := spec[stray]; ok {
+				t.Errorf("%s has %s", name, stray)
+			}
+		}
+		if _, ok, _ := unstructured.NestedFieldNoCopy(spec, "policies", "authorization"); !ok {
+			t.Errorf("%s lost its authorization", name)
+		}
+	}
+	// Other providers are unchanged: the key in the Authorization header, no settings blocks.
+	g := find(t, Compile([]v1.Model{model("gemma", "google/gemma")}, nil, nil, route).Objects, "AgentgatewayModel", "gemma").Object
+	if a, _, _ := unstructured.NestedMap(g, "spec", "policies", "auth"); !reflect.DeepEqual(a, map[string]any{"secretRef": map[string]any{"name": "ambit-llm-openrouter"}}) {
+		t.Errorf("openrouter auth %#v", a)
 	}
 }

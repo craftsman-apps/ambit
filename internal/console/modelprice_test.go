@@ -19,7 +19,7 @@ func priceFixture(t *testing.T, gitops bool) (http.Handler, client.Client, *Auth
 	t.Helper()
 	_, c, a := serversFixture(t)
 	_ = c.Create(t.Context(), &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gpt", Namespace: testNS, Labels: map[string]string{"team": "x"}},
-		Spec: v1.ModelSpec{Provider: "OpenAI", Model: "gpt-4.1", DisplayName: "GPT", CredentialsRef: v1.SecretRef{Name: "ambit-llm-openai"}}})
+		Spec: v1.ModelSpec{Provider: "OpenAI", Model: "gpt-4.1", DisplayName: "GPT", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-openai"}}})
 	l, _ := ParseLiteLLM([]byte(sampleList), "built in", "", "")
 	cat := &Catalog{Client: c, Namespace: testNS, Prices: &PriceSource{list: l}}
 	repo := &recordingRepo{}
@@ -102,7 +102,7 @@ func TestPriceEditInGitOpsKeepsLabels(t *testing.T) {
 func TestPriceSaveRetriesAStatusConflict(t *testing.T) {
 	_, c, a := serversFixture(t)
 	_ = c.Create(t.Context(), &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gpt", Namespace: testNS},
-		Spec: v1.ModelSpec{Provider: "OpenAI", Model: "gpt-4.1", CredentialsRef: v1.SecretRef{Name: "ambit-llm-openai"}}})
+		Spec: v1.ModelSpec{Provider: "OpenAI", Model: "gpt-4.1", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-openai"}}})
 	conflicts := 1
 	wc := interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
 		Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
@@ -121,5 +121,21 @@ func TestPriceSaveRetriesAStatusConflict(t *testing.T) {
 	_ = c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "gpt"}, &m)
 	if m.Spec.Price == nil || m.Spec.Price.OutputPerMillionTokens != "4" {
 		t.Fatalf("price not saved: %+v", m.Spec.Price)
+	}
+}
+
+// A Bedrock Model on the gateway's AWS identity keeps having no credentialsRef after a price edit in GitOps mode.
+func TestPriceEditKeepsMissingCredentialsRef(t *testing.T) {
+	h, c, a, repo := priceFixture(t, true)
+	if err := c.Create(t.Context(), &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "claude", Namespace: testNS},
+		Spec: v1.ModelSpec{Provider: "Bedrock", Model: "anthropic.claude-sonnet-4-5-20250929-v1:0"}}); err != nil {
+		t.Fatal(err)
+	}
+	r := do(t, h, "PUT", "/api/models/claude/price", user(a, "priya@acme.test", RoleAdmin), map[string]string{"inputPerMillionTokens": "3", "outputPerMillionTokens": "15"})
+	if r.Code != http.StatusAccepted || len(repo.files) != 1 {
+		t.Fatalf("%d %s", r.Code, r.Body)
+	}
+	if got := string(repo.files[0].Content); strings.Contains(got, "credentialsRef") || !strings.Contains(got, "provider: Bedrock") {
+		t.Fatalf("manifest:\n%s", got)
 	}
 }

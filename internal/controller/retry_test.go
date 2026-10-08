@@ -33,7 +33,7 @@ func TestFailedApplyIsRetried(t *testing.T) {
 	ctx := t.Context()
 	for _, o := range []client.Object{
 		&v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemma", Namespace: ns},
-			Spec: v1.ModelSpec{Provider: "Openrouter", Model: "google/gemma-4-31b-it:free", CredentialsRef: v1.SecretRef{Name: "ambit-llm-openrouter"}}},
+			Spec: v1.ModelSpec{Provider: "Openrouter", Model: "google/gemma-4-31b-it:free", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-openrouter"}}},
 		&v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "eng", Namespace: ns}, Spec: v1.AccessRuleSpec{Groups: []string{"eng"}, Models: []string{"gemma"}}},
 	} {
 		if err := envClient.Create(ctx, o); err != nil {

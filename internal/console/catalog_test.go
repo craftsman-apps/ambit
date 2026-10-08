@@ -25,7 +25,7 @@ func catalogFixture(t *testing.T) (http.Handler, client.Client, *Auth) {
 	}
 	m := func(name, id string, groups []string, all bool) *v1.Model {
 		return &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNS},
-			Spec:   v1.ModelSpec{Provider: "Openrouter", Model: id, DisplayName: name + " display", CredentialsRef: v1.SecretRef{Name: "k"}},
+			Spec:   v1.ModelSpec{Provider: "Openrouter", Model: id, DisplayName: name + " display", CredentialsRef: &v1.SecretRef{Name: "k"}},
 			Status: v1.ModelStatus{AllowedGroups: groups, AllowAllSignedIn: all, Conditions: []metav1.Condition{{Type: "Ready", Status: "True", Reason: "Accepted", Message: "served by the gateway"}}}}
 	}
 	git := &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "ml-research-nemotron", Namespace: testNS,

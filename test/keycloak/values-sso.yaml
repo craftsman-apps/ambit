@@ -47,3 +47,8 @@ limits:
 protection:
   enabled: true
   toolsRefresh: 20s
+
+gateway:
+  serviceAccount:
+    # Test only: proves the annotations reach the generated ServiceAccount (IRSA uses eks.amazonaws.com/role-arn).
+    annotations: { ambitproject.dev/test: kind }

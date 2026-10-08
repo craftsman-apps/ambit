@@ -17,7 +17,7 @@ func TestRouterReconcile(t *testing.T) {
 	namespace(t, ns)
 	ctx := t.Context()
 	for _, o := range []client.Object{
-		&v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemma", Namespace: ns}, Spec: v1.ModelSpec{Provider: "Openrouter", Model: "google/gemma", CredentialsRef: v1.SecretRef{Name: "ambit-llm-k"}}},
+		&v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemma", Namespace: ns}, Spec: v1.ModelSpec{Provider: "Openrouter", Model: "google/gemma", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-k"}}},
 		&v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "all", Namespace: ns}, Spec: v1.AccessRuleSpec{AllSignedIn: true, Models: []string{"gemma", "auto"}}},
 		&v1.ModelRouter{ObjectMeta: metav1.ObjectMeta{Name: "auto", Namespace: ns}, Spec: v1.ModelRouterSpec{Default: "gemma"}},
 	} {
@@ -52,7 +52,7 @@ func TestInvalidRouterRemovesVirtualModel(t *testing.T) {
 	ns := "ambit-router-stale"
 	namespace(t, ns)
 	ctx := t.Context()
-	gemma := &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemma", Namespace: ns}, Spec: v1.ModelSpec{Provider: "Openrouter", Model: "google/gemma", CredentialsRef: v1.SecretRef{Name: "ambit-llm-k"}}}
+	gemma := &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemma", Namespace: ns}, Spec: v1.ModelSpec{Provider: "Openrouter", Model: "google/gemma", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-k"}}}
 	mr := &v1.ModelRouter{ObjectMeta: metav1.ObjectMeta{Name: "auto", Namespace: ns}, Spec: v1.ModelRouterSpec{Default: "gemma"}}
 	for _, o := range []client.Object{gemma, mr} {
 		if err := envClient.Create(ctx, o); err != nil {
@@ -62,7 +62,7 @@ func TestInvalidRouterRemovesVirtualModel(t *testing.T) {
 	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}}
 	_, _ = r.Reconcile(ctx, reconcile.Request{})
 	// now a Model claims the router's wire name
-	if err := envClient.Create(ctx, &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "clash", Namespace: ns}, Spec: v1.ModelSpec{Provider: "Openrouter", Model: "auto", CredentialsRef: v1.SecretRef{Name: "ambit-llm-k"}}}); err != nil {
+	if err := envClient.Create(ctx, &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "clash", Namespace: ns}, Spec: v1.ModelSpec{Provider: "Openrouter", Model: "auto", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-k"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
@@ -87,7 +87,7 @@ func TestModelTakingRouterObjectNameSurvivesCleanup(t *testing.T) {
 	namespace(t, ns)
 	ctx := t.Context()
 	for _, o := range []client.Object{
-		&v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemma", Namespace: ns}, Spec: v1.ModelSpec{Provider: "Openrouter", Model: "google/gemma", CredentialsRef: v1.SecretRef{Name: "ambit-llm-k"}}},
+		&v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemma", Namespace: ns}, Spec: v1.ModelSpec{Provider: "Openrouter", Model: "google/gemma", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-k"}}},
 		&v1.ModelRouter{ObjectMeta: metav1.ObjectMeta{Name: "auto", Namespace: ns}, Spec: v1.ModelRouterSpec{Default: "gemma"}},
 	} {
 		if err := envClient.Create(ctx, o); err != nil {
@@ -96,7 +96,7 @@ func TestModelTakingRouterObjectNameSurvivesCleanup(t *testing.T) {
 	}
 	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}}
 	_, _ = r.Reconcile(ctx, reconcile.Request{})
-	if err := envClient.Create(ctx, &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "router-auto", Namespace: ns}, Spec: v1.ModelSpec{Provider: "Openrouter", Model: "x/y", CredentialsRef: v1.SecretRef{Name: "ambit-llm-k"}}}); err != nil {
+	if err := envClient.Create(ctx, &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "router-auto", Namespace: ns}, Spec: v1.ModelSpec{Provider: "Openrouter", Model: "x/y", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-k"}}}); err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {

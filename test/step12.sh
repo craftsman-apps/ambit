@@ -258,7 +258,9 @@ kubectl -n "$NS" patch modelrouters.ambitproject.dev smart --type merge -p '{"sp
 wait_until 120 '[[ $(replicas) == 0 ]]' >/dev/null || fail "7 not scaled down"
 helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --set-string "routing.router.podAnnotations.restart=$(date +%s)" --wait --timeout 5m >/dev/null
 [[ $(replicas) == 0 ]] || fail "7 a Helm upgrade changed ambit-router's replicas from 0 to $(replicas)"
-sleep 15; kill -TERM $lp 2>/dev/null  # the load tool stops sending, lets requests in flight finish, writes its results
+# $lp is the subshell that runs the load() function; signal its child, the load tool, which stops sending, lets
+# requests in flight finish and writes its results; the subshell then exits with the tool's status.
+sleep 15; pkill -TERM -P $lp || kill -TERM $lp  # bash may run the tool itself as $lp (no subshell)
 wait $lp || fail "7 load run: $(cat "$W/load-roll")"
 uv run --no-project python -c "
 import json,sys

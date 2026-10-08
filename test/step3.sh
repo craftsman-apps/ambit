@@ -200,4 +200,61 @@ val=$(kubectl -n "$NS" get sa "$sa" -o jsonpath='{.metadata.annotations.ambitpro
 [[ -n "$sa" && "$val" == kind ]] || fail "12 gateway ServiceAccount '$sa' annotation ambitproject.dev/test is '$val', want 'kind'"
 cleanup12; trap 'on_exit $?' EXIT
 pass "12 Azure and Bedrock (keys and AWS identity) accepted by agentgateway; rule compiles; budget charges their prices; gateway ServiceAccount annotated"
+# 13 · Vertex AI Models (a key file that is not real, and the gateway's identity; no request reaches Google):
+# agentgateway accepts both, a rule names them, the dollar budget charges their prices.
+cleanup13() {
+  kubectl -n "$NS" delete "models.$G" test-vertex-key test-vertex-identity --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete "accessrules.$G" test-vertex --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete "budgets.$G" test-vertex --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete secret ambit-llm-gcp-test --ignore-not-found >/dev/null 2>&1 || true
+}
+trap 'rc=$?; cleanup13; on_exit $rc' EXIT
+kubectl -n "$NS" create secret generic ambit-llm-gcp-test --from-literal=credentials.json='{}' --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n "$NS" apply -f - >/dev/null <<YAML
+apiVersion: $G/v1alpha1
+kind: Model
+metadata: { name: test-vertex-key }
+spec: { provider: VertexAI, model: gemini-2.5-pro, credentialsRef: { name: ambit-llm-gcp-test }, vertexai: { projectId: ambit-test, region: europe-west4 },
+        price: { inputPerMillionTokens: "1.25", outputPerMillionTokens: "10" } }
+---
+apiVersion: $G/v1alpha1
+kind: Model
+metadata: { name: test-vertex-identity }
+spec: { provider: VertexAI, model: "claude-sonnet-4-5@20250929", vertexai: { projectId: ambit-test }, price: { inputPerMillionTokens: "3", outputPerMillionTokens: "15" } }
+---
+apiVersion: $G/v1alpha1
+kind: AccessRule
+metadata: { name: test-vertex }
+spec: { groups: [test-vertex], models: [test-vertex-key, test-vertex-identity] }
+---
+apiVersion: $G/v1alpha1
+kind: Budget
+metadata: { name: test-vertex }
+spec: { group: test-vertex, groupDollarsPerDay: "5" }
+YAML
+for m in test-vertex-key test-vertex-identity; do
+  kubectl -n "$NS" wait "models.$G" "$m" --for=condition=Ready --timeout=60s >/dev/null \
+    || fail "13 $m not accepted by agentgateway: $(kubectl -n "$NS" get "models.$G" "$m" -o jsonpath='{.status.conditions[0].message}')"
+done
+kubectl -n "$NS" wait "accessrules.$G" test-vertex --for=condition=Ready --timeout=60s >/dev/null || fail "13 access rule naming the Vertex AI models not Ready"
+kubectl -n "$NS" wait "budgets.$G" test-vertex --for=condition=Ready --timeout=60s >/dev/null || fail "13 dollar budget not Ready"
+ok=""
+for _ in $(seq 1 30); do
+  pol=$(kubectl -n "$NS" get agentgatewaypolicies -l app.kubernetes.io/managed-by=ambit -o json)
+  ok=$(uv run --no-project python -c 'import sys, re
+q = chr(34)
+s = sys.stdin.read().replace(chr(92) + q, q)
+# The cost expression multiplies inputTokens by one price map and outputTokens by the other: check each side.
+m = re.search(r"inputTokens\) \* \{(.*?)\}\[llm\.requestModel\].*?outputTokens\) \* \{(.*?)\}\[llm\.requestModel\]", s)
+prices = {"gemini-2.5-pro": (1250000, 10000000), "claude-sonnet-4-5@20250929": (3000000, 15000000)}
+ok = m and all(f"{q}{k}{q}: {i}u" in m.group(1) and f"{q}{k}{q}: {o}u" in m.group(2) for k, (i, o) in prices.items())
+print("yes" if ok else "")' <<<"$pol")
+  [[ -n "$ok" ]] && break; sleep 1
+done
+[[ -n "$ok" ]] || fail "13 the cost expression does not charge the Vertex AI models' prices"
+key=$(kubectl -n "$NS" get agentgatewaymodel test-vertex-key -o jsonpath='{.spec.policies.auth.gcp.secretRef.name}')
+noauth=$(kubectl -n "$NS" get agentgatewaymodel test-vertex-identity -o jsonpath='{.spec.policies.auth}')
+[[ "$key" == ambit-llm-gcp-test && -z "$noauth" ]] || fail "13 auth: key-file Model '$key', identity Model auth '$noauth'"
+cleanup13; trap 'on_exit $?' EXIT
+pass "13 Vertex AI (key file and gateway identity) accepted by agentgateway; rule compiles; budget charges their prices"
 done_step 3a

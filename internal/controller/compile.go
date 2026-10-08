@@ -128,8 +128,8 @@ func CEL(a Access) string {
 	return "jwt.groups.exists(g, g in [" + strings.Join(q, ", ") + "])"
 }
 
-// modelAuth is how the gateway authenticates to the provider (spec, Generation): AWS keys for Bedrock, or none so
-// agentgateway uses the pod's AWS identity; Azure's documented api-key header; otherwise Authorization: Bearer.
+// modelAuth is how the gateway authenticates to the provider: AWS keys for Bedrock or a Google key file for VertexAI,
+// or none so agentgateway uses the pod's cloud identity; Azure's documented api-key header; otherwise Authorization: Bearer.
 func modelAuth(m v1.Model) map[string]any {
 	ref := m.Spec.CredentialsRef
 	switch {
@@ -137,6 +137,8 @@ func modelAuth(m v1.Model) map[string]any {
 		return nil
 	case m.Spec.Provider == "Bedrock":
 		return map[string]any{"aws": map[string]any{"secretRef": map[string]any{"name": ref.Name}}}
+	case m.Spec.Provider == "VertexAI":
+		return map[string]any{"gcp": map[string]any{"secretRef": map[string]any{"name": ref.Name}}}
 	case m.Spec.Provider == "Azure":
 		return map[string]any{"secretRef": map[string]any{"name": ref.Name}, "location": map[string]any{"header": map[string]any{"name": "api-key"}}}
 	}
@@ -170,6 +172,13 @@ func agentgatewayModel(m v1.Model, a Access, route RouteRef) *unstructured.Unstr
 			s["projectName"] = az.ProjectName
 		}
 		unstructured.SetNestedMap(o.Object, s, "spec", "azure")
+	}
+	if vx := m.Spec.VertexAI; vx != nil {
+		s := map[string]any{"projectId": vx.ProjectID}
+		if vx.Region != "" {
+			s["region"] = vx.Region
+		}
+		unstructured.SetNestedMap(o.Object, s, "spec", "vertexai")
 	}
 	if m.Spec.Provider == "Bedrock" { // agentgateway requires the block with Bedrock, even empty
 		s := map[string]any{}

@@ -199,11 +199,18 @@ func TestReconcilerAgainstAPIServer(t *testing.T) {
 		}
 		return nil
 	})
-	p, _ := get("AgentgatewayPolicy", MCPBackendName+"-access")
-	if e, _, _ := unstructured.NestedStringSlice(p.Object, "spec", "backend", "mcp", "authorization", "policy", "matchExpressions"); len(e) != 1 ||
-		e[0] != `mcp.tool.target == "time" && mcp.tool.name == "get_current_time" && jwt.groups.exists(g, g in ["eng"])` {
-		t.Fatalf("policy %v", e)
-	}
+	// The policy can exist before the AccessRule is compiled into it (it then grants nothing: "false").
+	eventually(t, "MCP access policy", func() error {
+		p, err := get("AgentgatewayPolicy", MCPBackendName+"-access")
+		if err != nil {
+			return err
+		}
+		if e, _, _ := unstructured.NestedStringSlice(p.Object, "spec", "backend", "mcp", "authorization", "policy", "matchExpressions"); len(e) != 1 ||
+			e[0] != `mcp.tool.target == "time" && mcp.tool.name == "get_current_time" && jwt.groups.exists(g, g in ["eng"])` {
+			return fmt.Errorf("policy %v", e)
+		}
+		return nil
+	})
 	var m v1.Model
 	eventually(t, "Model Pending before agentgateway answers", func() error {
 		_ = envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "gemma"}, &m)
@@ -264,7 +271,7 @@ func TestReconcilerAgainstAPIServer(t *testing.T) {
 	eventually(t, "per-user token policy", func() error { _, err := get("AgentgatewayPolicy", "ambit-conn-whoami"); return err })
 
 	// Drift: a manual edit that opens every tool is put back.
-	p, _ = get("AgentgatewayPolicy", MCPBackendName+"-access")
+	p, _ := get("AgentgatewayPolicy", MCPBackendName+"-access")
 	_ = unstructured.SetNestedStringSlice(p.Object, []string{"true"}, "spec", "backend", "mcp", "authorization", "policy", "matchExpressions")
 	if err := envClient.Update(ctx, p); err != nil {
 		t.Fatal(err)
@@ -419,5 +426,21 @@ func TestFailedCleanupOfRefusedServerIsRetried(t *testing.T) {
 	r.Client = deleteFails{Client: envClient, prefix: "ambit-conn-"}
 	if _, err := r.Reconcile(ctx, reconcile.Request{}); err == nil {
 		t.Fatal("a failed delete of a refused server's policy was not returned")
+	}
+}
+
+// The CRD's rules hold in the real API server, not only in `ambit validate`.
+func TestAPIServerRefusesVertexAIWithoutSettings(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-vertex-api"
+	namespace(t, ns)
+	err := envClient.Create(t.Context(), &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemini", Namespace: ns},
+		Spec: v1.ModelSpec{Provider: "VertexAI", Model: "gemini-2.5-pro"}})
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "vertexai settings are required") {
+		t.Fatalf("want an Invalid error naming the vertexai rule, got %v", err)
+	}
+	if err := envClient.Create(t.Context(), &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemini-ok", Namespace: ns},
+		Spec: v1.ModelSpec{Provider: "VertexAI", Model: "gemini-2.5-pro", VertexAI: &v1.VertexAISettings{ProjectID: "acme-ml"}}}); err != nil {
+		t.Fatalf("valid VertexAI Model refused: %v", err)
 	}
 }

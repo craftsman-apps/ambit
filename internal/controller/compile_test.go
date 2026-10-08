@@ -274,3 +274,35 @@ func TestCloudProviderModels(t *testing.T) {
 		t.Errorf("openrouter auth %#v", a)
 	}
 }
+
+// Vertex AI: the vertexai block is copied; a key file goes in auth.gcp.secretRef, the gateway's identity needs no auth.
+func TestVertexAIModels(t *testing.T) {
+	keyed := model("gemini", "gemini-2.5-pro")
+	keyed.Spec.Provider, keyed.Spec.CredentialsRef = "VertexAI", &v1.SecretRef{Name: "ambit-llm-gcp"}
+	keyed.Spec.VertexAI = &v1.VertexAISettings{ProjectID: "acme-ml", Region: "europe-west4"}
+	ambient := model("claude", "claude-sonnet-4-5@20250929")
+	ambient.Spec.Provider, ambient.Spec.CredentialsRef = "VertexAI", nil
+	ambient.Spec.VertexAI = &v1.VertexAISettings{ProjectID: "acme-ml"}
+	r := Compile([]v1.Model{keyed, ambient}, nil, nil, route)
+	for name, w := range map[string]struct {
+		vertexai map[string]any
+		auth     any
+	}{
+		"gemini": {map[string]any{"projectId": "acme-ml", "region": "europe-west4"}, map[string]any{"gcp": map[string]any{"secretRef": map[string]any{"name": "ambit-llm-gcp"}}}},
+		"claude": {map[string]any{"projectId": "acme-ml"}, nil},
+	} {
+		spec := find(t, r.Objects, "AgentgatewayModel", name).Object["spec"].(map[string]any)
+		if spec["provider"] != "VertexAI" || !reflect.DeepEqual(spec["vertexai"], w.vertexai) {
+			t.Errorf("%s provider %v vertexai %#v", name, spec["provider"], spec["vertexai"])
+		}
+		auth, found, _ := unstructured.NestedFieldNoCopy(spec, "policies", "auth")
+		if (w.auth == nil) == found || (found && !reflect.DeepEqual(auth, w.auth)) {
+			t.Errorf("%s auth = %#v (found %v), want %#v", name, auth, found, w.auth)
+		}
+		for _, stray := range []string{"baseURL", "custom", "azure", "bedrock"} {
+			if _, ok := spec[stray]; ok {
+				t.Errorf("%s has %s", name, stray)
+			}
+		}
+	}
+}

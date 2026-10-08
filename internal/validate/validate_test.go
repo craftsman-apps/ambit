@@ -94,7 +94,7 @@ spec: { provider: OpenAI, model: llama, credentialsRef: { name: ambit-llm-x }, b
 		{"provider Ambit cannot configure", `apiVersion: ambitproject.dev/v1alpha1
 kind: Model
 metadata: { name: gemini }
-spec: { provider: VertexAI, model: gemini-2.5-pro, credentialsRef: { name: ambit-llm-x } }`, "Unsupported value"},
+spec: { provider: Ollama, model: llama3, credentialsRef: { name: ambit-llm-x } }`, "Unsupported value"},
 		{"azure without settings", `apiVersion: ambitproject.dev/v1alpha1
 kind: Model
 metadata: { name: gpt }
@@ -122,7 +122,7 @@ spec: { provider: Azure, model: gpt-4.1, credentialsRef: { name: ambit-llm-azure
 		{"baseURL with bedrock", `apiVersion: ambitproject.dev/v1alpha1
 kind: Model
 metadata: { name: claude }
-spec: { provider: Bedrock, model: us.anthropic.claude-sonnet-4-5-20250929-v1:0, baseURL: "http://proxy:8000/v1" }`, "baseURL is not used with Azure or Bedrock"},
+spec: { provider: Bedrock, model: us.anthropic.claude-sonnet-4-5-20250929-v1:0, baseURL: "http://proxy:8000/v1" }`, "baseURL is not used with Azure, Bedrock or VertexAI"},
 		{"formats with azure", `apiVersion: ambitproject.dev/v1alpha1
 kind: Model
 metadata: { name: gpt }
@@ -143,6 +143,26 @@ spec: { provider: Bedrock, model: anthropic.claude-sonnet-4-5-20250929-v1:0, bed
 kind: Model
 metadata: { name: claude }
 spec: { provider: Bedrock, model: anthropic.claude-sonnet-4-5-20250929-v1:0, credentialsRef: { name: aws-keys } }`, "ambit-llm-<something>"},
+		{"vertexai without settings", `apiVersion: ambitproject.dev/v1alpha1
+kind: Model
+metadata: { name: gemini }
+spec: { provider: VertexAI, model: gemini-2.5-pro }`, "vertexai settings are required with provider VertexAI"},
+		{"vertexai settings on another provider", `apiVersion: ambitproject.dev/v1alpha1
+kind: Model
+metadata: { name: gemini }
+spec: { provider: Gemini, model: gemini-2.5-pro, credentialsRef: { name: ambit-llm-x }, vertexai: { projectId: acme-ml } }`, "vertexai settings are required with provider VertexAI"},
+		{"baseURL with vertexai", `apiVersion: ambitproject.dev/v1alpha1
+kind: Model
+metadata: { name: gemini }
+spec: { provider: VertexAI, model: gemini-2.5-pro, vertexai: { projectId: acme-ml }, baseURL: "http://proxy:8000/v1" }`, "baseURL is not used with Azure, Bedrock or VertexAI"},
+		{"formats with vertexai", `apiVersion: ambitproject.dev/v1alpha1
+kind: Model
+metadata: { name: gemini }
+spec: { provider: VertexAI, model: gemini-2.5-pro, vertexai: { projectId: acme-ml }, formats: [Completions] }`, "formats describe a self-hosted server"},
+		{"gemini without credentials", `apiVersion: ambitproject.dev/v1alpha1
+kind: Model
+metadata: { name: gemini }
+spec: { provider: Gemini, model: gemini-2.5-pro }`, "credentialsRef is required (only Bedrock and VertexAI"},
 		{"namespace in Git", `apiVersion: ambitproject.dev/v1alpha1
 kind: AccessRule
 metadata: { name: eng, namespace: ambit-system }
@@ -227,6 +247,46 @@ func TestCloudProviderModelsAreValid(t *testing.T) {
 		p := check(t, "apiVersion: ambitproject.dev/v1alpha1\nkind: Model\nmetadata: { name: m }\nspec: "+doc+"\n")
 		if len(p) == 0 || !(strings.Contains(p[0].String(), "may not be more than") || strings.Contains(p[0].String(), "should be at least") || strings.Contains(p[0].String(), "should match")) {
 			t.Errorf("%s over its limit: %v", name, p)
+		}
+	}
+}
+
+func TestVertexAIModels(t *testing.T) {
+	doc := func(settings string, creds bool) string {
+		c := ""
+		if creds {
+			c = "credentialsRef: { name: ambit-llm-gcp }, "
+		}
+		return "apiVersion: ambitproject.dev/v1alpha1\nkind: Model\nmetadata: { name: m }\nspec: { provider: VertexAI, model: gemini-2.5-pro, " + c + "vertexai: " + settings + " }\n"
+	}
+	for name, d := range map[string]string{
+		"gemini with a key file": doc(`{ projectId: acme-ml }`, true),
+		"claude on the identity": "apiVersion: ambitproject.dev/v1alpha1\nkind: Model\nmetadata: { name: m }\nspec: { provider: VertexAI, model: claude-sonnet-4-5@20250929, vertexai: { projectId: acme-ml, region: europe-west4 } }\n",
+		"shortest project":       doc(`{ projectId: acme-x }`, false),
+		"longest project":        doc(`{ projectId: a`+strings.Repeat("b", 28)+`c }`, false),
+		"domain-scoped project":  doc(`{ projectId: "example.com:my-project" }`, false),
+		"longest region":         doc(`{ projectId: acme-ml, region: `+strings.Repeat("r", 63)+` }`, false),
+		"multi-region":           doc(`{ projectId: acme-ml, region: eu }`, false),
+	} {
+		if p := check(t, d); len(p) != 0 {
+			t.Errorf("%s: %v", name, p)
+		}
+	}
+	for name, d := range map[string]string{
+		"project too short":       doc(`{ projectId: acme1 }`, false),
+		"project too long":        doc(`{ projectId: a`+strings.Repeat("b", 29)+`c }`, false),
+		"project uppercase":       doc(`{ projectId: Acme-ml }`, false),
+		"project leading digit":   doc(`{ projectId: 1acme-ml }`, false),
+		"project trailing hyphen": doc(`{ projectId: acme-ml- }`, false),
+		"region too long":         doc(`{ projectId: acme-ml, region: `+strings.Repeat("r", 64)+` }`, false),
+		"region uppercase":        doc(`{ projectId: acme-ml, region: EU }`, false),
+		"region leading digit":    doc(`{ projectId: acme-ml, region: 4west }`, false),
+		"region lone hyphen":      doc(`{ projectId: acme-ml, region: "-" }`, false),
+		"no project":              doc(`{ region: eu }`, false),
+	} {
+		p := check(t, d)
+		if len(p) == 0 {
+			t.Errorf("%s: accepted", name)
 		}
 	}
 }

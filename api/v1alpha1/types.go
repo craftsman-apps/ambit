@@ -6,23 +6,26 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // +kubebuilder:validation:XValidation:rule="!has(self.formats) || (has(self.baseURL) && self.provider == 'OpenAI')",message="formats describe a self-hosted server: they need provider OpenAI and a baseURL"
 // +kubebuilder:validation:XValidation:rule="has(self.azure) == (self.provider == 'Azure')",message="azure settings are required with provider Azure and only there"
 // +kubebuilder:validation:XValidation:rule="!has(self.bedrock) || self.provider == 'Bedrock'",message="bedrock settings are only for provider Bedrock"
-// +kubebuilder:validation:XValidation:rule="has(self.credentialsRef) || self.provider == 'Bedrock'",message="credentialsRef is required (only Bedrock may use the gateway's AWS identity)"
-// +kubebuilder:validation:XValidation:rule="!has(self.baseURL) || !(self.provider in ['Azure', 'Bedrock'])",message="baseURL is not used with Azure or Bedrock: their settings define the endpoint"
+// +kubebuilder:validation:XValidation:rule="has(self.credentialsRef) || self.provider in ['Bedrock', 'VertexAI']",message="credentialsRef is required (only Bedrock and VertexAI may use the gateway's cloud identity)"
+// +kubebuilder:validation:XValidation:rule="!has(self.baseURL) || !(self.provider in ['Azure', 'Bedrock', 'VertexAI'])",message="baseURL is not used with Azure, Bedrock or VertexAI: their settings define the endpoint"
+// +kubebuilder:validation:XValidation:rule="has(self.vertexai) == (self.provider == 'VertexAI')",message="vertexai settings are required with provider VertexAI and only there"
 type ModelSpec struct {
-	// Provider serving the model. Values follow agentgateway's AgentgatewayModel providers. Azure and Bedrock also
-	// need their settings block (azure, bedrock). VertexAI is not offered yet: it needs Google Cloud credentials.
-	// Ollama and other self-hosted servers: provider OpenAI with a baseURL.
-	// +kubebuilder:validation:Enum=Anthropic;Azure;Baseten;Bedrock;Cerebras;Cohere;Deepinfra;Deepseek;Fireworks;Gemini;Groq;Huggingface;Meta;Mistral;OpenAI;Openrouter;TogetherAI;XAI
+	// Provider serving the model. Values follow agentgateway's AgentgatewayModel providers. Azure, Bedrock and VertexAI
+	// also need their settings block (azure, bedrock, vertexai). Ollama and other self-hosted servers: provider OpenAI
+	// with a baseURL.
+	// +kubebuilder:validation:Enum=Anthropic;Azure;Baseten;Bedrock;Cerebras;Cohere;Deepinfra;Deepseek;Fireworks;Gemini;Groq;Huggingface;Meta;Mistral;OpenAI;Openrouter;TogetherAI;VertexAI;XAI
 	Provider string `json:"provider"`
 	// Model is the exact name clients send in the request, e.g. "google/gemma-4-31b-it:free". For Azure, the
-	// deployment name; for Bedrock, the model or inference-profile ID, e.g. "us.anthropic.claude-sonnet-4-5-20250929-v1:0".
+	// deployment name; for Bedrock, the model or inference-profile ID, e.g. "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+	// for VertexAI, the Vertex AI model name, e.g. "gemini-2.5-pro" or "claude-sonnet-4-5@20250929".
 	// +kubebuilder:validation:MinLength=1
 	Model string `json:"model"`
 	// CredentialsRef names a Secret in this namespace with the provider's credentials: an "Authorization" entry
-	// with the API key, or for Bedrock "accessKey", "secretKey" and optional "sessionToken". The credentials never
-	// appear in this object, so the object is safe to keep in Git. Only Secrets named ambit-llm-* may be used, so
-	// a Model cannot send another Secret (e.g. console keys) to a provider. Required, except with Bedrock: without
-	// it, the gateway uses its own AWS identity (IRSA or EKS Pod Identity).
+	// with the API key; for Bedrock "accessKey", "secretKey" and optional "sessionToken"; for VertexAI a Google
+	// service-account key file in "credentials.json". The credentials never appear in this object, so the object is
+	// safe to keep in Git. Only Secrets named ambit-llm-* may be used, so a Model cannot send another Secret (e.g.
+	// console keys) to a provider. Required, except with Bedrock and VertexAI: without it, the gateway uses its own
+	// cloud identity (IRSA or EKS Pod Identity; GKE Workload Identity).
 	// +optional
 	// +kubebuilder:validation:XValidation:rule="self.name.startsWith('ambit-llm-')",message="credentialsRef must name a Secret called ambit-llm-<something>"
 	CredentialsRef *SecretRef `json:"credentialsRef,omitempty"`
@@ -51,6 +54,9 @@ type ModelSpec struct {
 	// Amazon Bedrock settings. Optional with provider Bedrock (the region defaults to us-east-1), refused otherwise.
 	// +optional
 	Bedrock *BedrockSettings `json:"bedrock,omitempty"`
+	// Google Vertex AI project. Required with provider VertexAI, refused otherwise.
+	// +optional
+	VertexAI *VertexAISettings `json:"vertexai,omitempty"`
 	// Price of this model, for cost in Usage. Without it, Usage shows tokens only for this model.
 	// +optional
 	Price *ModelPrice `json:"price,omitempty"`
@@ -97,6 +103,19 @@ type BedrockSettings struct {
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[a-z0-9-]+$`
+	Region string `json:"region,omitempty"`
+}
+
+// VertexAISettings name the Google Cloud project; agentgateway builds the endpoint from them.
+type VertexAISettings struct {
+	// ProjectID of the Google Cloud project, e.g. acme-ml (or a legacy domain-scoped ID, example.com:acme-ml).
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^([a-z0-9][a-z0-9.-]*[a-z0-9]:)?[a-z][a-z0-9-]{4,28}[a-z0-9]$`
+	ProjectID string `json:"projectId"`
+	// Region (location): global, the multi-regions us and eu, or a region such as europe-west4. Default
+	// (agentgateway): global. Whether a model is offered there shows only at request time.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`
 	Region string `json:"region,omitempty"`
 }
 

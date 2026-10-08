@@ -10,6 +10,7 @@ the `Model` only names it, so the `Model` is safe to keep in Git.
 | `Huggingface` | `credentialsRef` (API key) | no (not in LiteLLM's price list) |
 | `Azure` | `credentialsRef` (API key) and `azure` | only when the deployment name equals a model name in the list |
 | `Bedrock` | `credentialsRef` (AWS keys) or the gateway's AWS identity; `bedrock` optional | yes, by model or inference-profile ID |
+| `VertexAI` | `credentialsRef` (key file) or the gateway's Google identity; `vertexai` | yes, for the canonical model names |
 | `OpenAI` with `baseURL` | a self-hosted, OpenAI-compatible server (vLLM, Ollama, LiteLLM ...) | no |
 
 A Model without a price shows tokens only in Usage, and a group with a dollar budget is refused it. Set the price
@@ -28,6 +29,12 @@ AWS keys for Bedrock go in `accessKey`, `secretKey` and, for temporary credentia
 ```sh
 kubectl -n ambit-system create secret generic ambit-llm-aws \
   --from-literal=accessKey=<access key id> --from-literal=secretKey=<secret access key>
+```
+
+A Google service-account key file for Vertex AI goes in `credentials.json`:
+
+```sh
+kubectl -n ambit-system create secret generic ambit-llm-gcp --from-file=credentials.json=<service-account key file>
 ```
 
 ## Azure OpenAI and Azure AI Foundry
@@ -105,6 +112,55 @@ After changing the identity, restart the gateway pods so they pick it up:
 `kubectl -n ambit-system rollout restart deployment -l gateway.networking.k8s.io/gateway-name=ambit`.
 A missing or wrong identity shows only when a request is made, as an AWS error.
 
+## Google Vertex AI
+
+Gemini and Claude models served by your Google Cloud project. `model` is the Vertex AI model name: Gemini
+`gemini-2.5-pro`; Claude `claude-sonnet-4-5@20250929`. agentgateway also accepts `claude-sonnet-4-5-20250929`,
+but only the `@` form has a price suggestion. Claude must be enabled in Model Garden and is offered only in some
+regions. `region` defaults to `global`; `us`, `eu` or a region such as `europe-west4` also work. Legacy
+domain-scoped project IDs (`example.com:my-project`) are accepted.
+
+```yaml
+apiVersion: ambitproject.dev/v1alpha1
+kind: Model
+metadata: { name: gemini-2-5-pro-vertex }
+spec:
+  provider: VertexAI
+  model: gemini-2.5-pro
+  credentialsRef: { name: ambit-llm-gcp }    # leave out to use the gateway's Google identity
+  vertexai: { projectId: acme-ml, region: europe-west4 }
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: Model
+metadata: { name: claude-sonnet-vertex }
+spec:
+  provider: VertexAI
+  model: claude-sonnet-4-5@20250929
+  vertexai: { projectId: acme-ml }           # region global
+```
+
+### Vertex AI with the gateway's Google identity (GKE Workload Identity)
+
+Without `credentialsRef`, the gateway uses Google's default credentials. On GKE, turn on Workload Identity for the
+cluster and the node pool, then choose one of:
+
+- **Direct**: grant `roles/aiplatform.user` to the gateway's Kubernetes principal,
+  `principal://iam.googleapis.com/projects/<project number>/locations/global/workloadIdentityPools/<project>.svc.id.goog/subject/ns/ambit-system/sa/<gateway ServiceAccount>`.
+  No annotation is needed.
+- **Through a Google service account**: grant it `roles/aiplatform.user`; grant `roles/iam.workloadIdentityUser`
+  on it to `serviceAccount:<project>.svc.id.goog[ambit-system/<gateway ServiceAccount>]`; and annotate the
+  gateway's ServiceAccount through the chart:
+
+  ```yaml
+  gateway:
+    serviceAccount:
+      annotations:
+        iam.gke.io/gcp-service-account: ambit-vertex@acme-ml.iam.gserviceaccount.com
+  ```
+
+Find the gateway ServiceAccount's name with the command in the Bedrock section. Restart the gateway pods after
+changing the identity. A missing or wrong identity shows only when a request is made, as a Google auth error.
+
 ## Self-hosted servers
 
 Use provider `OpenAI` with `baseURL` (include the API path, usually `/v1`). `formats` lists the APIs the server
@@ -113,6 +169,7 @@ implements; the gateway converts other request formats to one of them. See the f
 
 ## Not supported
 
-Vertex AI; Azure Entra ID credentials (managed identity, workload identity); AWS assume-role; Bedrock guardrails.
-Azure and Bedrock Models cannot be the classifier of a type-LLM `ModelRouter` (ambit-router calls
+Azure Entra ID credentials (managed identity, workload identity); AWS assume-role; Bedrock guardrails; Vertex AI
+Model Garden partner models other than Claude; Vertex AI embeddings.
+Azure, Bedrock and Vertex AI Models cannot be the classifier of a type-LLM `ModelRouter` (ambit-router calls
 OpenAI-compatible endpoints only); they can be its route targets and default.

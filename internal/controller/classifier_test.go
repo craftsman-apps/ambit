@@ -91,14 +91,17 @@ func TestReadKeysOnlyForOpenAICompatibleClassifiers(t *testing.T) {
 	keyed.Spec.Provider, keyed.Spec.CredentialsRef = "Bedrock", &v1.SecretRef{Name: "ambit-llm-aws"}
 	role := model("claude-role", "anthropic.claude-sonnet-4-5-20250929-v1:0")
 	role.Spec.Provider, role.Spec.CredentialsRef = "Bedrock", nil
+	vertex := model("gemini-vx", "gemini-2.5-pro")
+	vertex.Spec.Provider, vertex.Spec.CredentialsRef = "VertexAI", &v1.SecretRef{Name: "ambit-llm-gcp"}
+	vertex.Spec.VertexAI = &v1.VertexAISettings{ProjectID: "acme-ml"}
 	var routers []v1.ModelRouter
-	for _, m := range []string{"gpt", "claude-keys", "claude-role", "local"} {
+	for _, m := range []string{"gpt", "claude-keys", "claude-role", "gemini-vx", "local"} {
 		r := llmRouter("auto-"+m, "coding")
 		r.Spec.Classifier.LLM.Model = m
 		routers = append(routers, r)
 	}
 	rec := &Reconciler{Live: c, Namespace: "ambit-system"}
-	keys, err := rec.readKeys(t.Context(), routers, []v1.Model{azure, keyed, role, local})
+	keys, err := rec.readKeys(t.Context(), routers, []v1.Model{azure, keyed, role, vertex, local})
 	if err != nil {
 		t.Fatal(err)
 	}

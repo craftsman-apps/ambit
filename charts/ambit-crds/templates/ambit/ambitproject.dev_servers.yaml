@@ -176,11 +176,18 @@ spec:
                   properties:
                     description:
                       type: string
+                    destructiveHint:
+                      type: boolean
                     fingerprint:
                       description: Fingerprint is sha256 over the name, description and input schema.
                       type: string
                     name:
                       type: string
+                    readOnlyHint:
+                      description: 'ReadOnlyHint and DestructiveHint are the server''s own MCP annotations, shown as hints only: a
+
+                        server''s claims about itself are not trusted.'
+                      type: boolean
                   required:
                   - name
                   type: object

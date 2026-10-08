@@ -268,3 +268,46 @@ func generated(apiVersion, kind, name, ns string, spec map[string]any) *unstruct
 	o.SetLabels(map[string]string{"app.kubernetes.io/managed-by": "ambit"})
 	return o
 }
+
+// EffectiveAccess summarises who may use one server, for the console's "pick tools" step.
+type EffectiveAccess struct {
+	AllSignedIn bool                `json:"allSignedIn"`
+	Groups      []string            `json:"groups"`
+	AllTools    bool                `json:"allTools"` // some rule grants every tool, including ones added later
+	Tools       map[string][]string `json:"tools"`    // tool → groups granted it by name
+}
+
+// ServerAccess reads the same merged access the gateway policy is built from (accessByServer), and
+// is empty for a Server the reconciler leaves out: refused by BindServers, or with a URL that does not parse.
+func ServerAccess(servers []v1.Server, conns []v1.Connection, rules []v1.AccessRule, name string) EffectiveAccess {
+	out := EffectiveAccess{Groups: []string{}, Tools: map[string][]string{}}
+	kept, _ := BindServers(servers, conns)
+	i := slices.IndexFunc(kept, func(s v1.Server) bool { return s.Name == name })
+	if i < 0 {
+		return out
+	}
+	if _, ok := target(kept[i]); !ok {
+		return out
+	}
+	a := accessByServer(kept, rules)[name]
+	groups := map[string]bool{}
+	add := func(x Access) {
+		out.AllSignedIn = out.AllSignedIn || x.AllSignedIn
+		for _, g := range x.Groups {
+			groups[g] = true
+		}
+	}
+	if a.all.AllSignedIn || len(a.all.Groups) > 0 {
+		out.AllTools = true
+		add(a.all)
+	}
+	for tool, x := range a.tools {
+		add(x)
+		out.Tools[tool] = append([]string{}, x.Groups...)
+	}
+	for g := range groups {
+		out.Groups = append(out.Groups, g)
+	}
+	sort.Strings(out.Groups)
+	return out
+}

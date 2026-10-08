@@ -9,4 +9,5 @@ spec:
     {{- if .Values.mcp.enabled }}
     # Token broker for Connections; the NetworkPolicy lets only the gateway in.
     - { name: broker, port: 8082, targetPort: broker }
+    - { name: tools, port: 8083, targetPort: tools }
     {{- end }}

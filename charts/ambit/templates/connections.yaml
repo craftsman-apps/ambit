@@ -41,4 +41,7 @@ spec:
     - ports: [{ port: 8080 }]
     - from: [{ podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit } } }]
       ports: [{ port: 8082 }]
+    # Tool lists of per-user servers (metadata only), for the controller.
+    - from: [{ podSelector: { matchLabels: { app.kubernetes.io/name: ambit-controller } } }]
+      ports: [{ port: 8083 }]
 {{- end }}

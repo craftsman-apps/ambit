@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -117,7 +118,8 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&v1.Server{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1.AccessRule{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1.Budget{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Watches(&v1.ModelRouter{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{}))
+		Watches(&v1.ModelRouter{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Watches(&v1.Connection{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{}))
 	if r.Classifier.Deployment != "" { // availability of ambit-router sets classifierState
 		b = b.Watches(&appsv1.Deployment{}, all)
 	}
@@ -140,6 +142,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			return reconcile.Result{}, err
 		}
 	}
+	var conns v1.ConnectionList
+	if err := r.Live.List(ctx, &conns, client.InNamespace(r.Namespace)); err != nil {
+		return reconcile.Result{}, err
+	}
+	boundServers, refusedServers := BindServers(servers.Items, conns.Items)
 	var routers v1.ModelRouterList
 	if err := r.Live.List(ctx, &routers, client.InNamespace(r.Namespace)); err != nil {
 		return reconcile.Result{}, err
@@ -153,7 +160,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	if !r.ArgumentLimits {
 		compiled, dropped = WithoutArgumentLimits(rules.Items)
 	}
-	res := Compile(models.Items, servers.Items, compiled, r.Route, routerNames...)
+	res := Compile(models.Items, boundServers, compiled, r.Route, routerNames...)
+	SetBrokerPaths(res.Objects, boundServers, conns.Items)
 	ApplyDropped(&res, dropped)
 	var budgets v1.BudgetList
 	if err := r.Live.List(ctx, &budgets, client.InNamespace(r.Namespace)); err != nil {
@@ -242,6 +250,19 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			conds[owner] = acceptedCondition(current)
 		case "MCPServer":
 			conds[owner] = mcpServerCondition(current)
+		}
+	}
+	// Objects of refused Servers: no general prune exists, and owner references only collect on Server deletion.
+	for name := range refusedServers {
+		if err := r.deleteGenerated(ctx, "AgentgatewayPolicy", "ambit-conn-"+name); err != nil {
+			return reconcile.Result{}, err
+		}
+	}
+	if len(boundServers) == 0 && len(servers.Items) > 0 { // every Server refused: no shared backend either
+		for _, o := range [][2]string{{"AgentgatewayBackend", MCPBackendName}, {"AgentgatewayPolicy", MCPBackendName + "-access"}} {
+			if err := r.deleteGenerated(ctx, o[0], o[1]); err != nil {
+				return reconcile.Result{}, err
+			}
 		}
 	}
 	// No budgets (or budgets off): stop asking the ratelimit service on every request. No dollar limit: stop
@@ -333,13 +354,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		if !ok && s.Spec.URL != "" { // remote: no ToolHive object to report on
 			c = cond(metav1.ConditionTrue, "Remote", "served from "+s.Spec.URL+" through the gateway")
 		}
+		if msg, ok := refusedServers[s.Name]; ok {
+			c = cond(metav1.ConditionFalse, "ConnectionBound", msg)
+		}
 		setReady(&next.Status.Conditions, c, s.Generation)
 		if c.Status == metav1.ConditionTrue && r.ListTools != nil {
-			next.Status.Tools = r.readTools(ctx, *s)
+			var tc *metav1.Condition
+			next.Status.Tools, tc = r.readTools(ctx, *s)
+			if tc != nil {
+				tc.ObservedGeneration = s.Generation
+				meta.SetStatusCondition(&next.Status.Conditions, *tc)
+			} else {
+				meta.RemoveStatusCondition(&next.Status.Conditions, "ToolsRead")
+			}
 			if result.RequeueAfter == 0 {
 				result.RequeueAfter = r.refresh()
 			}
 			pinTools(next)
+		} else {
+			meta.RemoveStatusCondition(&next.Status.Conditions, "ToolsRead")
 		}
 		if err := r.updateStatus(ctx, s.Status, next.Status, next); err != nil {
 			return reconcile.Result{}, err
@@ -425,20 +458,39 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 
 // readTools returns the server's tools, reading them again when they are older than toolsRefresh.
 // On failure it keeps the last known list: a slow server must not make its tools vanish from the console.
-func (r *Reconciler) readTools(ctx context.Context, s v1.Server) []v1.Tool {
+// For per-user servers it also returns the ToolsRead condition; nil means the condition does not apply.
+func (r *Reconciler) readTools(ctx context.Context, s v1.Server) ([]v1.Tool, *metav1.Condition) {
 	if r.toolsRead == nil {
 		r.toolsRead = map[types.UID]time.Time{}
 	}
 	if t, ok := r.toolsRead[s.UID]; ok && time.Since(t) < r.refresh() && len(s.Status.Tools) > 0 {
-		return s.Status.Tools
+		return s.Status.Tools, meta.FindStatusCondition(s.Status.Conditions, "ToolsRead").DeepCopy()
 	}
 	tools, err := r.ListTools(ctx, s)
+	if errors.Is(err, errToolsNotRead) {
+		return s.Status.Tools, nil
+	}
+	if errors.Is(err, ErrNoReader) {
+		c := cond(metav1.ConditionFalse, "ReaderUnavailable", "no admin's account is set to read this server's tools; choose one on the Servers page")
+		c.Type = "ToolsRead"
+		return s.Status.Tools, &c
+	}
 	if err != nil {
 		log.FromContext(ctx).Error(err, "read tools", "server", s.Name)
-		return s.Status.Tools
+		if s.Spec.Connection == "" {
+			return s.Status.Tools, nil
+		}
+		c := cond(metav1.ConditionFalse, "ReadFailed", "the last attempt to read this server's tools failed; the list shown is from an earlier read")
+		c.Type = "ToolsRead"
+		return s.Status.Tools, &c
 	}
 	r.toolsRead[s.UID] = time.Now()
-	return tools
+	if s.Spec.Connection == "" {
+		return tools, nil
+	}
+	c := cond(metav1.ConditionTrue, "Read", fmt.Sprintf("%d tools", len(tools)))
+	c.Type = "ToolsRead"
+	return tools, &c
 }
 
 func setReady(conds *[]metav1.Condition, c metav1.Condition, generation int64) {
@@ -534,4 +586,17 @@ func acceptedCondition(o *unstructured.Unstructured) metav1.Condition {
 // controllerOwnerKind is the Kind of the Ambit object that controls o, or "".
 func controllerOwnerKind(o *unstructured.Unstructured) string {
 	return strings.Split(controllerOwner(o), "/")[0]
+}
+
+// deleteGenerated removes one object Ambit generated, if present and owned by Ambit.
+func (r *Reconciler) deleteGenerated(ctx context.Context, kind, name string) error {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: "agentgateway.dev", Version: "v1alpha1", Kind: kind})
+	if err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: name}, u); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if !ownedByAmbit(u) {
+		return nil
+	}
+	return client.IgnoreNotFound(r.Delete(ctx, u))
 }

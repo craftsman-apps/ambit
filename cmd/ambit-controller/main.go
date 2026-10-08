@@ -31,6 +31,7 @@ func main() {
 	toolsRefresh := flag.Duration("tools-refresh", 10*time.Minute, "how often each running server's tools are read again (changed tools are hidden until approved)")
 	xdsAddr := flag.String("xds-addr", "", "agentgateway control plane (xDS) host:port; its certificate is nudged when not renewed. Empty turns this off")
 	xdsSecret := flag.String("xds-secret", "kgateway-xds-cert", "agentgateway's Secret for the xDS certificate")
+	consoleTools := flag.String("console-tools-url", "", "console tools listener (e.g. http://ambit-console.ambit-system.svc:8083); per-user servers' tools are read through it. Empty leaves them unlisted")
 	routerDep := flag.String("router-deployment", "", "ambit-router's Deployment (routers of type LLM); empty: not installed")
 	routerReplicas := flag.Int("router-replicas", 2, "ambit-router replicas while a router of type LLM exists")
 	flag.Parse()
@@ -63,7 +64,11 @@ func main() {
 		log.Error(err, "create manager")
 		os.Exit(1)
 	}
-	if err := (&controller.Reconciler{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), ListTools: controller.ListTools, Namespace: ns, Route: controller.RouteRef{Name: *route},
+	listTools := controller.ListTools
+	if *consoleTools != "" {
+		listTools = controller.WithConsoleTools(controller.ListTools, controller.ConsoleTools{URL: *consoleTools})
+	}
+	if err := (&controller.Reconciler{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), ListTools: listTools, Namespace: ns, Route: controller.RouteRef{Name: *route},
 		RateLimit: controller.RateLimit{Service: *rlService, Port: *rlPort, FailureMode: *rlFailure}, ToolsRefresh: *toolsRefresh, ArgumentLimits: *argLimits,
 		Classifier: controller.Classifier{Deployment: *routerDep, Replicas: int32(*routerReplicas)}}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "set up controller")

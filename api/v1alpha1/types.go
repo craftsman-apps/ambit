@@ -279,6 +279,12 @@ type Tool struct {
 	// Fingerprint is sha256 over the name, description and input schema.
 	// +optional
 	Fingerprint string `json:"fingerprint,omitempty"`
+	// ReadOnlyHint and DestructiveHint are the server's own MCP annotations, shown as hints only: a
+	// server's claims about itself are not trusted.
+	// +optional
+	ReadOnlyHint *bool `json:"readOnlyHint,omitempty"`
+	// +optional
+	DestructiveHint *bool `json:"destructiveHint,omitempty"`
 }
 
 type ToolPin struct {
@@ -328,6 +334,25 @@ type ConnectionSpec struct {
 	ClientSecretRef SecretRef `json:"clientSecretRef"`
 	// +optional
 	Scopes []string `json:"scopes,omitempty"`
+	// ServerURL binds the Connection to one MCP server: only a Server whose url equals it may name this
+	// Connection, so a user's token for this app never goes anywhere else. Empty: no binding.
+	// +kubebuilder:validation:Pattern=`^https?://[^/?#]+(/[^?#]*)?$`
+	// +optional
+	ServerURL string `json:"serverURL,omitempty"`
+	// Resource is the RFC 8707 resource indicator sent on authorize, token and refresh requests. Empty: not sent.
+	// +kubebuilder:validation:Pattern=`^https?://[^?#]+$`
+	// +optional
+	Resource string `json:"resource,omitempty"`
+	// AuthorizeParams are extra query parameters for the authorize request, e.g. prompt=consent.
+	// +kubebuilder:validation:MaxProperties=16
+	// +kubebuilder:validation:XValidation:rule="self.all(k, !(k in ['client_id','redirect_uri','state','code_challenge','code_challenge_method','scope','resource','response_type','response_mode','request','request_uri']))",message="these parameters are set by Ambit"
+	// +optional
+	AuthorizeParams map[string]string `json:"authorizeParams,omitempty"`
+	// TokenRequestFormat is how token requests are encoded: Form (RFC 6749) or JSON (e.g. monday.com).
+	// +kubebuilder:validation:Enum=Form;JSON
+	// +kubebuilder:default=Form
+	// +optional
+	TokenRequestFormat string `json:"tokenRequestFormat,omitempty"`
 }
 
 type ConnectionStatus struct {

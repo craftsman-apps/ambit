@@ -174,10 +174,15 @@ connect_app() {
 }
 # pod_curl LABELS URL [CURL ARGS...]: HTTP status of URL seen from a short-lived pod with LABELS (comma separated,
 # e.g. "app.kubernetes.io/name=ambit-controller"); always 3 characters, 000 = no connection. Needs NS, CURL_IMAGE.
+# kubectl run --rm -i can lose the output of a container that ends before it attaches (seen in CI: no
+# output within 2 s); an empty answer is retried, while curl's own 000 (no connection) is returned at once.
 pod_curl() {
-  local out labels=$1 url=$2; shift 2
-  out=$(kubectl -n "$NS" run "probe-$RANDOM" --rm -i --restart=Never --quiet --image="$CURL_IMAGE" --labels="$labels" --command -- \
-    curl -s -m 3 -o /dev/null -w '%{http_code}' "$@" "$url" 2>"$W/pod_curl.err") || true   # curl prints 000 itself on failure; kubectl errors stay in $W/pod_curl.err
-  out=${out: -3}
-  [[ $out =~ ^[0-9]{3}$ ]] && echo "$out" || echo 000
+  local out labels=$1 url=$2 try; shift 2
+  for try in 1 2 3; do
+    out=$(kubectl -n "$NS" run "probe-$RANDOM" --rm -i --restart=Never --quiet --image="$CURL_IMAGE" --labels="$labels" --command -- \
+      curl -s -m 3 -o /dev/null -w '%{http_code}' "$@" "$url" 2>"$W/pod_curl.err") || true   # kubectl errors stay in $W/pod_curl.err
+    out=${out: -3}
+    [[ $out =~ ^[0-9]{3}$ ]] && { echo "$out"; return; }
+  done
+  echo 000
 }

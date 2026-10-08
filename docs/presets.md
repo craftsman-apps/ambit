@@ -188,11 +188,11 @@ Changing an existing preset needs a higher `version`; CI checks this.
 | servicenow | ServiceNow | your instance (service-now.com) | yes | MCP Server Console, Zurich Patch 9 or Australia Patch 2 or later | not yet |
 | databricks | Databricks | your workspace host | no | SQL warehouse; account admin creates the app connection | 2026-10-07 |
 | pagerduty | PagerDuty | mcp.pagerduty.com | yes | Advanced Permissions | 2026-10-07 |
-| gmail | Gmail | gmailmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | not yet |
-| google-calendar | Google Calendar | calendarmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | not yet |
-| google-drive | Google Drive | drivemcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | not yet |
-| google-docs | Google Docs | docsmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | not yet |
-| google-sheets | Google Sheets | sheetsmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | not yet |
+| gmail | Gmail | gmailmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | 2026-10-08 |
+| google-calendar | Google Calendar | calendarmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | 2026-10-08 |
+| google-drive | Google Drive | drivemcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | 2026-10-08 |
+| google-docs | Google Docs | docsmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | 2026-10-08 |
+| google-sheets | Google Sheets | sheetsmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | 2026-10-08 |
 
 PayPal is not in the initial list: its MCP server accepts only clients that register themselves (dynamic client
 registration), which Ambit adds in phase 2.

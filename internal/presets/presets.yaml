@@ -406,6 +406,8 @@
   live: { tool: browse_users, arguments: { request: { action: list } } }
 - id: gmail
   version: 1
+  verified: true
+  verifiedOn: "2026-10-08"
   displayName: Gmail
   category: Google Workspace
   server: { url: "https://gmailmcp.googleapis.com/mcp/v1", transport: streamable-http }
@@ -433,6 +435,8 @@
   live: { tool: list_labels }
 - id: google-calendar
   version: 1
+  verified: true
+  verifiedOn: "2026-10-08"
   displayName: Google Calendar
   category: Google Workspace
   server: { url: "https://calendarmcp.googleapis.com/mcp/v1", transport: streamable-http }
@@ -460,6 +464,8 @@
   live: { tool: list_calendars }
 - id: google-drive
   version: 1
+  verified: true
+  verifiedOn: "2026-10-08"
   displayName: Google Drive
   category: Google Workspace
   server: { url: "https://drivemcp.googleapis.com/mcp/v1", transport: streamable-http }
@@ -487,6 +493,8 @@
   live: { tool: list_recent_files }
 - id: google-docs
   version: 1
+  verified: true
+  verifiedOn: "2026-10-08"
   displayName: Google Docs
   category: Google Workspace
   server: { url: "https://docsmcp.googleapis.com/mcp/v1", transport: streamable-http }
@@ -515,6 +523,8 @@
   live: { tool: read_doc, arguments: { documentId: "1FbGsuTo5o1BCSS-mG3QL5n5LZyH4zB6PuAnQR1qGQRI" } }
 - id: google-sheets
   version: 1
+  verified: true
+  verifiedOn: "2026-10-08"
   displayName: Google Sheets
   category: Google Workspace
   server: { url: "https://sheetsmcp.googleapis.com/mcp/v1", transport: streamable-http }

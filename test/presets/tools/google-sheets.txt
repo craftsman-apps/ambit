@@ -1,0 +1,6 @@
+get_spreadsheet
+get_values
+insert_dimension
+update_formulas
+update_spreadsheet
+update_values

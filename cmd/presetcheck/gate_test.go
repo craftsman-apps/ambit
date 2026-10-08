@@ -171,11 +171,11 @@ func TestChangedSinceInRealHistory(t *testing.T) {
 	}
 }
 
-// The initial release ships 21 presets; PayPal (dynamic client registration) and Salesforce wait for phase 2.
-func TestRequiredAreTheInitial21(t *testing.T) {
-	want := []string{"github", "linear", "asana", "monday", "airtable", "box", "dropbox", "canva", "gmail",
-		"google-calendar", "google-drive", "google-docs", "google-sheets", "slack", "zoom", "webex", "hubspot",
-		"docusign", "servicenow", "databricks", "pagerduty"}
+// The initial release ships 18 presets; PayPal, Salesforce, Box, Webex and ServiceNow wait for phase 2.
+func TestRequiredAreTheInitial18(t *testing.T) {
+	want := []string{"github", "linear", "asana", "monday", "airtable", "dropbox", "canva", "gmail",
+		"google-calendar", "google-drive", "google-docs", "google-sheets", "slack", "zoom", "hubspot",
+		"docusign", "databricks", "pagerduty"}
 	if !slices.Equal(required, want) {
 		t.Fatalf("required = %v", required)
 	}

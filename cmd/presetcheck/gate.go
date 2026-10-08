@@ -17,11 +17,11 @@ var fullCommitRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 var watched = []string{"api/v1alpha1", "internal/console", "internal/presets", "cmd/presetcheck", "internal/controller/tools.go", "go.mod", "go.sum"}
 
-// required: the 21 initial presets. PayPal waits for dynamic client registration (phase 2): its MCP server accepts only
-// self-registered clients. Salesforce waits for phase 2: its hosted MCP servers need a Developer Edition or Enterprise org.
-var required = []string{"github", "linear", "asana", "monday", "airtable", "box", "dropbox", "canva", "gmail", "google-calendar",
-	"google-drive", "google-docs", "google-sheets", "slack", "zoom", "webex", "hubspot", "docusign",
-	"servicenow", "databricks", "pagerduty"}
+// required: the 18 initial presets. PayPal waits for dynamic client registration (phase 2): its MCP server accepts only
+// self-registered clients. Salesforce, Box, Webex and ServiceNow wait for phase 2: each needs an admin or developer
+// account the maintainer does not have yet (see docs/presets.md).
+var required = []string{"github", "linear", "asana", "monday", "airtable", "dropbox", "canva", "gmail", "google-calendar",
+	"google-drive", "google-docs", "google-sheets", "slack", "zoom", "hubspot", "docusign", "databricks", "pagerduty"}
 
 func gateProblems(r Results, now time.Time, catalog []presets.Preset, changedSince func(string) ([]string, error), required []string) []string {
 	var p []string
@@ -59,7 +59,7 @@ func gateProblems(r Results, now time.Time, catalog []presets.Preset, changedSin
 			p = append(p, id+" is not verified")
 		}
 	}
-	for _, c := range catalog { // every verified preset, not only the initial 21
+	for _, c := range catalog { // every verified preset, not only the initial 18
 		if c.Verified && !passed[c.ID] {
 			p = append(p, c.ID+" has no passing result")
 		}

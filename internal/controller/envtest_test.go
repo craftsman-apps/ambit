@@ -191,6 +191,9 @@ func TestReconcilerAgainstAPIServer(t *testing.T) {
 		}
 		return u, envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, u)
 	}
+	// Play ToolHive: the server runs, so it joins the shared backend (only running image servers do).
+	eventually(t, "MCPServer", func() error { _, err := get("MCPServer", "time"); return err })
+	setMCPServerReady(t, ns, "time", true)
 	eventually(t, "generated objects", func() error {
 		for _, k := range [][2]string{{"AgentgatewayModel", "gemma"}, {"MCPServer", "time"}, {"AgentgatewayBackend", MCPBackendName}, {"AgentgatewayPolicy", MCPBackendName + "-access"}} {
 			if _, err := get(k[0], k[1]); err != nil {
@@ -442,5 +445,64 @@ func TestAPIServerRefusesVertexAIWithoutSettings(t *testing.T) {
 	if err := envClient.Create(t.Context(), &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemini-ok", Namespace: ns},
 		Spec: v1.ModelSpec{Provider: "VertexAI", Model: "gemini-2.5-pro", VertexAI: &v1.VertexAISettings{ProjectID: "acme-ml"}}}); err != nil {
 		t.Fatalf("valid VertexAI Model refused: %v", err)
+	}
+}
+
+// setMCPServerReady plays ToolHive: it reports the generated MCPServer's readiness.
+func setMCPServerReady(t *testing.T, ns, name string, ready bool) {
+	t.Helper()
+	ms := &unstructured.Unstructured{}
+	ms.SetGroupVersionKind(MCPServerGVK)
+	if err := envClient.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: name}, ms); err != nil {
+		t.Fatal(err)
+	}
+	status, reason := "True", "Running"
+	if !ready {
+		status, reason = "False", "NotRunning"
+	}
+	_ = unstructured.SetNestedSlice(ms.Object, []any{map[string]any{"type": "Ready", "status": status, "reason": reason,
+		"message": "", "lastTransitionTime": metav1.Now().UTC().Format(time.RFC3339)}}, "status", "conditions")
+	if err := envClient.Status().Update(t.Context(), ms); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An image server joins the shared backend only once ToolHive runs it (risk 16: a starting server slowed every
+// user's new session), and a backend left with no running server is deleted (agentgateway refuses it empty).
+func TestImageServerJoinsBackendWhenRunning(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-running"
+	namespace(t, ns)
+	ctx := t.Context()
+	if err := envClient.Create(ctx, &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "time", Namespace: ns},
+		Spec: v1.ServerSpec{Image: timeImage, Transport: "stdio"}}); err != nil {
+		t.Fatal(err)
+	}
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}}
+	rec := func() {
+		t.Helper()
+		if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec()
+	if _, err := genGet(ctx, ns, "AgentgatewayBackend", MCPBackendName); !apierrors.IsNotFound(err) {
+		t.Fatalf("shared backend before the server runs: %v", err)
+	}
+	setMCPServerReady(t, ns, "time", true)
+	rec()
+	b, err := genGet(ctx, ns, "AgentgatewayBackend", MCPBackendName)
+	if err != nil {
+		t.Fatalf("no shared backend once the server runs: %v", err)
+	}
+	if got := strings.Join(backendTargets(t, []*unstructured.Unstructured{b}), ","); got != "time" {
+		t.Fatalf("targets %q", got)
+	}
+	setMCPServerReady(t, ns, "time", false) // ToolHive restarts it
+	rec()
+	for _, o := range [][2]string{{"AgentgatewayBackend", MCPBackendName}, {"AgentgatewayPolicy", MCPBackendName + "-access"}} {
+		if _, err := genGet(ctx, ns, o[0], o[1]); !apierrors.IsNotFound(err) {
+			t.Fatalf("%s/%s kept with no running server: %v", o[0], o[1], err)
+		}
 	}
 }

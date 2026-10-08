@@ -146,6 +146,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	if err := r.Live.List(ctx, &conns, client.InNamespace(r.Namespace)); err != nil {
 		return reconcile.Result{}, err
 	}
+	if err := r.markRunning(ctx, servers.Items); err != nil {
+		return reconcile.Result{}, err
+	}
 	boundServers, refusedServers := BindServers(servers.Items, conns.Items)
 	var routers v1.ModelRouterList
 	if err := r.Live.List(ctx, &routers, client.InNamespace(r.Namespace)); err != nil {
@@ -258,7 +261,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			return reconcile.Result{}, err
 		}
 	}
-	if len(boundServers) == 0 && len(servers.Items) > 0 { // every Server refused: no shared backend either
+	if !generates(res.Objects, "AgentgatewayBackend", MCPBackendName) && len(servers.Items) > 0 { // every Server refused or none running: no shared backend either
 		for _, o := range [][2]string{{"AgentgatewayBackend", MCPBackendName}, {"AgentgatewayPolicy", MCPBackendName + "-access"}} {
 			if err := r.deleteGenerated(ctx, o[0], o[1]); err != nil {
 				return reconcile.Result{}, err
@@ -546,6 +549,32 @@ func cond(s metav1.ConditionStatus, reason, msg string) metav1.Condition {
 	return metav1.Condition{Type: "Ready", Status: s, Reason: reason, Message: msg}
 }
 
+// markRunning sets each image Server's Ready condition, in memory, from ToolHive's live verdict on its MCPServer,
+// before compiling: only running image servers join the shared backend (compileServers). The stored status may be
+// a pass behind, and the pass that a Ready MCPServer triggers must already add the target.
+func (r *Reconciler) markRunning(ctx context.Context, servers []v1.Server) error {
+	var list unstructured.UnstructuredList
+	list.SetGroupVersionKind(MCPServerGVK.GroupVersion().WithKind(MCPServerGVK.Kind + "List"))
+	if err := r.Live.List(ctx, &list, client.InNamespace(r.Namespace)); err != nil && !meta.IsNoMatchError(err) {
+		return err
+	}
+	verdict := map[string]metav1.Condition{}
+	for i := range list.Items {
+		verdict[list.Items[i].GetName()] = mcpServerCondition(&list.Items[i])
+	}
+	for i := range servers {
+		if servers[i].Spec.URL != "" {
+			continue
+		}
+		c, ok := verdict[servers[i].Name]
+		if !ok {
+			c = cond(metav1.ConditionUnknown, "Pending", "waiting for ToolHive to start the server")
+		}
+		meta.SetStatusCondition(&servers[i].Status.Conditions, c)
+	}
+	return nil
+}
+
 // mcpServerCondition mirrors ToolHive's verdict on the generated MCPServer into the Server.
 func mcpServerCondition(o *unstructured.Unstructured) metav1.Condition {
 	conds, _, _ := unstructured.NestedSlice(o.Object, "status", "conditions")
@@ -599,4 +628,13 @@ func (r *Reconciler) deleteGenerated(ctx context.Context, kind, name string) err
 		return nil
 	}
 	return client.IgnoreNotFound(r.Delete(ctx, u))
+}
+
+func generates(objs []*unstructured.Unstructured, kind, name string) bool {
+	for _, o := range objs {
+		if o.GetKind() == kind && o.GetName() == name {
+			return true
+		}
+	}
+	return false
 }

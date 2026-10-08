@@ -129,12 +129,30 @@ metadata: { name: tagged }
 spec: { image: "ghcr.io/stacklok/dockyard/uvx/mcp-server-time:2026.8.18" }
 YAML
 then fail "11 a Server with a tag instead of a digest was accepted"; fi
+# While a Server is deleted and created again, the other servers' users must keep working (risk 16: a Service
+# backendRef made agentgateway drop the whole shared backend, HTTP 500 for every user). alice may use only time.
+# A new server that is still booting slows new sessions (about 10 s, agentgateway waits for every target), so the
+# limit is 30 s: this check is about failures, not that delay.
+AL=$(token alice); : > "$W/probes"
+( set +e  # one timed-out curl must not end the probe loop (set -e is inherited)
+  while :; do
+    c=$(command curl -s -m 30 -D "$W/ph" -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $AL" -H 'Content-Type: application/json' \
+      -H 'Accept: application/json, text/event-stream' \
+      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"r16","version":"1"}}}' "$MCP")
+    sid=$(awk 'tolower($1)=="mcp-session-id:"{print $2}' "$W/ph" | tr -d '\r'); r=fail
+    if [[ "$c" == 200 && -n "$sid" ]] && command curl -s -m 30 -H "Authorization: Bearer $AL" -H "Mcp-Session-Id: $sid" -H 'Content-Type: application/json' \
+      -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' "$MCP" | grep -q get_current_time; then r=ok; fi
+    echo "$c $r" >> "$W/probes"
+  done ) & probes=$!
 kubectl -n "$NS" delete "servers.$G" everything >/dev/null
 wait_for "11 MCPServer everything not garbage-collected" '! kubectl -n "$NS" get mcpserver everything >/dev/null 2>&1'
 wait_for "11 mira still sees everything_* tools: $TOOLS" 'try_tools "$(token mira)"; [[ $TOOLS != *everything_* && $TOOLS == *time_get_current_time* ]]'
 kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
 kubectl -n "$NS" wait "servers.$G" --all --for=condition=Ready --timeout=300s >/dev/null || fail "11 everything not Ready again"
-pass "11 tag-only image rejected: $(tr -d '\n' <"$W/err" | sed 's/.*spec.image//' | cut -c1-90); deleted Server's tools gone, restored"
+sleep 10; kill "$probes" 2>/dev/null || true; wait "$probes" 2>/dev/null || true
+n=$(wc -l <"$W/probes" | tr -d ' '); bad=$(grep -c ' fail$' "$W/probes" || true)
+[[ "$n" -ge 50 && "$bad" -eq 0 ]] || fail "11 alice's sessions failed while another Server was deleted and created: $bad of $n (codes: $(grep ' fail$' "$W/probes" | cut -d' ' -f1 | sort | uniq -c | tr -s ' \n' ' '))"
+pass "11 tag-only image rejected: $(tr -d '\n' <"$W/err" | sed 's/.*spec.image//' | cut -c1-90); deleted Server's tools gone, restored; other users unaffected ($n sessions, 0 failed)"
 
 # 12 · chart renders identically with MCP on
 helm template ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml > "$W/r1"

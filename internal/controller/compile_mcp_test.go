@@ -16,7 +16,9 @@ const timeImage = "ghcr.io/stacklok/dockyard/uvx/mcp-server-time@sha256:00000000
 func server(name, transport string) v1.Server {
 	return v1.Server{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ambit-system", UID: types.UID("uid-" + name),
 		Annotations: map[string]string{"argocd.argoproj.io/tracking-id": "ambit-config:ambitproject.dev/Server:ambit-system/" + name}},
-		Spec: v1.ServerSpec{Image: timeImage, Transport: transport}}
+		Spec: v1.ServerSpec{Image: timeImage, Transport: transport},
+		// Running in ToolHive: only running image servers are targets of the shared backend.
+		Status: v1.ServerStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Running"}}}}
 }
 
 func toolRule(name string, groups []string, all bool, servers ...v1.ServerAccess) v1.AccessRule {
@@ -129,8 +131,10 @@ func TestGeneratedMCPObjects(t *testing.T) {
 		t.Fatalf("sse target %v", legacy)
 	}
 	st := timeT["static"].(map[string]any)
+	// A DNS host, not a Service backendRef: agentgateway rejects the whole shared backend while any referenced
+	// Service is missing, which ToolHive's proxy Service is around every create and delete (risk 16).
 	if st["protocol"] != "StreamableHTTP" || st["path"] != "/mcp" || st["port"] != int64(8080) ||
-		st["backendRef"].(map[string]any)["name"] != "mcp-time-proxy" {
+		st["host"] != "mcp-time-proxy.ambit-system.svc.cluster.local" || st["backendRef"] != nil {
 		t.Fatalf("stdio target %v", timeT)
 	}
 	// Shared objects belong to every Server, so they are removed with the last one and never before.
@@ -286,5 +290,43 @@ func TestServerAccessEmptyWhenReconcilerLeavesServerOut(t *testing.T) {
 	bad := []v1.Server{perUser("crm", "https://mcp.crm.test:bad/mcp", "crm")}
 	if a := ServerAccess(bad, nil, rules, "crm"); a.AllTools || a.AllSignedIn {
 		t.Fatalf("bad url: %+v", a)
+	}
+}
+
+func backendTargets(t *testing.T, objs []*unstructured.Unstructured) []string {
+	t.Helper()
+	targets, _, _ := unstructured.NestedSlice(find(t, objs, "AgentgatewayBackend", MCPBackendName).Object, "spec", "mcp", "targets")
+	var names []string
+	for _, x := range targets {
+		names = append(names, x.(map[string]any)["name"].(string))
+	}
+	return names
+}
+
+// Only running image servers are targets: agentgateway opens each session by contacting every target, so a
+// server that is still starting (or still stopping, when recreated at once) slowed every user's new session
+// for 1-5 s (risk 16, measured on kind). Its MCPServer is still generated, so ToolHive starts it.
+func TestOnlyRunningImageServersAreTargets(t *testing.T) {
+	starting := server("everything", "stdio")
+	starting.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionUnknown, Reason: "Pending"}}
+	remote := server("remote", "stdio")
+	remote.Spec.Image, remote.Spec.URL, remote.Status.Conditions = "", "https://mcp.example.com/mcp", nil
+	r := Compile(nil, []v1.Server{server("time", "stdio"), starting, remote}, nil, route)
+	find(t, r.Objects, "MCPServer", "everything")
+	if got := strings.Join(backendTargets(t, r.Objects), ","); got != "remote,time" {
+		t.Fatalf("targets %s, want remote,time (a URL server needs no ToolHive pod)", got)
+	}
+}
+
+// agentgateway refuses an MCP backend without targets: while no server runs yet there is no shared backend.
+func TestNoRunningServerGeneratesNoSharedBackend(t *testing.T) {
+	starting := server("time", "stdio")
+	starting.Status.Conditions = nil
+	r := Compile(nil, []v1.Server{starting}, nil, route)
+	find(t, r.Objects, "MCPServer", "time")
+	for _, o := range r.Objects {
+		if o.GetKind() == "AgentgatewayBackend" || o.GetName() == MCPBackendName+"-access" {
+			t.Fatalf("generated %s %s with no running server", o.GetKind(), o.GetName())
+		}
 	}
 }

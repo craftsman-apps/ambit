@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"k8s.io/apimachinery/pkg/api/meta"
 	"net/url"
 	"slices"
 	"sort"
@@ -50,14 +51,21 @@ func compileServers(servers []v1.Server, rules []v1.AccessRule) []*unstructured.
 		if !ok {
 			continue // a URL that does not parse (the console refuses these; kubectl can still write one): left out
 		}
-		targets = append(targets, map[string]any{"name": s.Name, "static": t})
 		if s.Spec.URL == "" {
 			out = append(out, mcpServer(s))
+		}
+		// agentgateway opens each session by contacting every target: an image server that is still starting
+		// (or stopping) would slow every user's new session, so it joins only once ToolHive runs it.
+		if s.Spec.URL != "" || meta.IsStatusConditionTrue(s.Status.Conditions, "Ready") {
+			targets = append(targets, map[string]any{"name": s.Name, "static": t})
 		}
 		if s.Spec.Connection != "" {
 			out = append(out, connectionPolicy(s))
 		}
 		clauses = append(clauses, serverClauses(s.Name, access[s.Name])...)
+	}
+	if len(targets) == 0 {
+		return out // agentgateway refuses an MCP backend without targets; the reconciler deletes a previous one
 	}
 	expr := "false"
 	if len(clauses) > 0 {
@@ -130,7 +138,12 @@ func target(s v1.Server) (map[string]any, bool) {
 		protocol, path = "SSE", "/sse"
 	}
 	if s.Spec.URL == "" {
-		return map[string]any{"backendRef": map[string]any{"name": "mcp-" + s.Name + "-proxy"}, "port": int64(proxyPort), "path": path, "protocol": protocol}, true
+		// ToolHive's proxy Service by DNS name, not as a backendRef: agentgateway v1.6.0 rejects the whole shared
+		// backend (every user's MCP traffic) while any referenced Service is missing, which this one is for a moment
+		// around every create and delete. A host is resolved per connection, so only this server is affected.
+		// ponytail: assumes the cluster domain cluster.local; add a controller flag for clusters that change it.
+		host := "mcp-" + s.Name + "-proxy." + s.Namespace + ".svc.cluster.local"
+		return map[string]any{"host": host, "port": int64(proxyPort), "path": path, "protocol": protocol}, true
 	}
 	// The CRD pattern still lets through a bad port ("host:bad") or escape ("%zz").
 	u, err := url.Parse(s.Spec.URL)

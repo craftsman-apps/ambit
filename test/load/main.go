@@ -10,9 +10,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -51,6 +53,23 @@ func answerLine(status int, body []byte) string {
 	}
 	b, _ := json.Marshal(map[string]any{"status": status, "model": a.Model, "content": content})
 	return string(b)
+}
+
+// dispatch calls send for every tick until the duration has passed or stop is closed; it returns the number sent.
+func dispatch(ticks <-chan time.Time, stop <-chan struct{}, start time.Time, dur time.Duration, send func(time.Time)) int {
+	n := 0
+	for {
+		select {
+		case <-stop:
+			return n
+		case now := <-ticks:
+			if now.Sub(start) > dur {
+				return n
+			}
+			send(now)
+			n++
+		}
+	}
 }
 
 func main() {
@@ -92,11 +111,14 @@ func main() {
 	start := time.Now()
 	tick := time.NewTicker(time.Duration(float64(time.Second) / *rate))
 	defer tick.Stop()
+	// SIGTERM or SIGINT ends sending early (a test script whose event is over); requests in flight finish and the
+	// results are written as after the full duration.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+	stop := make(chan struct{})
+	go func() { <-sig; close(stop) }()
 	i := 0
-	for now := range tick.C {
-		if now.Sub(start) > *dur {
-			break
-		}
+	dispatch(tick.C, stop, start, *dur, func(now time.Time) {
 		cohort := i % len(bodies)
 		body := bodyFor(i, bodies)
 		i++
@@ -144,7 +166,7 @@ func main() {
 				errs[cohort]++
 			}
 		}(now)
-	}
+	})
 	wg.Wait()
 	for c := range bodies {
 		p := percentiles(lat[c])

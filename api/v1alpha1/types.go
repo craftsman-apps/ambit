@@ -5,10 +5,10 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // ModelSpec is one entry in the model catalog: a model clients may request through the gateway.
 // +kubebuilder:validation:XValidation:rule="!has(self.formats) || (has(self.baseURL) && self.provider == 'OpenAI')",message="formats describe a self-hosted server: they need provider OpenAI and a baseURL"
 type ModelSpec struct {
-	// Provider serving the model. Values follow agentgateway's AgentgatewayModel providers. Azure, Bedrock and
-	// VertexAI are not offered: agentgateway needs provider settings and cloud credentials for them that a Model
-	// cannot express yet.
-	// +kubebuilder:validation:Enum=Anthropic;Gemini;OpenAI;Openrouter
+	// Provider serving the model. Values follow agentgateway's AgentgatewayModel providers that need only an API key.
+	// Azure, Bedrock and VertexAI are not offered yet: agentgateway needs provider settings and cloud credentials
+	// for them that a Model cannot express yet. Ollama and other self-hosted servers: provider OpenAI with a baseURL.
+	// +kubebuilder:validation:Enum=Anthropic;Baseten;Cerebras;Cohere;Deepinfra;Deepseek;Fireworks;Gemini;Groq;Huggingface;Meta;Mistral;OpenAI;Openrouter;TogetherAI;XAI
 	Provider string `json:"provider"`
 	// Model is the exact name clients send in the request, e.g. "google/gemma-4-31b-it:free".
 	// +kubebuilder:validation:MinLength=1

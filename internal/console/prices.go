@@ -55,6 +55,12 @@ var litellmProvider = map[string]struct {
 }{
 	"OpenAI": {"openai", []string{"openai"}}, "Anthropic": {"anthropic", []string{"anthropic"}},
 	"Gemini": {"gemini", []string{"gemini"}}, "Openrouter": {"openrouter", []string{"openrouter"}},
+	"Mistral": {"mistral", []string{"mistral"}}, "Cohere": {"cohere", []string{"cohere", "cohere_chat"}},
+	"XAI": {"xai", []string{"xai"}}, "Deepseek": {"deepseek", []string{"deepseek"}}, "Meta": {"meta", []string{"meta"}},
+	"Groq": {"groq", []string{"groq"}}, "Cerebras": {"cerebras", []string{"cerebras"}},
+	"TogetherAI": {"together_ai", []string{"together_ai"}}, "Fireworks": {"fireworks_ai", []string{"fireworks_ai"}},
+	"Deepinfra": {"deepinfra", []string{"deepinfra"}}, "Baseten": {"baseten", []string{"baseten"}},
+	// Huggingface: LiteLLM's list has no Hugging Face prices, so no suggestion.
 }
 
 // ParseLiteLLM reads LiteLLM's file (or the trimmed built-in copy). Every entry it keeps must have a

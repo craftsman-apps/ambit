@@ -26,8 +26,8 @@ func classifierSetup(t *testing.T, ns string) func() {
 	ctx := t.Context()
 	for _, o := range []client.Object{routerDeployment(ns),
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ambit-llm-local", Namespace: ns}, Data: map[string][]byte{"Authorization": []byte("sk-local")}},
-		&v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemma", Namespace: ns}, Spec: v1.ModelSpec{Provider: "Openrouter", Model: "google/gemma", CredentialsRef: v1.SecretRef{Name: "ambit-llm-k"}}},
-		&v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "local", Namespace: ns}, Spec: v1.ModelSpec{Provider: "OpenAI", Model: "qwen", BaseURL: "http://vllm:8000/v1", CredentialsRef: v1.SecretRef{Name: "ambit-llm-local"}}},
+		&v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemma", Namespace: ns}, Spec: v1.ModelSpec{Provider: "Openrouter", Model: "google/gemma", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-k"}}},
+		&v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "local", Namespace: ns}, Spec: v1.ModelSpec{Provider: "OpenAI", Model: "qwen", BaseURL: "http://vllm:8000/v1", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-local"}}},
 		&v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "all", Namespace: ns}, Spec: v1.AccessRuleSpec{AllSignedIn: true, Models: []string{"gemma", "auto", "auto2"}}},
 		&v1.ModelRouter{ObjectMeta: metav1.ObjectMeta{Name: "auto", Namespace: ns}, Spec: v1.ModelRouterSpec{Default: "gemma", Classifier: v1.RouterClassifier{Type: "Rules"}}},
 	} {

@@ -4,20 +4,28 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 // ModelSpec is one entry in the model catalog: a model clients may request through the gateway.
 // +kubebuilder:validation:XValidation:rule="!has(self.formats) || (has(self.baseURL) && self.provider == 'OpenAI')",message="formats describe a self-hosted server: they need provider OpenAI and a baseURL"
+// +kubebuilder:validation:XValidation:rule="has(self.azure) == (self.provider == 'Azure')",message="azure settings are required with provider Azure and only there"
+// +kubebuilder:validation:XValidation:rule="!has(self.bedrock) || self.provider == 'Bedrock'",message="bedrock settings are only for provider Bedrock"
+// +kubebuilder:validation:XValidation:rule="has(self.credentialsRef) || self.provider == 'Bedrock'",message="credentialsRef is required (only Bedrock may use the gateway's AWS identity)"
+// +kubebuilder:validation:XValidation:rule="!has(self.baseURL) || !(self.provider in ['Azure', 'Bedrock'])",message="baseURL is not used with Azure or Bedrock: their settings define the endpoint"
 type ModelSpec struct {
-	// Provider serving the model. Values follow agentgateway's AgentgatewayModel providers that need only an API key.
-	// Azure, Bedrock and VertexAI are not offered yet: agentgateway needs provider settings and cloud credentials
-	// for them that a Model cannot express yet. Ollama and other self-hosted servers: provider OpenAI with a baseURL.
-	// +kubebuilder:validation:Enum=Anthropic;Baseten;Cerebras;Cohere;Deepinfra;Deepseek;Fireworks;Gemini;Groq;Huggingface;Meta;Mistral;OpenAI;Openrouter;TogetherAI;XAI
+	// Provider serving the model. Values follow agentgateway's AgentgatewayModel providers. Azure and Bedrock also
+	// need their settings block (azure, bedrock). VertexAI is not offered yet: it needs Google Cloud credentials.
+	// Ollama and other self-hosted servers: provider OpenAI with a baseURL.
+	// +kubebuilder:validation:Enum=Anthropic;Azure;Baseten;Bedrock;Cerebras;Cohere;Deepinfra;Deepseek;Fireworks;Gemini;Groq;Huggingface;Meta;Mistral;OpenAI;Openrouter;TogetherAI;XAI
 	Provider string `json:"provider"`
-	// Model is the exact name clients send in the request, e.g. "google/gemma-4-31b-it:free".
+	// Model is the exact name clients send in the request, e.g. "google/gemma-4-31b-it:free". For Azure, the
+	// deployment name; for Bedrock, the model or inference-profile ID, e.g. "us.anthropic.claude-sonnet-4-5-20250929-v1:0".
 	// +kubebuilder:validation:MinLength=1
 	Model string `json:"model"`
-	// CredentialsRef names a Secret in this namespace with the provider key in its "Authorization" entry.
-	// The key itself never appears in this object, so the object is safe to keep in Git. Only Secrets
-	// named ambit-llm-* may be used, so a Model cannot send another Secret (e.g. console keys) to a provider.
+	// CredentialsRef names a Secret in this namespace with the provider's credentials: an "Authorization" entry
+	// with the API key, or for Bedrock "accessKey", "secretKey" and optional "sessionToken". The credentials never
+	// appear in this object, so the object is safe to keep in Git. Only Secrets named ambit-llm-* may be used, so
+	// a Model cannot send another Secret (e.g. console keys) to a provider. Required, except with Bedrock: without
+	// it, the gateway uses its own AWS identity (IRSA or EKS Pod Identity).
+	// +optional
 	// +kubebuilder:validation:XValidation:rule="self.name.startsWith('ambit-llm-')",message="credentialsRef must name a Secret called ambit-llm-<something>"
-	CredentialsRef SecretRef `json:"credentialsRef"`
+	CredentialsRef *SecretRef `json:"credentialsRef,omitempty"`
 	// DisplayName is shown in the console.
 	// +optional
 	DisplayName string `json:"displayName,omitempty"`
@@ -37,6 +45,12 @@ type ModelSpec struct {
 	// +kubebuilder:validation:MaxItems=8
 	// +listType=set
 	Formats []ModelFormat `json:"formats,omitempty"`
+	// Azure OpenAI or Azure AI Foundry resource. Required with provider Azure, refused otherwise.
+	// +optional
+	Azure *AzureSettings `json:"azure,omitempty"`
+	// Amazon Bedrock settings. Optional with provider Bedrock (the region defaults to us-east-1), refused otherwise.
+	// +optional
+	Bedrock *BedrockSettings `json:"bedrock,omitempty"`
 	// Price of this model, for cost in Usage. Without it, Usage shows tokens only for this model.
 	// +optional
 	Price *ModelPrice `json:"price,omitempty"`
@@ -51,6 +65,39 @@ type ModelPrice struct {
 	InputPerMillionTokens string `json:"inputPerMillionTokens"`
 	// +kubebuilder:validation:Pattern=`^[0-9]{1,6}(\.[0-9]{1,6})?$`
 	OutputPerMillionTokens string `json:"outputPerMillionTokens"`
+}
+
+// AzureSettings name the Azure resource; agentgateway builds the endpoint from them.
+// +kubebuilder:validation:XValidation:rule="has(self.projectName) == (self.resourceType == 'Foundry')",message="projectName is required for Foundry and only there"
+type AzureSettings struct {
+	// ResourceName is the resource's name: <name>.openai.azure.com (OpenAI) or <name>.services.ai.azure.com (Foundry).
+	// +kubebuilder:validation:MinLength=2
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])$`
+	ResourceName string `json:"resourceName"`
+	// +kubebuilder:validation:Enum=OpenAI;Foundry
+	ResourceType string `json:"resourceType"`
+	// APIVersion, e.g. v1 or 2025-04-01-preview. Default (agentgateway): v1.
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9.-]+$`
+	APIVersion string `json:"apiVersion,omitempty"`
+	// ProjectName of the Foundry project (resourceType Foundry only).
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	ProjectName string `json:"projectName,omitempty"`
+}
+
+// BedrockSettings for Amazon Bedrock.
+type BedrockSettings struct {
+	// Region, e.g. eu-west-1. Default (agentgateway): us-east-1.
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9-]+$`
+	Region string `json:"region,omitempty"`
 }
 
 type SecretRef struct {

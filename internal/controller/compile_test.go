@@ -14,7 +14,7 @@ func model(name, id string) v1.Model {
 	return v1.Model{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ambit-system", UID: types.UID("uid-" + name),
 		Annotations: map[string]string{"argocd.argoproj.io/tracking-id": "ambit-config:ambitproject.dev/Model:ambit-system/" + name},
 		Labels:      map[string]string{"app.kubernetes.io/instance": "ambit-config"}},
-		Spec: v1.ModelSpec{Provider: "Openrouter", Model: id, CredentialsRef: v1.SecretRef{Name: "ambit-llm-openrouter"}}}
+		Spec: v1.ModelSpec{Provider: "Openrouter", Model: id, CredentialsRef: &v1.SecretRef{Name: "ambit-llm-openrouter"}}}
 }
 
 func rule(name string, groups []string, all bool, models ...string) v1.AccessRule {

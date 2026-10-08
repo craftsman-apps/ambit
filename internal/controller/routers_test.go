@@ -249,7 +249,7 @@ func TestRouterWarningsAreAllShown(t *testing.T) {
 }
 
 var local = v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "local", Namespace: "ambit-system"},
-	Spec: v1.ModelSpec{Provider: "OpenAI", Model: "qwen3-0.6b", BaseURL: "http://vllm:8000/v1", CredentialsRef: v1.SecretRef{Name: "ambit-llm-local"}}}
+	Spec: v1.ModelSpec{Provider: "OpenAI", Model: "qwen3-0.6b", BaseURL: "http://vllm:8000/v1", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-local"}}}
 var installed = ClassifierInput{Installed: true, HasKey: map[string]bool{"local": true}}
 
 func llmRouter(name string, cats ...string) v1.ModelRouter {

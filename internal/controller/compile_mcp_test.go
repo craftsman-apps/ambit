@@ -18,7 +18,8 @@ func server(name, transport string) v1.Server {
 		Annotations: map[string]string{"argocd.argoproj.io/tracking-id": "ambit-config:ambitproject.dev/Server:ambit-system/" + name}},
 		Spec: v1.ServerSpec{Image: timeImage, Transport: transport},
 		// Running in ToolHive: only running image servers are targets of the shared backend.
-		Status: v1.ServerStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Running"}}}}
+		Status: v1.ServerStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Running"},
+			{Type: "Serving", Status: metav1.ConditionTrue, Reason: "Answered"}}}}
 }
 
 func toolRule(name string, groups []string, all bool, servers ...v1.ServerAccess) v1.AccessRule {
@@ -330,5 +331,15 @@ func TestNoRunningServerGeneratesNoSharedBackend(t *testing.T) {
 		if o.GetKind() == "AgentgatewayBackend" {
 			t.Fatalf("generated %s %s with no running server", o.GetKind(), o.GetName())
 		}
+	}
+}
+
+// A down or unreachable server fails within 1 s instead of ~10 s when a session opens (agentgateway contacts every
+// target first). Only connection setup is limited: long tool calls and streams are not.
+func TestAccessPolicyLimitsConnectTime(t *testing.T) {
+	r := Compile(nil, []v1.Server{server("time", "stdio")}, nil, route)
+	p := find(t, r.Objects, "AgentgatewayPolicy", MCPBackendName+"-access")
+	if got, _, _ := unstructured.NestedString(p.Object, "spec", "backend", "tcp", "connectTimeout"); got != "1s" {
+		t.Fatalf("connectTimeout %q", got)
 	}
 }

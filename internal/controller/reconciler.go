@@ -146,7 +146,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	if err := r.Live.List(ctx, &conns, client.InNamespace(r.Namespace)); err != nil {
 		return reconcile.Result{}, err
 	}
-	if err := r.markRunning(ctx, servers.Items); err != nil {
+	saved := servers.DeepCopy() // the stored statuses: markRunning changes servers in memory before compiling
+	admitting, err := r.markRunning(ctx, servers.Items)
+	if err != nil {
 		return reconcile.Result{}, err
 	}
 	boundServers, refusedServers := BindServers(servers.Items, conns.Items)
@@ -380,9 +382,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		} else {
 			meta.RemoveStatusCondition(&next.Status.Conditions, "ToolsRead")
 		}
-		if err := r.updateStatus(ctx, s.Status, next.Status, next); err != nil {
+		if err := r.updateStatus(ctx, saved.Items[i].Status, next.Status, next); err != nil {
 			return reconcile.Result{}, err
 		}
+	}
+	if admitting && (result.RequeueAfter == 0 || result.RequeueAfter > admissionRetry) {
+		result.RequeueAfter = admissionRetry // a running server that does not answer yet: try it again soon
 	}
 	first := map[string]string{} // group -> the Budget that governs it (first by name)
 	sort.Slice(budgets.Items, func(i, j int) bool { return budgets.Items[i].Name < budgets.Items[j].Name })
@@ -552,31 +557,70 @@ func cond(s metav1.ConditionStatus, reason, msg string) metav1.Condition {
 	return metav1.Condition{Type: "Ready", Status: s, Reason: reason, Message: msg}
 }
 
+// How soon a running server that does not answer its first MCP introduction is tried again.
+const admissionRetry = 3 * time.Second
+
 // markRunning sets each image Server's Ready condition, in memory, from ToolHive's live verdict on its MCPServer,
-// before compiling: only running image servers join the shared backend (compileServers). The stored status may be
-// a pass behind, and the pass that a Ready MCPServer triggers must already add the target.
-func (r *Reconciler) markRunning(ctx context.Context, servers []v1.Server) error {
+// before compiling. A running server that has not answered yet is asked once (its tools, through the same proxy
+// Service the gateway uses); when it answers, Serving becomes true and stays true. Only Serving image servers join
+// the shared backend (compileServers): agentgateway introduces every new session to every target, so a booting
+// server would make every user wait, and any later change to the target list breaks resuming open sessions on the
+// other gateway replica, so a restart does not remove it. It reports whether a server is still being admitted.
+func (r *Reconciler) markRunning(ctx context.Context, servers []v1.Server) (bool, error) {
 	var list unstructured.UnstructuredList
 	list.SetGroupVersionKind(MCPServerGVK.GroupVersion().WithKind(MCPServerGVK.Kind + "List"))
 	if err := r.Live.List(ctx, &list, client.InNamespace(r.Namespace)); err != nil && !meta.IsNoMatchError(err) {
-		return err
+		return false, err
 	}
+	admitting := false
 	verdict := map[string]metav1.Condition{}
+	owner := map[string]types.UID{}
 	for i := range list.Items {
-		verdict[list.Items[i].GetName()] = mcpServerCondition(&list.Items[i])
+		o := &list.Items[i]
+		if o.GetDeletionTimestamp() != nil { // a deleted Server's object, still being removed: its pod is not ours
+			continue
+		}
+		verdict[o.GetName()] = mcpServerCondition(o)
+		for _, ref := range o.GetOwnerReferences() {
+			if ref.Kind == "Server" {
+				owner[o.GetName()] = ref.UID
+			}
+		}
 	}
 	for i := range servers {
 		if servers[i].Spec.URL != "" {
 			continue
 		}
 		c, ok := verdict[servers[i].Name]
+		if ok && owner[servers[i].Name] != servers[i].UID { // left by an earlier Server of the same name
+			ok = false
+		}
 		if !ok {
 			c = cond(metav1.ConditionUnknown, "Pending", "waiting for ToolHive to start the server")
 		}
 		c.ObservedGeneration = servers[i].Generation // as setReady writes it: no status write on an idle pass
 		meta.SetStatusCondition(&servers[i].Status.Conditions, c)
+		if c.Status != metav1.ConditionTrue || meta.IsStatusConditionTrue(servers[i].Status.Conditions, "Serving") {
+			continue
+		}
+		if r.ListTools != nil {
+			pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			tools, err := r.ListTools(pctx, servers[i])
+			cancel()
+			if err != nil {
+				admitting = true
+				continue
+			}
+			servers[i].Status.Tools = tools
+			if r.toolsRead == nil {
+				r.toolsRead = map[types.UID]time.Time{}
+			}
+			r.toolsRead[servers[i].UID] = time.Now()
+		}
+		meta.SetStatusCondition(&servers[i].Status.Conditions, metav1.Condition{Type: "Serving", Status: metav1.ConditionTrue,
+			Reason: "Answered", Message: "answered its first MCP introduction; listed for every session from now on", ObservedGeneration: servers[i].Generation})
 	}
-	return nil
+	return admitting, nil
 }
 
 // mcpServerCondition mirrors ToolHive's verdict on the generated MCPServer into the Server.

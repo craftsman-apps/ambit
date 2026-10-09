@@ -481,7 +481,9 @@ func TestImageServerJoinsBackendOnceItAnswers(t *testing.T) {
 		t.Fatal(err)
 	}
 	answers := false
+	now := time.Now()
 	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
+		Now: func() time.Time { return now },
 		ListTools: func(context.Context, v1.Server) ([]v1.Tool, error) {
 			if !answers {
 				return nil, errors.New("connection refused")
@@ -527,6 +529,7 @@ func TestImageServerJoinsBackendOnceItAnswers(t *testing.T) {
 		t.Fatalf("listed before it answers: %q", got)
 	}
 	answers = true
+	now = now.Add(admissionRetry) // asked again after the retry wait
 	rec()
 	if got := listed(); got != "time" {
 		t.Fatalf("not listed once it answers: %q", got)
@@ -574,5 +577,91 @@ func TestRunningServerStatusIsSaved(t *testing.T) {
 	_ = envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "time"}, &s)
 	if c := meta.FindStatusCondition(s.Status.Conditions, "Ready"); c == nil || c.Reason != "Running" {
 		t.Fatalf("saved Ready condition %+v, want reason Running", c)
+	}
+}
+
+// Admission asks a server at most once per pass and backs off while it does not answer: a broken server must not
+// hold up the controller (access changes) or be asked every 3 s forever.
+func TestAdmissionBacksOff(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-backoff"
+	namespace(t, ns)
+	ctx := t.Context()
+	if err := envClient.Create(ctx, &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "time", Namespace: ns},
+		Spec: v1.ServerSpec{Image: timeImage, Transport: "stdio"}}); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	now := time.Now()
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
+		Now: func() time.Time { return now },
+		ListTools: func(context.Context, v1.Server) ([]v1.Tool, error) {
+			calls++
+			return nil, errors.New("connection refused")
+		}}
+	rec := func() reconcile.Result {
+		t.Helper()
+		res, err := r.Reconcile(ctx, reconcile.Request{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	rec()
+	setMCPServerReady(t, ns, "time", true)
+	first := rec()
+	if calls != 1 {
+		t.Fatalf("asked %d times in one pass, want 1", calls)
+	}
+	rec() // too early: not asked again
+	if calls != 1 {
+		t.Fatalf("asked again before the retry time: %d", calls)
+	}
+	now = now.Add(first.RequeueAfter)
+	second := rec()
+	if calls != 2 || second.RequeueAfter <= first.RequeueAfter {
+		t.Fatalf("calls %d, requeue %v then %v: want a growing wait", calls, first.RequeueAfter, second.RequeueAfter)
+	}
+	for i := 0; i < 10; i++ {
+		now = now.Add(time.Hour)
+		if res := rec(); res.RequeueAfter > time.Minute {
+			t.Fatalf("wait %v grew beyond a minute", res.RequeueAfter)
+		}
+	}
+}
+
+// A server whose tools cannot be read (a down vendor) is not asked again on every pass: each try waited up to 15 s,
+// so every pass was slow and every change, including access revocations, reached the gateway late.
+func TestFailedToolReadIsNotRetriedEveryPass(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-toolread"
+	namespace(t, ns)
+	ctx := t.Context()
+	if err := envClient.Create(ctx, &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "vendor", Namespace: ns},
+		Spec: v1.ServerSpec{URL: "https://mcp.example.com/mcp", Transport: "streamable-http"}}); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	now := time.Now()
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
+		Now: func() time.Time { return now },
+		ListTools: func(context.Context, v1.Server) ([]v1.Tool, error) {
+			calls++
+			return nil, errors.New("i/o timeout")
+		}}
+	for i := 0; i < 3; i++ {
+		if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("a failing server was asked %d times in 3 passes, want 1", calls)
+	}
+	now = now.Add(toolsRetry)
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("not asked again after %v: %d", toolsRetry, calls)
 	}
 }

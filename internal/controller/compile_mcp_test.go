@@ -334,12 +334,12 @@ func TestNoRunningServerGeneratesNoSharedBackend(t *testing.T) {
 	}
 }
 
-// A down or unreachable server fails within 1 s instead of ~10 s when a session opens (agentgateway contacts every
+// A down or unreachable server fails within 2 s instead of ~10 s when a session opens (agentgateway contacts every
 // target first). Only connection setup is limited: long tool calls and streams are not.
 func TestAccessPolicyLimitsConnectTime(t *testing.T) {
 	r := Compile(nil, []v1.Server{server("time", "stdio")}, nil, route)
 	p := find(t, r.Objects, "AgentgatewayPolicy", MCPBackendName+"-access")
-	if got, _, _ := unstructured.NestedString(p.Object, "spec", "backend", "tcp", "connectTimeout"); got != "1s" {
+	if got, _, _ := unstructured.NestedString(p.Object, "spec", "backend", "tcp", "connectTimeout"); got != "2s" {
 		t.Fatalf("connectTimeout %q", got)
 	}
 }

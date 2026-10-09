@@ -131,8 +131,9 @@ YAML
 then fail "11 a Server with a tag instead of a digest was accepted"; fi
 # While a Server is deleted and created again, the other servers' users must keep working (risk 16: a Service
 # backendRef made agentgateway drop the whole shared backend, HTTP 500 for every user). alice may use only time.
-# A server joins the list only once it answers, so a booting one must not slow them either (it took ~10 s:
-# agentgateway introduces every new session to every target).
+# A server joins the list only once it answers, so a booting one must not slow them either (it took ~10 s per
+# request: agentgateway introduces every new session to every target). A deleted server's pod may still hold its
+# connections for a moment (up to the 2 s connect timeout, twice per probe), hence 8 s, not less.
 AL=$(token alice); : > "$W/probes"
 ( set +e  # one timed-out curl must not end the probe loop (set -e is inherited)
   while :; do
@@ -153,7 +154,7 @@ kubectl -n "$NS" wait "servers.$G" --all --for=condition=Ready --timeout=300s >/
 sleep 10; kill "$probes" 2>/dev/null || true; wait "$probes" 2>/dev/null || true
 n=$(wc -l <"$W/probes" | tr -d ' '); bad=$(grep -c ' fail ' "$W/probes" || true)
 slowest=$(awk '$3>m{m=$3} END{print m+0}' "$W/probes")
-[[ "$slowest" -le 5000 ]] || fail "11 another Server's create or delete slowed alice's new sessions: slowest $slowest ms"
+[[ "$slowest" -le 8000 ]] || fail "11 another Server's create or delete slowed alice's new sessions: slowest $slowest ms"
 [[ "$n" -ge 20 && "$bad" -eq 0 ]] || fail "11 alice's sessions failed while another Server was deleted and created: $bad of $n (codes: $(grep ' fail ' "$W/probes" | cut -d' ' -f1 | sort | uniq -c | tr -s ' \n' ' '))"
 pass "11 tag-only image rejected: $(tr -d '\n' <"$W/err" | sed 's/.*spec.image//' | cut -c1-90); deleted Server's tools gone, restored; other users unaffected ($n sessions, 0 failed, slowest $slowest ms)"
 

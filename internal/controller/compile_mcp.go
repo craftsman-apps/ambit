@@ -86,8 +86,9 @@ func compileServers(servers []v1.Server, rules []v1.AccessRule) []*unstructured.
 				"policy": map[string]any{"matchExpressions": []any{expr}},
 			}},
 			// A session opens only after every target has answered: a down one must fail fast, not after ~10 s.
-			// Only connection setup is limited; long tool calls and streams are not.
-			"tcp": map[string]any{"connectTimeout": "1s"},
+			// Only connection setup (including TLS) is limited; long tool calls and streams are not. 2 s leaves
+			// room for a TLS handshake to a remote server in another region.
+			"tcp": map[string]any{"connectTimeout": "2s"},
 		},
 	})
 	// agentgateway refuses an MCP backend without targets: none while no server runs (the reconciler deletes a

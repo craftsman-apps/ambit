@@ -7,6 +7,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
@@ -57,7 +58,10 @@ type Reconciler struct {
 	// RateLimit is where Budgets are enforced; an empty Service turns budgets off.
 	RateLimit RateLimit
 
-	toolsRead map[types.UID]time.Time // when each Server's tools were last read (single worker, no lock)
+	toolsRead   map[types.UID]time.Time // when each Server's tools were last read (single worker, no lock)
+	toolsFailed map[types.UID]time.Time // when a Server's tools last failed to be read
+	admitAt     map[types.UID]time.Time // when to ask a server that has not answered its MCP introduction again
+	admitWait   map[types.UID]time.Duration
 	// ArgumentLimits is true when ambit-guard runs (protection on) and enforces argument limits.
 	ArgumentLimits bool
 	// Classifier is ambit-router, which labels prompts for routers of type LLM.
@@ -68,6 +72,9 @@ type Reconciler struct {
 
 // How often the tools of a running server are read again by default: servers may add or change tools.
 const toolsRefresh = 10 * time.Minute
+
+// How long a server whose tools could not be read waits before it is asked again.
+const toolsRetry = time.Minute
 
 func (r *Reconciler) refresh() time.Duration {
 	if r.ToolsRefresh > 0 {
@@ -147,7 +154,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		return reconcile.Result{}, err
 	}
 	saved := servers.DeepCopy() // the stored statuses: markRunning changes servers in memory before compiling
-	admitting, err := r.markRunning(ctx, servers.Items)
+	admitRetry, err := r.markRunning(ctx, servers.Items)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -366,7 +373,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			c = cond(metav1.ConditionFalse, "ConnectionBound", msg)
 		}
 		setReady(&next.Status.Conditions, c, s.Generation)
-		if c.Status == metav1.ConditionTrue && r.ListTools != nil {
+		admitted := s.Spec.URL != "" || meta.IsStatusConditionTrue(s.Status.Conditions, "Serving")
+		if c.Status == metav1.ConditionTrue && r.ListTools != nil && admitted { // admission reads the others' tools
 			var tc *metav1.Condition
 			next.Status.Tools, tc = r.readTools(ctx, *s)
 			if tc != nil {
@@ -386,8 +394,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			return reconcile.Result{}, err
 		}
 	}
-	if admitting && (result.RequeueAfter == 0 || result.RequeueAfter > admissionRetry) {
-		result.RequeueAfter = admissionRetry // a running server that does not answer yet: try it again soon
+	if admitRetry > 0 && (result.RequeueAfter == 0 || result.RequeueAfter > admitRetry) {
+		result.RequeueAfter = admitRetry // a running server that does not answer yet: try it again soon
 	}
 	first := map[string]string{} // group -> the Budget that governs it (first by name)
 	sort.Slice(budgets.Items, func(i, j int) bool { return budgets.Items[i].Name < budgets.Items[j].Name })
@@ -477,7 +485,21 @@ func (r *Reconciler) readTools(ctx context.Context, s v1.Server) ([]v1.Tool, *me
 	if t, ok := r.toolsRead[s.UID]; ok && time.Since(t) < r.refresh() && len(s.Status.Tools) > 0 {
 		return s.Status.Tools, meta.FindStatusCondition(s.Status.Conditions, "ToolsRead").DeepCopy()
 	}
+	// A server read directly that could not be read is asked again only after toolsRetry: each try can wait up to
+	// the read timeout, and a down vendor must not make every pass (and every access change) slow. Per-user
+	// servers are read through the console, which answers at once.
+	if t, ok := r.toolsFailed[s.UID]; ok && s.Spec.Connection == "" && r.now().Before(t.Add(toolsRetry)) {
+		return s.Status.Tools, meta.FindStatusCondition(s.Status.Conditions, "ToolsRead").DeepCopy()
+	}
 	tools, err := r.ListTools(ctx, s)
+	if r.toolsFailed == nil {
+		r.toolsFailed = map[types.UID]time.Time{}
+	}
+	if err != nil {
+		r.toolsFailed[s.UID] = r.now()
+	} else {
+		delete(r.toolsFailed, s.UID)
+	}
 	if errors.Is(err, errToolsNotRead) {
 		return s.Status.Tools, nil
 	}
@@ -557,22 +579,27 @@ func cond(s metav1.ConditionStatus, reason, msg string) metav1.Condition {
 	return metav1.Condition{Type: "Ready", Status: s, Reason: reason, Message: msg}
 }
 
-// How soon a running server that does not answer its first MCP introduction is tried again.
-const admissionRetry = 3 * time.Second
+// A running server that does not answer its first MCP introduction is asked again after admissionRetry, doubling
+// up to admissionRetryMax, so a broken server is neither asked every few seconds forever nor forgotten.
+const (
+	admissionRetry    = 3 * time.Second
+	admissionRetryMax = time.Minute
+	admissionTimeout  = 3 * time.Second
+)
 
 // markRunning sets each image Server's Ready condition, in memory, from ToolHive's live verdict on its MCPServer,
 // before compiling. A running server that has not answered yet is asked once (its tools, through the same proxy
 // Service the gateway uses); when it answers, Serving becomes true and stays true. Only Serving image servers join
 // the shared backend (compileServers): agentgateway introduces every new session to every target, so a booting
 // server would make every user wait, and any later change to the target list breaks resuming open sessions on the
-// other gateway replica, so a restart does not remove it. It reports whether a server is still being admitted.
-func (r *Reconciler) markRunning(ctx context.Context, servers []v1.Server) (bool, error) {
+// other gateway replica, so a restart does not remove it. Servers are asked in parallel, each for at most admissionTimeout, so a broken one cannot hold up the
+// pass. It returns when to try the servers that have not answered yet (0: none).
+func (r *Reconciler) markRunning(ctx context.Context, servers []v1.Server) (time.Duration, error) {
 	var list unstructured.UnstructuredList
 	list.SetGroupVersionKind(MCPServerGVK.GroupVersion().WithKind(MCPServerGVK.Kind + "List"))
 	if err := r.Live.List(ctx, &list, client.InNamespace(r.Namespace)); err != nil && !meta.IsNoMatchError(err) {
-		return false, err
+		return 0, err
 	}
-	admitting := false
 	verdict := map[string]metav1.Condition{}
 	owner := map[string]types.UID{}
 	for i := range list.Items {
@@ -587,40 +614,81 @@ func (r *Reconciler) markRunning(ctx context.Context, servers []v1.Server) (bool
 			}
 		}
 	}
+	now := r.now()
+	var ask []int
+	var retry time.Duration
 	for i := range servers {
-		if servers[i].Spec.URL != "" {
+		s := &servers[i]
+		if s.Spec.URL != "" {
 			continue
 		}
-		c, ok := verdict[servers[i].Name]
-		if ok && owner[servers[i].Name] != servers[i].UID { // left by an earlier Server of the same name
+		c, ok := verdict[s.Name]
+		if ok && owner[s.Name] != s.UID { // left by an earlier Server of the same name
 			ok = false
 		}
 		if !ok {
 			c = cond(metav1.ConditionUnknown, "Pending", "waiting for ToolHive to start the server")
 		}
-		c.ObservedGeneration = servers[i].Generation // as setReady writes it: no status write on an idle pass
-		meta.SetStatusCondition(&servers[i].Status.Conditions, c)
-		if c.Status != metav1.ConditionTrue || meta.IsStatusConditionTrue(servers[i].Status.Conditions, "Serving") {
+		c.ObservedGeneration = s.Generation // as setReady writes it: no status write on an idle pass
+		meta.SetStatusCondition(&s.Status.Conditions, c)
+		switch {
+		case meta.IsStatusConditionTrue(s.Status.Conditions, "Serving"):
+		case c.Status != metav1.ConditionTrue:
+		case r.ListTools == nil:
+			setServing(s, "Running", "running in ToolHive")
+		case now.Before(r.admitAt[s.UID]):
+			if w := r.admitAt[s.UID].Sub(now); retry == 0 || w < retry {
+				retry = w
+			}
+		default:
+			ask = append(ask, i)
+		}
+	}
+	type answer struct {
+		tools []v1.Tool
+		err   error
+	}
+	answers := make([]answer, len(ask))
+	var wg sync.WaitGroup
+	for k, i := range ask {
+		wg.Add(1)
+		go func(k int, s v1.Server) {
+			defer wg.Done()
+			actx, cancel := context.WithTimeout(ctx, admissionTimeout)
+			defer cancel()
+			answers[k].tools, answers[k].err = r.ListTools(actx, s)
+		}(k, servers[i])
+	}
+	wg.Wait()
+	if r.admitAt == nil {
+		r.admitAt, r.admitWait = map[types.UID]time.Time{}, map[types.UID]time.Duration{}
+	}
+	for k, i := range ask {
+		s := &servers[i]
+		if err := answers[k].err; err != nil {
+			w := min(max(2*r.admitWait[s.UID], admissionRetry), admissionRetryMax)
+			r.admitWait[s.UID], r.admitAt[s.UID] = w, now.Add(w)
+			if retry == 0 || w < retry {
+				retry = w
+			}
+			log.FromContext(ctx).Info("server does not answer its MCP introduction yet", "server", s.Name, "retryIn", w.String(), "err", err.Error())
 			continue
 		}
-		if r.ListTools != nil {
-			pctx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			tools, err := r.ListTools(pctx, servers[i])
-			cancel()
-			if err != nil {
-				admitting = true
-				continue
-			}
-			servers[i].Status.Tools = tools
-			if r.toolsRead == nil {
-				r.toolsRead = map[types.UID]time.Time{}
-			}
-			r.toolsRead[servers[i].UID] = time.Now()
+		delete(r.admitAt, s.UID)
+		delete(r.admitWait, s.UID)
+		s.Status.Tools = answers[k].tools
+		if r.toolsRead == nil {
+			r.toolsRead = map[types.UID]time.Time{}
 		}
-		meta.SetStatusCondition(&servers[i].Status.Conditions, metav1.Condition{Type: "Serving", Status: metav1.ConditionTrue,
-			Reason: "Answered", Message: "answered its first MCP introduction; listed for every session from now on", ObservedGeneration: servers[i].Generation})
+		r.toolsRead[s.UID] = time.Now()
+		setServing(s, "Answered", "answered its first MCP introduction")
 	}
-	return admitting, nil
+	return retry, nil
+}
+
+func setServing(s *v1.Server, reason, msg string) {
+	meta.SetStatusCondition(&s.Status.Conditions, metav1.Condition{Type: "Serving", Status: metav1.ConditionTrue,
+		Reason: reason, Message: msg + "; listed for every session from now on", ObservedGeneration: s.Generation})
 }
 
 // mcpServerCondition mirrors ToolHive's verdict on the generated MCPServer into the Server.

@@ -362,8 +362,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			return reconcile.Result{}, err
 		}
 	}
+	seen := map[types.UID]bool{}
 	for i := range servers.Items {
 		s := &servers.Items[i]
+		seen[s.UID] = true
 		next := s.DeepCopy()
 		c, ok := conds["Server/"+s.Name]
 		if !ok && s.Spec.URL != "" { // remote: no ToolHive object to report on
@@ -392,6 +394,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		}
 		if err := r.updateStatus(ctx, saved.Items[i].Status, next.Status, next); err != nil {
 			return reconcile.Result{}, err
+		}
+	}
+	for uid, t := range r.toolsFailed { // a failed tool read is tried again after toolsRetry, not at the next refresh
+		if w := t.Add(toolsRetry).Sub(r.now()); w > 0 && (admitRetry == 0 || w < admitRetry) && seen[uid] {
+			admitRetry = w
 		}
 	}
 	if admitRetry > 0 && (result.RequeueAfter == 0 || result.RequeueAfter > admitRetry) {
@@ -482,23 +489,28 @@ func (r *Reconciler) readTools(ctx context.Context, s v1.Server) ([]v1.Tool, *me
 	if r.toolsRead == nil {
 		r.toolsRead = map[types.UID]time.Time{}
 	}
-	if t, ok := r.toolsRead[s.UID]; ok && time.Since(t) < r.refresh() && len(s.Status.Tools) > 0 {
-		return s.Status.Tools, meta.FindStatusCondition(s.Status.Conditions, "ToolsRead").DeepCopy()
+	last := func() *metav1.Condition {
+		if s.Spec.Connection == "" {
+			return nil // the condition applies to per-user servers only
+		}
+		return meta.FindStatusCondition(s.Status.Conditions, "ToolsRead").DeepCopy()
 	}
-	// A server read directly that could not be read is asked again only after toolsRetry: each try can wait up to
-	// the read timeout, and a down vendor must not make every pass (and every access change) slow. Per-user
-	// servers are read through the console, which answers at once.
-	if t, ok := r.toolsFailed[s.UID]; ok && s.Spec.Connection == "" && r.now().Before(t.Add(toolsRetry)) {
-		return s.Status.Tools, meta.FindStatusCondition(s.Status.Conditions, "ToolsRead").DeepCopy()
+	if t, ok := r.toolsRead[s.UID]; ok && r.now().Sub(t) < r.refresh() {
+		return s.Status.Tools, last()
+	}
+	// A server that could not be read is asked again only after toolsRetry: each try can wait up to the read
+	// timeout (directly, or through the console, which asks the vendor), and a down vendor must not make every
+	// pass, and every access change, slow.
+	if t, ok := r.toolsFailed[s.UID]; ok && r.now().Before(t.Add(toolsRetry)) {
+		return s.Status.Tools, last()
 	}
 	tools, err := r.ListTools(ctx, s)
 	if r.toolsFailed == nil {
 		r.toolsFailed = map[types.UID]time.Time{}
 	}
-	if err != nil {
+	delete(r.toolsFailed, s.UID)
+	if err != nil && !errors.Is(err, ErrNoReader) && !errors.Is(err, errToolsNotRead) { // those two are settings
 		r.toolsFailed[s.UID] = r.now()
-	} else {
-		delete(r.toolsFailed, s.UID)
 	}
 	if errors.Is(err, errToolsNotRead) {
 		return s.Status.Tools, nil
@@ -517,7 +529,7 @@ func (r *Reconciler) readTools(ctx context.Context, s v1.Server) ([]v1.Tool, *me
 		c.Type = "ToolsRead"
 		return s.Status.Tools, &c
 	}
-	r.toolsRead[s.UID] = time.Now()
+	r.toolsRead[s.UID] = r.now()
 	if s.Spec.Connection == "" {
 		return tools, nil
 	}
@@ -660,6 +672,7 @@ func (r *Reconciler) markRunning(ctx context.Context, servers []v1.Server) (time
 		}(k, servers[i])
 	}
 	wg.Wait()
+	now = r.now() // waits count from the answer, not from before asking
 	if r.admitAt == nil {
 		r.admitAt, r.admitWait = map[types.UID]time.Time{}, map[types.UID]time.Duration{}
 	}
@@ -680,7 +693,7 @@ func (r *Reconciler) markRunning(ctx context.Context, servers []v1.Server) (time
 		if r.toolsRead == nil {
 			r.toolsRead = map[types.UID]time.Time{}
 		}
-		r.toolsRead[s.UID] = time.Now()
+		r.toolsRead[s.UID] = r.now()
 		setServing(s, "Answered", "answered its first MCP introduction")
 	}
 	return retry, nil

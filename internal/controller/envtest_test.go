@@ -665,3 +665,70 @@ func TestFailedToolReadIsNotRetriedEveryPass(t *testing.T) {
 		t.Fatalf("not asked again after %v: %d", toolsRetry, calls)
 	}
 }
+
+// A per-user server's tools come through the console, which asks the vendor and waits: a failure there waits
+// toolsRetry too (a down vendor made every pass slow). "No reader chosen" is a setting, so it is asked every pass.
+func TestFailedConsoleToolReadWaits(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-console-wait"
+	namespace(t, ns)
+	ctx := t.Context()
+	if err := envClient.Create(ctx, perUserEnv(ns)); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	var next error = errors.New("console tools: status 502")
+	now := time.Now()
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
+		Now: func() time.Time { return now },
+		ListTools: func(context.Context, v1.Server) ([]v1.Tool, error) {
+			calls++
+			return nil, next
+		}}
+	res := reconcile.Result{}
+	for i := 0; i < 3; i++ {
+		var err error
+		if res, err = r.Reconcile(ctx, reconcile.Request{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("a failing console read was tried %d times in 3 passes, want 1", calls)
+	}
+	if res.RequeueAfter <= 0 || res.RequeueAfter > toolsRetry {
+		t.Fatalf("the retry is not scheduled: requeue %v, want <= %v", res.RequeueAfter, toolsRetry)
+	}
+	next = ErrNoReader
+	now = now.Add(toolsRetry)
+	for i := 0; i < 2; i++ {
+		if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 3 {
+		t.Fatalf("with no reader chosen, want a try every pass: %d calls", calls)
+	}
+}
+
+// A server that answers with no tools is read once per refresh, like any other (it was read on every pass).
+func TestEmptyToolListIsCached(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-empty-tools"
+	namespace(t, ns)
+	ctx := t.Context()
+	if err := envClient.Create(ctx, &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "vendor", Namespace: ns},
+		Spec: v1.ServerSpec{URL: "https://mcp.example.com/mcp", Transport: "streamable-http"}}); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
+		ListTools: func(context.Context, v1.Server) ([]v1.Tool, error) { calls++; return nil, nil }}
+	for i := 0; i < 3; i++ {
+		if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("an empty tool list was read %d times in 3 passes, want 1", calls)
+	}
+}

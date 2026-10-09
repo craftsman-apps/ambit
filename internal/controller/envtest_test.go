@@ -528,6 +528,10 @@ func TestImageServerJoinsBackendOnceItAnswers(t *testing.T) {
 	if got := listed(); got != "" {
 		t.Fatalf("listed before it answers: %q", got)
 	}
+	// Ready means its tools are available: a running server that has not answered yet is still starting.
+	if c := meta.FindStatusCondition(server().Status.Conditions, "Ready"); c == nil || c.Status == metav1.ConditionTrue || c.Reason != "Starting" {
+		t.Fatalf("Ready before it answers: %+v", c)
+	}
 	answers = true
 	now = now.Add(admissionRetry) // asked again after the retry wait
 	rec()
@@ -536,6 +540,9 @@ func TestImageServerJoinsBackendOnceItAnswers(t *testing.T) {
 	}
 	if c := meta.FindStatusCondition(server().Status.Conditions, "Serving"); c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatalf("Serving condition not saved: %+v", c)
+	}
+	if c := meta.FindStatusCondition(server().Status.Conditions, "Ready"); c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("not Ready once it answers: %+v", c)
 	}
 	setMCPServerReady(t, ns, "time", false) // ToolHive restarts it
 	answers = false

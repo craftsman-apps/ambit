@@ -374,6 +374,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		if msg, ok := refusedServers[s.Name]; ok {
 			c = cond(metav1.ConditionFalse, "ConnectionBound", msg)
 		}
+		// Ready means its tools are available: an image server ToolHive runs is listed only once it has answered.
+		if s.Spec.URL == "" && c.Status == metav1.ConditionTrue && !meta.IsStatusConditionTrue(s.Status.Conditions, "Serving") {
+			c = cond(metav1.ConditionUnknown, "Starting", "running in ToolHive; its tools appear once its MCP server answers")
+		}
 		setReady(&next.Status.Conditions, c, s.Generation)
 		admitted := s.Spec.URL != "" || meta.IsStatusConditionTrue(s.Status.Conditions, "Serving")
 		if c.Status == metav1.ConditionTrue && r.ListTools != nil && admitted { // admission reads the others' tools

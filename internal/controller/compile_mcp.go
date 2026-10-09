@@ -54,9 +54,9 @@ func compileServers(servers []v1.Server, rules []v1.AccessRule) []*unstructured.
 		if s.Spec.URL == "" {
 			out = append(out, mcpServer(s))
 		}
-		// agentgateway opens each session by contacting every target: an image server that is still starting
-		// (or stopping) would slow every user's new session, so it joins only once ToolHive runs it.
-		if s.Spec.URL != "" || meta.IsStatusConditionTrue(s.Status.Conditions, "Ready") {
+		// agentgateway opens each session by contacting every target: an image server joins once it has answered
+		// (Serving, set by the reconciler), so a booting one does not slow every user's new session.
+		if s.Spec.URL != "" || meta.IsStatusConditionTrue(s.Status.Conditions, "Serving") {
 			targets = append(targets, map[string]any{"name": s.Name, "static": t})
 		}
 		if s.Spec.Connection != "" {
@@ -80,10 +80,16 @@ func compileServers(servers []v1.Server, rules []v1.AccessRule) []*unstructured.
 	})
 	policy := generated("agentgateway.dev/v1alpha1", "AgentgatewayPolicy", MCPBackendName+"-access", sorted[0].Namespace, map[string]any{
 		"targetRefs": []any{map[string]any{"group": "agentgateway.dev", "kind": "AgentgatewayBackend", "name": MCPBackendName}},
-		"backend": map[string]any{"mcp": map[string]any{"authorization": map[string]any{
-			"action": "Allow",
-			"policy": map[string]any{"matchExpressions": []any{expr}},
-		}}},
+		"backend": map[string]any{
+			"mcp": map[string]any{"authorization": map[string]any{
+				"action": "Allow",
+				"policy": map[string]any{"matchExpressions": []any{expr}},
+			}},
+			// A session opens only after every target has answered: a down one must fail fast, not after ~10 s.
+			// Only connection setup (including TLS) is limited; long tool calls and streams are not. 2 s leaves
+			// room for a TLS handshake to a remote server in another region.
+			"tcp": map[string]any{"connectTimeout": "2s"},
+		},
 	})
 	// agentgateway refuses an MCP backend without targets: none while no server runs (the reconciler deletes a
 	// previous one). The policy stays, so the backend never comes back before its authorization.

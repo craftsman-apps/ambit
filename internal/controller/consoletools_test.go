@@ -131,7 +131,9 @@ func TestToolsReadFailedThenCleared(t *testing.T) {
 		t.Fatal(err)
 	}
 	var next error = ErrNoReader
+	now := time.Now()
 	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}, ToolsRefresh: time.Nanosecond,
+		Now: func() time.Time { return now },
 		ListTools: func(context.Context, v1.Server) ([]v1.Tool, error) {
 			if next != nil {
 				return nil, next
@@ -152,6 +154,7 @@ func TestToolsReadFailedThenCleared(t *testing.T) {
 		t.Fatalf("cond %+v", c)
 	}
 	next = nil
+	now = now.Add(toolsRetry) // a failed read is tried again after toolsRetry
 	if c := reconcileOnce(); c == nil || c.Reason != "Read" {
 		t.Fatalf("cond %+v", c)
 	}

@@ -15,7 +15,9 @@ import (
 
 	"github.com/craftsman-apps/ambit/internal/routerconfig"
 	appsv1 "k8s.io/api/apps/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 )
 
 func TestClassifierStateFromDeployment(t *testing.T) {
@@ -107,5 +109,39 @@ func TestReadKeysOnlyForOpenAICompatibleClassifiers(t *testing.T) {
 	}
 	if len(read) != 1 || read[0] != "ambit-llm-local" || len(keys) != 1 || keys["local"] != "sk-local" {
 		t.Fatalf("secrets read %v, keys %v", read, keys)
+	}
+}
+
+// A ToolHive object left by an earlier Server of the same name (still being deleted) must not make the new Server
+// count as running: its pod is the old one, so the new server would join the list while it still boots.
+func TestMarkRunningIgnoresAnotherServersMCPServer(t *testing.T) {
+	ms := func(name, ownerUID string, deleting bool) *unstructured.Unstructured {
+		u := &unstructured.Unstructured{}
+		u.SetGroupVersionKind(MCPServerGVK)
+		u.SetName(name)
+		u.SetNamespace("ambit-system")
+		u.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: v1.GroupVersion.String(), Kind: "Server", Name: name, UID: types.UID(ownerUID)}})
+		if deleting {
+			u.SetFinalizers([]string{"toolhive.stacklok.dev/finalizer"})
+			now := metav1.Now()
+			u.SetDeletionTimestamp(&now)
+		}
+		_ = unstructured.SetNestedSlice(u.Object, []any{map[string]any{"type": "Ready", "status": "True"}}, "status", "conditions")
+		return u
+	}
+	c := fake.NewClientBuilder().WithObjects(ms("old-owner", "uid-gone", false), ms("deleting", "uid-deleting", true), ms("current", "uid-current", false)).Build()
+	servers := []v1.Server{
+		{ObjectMeta: metav1.ObjectMeta{Name: "old-owner", Namespace: "ambit-system", UID: "uid-new"}, Spec: v1.ServerSpec{Image: timeImage}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "deleting", Namespace: "ambit-system", UID: "uid-deleting"}, Spec: v1.ServerSpec{Image: timeImage}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "current", Namespace: "ambit-system", UID: "uid-current"}, Spec: v1.ServerSpec{Image: timeImage}},
+	}
+	r := &Reconciler{Live: c, Namespace: "ambit-system"}
+	if _, err := r.markRunning(t.Context(), servers); err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []bool{false, false, true} {
+		if got := meta.IsStatusConditionTrue(servers[i].Status.Conditions, "Ready"); got != want {
+			t.Errorf("%s running=%v, want %v", servers[i].Name, got, want)
+		}
 	}
 }

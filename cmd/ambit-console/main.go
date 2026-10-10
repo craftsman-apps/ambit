@@ -135,7 +135,7 @@ func run(ctx context.Context) error {
 	var auth *console.Auth
 	if err := retry(ctx, "dex discovery", func() (e error) {
 		auth, e = console.NewAuth(ctx, console.AuthConfig{
-			Issuer: publicURL + "/dex", ClientID: console.ClientID, ClientSecret: keys.ClientSecret,
+			Issuer: publicURL + "/dex", InternalIssuer: os.Getenv("AMBIT_DEX_URL"), ClientID: console.ClientID, ClientSecret: keys.ClientSecret,
 			PublicURL: publicURL, SessionKey: keys.SessionKey, SessionTTL: time.Duration(hours) * time.Hour,
 		})
 		return e

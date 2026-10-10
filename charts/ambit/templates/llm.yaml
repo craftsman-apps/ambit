@@ -1,5 +1,5 @@
 {{- if .Values.llm.enabled }}
-{{- $jwt := .Values.llm.jwt }}
+{{- $jwt := fromJson (include "ambit.jwt" (dict "root" $ "jwt" .Values.llm.jwt "name" "llm")) }}
 {{- if not (and $jwt.issuer $jwt.jwksURL) }}
 {{- fail "llm.enabled=true needs llm.jwt.issuer and llm.jwt.jwksURL: Ambit never serves LLM traffic without token validation" }}
 {{- end }}

@@ -1,6 +1,7 @@
 name: ci
 # Cost: a pull request runs the full check; a merge to main does not run it again (the merge script merges only a
-# PR that already contains the current main). Draft PRs and documentation-only changes skip the e2e job.
+# PR that already contains the current main). Draft PRs skip the e2e job; documentation-only changes (docs/, *.md,
+# LICENSE, NOTICE) skip build and e2e, so the PR still gets a green check in seconds.
 on:
   push: { branches: ["step-*"] }
   pull_request: { types: [opened, synchronize, reopened, ready_for_review] }
@@ -10,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  changes:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.changes.outputs.code }}
@@ -22,8 +23,16 @@ jobs:
         env: { BASE: "${{ github.event.pull_request.base.sha }}", HEAD: "${{ github.event.pull_request.head.sha }}" }
         run: |
           code=true
-          if [ -n "$BASE" ] && ! git diff --name-only "$BASE...$HEAD" | grep -qvE '^docs/|\.md$|^LICENSE$'; then code=false; fi
+          if [ -n "$BASE" ] && ! git diff --name-only "$BASE...$HEAD" | grep -qvE '^docs/|\.md$|^LICENSE$|^NOTICE$'; then code=false; fi
           echo "code=$code" | tee -a "$GITHUB_OUTPUT"
+
+  build:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version-file: go.mod }
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -51,7 +60,7 @@ jobs:
       # The image for both e2e parts, built once: Go's cache is warm here (setup-go and the tests above), and web/dist
       # is already built. Docker builds inside the e2e jobs compiled everything again (6.4 min each, 2026-10-08).
       - name: Build the Ambit image for the e2e jobs
-        if: steps.changes.outputs.code == 'true' && !github.event.pull_request.draft
+        if: ${{ !github.event.pull_request.draft }}
         run: |
           for c in ambit-console ambit-controller ambit ambit-guard ambit-router; do
             CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "bin/$c" "./cmd/$c"
@@ -60,7 +69,7 @@ jobs:
           docker build -t ambit-whoami:dev -f test/whoami/Dockerfile .  # test-only MCP server (step 5)
           docker save ambit-console:dev ambit-whoami:dev | gzip > "$RUNNER_TEMP/images.tar.gz"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: steps.changes.outputs.code == 'true' && !github.event.pull_request.draft
+        if: ${{ !github.event.pull_request.draft }}
         with: { name: images, path: "${{ runner.temp }}/images.tar.gz", retention-days: 1 }
       - name: Chart rules (ambit-router shape and RBAC)
         run: test/chart.sh
@@ -70,8 +79,8 @@ jobs:
   # the UI tests (which need step 3's catalog), part b the two longest steps.
   e2e:
     name: e2e (${{ matrix.part.name }})
-    needs: build
-    if: needs.build.outputs.code == 'true' && !github.event.pull_request.draft
+    needs: build  # skipped with build for documentation-only changes
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:

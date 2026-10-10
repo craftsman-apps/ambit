@@ -77,8 +77,8 @@ jobs:
   # The quick start as the docs give it: deploy/quickstart.yaml on a fresh kind cluster, without the CoreDNS
   # rewrite or Keycloak the other parts use. Sign-in, a token from Dex, a first call, the audit record.
   quickstart:
-    needs: build
-    if: needs.build.outputs.code == 'true' && !github.event.pull_request.draft
+    needs: build  # skipped with build for documentation-only changes
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:

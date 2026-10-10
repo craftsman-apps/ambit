@@ -61,8 +61,10 @@ llm:
   # Serve OpenAI-compatible LLM traffic at <host>/v1. Models and access come from Model and AccessRule objects.
   enabled: false
   host: llm.example.com
-  # Tokens from the customer's identity provider (not Dex). Required when llm.enabled is true.
+  # Tokens the gateway accepts. Either your identity provider's (issuer, audiences, jwksURL), or, with
+  # dex: true, Ambit's own Dex (client ambit-cli; local accounts get tokens with the password grant).
   jwt:
+    dex: false
     issuer: ""
     audiences: []
     jwksURL: ""
@@ -107,8 +109,10 @@ mcp:
   # ToolHive runs each server in a pod that only the gateway can reach.
   enabled: false
   host: mcp.example.com
-  # Tokens from the customer's identity provider (not Dex). Required when mcp.enabled is true.
+  # Tokens the gateway accepts. Either your identity provider's (issuer, audiences, jwksURL), or, with
+  # dex: true, Ambit's own Dex (client ambit-cli; local accounts get tokens with the password grant).
   jwt:
+    dex: false
     issuer: ""
     audiences: []
     jwksURL: ""

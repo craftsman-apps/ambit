@@ -17,6 +17,15 @@ stringData:
       addr: 0.0.0.0:5557
     oauth2:
       skipApprovalScreen: true
+      {{- if and (include "ambit.dexIssuesGatewayTokens" .) .Values.bootstrapAdmin.enabled }}
+      # Local accounts get gateway tokens with a username and password (llm/mcp.jwt.dex).
+      passwordConnector: local
+      {{- end }}
+    {{- if include "ambit.dexIssuesGatewayTokens" . }}
+    # Public client for gateway tokens: no secret, as on a laptop it could not be kept secret.
+    staticClients:
+      - { id: ambit-cli, name: Ambit CLI, public: true }
+    {{- end }}
     frontend:
       issuer: Ambit
       logoURL: {{ .Values.console.url }}/favicon.svg

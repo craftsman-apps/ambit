@@ -1,7 +1,7 @@
 name: release
 on:
   push: { tags: ["v*"] }
-permissions: { contents: read, packages: write }
+permissions: { contents: write, packages: write }  # contents: the GitHub release and its files
 
 jobs:
   publish:
@@ -38,3 +38,13 @@ jobs:
             helm package charts/$c --version "${{ steps.v.outputs.version }}" --app-version "${{ steps.v.outputs.version }}" -d /tmp/charts
             helm push /tmp/charts/$c-${{ steps.v.outputs.version }}.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
           done
+      # The quick start downloads these from the release, so it needs no clone of the repository.
+      - name: GitHub release with the quick-start files
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          mkdir -p /tmp/assets
+          cp kind/cluster.yaml /tmp/assets/kind-cluster.yaml
+          cp deploy/quickstart.yaml /tmp/assets/quickstart.yaml
+          # Gateway API, agentgateway and ToolHive CRDs, which neither chart installs.
+          for f in deploy/crds/*.yaml; do cat "$f"; printf '\n---\n'; done > /tmp/assets/crds.yaml
+          gh release create "$GITHUB_REF_NAME" /tmp/assets/* --title "$GITHUB_REF_NAME" --generate-notes

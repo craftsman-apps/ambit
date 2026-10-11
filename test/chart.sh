@@ -119,10 +119,10 @@ assert any(set(x['verbs'])=={'get','list','watch','create','update','delete'} fo
 l=[x for x in r if x['apiGroups']==['coordination.k8s.io']]
 assert len(l)==1 and l[0]['resources']==['leases'] and set(l[0]['verbs'])=={'get','create','update'}, l" "console Role: key objects and Lease (no Lease delete)"
 check_qs "d=one('Deployment','ambit-console')['spec']
-assert d['strategy']=={'type':'Recreate','rollingUpdate':None} and d['replicas']==1, d
+assert d['strategy']=={'type':'RollingUpdate','rollingUpdate':{'maxSurge':0,'maxUnavailable':1}} and d['replicas']==1, d
 e={x['name']:x for x in d['template']['spec']['containers'][0]['env']}
 assert e['AMBIT_KEYS_ENABLED']['value']=='true' and e['AMBIT_KEYS_INACTIVITY_DAYS']['value']=='30' and e['AMBIT_KEYS_MAX_DAYS']['value']=='365', e
-assert e['AMBIT_POD_NAME']['valueFrom']['fieldRef']['fieldPath']=='metadata.name', e" "console: Recreate, key settings, pod name"
+assert e['AMBIT_POD_NAME']['valueFrom']['fieldRef']['fieldPath']=='metadata.name', e" "console: RollingUpdate maxSurge 0, key settings, pod name"
 ! helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set console.replicas=2 >/dev/null 2>&1 || { echo "FAIL chart: console.replicas>1 must be refused"; exit 1; }
 ! helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --kube-version 1.29.0 >/dev/null 2>&1 || { echo "FAIL chart: Kubernetes < 1.30 must be refused"; exit 1; }
 helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --kube-version v1.30.4-eks-a737599 >/dev/null || { echo "FAIL chart: vendor-suffixed 1.30 must render"; exit 1; }

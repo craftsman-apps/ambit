@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Shell, Status } from "@/components/shell";
 
 type GrantResult = { connection: string; revokedAtProvider: boolean; error?: string };
-type OffboardingRecord = { email: string; at: string; trigger: string; grants: GrantResult[]; sessionsEnded: number; gatewayBlocked: boolean; completeSuccess: boolean };
+type OffboardingRecord = { email: string; at: string; trigger: string; grants: GrantResult[]; sessionsEnded: number; gatewayBlocked: boolean; keysDeleted: number; keysError?: string; completeSuccess: boolean };
 type Offboarding = { scimURL: string; records: OffboardingRecord[] };
 
 async function get<T>(url: string): Promise<T> {
@@ -51,6 +51,7 @@ export function OffboardingPage() {
                 ))}
                 {r.grants.length === 0 && <li className="text-muted">No app grants.</li>}
                 <li>{r.sessionsEnded} console session(s) ended · gateway tokens {r.gatewayBlocked ? "blocked" : <span className="text-bad">not blocked</span>}</li>
+                <li>Keys deleted: {r.keysDeleted}{r.keysError && <span className="text-bad"> · {r.keysError}</span>}</li>
               </ul>
             </div>
           ))}

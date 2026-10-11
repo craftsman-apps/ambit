@@ -272,7 +272,7 @@ func run(ctx context.Context) error {
 	}
 	var scim *console.SCIM
 	if conns != nil {
-		scim = &console.SCIM{Client: objects, Namespace: ns, Token: keys.SCIMToken, Conns: conns, Sessions: auth.Sessions}
+		scim = &console.SCIM{Client: objects, Namespace: ns, Token: keys.SCIMToken, Conns: conns, Sessions: auth.Sessions, Keys: keySvc}
 	}
 	catalogPresets, err := presets.All()
 	if err != nil {

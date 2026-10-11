@@ -6,7 +6,7 @@ metadata:
 spec:
   {{- if gt (int .Values.console.replicas) 1 }}{{ fail "console.replicas must be 1: personal API keys and sessions need a single console (spec: one writer)" }}{{ end }}
   replicas: {{ .Values.console.replicas }}
-  strategy: { type: Recreate }
+  strategy: { type: Recreate, rollingUpdate: null }
   selector:
     matchLabels: { app.kubernetes.io/name: ambit-console }
   template:

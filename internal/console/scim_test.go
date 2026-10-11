@@ -526,3 +526,51 @@ func TestConcurrentProvisioningSucceeds(t *testing.T) {
 		}
 	}
 }
+
+func TestActivePatchOnActiveUserUnblocks(t *testing.T) {
+	mux, s, _, c := scimFixture(t)
+	ctx := context.Background()
+	id := provision(t, mux, "bob@acme.test")
+	// a deactivation that answered 503 earlier left the person blocked while the stored user stayed active
+	if err := s.setBlocked(ctx, "bob@acme.test", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Keys.OffboardKeys(ctx, "bob@acme.test", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if r := patchActive(t, mux, id, true); r.Code != 200 {
+		t.Fatalf("%d %s", r.Code, r.Body)
+	}
+	if b := blocked(t, c); b != "[]" {
+		t.Fatalf("still blocked: %s", b)
+	}
+	newKey(t, s, "bob@acme.test")
+}
+
+func TestActivePatchOnActiveUserDoesNoWrites(t *testing.T) {
+	mux, s, _, c := scimFixture(t)
+	id := provision(t, mux, "bob@acme.test")
+	writes := 0
+	count := func(obj client.Object) {
+		if _, ok := obj.(*corev1.ConfigMap); ok {
+			writes++
+		}
+	}
+	f := interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			count(obj)
+			return c.Update(ctx, obj, opts...)
+		},
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			count(obj)
+			return c.Create(ctx, obj, opts...)
+		}}
+	s.Client = interceptor.NewClient(c.(client.WithWatch), f)
+	s.Keys.Client = s.Client
+	if r := patchActive(t, mux, id, true); r.Code != 200 {
+		t.Fatalf("%d", r.Code)
+	}
+	if writes != 0 {
+		t.Fatalf("%d ConfigMap writes", writes)
+	}
+}

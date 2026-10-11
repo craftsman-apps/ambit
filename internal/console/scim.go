@@ -350,11 +350,15 @@ func (s *SCIM) setActive(ctx context.Context, u *SCIMUser, active bool, trigger,
 		if retry {
 			return errScimRetry
 		}
-	case !was && active:
+	case active:
+		// also when the stored user was already active: an offboarding that answered 503 may have left the
+		// person blocked. Both steps are idempotent and write nothing when there is nothing to undo.
 		if err := s.activate(ctx, u.Email); err != nil {
 			return err
 		}
-		slog.Info("scim: user reactivated", "email", u.Email)
+		if !was {
+			slog.Info("scim: user reactivated", "email", u.Email)
+		}
 	}
 	return nil
 }

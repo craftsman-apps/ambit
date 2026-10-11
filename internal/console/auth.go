@@ -188,7 +188,7 @@ func (a *Auth) Callback(w http.ResponseWriter, r *http.Request) {
 	a.Sessions.Add(s.ID, s.Email, s.Exp)
 	http.SetCookie(w, a.cookie(SessionCookie, a.codec.Encode(s), int(a.ttl.Seconds()), "/"))
 	slog.Info("signed in", "email", s.Email, "role", s.Role, "connector", cl.Federated.ConnectorID)
-	if a.onSignIn != nil { // synchronous: the refresh holds the key lock for milliseconds
+	if a.onSignIn != nil { // the hook is called in line; it must not block (the console's hook starts a goroutine)
 		a.onSignIn(context.WithoutCancel(r.Context()), s)
 	}
 	http.Redirect(w, r, "/", http.StatusFound)

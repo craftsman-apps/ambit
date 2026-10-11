@@ -937,3 +937,12 @@ func TestOffboardKeysReplacesAnUnreadableOwnerRecord(t *testing.T) {
 		t.Fatal("created after offboarding:", err)
 	}
 }
+
+func TestStaleStartTermDoesNotEndALiveTerm(t *testing.T) {
+	s, _ := newKeySvc(t) // publishes a live term (lead2)
+	lead1, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.StartTerm(lead1); err == nil || !s.Writable() {
+		t.Fatal("a stale start ended the live term:", err, s.Writable())
+	}
+}

@@ -68,7 +68,12 @@ func (s *KeyService) now() time.Time { return s.Now().UTC().Truncate(time.Second
 func (s *KeyService) StartTerm(lead context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.term = nil
+	if err := lead.Err(); err != nil { // a stale start must not touch a newer term
+		return err
+	}
+	if s.term != nil && s.term.Err() != nil {
+		s.term = nil
+	}
 	var last error
 	err := termBackoff.DelayFunc().Until(lead, true, false, func(ctx context.Context) (bool, error) {
 		_, objErrs, err := s.repairLocked(ctx)

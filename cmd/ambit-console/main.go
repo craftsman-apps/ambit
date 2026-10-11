@@ -44,6 +44,19 @@ func envInt(k string, def int) int {
 	return def
 }
 
+// keySettingsFromEnv reads the key settings; values the service cannot work with stop the start.
+func keySettingsFromEnv() (console.KeySettings, error) {
+	k := console.KeySettings{Enabled: os.Getenv("AMBIT_KEYS_ENABLED") != "false",
+		InactivityDays: envInt("AMBIT_KEYS_INACTIVITY_DAYS", 30), MaxDays: envInt("AMBIT_KEYS_MAX_DAYS", 365)}
+	if k.InactivityDays < 1 || k.InactivityDays > 365 {
+		return k, fmt.Errorf("AMBIT_KEYS_INACTIVITY_DAYS is %d; it must be 1 to 365", k.InactivityDays)
+	}
+	if k.MaxDays != 30 && k.MaxDays != 90 && k.MaxDays != 365 {
+		return k, fmt.Errorf("AMBIT_KEYS_MAX_DAYS is %d; it must be 30, 90 or 365", k.MaxDays)
+	}
+	return k, nil
+}
+
 // retry runs f until it succeeds or ctx ends. Dex may still be starting when the console starts.
 func retry(ctx context.Context, what string, f func() error) error {
 	for delay := time.Second; ; delay = min(delay*2, 15*time.Second) {
@@ -144,9 +157,11 @@ func run(ctx context.Context) error {
 	if podName == "" {
 		return errors.New("AMBIT_POD_NAME is required: it names this console in the key Lease")
 	}
-	keySvc := &console.KeyService{Client: objects, Namespace: ns, Now: time.Now, Settings: console.KeySettings{
-		Enabled: os.Getenv("AMBIT_KEYS_ENABLED") != "false", InactivityDays: envInt("AMBIT_KEYS_INACTIVITY_DAYS", 30),
-		MaxDays: envInt("AMBIT_KEYS_MAX_DAYS", 365)}}
+	keySettings, err := keySettingsFromEnv()
+	if err != nil {
+		return err
+	}
+	keySvc := &console.KeyService{Client: objects, Namespace: ns, Now: time.Now, Settings: keySettings}
 	go console.RunLeader(ctx, kube, ns, podName, keySvc.StartTerm, keySvc.EndTerm)
 	go func() { // the hourly full repair bounds any stale write or interrupted refresh to one hour
 		t := time.NewTicker(time.Hour)
@@ -173,9 +188,14 @@ func run(ctx context.Context) error {
 			Issuer: publicURL + "/dex", InternalIssuer: os.Getenv("AMBIT_DEX_URL"), ClientID: console.ClientID, ClientSecret: keys.ClientSecret,
 			PublicURL: publicURL, SessionKey: keys.SessionKey, SessionTTL: time.Duration(hours) * time.Hour,
 			OnSignIn: func(c context.Context, sess console.Session) {
-				if err := keySvc.Refresh(c, sess); err != nil && !errors.Is(err, console.ErrNotLeader) {
-					slog.Error("key refresh at sign-in", "email", sess.Email, "err", err)
-				}
+				go func() { // never make sign-in wait for the key lock; Refresh keeps the newest sign-in, so order does not matter
+					switch err := keySvc.Refresh(c, sess); {
+					case errors.Is(err, console.ErrNotLeader):
+						slog.Debug("key refresh skipped: not the key writer")
+					case err != nil:
+						slog.Error("key refresh at sign-in", "email", sess.Email, "err", err)
+					}
+				}()
 			},
 		})
 		return e

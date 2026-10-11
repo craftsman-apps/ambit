@@ -30,6 +30,13 @@ spec:
             {{- if .Values.console.testPresets }}
             - { name: AMBIT_TEST_PRESETS, value: "1" }
             {{- end }}
+            {{- if .Values.console.testHooks }}
+            - { name: AMBIT_TEST_HOOKS, value: "true" }
+            {{- end }}
+            {{- $scheme := ternary "https" "http" (.Values.gateway.tls.enabled | default false) }}
+            {{- $port := regexFind ":[0-9]+$" (urlParse .Values.console.url).host }}
+            - { name: AMBIT_LLM_URL, value: {{ printf "%s://%s%s" $scheme .Values.llm.host $port | quote }} }
+            - { name: AMBIT_MCP_URL, value: {{ printf "%s://%s%s/mcp" $scheme .Values.mcp.host $port | quote }} }
             {{- $opts := list }}
             {{- range .Values.sso.connectors }}
             {{- $opts = append $opts (dict "id" .id "name" (.name | default .id)) }}

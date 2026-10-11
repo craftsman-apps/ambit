@@ -381,7 +381,12 @@ func (s *KeyService) getKey(ctx context.Context, id string) (Key, error) {
 	if sec.Labels[keyLabel] != "true" {
 		return Key{}, ErrNotFound
 	}
-	return KeyFromSecret(&sec)
+	k, err := KeyFromSecret(&sec)
+	if err != nil {
+		slog.Warn("unreadable key Secret", "key", id, "err", err) // the repair deletes it; callers see no such key
+		return Key{}, ErrNotFound
+	}
+	return k, nil
 }
 
 // deleteKey deletes k only if it is still the version that was read, then records the event.

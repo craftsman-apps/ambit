@@ -69,6 +69,11 @@ type Call struct {
 	// Label and LabelReason are a classifier's label and why it was or was not set (empty for type Rules).
 	Label       string `json:"label"`
 	LabelReason string `json:"labelReason"`
+	// KeyID is the personal API key id of a call made with a key; Identity says how the caller was identified
+	// (key or JWT); Subject is the token's jwt.sub (empty for keys).
+	KeyID    string `json:"keyId"`
+	Identity string `json:"identity"`
+	Subject  string `json:"subject"`
 }
 
 // routerOf is the router a call went through: the requested name when it differs from the answering model.
@@ -88,7 +93,8 @@ SELECT Timestamp,
        {email:String}, LogAttributes['route'], LogAttributes['mcp.method.name'], LogAttributes['mcp.target'],
        LogAttributes['gen_ai.tool.name'], LogAttributes['gen_ai.request.model'], {status}, LogAttributes['error'],
        toInt64OrZero(LogAttributes['gen_ai.usage.input_tokens']), toInt64OrZero(LogAttributes['gen_ai.usage.output_tokens']),
-       LogAttributes['ambit.router'], LogAttributes['ambit.route'], LogAttributes['ambit.routeReason']
+       LogAttributes['ambit.router'], LogAttributes['ambit.route'], LogAttributes['ambit.routeReason'],
+       LogAttributes['ambit.key_id'], LogAttributes['ambit.identity'], LogAttributes['jwt.sub']
 FROM otel_logs
 WHERE (LogAttributes['jwt.email'] = {email:String}
        -- Some refusals (e.g. a model the user may not use) are logged with the token's subject but
@@ -132,11 +138,37 @@ func (a *Audit) Calls(ctx context.Context, email string, from, to time.Time, lim
 		var c Call
 		var requested string
 		if err := rows.Scan(&c.Time, &c.Email, &c.Route, &c.Method, &c.Server, &c.Tool, &c.Model, &c.Status, &c.Error, &c.InputTokens, &c.OutputTokens,
-			&requested, &c.Label, &c.LabelReason); err != nil {
+			&requested, &c.Label, &c.LabelReason, &c.KeyID, &c.Identity, &c.Subject); err != nil {
 			return nil, err
 		}
 		c.Router = routerOf(requested, c.Model)
 		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+const keysLastUsedSQL = `SELECT LogAttributes['ambit.key_id'], max(Timestamp) FROM otel_logs
+WHERE LogAttributes['ambit.key_id'] != '' AND has({ids:Array(String)}, LogAttributes['ambit.key_id'])
+GROUP BY LogAttributes['ambit.key_id']`
+
+// KeysLastUsed returns the time of each key's latest gateway call; keys never used are absent.
+func (a *Audit) KeysLastUsed(ctx context.Context, ids []string) (map[string]time.Time, error) {
+	out := map[string]time.Time{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := a.DB.QueryContext(clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{"ids": arrayLiteral(ids)})), keysLastUsedSQL)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var t time.Time
+		if err := rows.Scan(&id, &t); err != nil {
+			return nil, err
+		}
+		out[id] = t
 	}
 	return out, rows.Err()
 }

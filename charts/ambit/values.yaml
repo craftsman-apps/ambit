@@ -48,6 +48,8 @@ console:
   sessionHours: 1
   # kind tests only: shows test presets
   testPresets: false
+  # Test-only endpoints (expire a key on demand); never enable in production.
+  testHooks: false
 
 bootstrapAdmin:
   # Local password sign-in (admin@ambit.local) for first setup. Set false once SSO works:

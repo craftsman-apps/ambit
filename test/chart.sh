@@ -42,6 +42,11 @@ assert c["oauth2"]["passwordConnector"]=="local", c["oauth2"]
 assert c["staticClients"]==[{"id":"ambit-cli","name":"Ambit CLI","public":True}], c.get("staticClients")' "jwt.dex: Dex has the public ambit-cli client and the password grant"
 check_qs 'e=one("Deployment","ambit-console")["spec"]["template"]["spec"]["containers"][0]["env"]
 assert {"name":"AMBIT_DEX_URL","value":"http://ambit-dex:5556/dex"} in e' "console reaches Dex in-cluster"
+check_qs 'e=one("Deployment","ambit-console")["spec"]["template"]["spec"]["containers"][0]["env"]
+assert {"name":"AMBIT_LLM_URL","value":"http://llm.localtest.me:8080"} in e and {"name":"AMBIT_MCP_URL","value":"http://mcp.localtest.me:8080/mcp"} in e, e
+assert not [x for x in e if x["name"]=="AMBIT_TEST_HOOKS"], "test hooks must be off by default"' "console gets the LLM and MCP URLs for key snippets"
+check 'e=one("Deployment","ambit-console")["spec"]["template"]["spec"]["containers"][0]["env"]
+assert {"name":"AMBIT_TEST_HOOKS","value":"true"} in e' "kind values enable the test hooks"
 check 'c=yaml.safe_load(one("Secret","ambit-dex-config")["stringData"]["config.yaml"])
 assert "passwordConnector" not in c["oauth2"] and "staticClients" not in c, c' "no password grant or ambit-cli without jwt.dex"
 ! helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set llm.jwt.issuer=https://idp.example.com >/dev/null 2>&1 || { echo "FAIL chart: jwt.dex with jwt.issuer must be refused"; exit 1; }

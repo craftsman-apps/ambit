@@ -22,8 +22,12 @@ const (
 )
 
 type KeyEvent struct {
-	At                                  time.Time
-	Actor, Action, KeyID, Email, Detail string
+	At     time.Time `json:"at"`
+	Actor  string    `json:"actor"`
+	Action string    `json:"action"`
+	KeyID  string    `json:"keyId"`
+	Email  string    `json:"email"`
+	Detail string    `json:"detail"`
 }
 
 // event records one key change as its own ConfigMap, never holding the key or its hash. Failure to record is

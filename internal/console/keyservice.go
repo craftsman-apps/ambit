@@ -189,11 +189,13 @@ func (s *KeyService) Create(ctx context.Context, sess Session, name string, scop
 	}
 	signed := time.Unix(sess.SignedIn, 0).UTC()
 	// owner record first; a planted (unlabelled) record is overwritten, never trusted
-	o, _, err := s.changeOwner(ctx, email, errOwnerUnlabelled, func(o *Owner, exists bool) (bool, error) {
+	changed := false
+	o, wrote, err := s.changeOwner(ctx, email, errOwnerUnlabelled, func(o *Owner, exists bool) (bool, error) {
 		if o.Offboarded {
 			return false, ErrOffboarded
 		}
 		if !exists || signed.After(o.SignedIn) {
+			changed = exists && !slices.Equal(o.Groups, sess.Groups)
 			o.Groups, o.SignedIn = sess.Groups, signed
 			return true, nil
 		}
@@ -201,6 +203,15 @@ func (s *KeyService) Create(ctx context.Context, sess Session, name string, scop
 	})
 	if err != nil {
 		return "", Key{}, err
+	}
+	if wrote && len(keys) > 0 { // a newer sign-in is a refresh of the person's other keys too
+		n, _, err := s.applyOwner(ctx, o, keys, true)
+		if err != nil { // the owner record is written: the hourly repair completes the refresh
+			slog.Error("key refresh at creation left some keys unchanged; the hourly repair retries them", "email", email, "err", err)
+		}
+		if changed {
+			s.event(ctx, email, "refresh", "", email, "keys="+strconv.Itoa(n))
+		}
 	}
 	plain, prefix, hash, err := NewSecretKey()
 	if err != nil {

@@ -1016,3 +1016,24 @@ func TestOffboardAndReactivateLabelAPlantedOwnerRecord(t *testing.T) {
 		t.Fatalf("reactivation did not replace the planted record: %+v %v", o, err)
 	}
 }
+
+func TestCreateWithANewerSignInUpdatesOtherKeys(t *testing.T) {
+	s, clk := newKeySvc(t)
+	ctx := context.Background()
+	_, old, err := s.Create(ctx, alice("eng", "admins"), "old", ScopeLLM, 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := t0.AddDate(0, 0, 10)
+	clk.Set(now)
+	if _, _, err := s.Create(ctx, Session{Email: "alice@acme.com", Groups: []string{"eng"}, SignedIn: now.Unix()}, "new", ScopeLLM, 365); err != nil {
+		t.Fatal(err)
+	}
+	keys, _ := s.List(ctx, "alice@acme.com")
+	if len(keys) != 2 || keys[0].ID != old.ID {
+		t.Fatalf("%+v", keys)
+	}
+	if k := keys[0]; !slices.Equal(k.Groups, []string{"eng"}) || !k.SignedIn.Equal(now) || !k.Until.Equal(now.AddDate(0, 0, 30)) {
+		t.Fatalf("the older key kept the older sign-in: %+v", k)
+	}
+}

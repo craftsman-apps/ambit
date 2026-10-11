@@ -9,6 +9,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 NS=ambit-system CL=${QS_CLUSTER:-ambit-keyscale} PORT=${QS_PORT:-18080} IMG=${QS_IMAGE:-ambit-console:scale}
+[[ "$CL" != ambit && "$PORT" != 8080 ]] || { echo "FAIL refusing to use the shared cluster name or port"; exit 1; }
 export BASE=http://console.localtest.me:$PORT
 source test/lib.sh
 LLM=http://llm.localtest.me:$PORT
@@ -147,13 +148,13 @@ can_write_key || fail "key-labelled Secrets are still refused after the bindings
 # keys the first-200 sample uses: 20 random lines
 sort -R "$W/keys.tsv" > "$W/shuffled.tsv"; SAMPLE=$(head -20 "$W/shuffled.tsv")
 # owner records first (not timed), then the key Secrets
-jq '.items |= map(select(.metadata.name | startswith("ambit-key-owner-")))' "$W/keys.json" | kubectl apply -f - >/dev/null
+jq '.items |= map(select(.metadata.name | startswith("ambit-key-owner-")))' "$W/keys.json" | kubectl create -f - >/dev/null  # create, not apply: no last-applied annotation, as the console writes them
 jq '.items |= map(select(.metadata.name | startswith("ambit-key-owner-") | not))' "$W/keys.json" > "$W/keys-only.json"
 
 # --- (b) time to accept ---
 say "== (b) first key Secret -> accepted"
 T0=$(now)
-kubectl apply -f "$W/keys-only.json" >/dev/null &
+kubectl create -f "$W/keys-only.json" >/dev/null &   # create, not apply (as above)
 APPLY=$!
 declare -a OK=()  # 1 once a sampled key has answered 200
 while :; do
@@ -186,7 +187,7 @@ oom_check "$CPP"; oom_check "$PXP"
 say "== (a) memory after 1,000 keys"
 say "after: control plane $CP1 MiB (limit $(limit "$CPP")), proxy $PX1 MiB (limit $(limit "$PXP"))"
 say "growth: control plane $((CP1 - CP0)) MiB, proxy $((PX1 - PX0)) MiB"
-[[ ${PX1} -lt 512 && ${CP1} -lt 256 ]] || fail "STOP: memory at or over a limit"
+[[ $PX1 -lt $(limit "$PXP" | tr -d Mi) && $CP1 -lt $(limit "$CPP" | tr -d Mi) ]] || fail "STOP: memory at or over a limit"
 
 # --- restore the bindings; wait until the writer policy is enforced again ---
 kubectl create -f <(jq '{apiVersion:"v1",kind:"List",items:.}' "$W/bindings.json") >/dev/null
@@ -223,11 +224,11 @@ PSTART=$(kubectl -n "$NS" get pod "$CPOD" -o jsonpath='{.status.startTime}')
 CSTART=$(kubectl -n "$NS" get pod "$CPOD" -o jsonpath='{.status.containerStatuses[0].state.running.startedAt}')
 sign_in local admin@ambit.local "$PW"
 for _ in $(seq 1 60); do
-  [[ $(api GET /api/admin/key-events) == 200 ]] && [[ $(jq '[.events[] | select(.action=="repair")] | length' "$W/api") -ge 20 ]] && break
+  [[ $(api GET /api/admin/key-events) == 200 ]] && [[ $(jq '[.events[] | select(.action=="repair")] | length' "$W/api") -eq 20 ]] && break
   sleep 1
 done
 N=$(jq '[.events[] | select(.action=="repair")] | length' "$W/api")
-[[ "$N" -ge 20 ]] || fail "(d) only $N repair events"
+[[ "$N" -eq 20 ]] || fail "(d) only $N repair events"
 LAST=$(jq -r '[.events[] | select(.action=="repair") | .at] | max' "$W/api")
 FIRST=$(jq -r '[.events[] | select(.action=="repair") | .at] | min' "$W/api")
 ep() { uv run --no-project python -c 'import sys,datetime as d;print(d.datetime.fromisoformat(sys.argv[1].replace("Z","+00:00")).timestamp())' "$1"; }
@@ -249,7 +250,7 @@ while :; do
   if [[ -z "$TDOWN" ]]; then [[ "$c" != 200 ]] && TDOWN=$(now); else [[ "$c" == 200 ]] && break; fi
   [[ $(echo "$(now) - $t0 > 300" | bc) == 1 ]] && fail "(e) no 200 after the outage within 300 s (outage seen: ${TDOWN:-no})"
 done
-say "proxy pod deleted -> first refused request: $(ms "$t0" "$TDOWN") ms "
+say "proxy pod deleted -> first refused request: $(ms "$t0" "$TDOWN") ms"
 say "proxy pod deleted -> first 200 with a key (new pod): $(ms "$t0" "$(now)") ms"
 sleep 5; NPX=$(proxy_pod)
 say "new proxy pod $NPX memory after start: $(mem "$NPX") MiB (limit $(limit "$NPX"))"

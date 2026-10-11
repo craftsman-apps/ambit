@@ -21,6 +21,8 @@ spec:
           env:
             - { name: AMBIT_PUBLIC_URL, value: {{ .Values.console.url | quote }} }
             - { name: AMBIT_DEX_GRPC, value: "ambit-dex:5557" }
+            # Dex inside the cluster: console.url may not resolve from a pod (on kind it is 127.0.0.1).
+            - { name: AMBIT_DEX_URL, value: "http://ambit-dex:5556/dex" }
             - { name: AMBIT_SESSION_HOURS, value: {{ .Values.console.sessionHours | quote }} }
             - { name: AMBIT_BOOTSTRAP_ENABLED, value: {{ .Values.bootstrapAdmin.enabled | quote }} }
             {{- if .Values.console.testPresets }}

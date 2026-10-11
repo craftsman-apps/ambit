@@ -1,6 +1,7 @@
 name: ci
 # Cost: a pull request runs the full check; a merge to main does not run it again (the merge script merges only a
-# PR that already contains the current main). Draft PRs and documentation-only changes skip the e2e job.
+# PR that already contains the current main). Draft PRs skip the e2e job; documentation-only changes (docs/, *.md,
+# LICENSE, NOTICE) skip build and e2e, so the PR still gets a green check in seconds.
 on:
   push: { branches: ["step-*"] }
   pull_request: { types: [opened, synchronize, reopened, ready_for_review] }
@@ -10,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  changes:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.changes.outputs.code }}
@@ -22,8 +23,16 @@ jobs:
         env: { BASE: "${{ github.event.pull_request.base.sha }}", HEAD: "${{ github.event.pull_request.head.sha }}" }
         run: |
           code=true
-          if [ -n "$BASE" ] && ! git diff --name-only "$BASE...$HEAD" | grep -qvE '^docs/|\.md$|^LICENSE$'; then code=false; fi
+          if [ -n "$BASE" ] && ! git diff --name-only "$BASE...$HEAD" | grep -qvE '^docs/|\.md$|^LICENSE$|^NOTICE$'; then code=false; fi
           echo "code=$code" | tee -a "$GITHUB_OUTPUT"
+
+  build:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version-file: go.mod }
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -51,7 +60,7 @@ jobs:
       # The image for both e2e parts, built once: Go's cache is warm here (setup-go and the tests above), and web/dist
       # is already built. Docker builds inside the e2e jobs compiled everything again (6.4 min each, 2026-10-08).
       - name: Build the Ambit image for the e2e jobs
-        if: steps.changes.outputs.code == 'true' && !github.event.pull_request.draft
+        if: ${{ !github.event.pull_request.draft }}
         run: |
           for c in ambit-console ambit-controller ambit ambit-guard ambit-router; do
             CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "bin/$c" "./cmd/$c"
@@ -60,18 +69,46 @@ jobs:
           docker build -t ambit-whoami:dev -f test/whoami/Dockerfile .  # test-only MCP server (step 5)
           docker save ambit-console:dev ambit-whoami:dev | gzip > "$RUNNER_TEMP/images.tar.gz"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: steps.changes.outputs.code == 'true' && !github.event.pull_request.draft
+        if: ${{ !github.event.pull_request.draft }}
         with: { name: images, path: "${{ runner.temp }}/images.tar.gz", retention-days: 1 }
       - name: Chart rules (ambit-router shape and RBAC)
         run: test/chart.sh
+
+  # The quick start as the docs give it: deploy/quickstart.yaml on a fresh kind cluster, without the CoreDNS
+  # rewrite or Keycloak the other parts use. Sign-in, a token from Dex, a first call, the audit record.
+  quickstart:
+    needs: build  # skipped with build for documentation-only changes
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with: { install_only: true }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: images, path: "${{ runner.temp }}" }
+      - name: Quick start
+        run: |
+          gunzip -c "$RUNNER_TEMP/images.tar.gz" | docker load
+          helm dependency build charts/ambit >/dev/null
+          QS_KEEP=1 test/quickstart.sh
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          export KUBECONFIG=$(mktemp); kind get kubeconfig --name ambit-quickstart > "$KUBECONFIG"
+          kubectl get pods -A
+          kubectl -n ambit-system logs deploy/ambit-console --tail=100 || true
+          kubectl -n ambit-system logs deploy/ambit-dex --tail=50 || true
 
   # Two parallel parts, each on its own kind cluster: every step sets up what it needs. Measured 2026-10-08:
   # steps 8, 10 and 12 take about 5 min each, all the others 7 together; part a keeps the original order and
   # the UI tests (which need step 3's catalog), part b the two longest steps.
   e2e:
     name: e2e (${{ matrix.part.name }})
-    needs: build
-    if: needs.build.outputs.code == 'true' && !github.event.pull_request.draft
+    needs: build  # skipped with build for documentation-only changes
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:

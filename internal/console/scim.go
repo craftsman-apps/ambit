@@ -307,6 +307,12 @@ func (s *SCIM) create(w http.ResponseWriter, r *http.Request) {
 		scimRetry(w) // nothing saved: the identity provider's retry runs the offboarding again
 		return
 	}
+	if u.Active { // a person who was deleted (blocked, flagged offboarded) and is hired again
+		if err := s.activate(r.Context(), u.Email); err != nil {
+			scimRetry(w)
+			return
+		}
+	}
 	if err := s.save(r.Context(), u); err != nil {
 		slog.Error("scim: save user", "err", err)
 		scimErr(w, http.StatusInternalServerError, "could not save the user")
@@ -328,26 +334,40 @@ func (s *SCIM) get(w http.ResponseWriter, r *http.Request) {
 // setActive applies an activation change; deactivation offboards, reactivation lifts the gateway block
 // and clears the keys "offboarded" flag. A non-nil error means the change is incomplete: the caller
 // answers 503 and does not save the user, so the identity provider retries (every step is idempotent).
-func (s *SCIM) setActive(ctx context.Context, u *SCIMUser, active bool, trigger string) error {
+// prev is the email the user had before this request; when a PUT changes the email and deactivates, both
+// are offboarded so keys under the old email do not survive.
+func (s *SCIM) setActive(ctx context.Context, u *SCIMUser, active bool, trigger, prev string) error {
 	was := u.Active
 	u.Active = active
 	switch {
 	case was && !active:
-		if s.Offboard(ctx, u.Email, trigger).mustRetry() {
+		retry := s.Offboard(ctx, prev, trigger).mustRetry()
+		if u.Email != prev && s.Offboard(ctx, u.Email, trigger).mustRetry() {
+			retry = true
+		}
+		if retry {
 			return errScimRetry
 		}
 	case !was && active:
-		if err := s.setBlocked(ctx, u.Email, false); err != nil {
-			slog.Error("scim: unblock", "email", u.Email, "err", err)
+		if err := s.activate(ctx, u.Email); err != nil {
 			return err
 		}
-		if s.Keys != nil {
-			if err := s.Keys.Reactivate(ctx, u.Email); err != nil && !errors.Is(err, ErrBadInput) {
-				slog.Error("scim: reactivate keys", "email", u.Email, "err", err)
-				return err
-			}
-		}
 		slog.Info("scim: user reactivated", "email", u.Email)
+	}
+	return nil
+}
+
+// activate lifts the gateway block, then clears the keys "offboarded" flag. Both steps are idempotent.
+func (s *SCIM) activate(ctx context.Context, email string) error {
+	if err := s.setBlocked(ctx, email, false); err != nil {
+		slog.Error("scim: unblock", "email", email, "err", err)
+		return err
+	}
+	if s.Keys != nil {
+		if err := s.Keys.Reactivate(ctx, email); err != nil && !errors.Is(err, ErrBadInput) {
+			slog.Error("scim: reactivate keys", "email", email, "err", err)
+			return err
+		}
 	}
 	return nil
 }
@@ -364,6 +384,7 @@ func (s *SCIM) replace(w http.ResponseWriter, r *http.Request) {
 	if !readBody(w, r, &b) {
 		return
 	}
+	prev := u.Email
 	if b.UserName != "" {
 		u.UserName = b.UserName
 	}
@@ -372,7 +393,7 @@ func (s *SCIM) replace(w http.ResponseWriter, r *http.Request) {
 	}
 	u.ExternalID = b.ExternalID
 	if b.Active != nil {
-		if err := s.setActive(r.Context(), u, *b.Active, "scim PUT active=false"); err != nil {
+		if err := s.setActive(r.Context(), u, *b.Active, "scim PUT active=false", prev); err != nil {
 			scimRetry(w)
 			return
 		}
@@ -418,7 +439,7 @@ func (s *SCIM) patch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if active != nil {
-			if err := s.setActive(r.Context(), u, *active, fmt.Sprintf("scim PATCH active=%t", *active)); err != nil {
+			if err := s.setActive(r.Context(), u, *active, fmt.Sprintf("scim PATCH active=%t", *active), u.Email); err != nil {
 				scimRetry(w)
 				return
 			}
@@ -544,7 +565,46 @@ func (s *SCIM) setBlocked(ctx context.Context, email string, blocked bool) error
 	return s.Client.Update(ctx, &cm)
 }
 
+// carryGrants adds the grants of this person's earlier incomplete attempts (newer than their last complete
+// record) to rec, so a retry's record still shows what the first attempt revoked.
+func (s *SCIM) carryGrants(ctx context.Context, rec *OffboardingRecord) {
+	var l corev1.SecretList
+	if err := s.Client.List(ctx, &l, client.InNamespace(s.store().Namespace), client.MatchingLabels{recordLabel: "true", grantUserLabel: userHash(rec.Email)}); err != nil {
+		slog.Error("offboarding: read earlier records", "email", rec.Email, "err", err)
+		return
+	}
+	var prior []OffboardingRecord
+	var lastComplete time.Time
+	for i := range l.Items {
+		plain, err := s.store().open(l.Items[i].Data["record"])
+		var p OffboardingRecord
+		if err != nil || json.Unmarshal(plain, &p) != nil {
+			continue
+		}
+		if p.CompleteSuccess && p.At.After(lastComplete) {
+			lastComplete = p.At
+		}
+		prior = append(prior, p)
+	}
+	have := map[string]bool{}
+	for _, g := range rec.Grants {
+		have[g.Connection] = true
+	}
+	for _, p := range prior {
+		if p.CompleteSuccess || !p.At.After(lastComplete) {
+			continue
+		}
+		for _, g := range p.Grants {
+			if !have[g.Connection] {
+				have[g.Connection] = true
+				rec.Grants = append(rec.Grants, g)
+			}
+		}
+	}
+}
+
 func (s *SCIM) saveRecord(ctx context.Context, rec OffboardingRecord) {
+	s.carryGrants(ctx, &rec)
 	plain, _ := json.Marshal(rec)
 	sealed, err := s.store().seal(plain)
 	if err == nil {

@@ -575,8 +575,10 @@ func (s *KeyService) Reactivate(ctx context.Context, email string) error {
 	if !ok {
 		return ErrBadInput
 	}
-	_, wrote, err := s.changeOwner(ctx, email, false, func(o *Owner, exists bool) (bool, error) {
-		if !exists || !o.Offboarded {
+	_, oerr := s.owner(ctx, email)
+	bad := errors.Is(oerr, errBadOwner) // an unreadable record is replaced, or reactivation would fail forever
+	_, wrote, err := s.changeOwner(ctx, email, true, func(o *Owner, exists bool) (bool, error) {
+		if !exists || !(o.Offboarded || bad) {
 			return false, nil
 		}
 		o.Offboarded = false

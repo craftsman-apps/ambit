@@ -340,3 +340,109 @@ func TestUnusableEmailDoesNotLoop(t *testing.T) {
 		t.Fatalf("an unusable email must not be retried forever: %d %s", r.Code, r.Body)
 	}
 }
+
+func TestRehirePOSTUnblocksAndAllowsKeys(t *testing.T) {
+	mux, s, _, c := scimFixture(t)
+	ctx := context.Background()
+	id := provision(t, mux, "bob@acme.test")
+	if r := scimDo(t, mux, "DELETE", "/scim/v2/Users/"+id, scimToken, nil); r.Code != 204 {
+		t.Fatalf("delete: %d", r.Code)
+	}
+	if !strings.Contains(blocked(t, c), "bob@acme.test") {
+		t.Fatal("setup: not blocked after DELETE")
+	}
+	id = provision(t, mux, "bob@acme.test")
+	if strings.Contains(blocked(t, c), "bob@acme.test") {
+		t.Fatalf("rehired person still blocked: %s", blocked(t, c))
+	}
+	newKey(t, s, "bob@acme.test")
+	if !userActive(t, s, id) {
+		t.Fatal("user not saved active")
+	}
+	_ = ctx
+}
+
+func TestRehirePOSTFailureIs503AndSavesNothing(t *testing.T) {
+	mux, s, _, _ := scimFixture(t)
+	id := provision(t, mux, "bob@acme.test")
+	scimDo(t, mux, "DELETE", "/scim/v2/Users/"+id, scimToken, nil)
+	s.Keys.EndTermForTest()
+	body := map[string]any{"userName": "bob@acme.test", "active": true, "emails": []any{map[string]any{"value": "bob@acme.test", "primary": true}}}
+	if r := scimDo(t, mux, "POST", "/scim/v2/Users", scimToken, body); r.Code != 503 {
+		t.Fatalf("%d", r.Code)
+	}
+	if us, _ := s.all(context.Background()); len(us) != 0 {
+		t.Fatal("user saved")
+	}
+}
+
+func TestPUTChangingEmailAndDeactivatingOffboardsTheOldEmail(t *testing.T) {
+	mux, s, _, c := scimFixture(t)
+	ctx := context.Background()
+	id := provision(t, mux, "old@acme.test")
+	newKey(t, s, "old@acme.test")
+	r := scimDo(t, mux, "PUT", "/scim/v2/Users/"+id, scimToken, map[string]any{"userName": "old@acme.test", "active": false,
+		"emails": []any{map[string]any{"value": "new@acme.test", "primary": true}}})
+	if r.Code != 200 {
+		t.Fatalf("%d %s", r.Code, r.Body)
+	}
+	if keys, _ := s.Keys.ListAll(ctx); len(keys) != 0 {
+		t.Fatal("keys under the old email survived")
+	}
+	if b := blocked(t, c); !strings.Contains(b, "old@acme.test") {
+		t.Fatalf("old email not blocked: %s", b)
+	}
+}
+
+func TestReactivationReplacesAnUnreadableOwnerRecord(t *testing.T) {
+	mux, s, _, c := scimFixture(t)
+	ctx := context.Background()
+	id := provision(t, mux, "bob@acme.test")
+	newKey(t, s, "bob@acme.test")
+	if r := patchActive(t, mux, id, false); r.Code != 200 {
+		t.Fatalf("%d", r.Code)
+	}
+	var sec corev1.Secret
+	if err := c.Get(ctx, client.ObjectKey{Namespace: testNS, Name: "ambit-key-owner-" + ownerHash("bob@acme.test")}, &sec); err != nil {
+		t.Fatal(err)
+	}
+	sec.Data["owner.json"] = []byte("not json")
+	if err := c.Update(ctx, &sec); err != nil {
+		t.Fatal(err)
+	}
+	if r := patchActive(t, mux, id, true); r.Code != 200 {
+		t.Fatalf("%d %s", r.Code, r.Body)
+	}
+	if o, err := s.Keys.owner(ctx, "bob@acme.test"); err != nil || o.Offboarded {
+		t.Fatalf("%+v %v", o, err)
+	}
+}
+
+func TestRetryRecordKeepsTheGrantsRevokedByTheFirstAttempt(t *testing.T) {
+	mux, s, saas, _ := scimFixture(t)
+	ctx := context.Background()
+	id := provision(t, mux, "bob@acme.test")
+	s.Keys.EndTermForTest()
+	if r := patchActive(t, mux, id, false); r.Code != 503 {
+		t.Fatalf("%d", r.Code)
+	}
+	if len(saas.revoked) != 1 {
+		t.Fatalf("setup: %v", saas.revoked)
+	}
+	if err := s.Keys.StartTerm(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if r := patchActive(t, mux, id, false); r.Code != 200 {
+		t.Fatalf("%d", r.Code)
+	}
+	recs, _ := s.Records(ctx)
+	for _, r := range recs {
+		if r.Email == "bob@acme.test" && r.CompleteSuccess {
+			if len(r.Grants) != 1 || !r.Grants[0].RevokedAtProvider {
+				t.Fatalf("complete record lost the grant evidence: %+v", r)
+			}
+			return
+		}
+	}
+	t.Fatalf("no complete record: %+v", recs)
+}

@@ -5,14 +5,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
@@ -445,4 +449,80 @@ func TestRetryRecordKeepsTheGrantsRevokedByTheFirstAttempt(t *testing.T) {
 		}
 	}
 	t.Fatalf("no complete record: %+v", recs)
+}
+
+func TestSetBlockedNoChangeDoesNotWrite(t *testing.T) {
+	_, s, _, c := scimFixture(t)
+	ctx := context.Background()
+	if err := s.setBlocked(ctx, "bob@acme.test", true); err != nil {
+		t.Fatal(err)
+	}
+	writes := 0
+	count := func(obj client.Object) {
+		if _, ok := obj.(*corev1.ConfigMap); ok {
+			writes++
+		}
+	}
+	s.Client = interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			count(obj)
+			return c.Update(ctx, obj, opts...)
+		},
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			count(obj)
+			return c.Create(ctx, obj, opts...)
+		}})
+	if err := s.setBlocked(ctx, "carol@acme.test", false); err != nil { // absent: nothing to remove
+		t.Fatal(err)
+	}
+	if err := s.setBlocked(ctx, "BOB@acme.test", true); err != nil { // already present
+		t.Fatal(err)
+	}
+	if writes != 0 {
+		t.Fatalf("%d writes for a no-op", writes)
+	}
+}
+
+func TestSetBlockedRetriesOnConflict(t *testing.T) {
+	_, s, _, c := scimFixture(t)
+	ctx := context.Background()
+	if err := s.setBlocked(ctx, "bob@acme.test", true); err != nil {
+		t.Fatal(err)
+	}
+	conflicts := 1
+	s.Client = interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if _, ok := obj.(*corev1.ConfigMap); ok && conflicts > 0 {
+				conflicts--
+				return apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, obj.GetName(), errors.New("injected"))
+			}
+			return c.Update(ctx, obj, opts...)
+		}})
+	if err := s.setBlocked(ctx, "alice@acme.test", true); err != nil {
+		t.Fatal(err)
+	}
+	if b := blocked(t, c); b != `["alice@acme.test","bob@acme.test"]` {
+		t.Fatal(b)
+	}
+}
+
+func TestConcurrentProvisioningSucceeds(t *testing.T) {
+	mux, _, _, _ := scimFixture(t)
+	var wg sync.WaitGroup
+	codes := make([]int, 20)
+	for i := range codes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			e := fmt.Sprintf("user%d@acme.test", i)
+			codes[i] = scimDo(t, mux, "POST", "/scim/v2/Users", scimToken, map[string]any{"userName": e, "active": true,
+				"emails": []any{map[string]any{"value": e, "primary": true}}}).Code
+		}()
+	}
+	wg.Wait()
+	for i, c := range codes {
+		if c != http.StatusCreated {
+			t.Fatalf("user %d: %d", i, c)
+		}
+	}
 }

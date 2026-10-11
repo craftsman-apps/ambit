@@ -18,6 +18,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -535,34 +537,46 @@ func (s *SCIM) Offboard(ctx context.Context, email, trigger string) OffboardingR
 // setBlocked adds or removes the email in the ConfigMap the controller turns into a gateway Deny rule,
 // so tokens the identity provider already issued stop working now rather than when they expire.
 func (s *SCIM) setBlocked(ctx context.Context, email string, blocked bool) error {
-	var cm corev1.ConfigMap
-	err := s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: OffboardedConfigMap}, &cm)
-	create := apierrors.IsNotFound(err)
-	if err != nil && !create {
-		return err
-	}
-	if create {
-		cm = corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: OffboardedConfigMap, Namespace: s.Namespace,
-			Labels: map[string]string{"app.kubernetes.io/managed-by": "ambit-console"}}}
-	}
-	var emails []string
-	_ = json.Unmarshal([]byte(cm.Data["emails"]), &emails)
-	keep := emails[:0]
-	for _, e := range emails {
-		if !strings.EqualFold(e, email) {
-			keep = append(keep, e)
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		var cm corev1.ConfigMap
+		err := s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: OffboardedConfigMap}, &cm)
+		create := apierrors.IsNotFound(err)
+		if err != nil && !create {
+			return err
 		}
-	}
-	if blocked {
-		keep = append(keep, strings.ToLower(email))
-	}
-	sort.Strings(keep)
-	b, _ := json.Marshal(keep)
-	cm.Data = map[string]string{"emails": string(b)}
-	if create {
-		return s.Client.Create(ctx, &cm)
-	}
-	return s.Client.Update(ctx, &cm)
+		if create {
+			cm = corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: OffboardedConfigMap, Namespace: s.Namespace,
+				Labels: map[string]string{"app.kubernetes.io/managed-by": "ambit-console"}}}
+		}
+		var emails []string
+		_ = json.Unmarshal([]byte(cm.Data["emails"]), &emails)
+		present := false
+		keep := []string{}
+		for _, e := range emails {
+			if strings.EqualFold(e, email) {
+				present = true
+			} else {
+				keep = append(keep, e)
+			}
+		}
+		if present == blocked {
+			return nil // nothing would change: do not write the shared list
+		}
+		if blocked {
+			keep = append(keep, strings.ToLower(email))
+		}
+		sort.Strings(keep)
+		b, _ := json.Marshal(keep)
+		cm.Data = map[string]string{"emails": string(b)}
+		if create {
+			if err := s.Client.Create(ctx, &cm); apierrors.IsAlreadyExists(err) {
+				return apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, cm.Name, err) // retry as an update
+			} else {
+				return err
+			}
+		}
+		return s.Client.Update(ctx, &cm)
+	})
 }
 
 // carryGrants adds the grants of this person's earlier incomplete attempts (newer than their last complete

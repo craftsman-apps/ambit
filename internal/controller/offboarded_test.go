@@ -3,12 +3,13 @@ package controller
 import (
 	"testing"
 
+	"github.com/craftsman-apps/ambit/internal/identity"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-func TestOffboardedUsersAreDeniedOnBothRoutes(t *testing.T) {
+func TestOffboardedUsersAreRefusedOnBothRoutes(t *testing.T) {
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: OffboardedConfigMap, Namespace: "ambit-system", UID: "uid-cm"},
 		Data: map[string]string{"emails": `["Bob@Acme.test", "alice@acme.test", "x\" || true || \"@evil"]`}}
 	ok, rejected := OffboardedEmails(cm)
@@ -19,12 +20,12 @@ func TestOffboardedUsersAreDeniedOnBothRoutes(t *testing.T) {
 	e, _, _ := unstructured.NestedStringSlice(p.Object, "spec", "traffic", "authorization", "policy", "matchExpressions")
 	action, _, _ := unstructured.NestedString(p.Object, "spec", "traffic", "authorization", "action")
 	refs, _, _ := unstructured.NestedSlice(p.Object, "spec", "targetRefs")
-	if action != "Deny" || e[0] != `jwt.email in ["alice@acme.test", "bob@acme.test"]` || len(refs) != 2 {
+	if action != "Require" || e[0] != `!(`+identity.Principal(true)+` in ["alice@acme.test", "bob@acme.test"])` || len(refs) != 2 {
 		t.Fatalf("%s %v %v", action, e, refs)
 	}
 	if empty := offboardedPolicy(cm, nil, []string{"ambit-mcp"}); true {
 		e, _, _ := unstructured.NestedStringSlice(empty.Object, "spec", "traffic", "authorization", "policy", "matchExpressions")
-		if e[0] != "false" {
+		if e[0] != "true" {
 			t.Fatalf("empty list must deny nobody: %v", e)
 		}
 	}

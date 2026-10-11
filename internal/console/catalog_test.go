@@ -3,6 +3,7 @@ package console
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/craftsman-apps/ambit/internal/identity"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -104,7 +105,7 @@ func TestRuleDetailShowsEffectivePolicy(t *testing.T) {
 	var got RuleDetail
 	json.NewDecoder(r.Body).Decode(&got)
 	if r.Code != 200 || len(got.Effective) != 1 || got.Effective[0].Model != "nemotron-3-super" ||
-		got.Effective[0].CEL != `jwt.groups.exists(g, g in ["ml-research"])` || got.Effective[0].ModelName != "nvidia/nemotron:free" {
+		got.Effective[0].CEL != identity.PrincipalGroups+`.exists(g, g in ["ml-research"])` || got.Effective[0].ModelName != "nvidia/nemotron:free" {
 		t.Fatalf("%d %+v", r.Code, got)
 	}
 	if r := do(t, h, "GET", "/api/access-rules/nope", as(auth, RoleViewer), nil); r.Code != 404 {

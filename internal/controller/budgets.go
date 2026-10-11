@@ -34,12 +34,13 @@ type RateLimit struct {
 // non-members are not counted against this group.
 func member(group string) string {
 	q := strconv.Quote(group)
-	return "jwt.groups.exists(g, g == " + q + ") ? " + q + ` : ""`
+	return principalGroups + ".exists(g, g == " + q + ") ? " + q + ` : ""`
 }
 
-// spendUser names the person a dollar cap charges: the email, or the subject when the token has no email
-// claim (a failing expression would make agentgateway skip both the check and the charge).
-const spendUser = "has(jwt.email) ? jwt.email : jwt.sub"
+// spendUser names the person a dollar cap charges: the request's principal (a key's owner, or the JWT's email,
+// or its subject when emails are not required). It must not fail: a failing expression would make agentgateway
+// skip both the check and the charge.
+func spendUser() string { return principal() }
 
 // EffectiveBudgets returns the Budget that governs each group: the first by name. The reconciler reports
 // the others as DuplicateGroup.
@@ -114,7 +115,7 @@ func usageCondition(groups []string) string {
 		q[i] = strconv.Quote(g)
 	}
 	return `request.path == "/v1/chat/completions" && has(llmRequest.stream) && llmRequest.stream == true && ` +
-		`has(jwt.groups) && jwt.groups.exists(g, g in [` + strings.Join(q, ", ") + `])`
+		principalGroups + `.exists(g, g in [` + strings.Join(q, ", ") + `])`
 }
 
 // usagePolicy is a backend policy on the LLM route, so agentgateway applies it when it calls the chosen model:
@@ -153,7 +154,7 @@ func compileBudgets(budgets []v1.Budget, prices map[string]v1.ModelPrice, ns str
 				d["descriptors"] = []any{map[string]any{"key": "user", "rate_limit": map[string]any{"unit": "day", "requests_per_unit": *n}}}
 				gwDescriptors = append(gwDescriptors, map[string]any{"unit": "Requests", "entries": []any{
 					map[string]any{"name": "group", "expression": member(g)},
-					map[string]any{"name": "user", "expression": "jwt.email"}}})
+					map[string]any{"name": "user", "expression": principal()}}})
 			}
 			cfgDescriptors = append(cfgDescriptors, d)
 		}
@@ -168,7 +169,7 @@ func compileBudgets(budgets []v1.Budget, prices map[string]v1.ModelPrice, ns str
 				d["descriptors"] = []any{map[string]any{"key": "spend_user", "rate_limit": map[string]any{"unit": "day", "requests_per_unit": u}}}
 				gwDescriptors = append(gwDescriptors, map[string]any{"unit": "Tokens", "cost": cost, "entries": []any{
 					map[string]any{"name": "spend_group", "expression": member(g)},
-					map[string]any{"name": "spend_user", "expression": spendUser}}})
+					map[string]any{"name": "spend_user", "expression": spendUser()}}})
 			}
 			cfgDescriptors = append(cfgDescriptors, d)
 		}

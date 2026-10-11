@@ -70,8 +70,9 @@ func TestCostIsExactAndRoundsUp(t *testing.T) {
 // error: a token without a groups claim (or a request without "stream") would otherwise lose the client's own
 // stream_options (final review, 2026-10-06).
 func TestUsageConditionNeverFails(t *testing.T) {
-	env, err := cel.NewEnv(cel.Variable("request", cel.MapType(cel.StringType, cel.DynType)),
-		cel.Variable("llmRequest", cel.MapType(cel.StringType, cel.DynType)), cel.Variable("jwt", cel.MapType(cel.StringType, cel.DynType)))
+	env, err := cel.NewEnv(ext.Strings(), cel.Variable("request", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("llmRequest", cel.MapType(cel.StringType, cel.DynType)), cel.Variable("jwt", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("apiKey", cel.MapType(cel.StringType, cel.DynType)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,17 +82,22 @@ func TestUsageConditionNeverFails(t *testing.T) {
 	}
 	prg, _ := env.Program(ast)
 	chat := map[string]any{"path": "/v1/chat/completions"}
+	key := map[string]any{"keyId": "k1", "email": "alice@acme.com", "groups": []any{"ml-research"}, "until": "2099-01-01T00:00:00Z"}
+	otherKey := map[string]any{"keyId": "k2", "email": "bob@acme.com", "groups": []any{"eng"}, "until": "2099-01-01T00:00:00Z"}
 	for name, c := range map[string]struct {
-		llm, jwt map[string]any
-		want     bool
+		llm, jwt, apiKey map[string]any
+		want             bool
 	}{
-		"capped stream":   {map[string]any{"stream": true}, map[string]any{"groups": []any{"ml-research"}}, true},
-		"other group":     {map[string]any{"stream": true}, map[string]any{"groups": []any{"eng"}}, false},
-		"no groups claim": {map[string]any{"stream": true}, map[string]any{"sub": "x"}, false},
-		"no stream field": {map[string]any{}, map[string]any{"groups": []any{"ml-research"}}, false},
-		"stream false":    {map[string]any{"stream": false}, map[string]any{"groups": []any{"ml-research"}}, false},
+		"capped stream":            {map[string]any{"stream": true}, map[string]any{"groups": []any{"ml-research"}}, nil, true},
+		"other group":              {map[string]any{"stream": true}, map[string]any{"groups": []any{"eng"}}, nil, false},
+		"no groups claim":          {map[string]any{"stream": true}, map[string]any{"sub": "x"}, nil, false},
+		"no stream field":          {map[string]any{}, map[string]any{"groups": []any{"ml-research"}}, nil, false},
+		"key of a member":          {map[string]any{"stream": true}, map[string]any{}, key, true},
+		"key of another group":     {map[string]any{"stream": true}, map[string]any{}, otherKey, false},
+		"key wins over jwt groups": {map[string]any{"stream": true}, map[string]any{"groups": []any{"ml-research"}}, otherKey, false},
+		"stream false":             {map[string]any{"stream": false}, map[string]any{"groups": []any{"ml-research"}}, nil, false},
 	} {
-		v, _, err := prg.Eval(map[string]any{"request": chat, "llmRequest": c.llm, "jwt": c.jwt})
+		v, _, err := prg.Eval(map[string]any{"request": chat, "llmRequest": c.llm, "jwt": c.jwt, "apiKey": orEmpty(c.apiKey)})
 		if err != nil {
 			t.Errorf("%s: condition failed (the client's stream_options would be removed): %v", name, err)
 			continue
@@ -103,4 +109,12 @@ func TestUsageConditionNeverFails(t *testing.T) {
 	if !strings.HasPrefix(usageField([]string{"ml-research"}), usageCondition([]string{"ml-research"})+" ? ") {
 		t.Fatal("usageField does not use usageCondition")
 	}
+}
+
+// orEmpty: agentgateway's apiKey is an empty map for a request without a key, so has(apiKey.keyId) is false.
+func orEmpty(m map[string]any) map[string]any {
+	if m == nil {
+		return map[string]any{}
+	}
+	return m
 }

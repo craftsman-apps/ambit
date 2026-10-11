@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/craftsman-apps/ambit/internal/identity"
 	"os"
 	"path/filepath"
 	"strings"
@@ -210,7 +211,7 @@ func TestReconcilerAgainstAPIServer(t *testing.T) {
 			return err
 		}
 		if e, _, _ := unstructured.NestedStringSlice(p.Object, "spec", "backend", "mcp", "authorization", "policy", "matchExpressions"); len(e) != 1 ||
-			e[0] != `mcp.tool.target == "time" && mcp.tool.name == "get_current_time" && jwt.groups.exists(g, g in ["eng"])` {
+			e[0] != `mcp.tool.target == "time" && mcp.tool.name == "get_current_time" && `+identity.PrincipalGroups+`.exists(g, g in ["eng"])` {
 			return fmt.Errorf("policy %v", e)
 		}
 		return nil

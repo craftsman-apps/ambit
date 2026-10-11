@@ -2,6 +2,7 @@ package console
 
 import (
 	"encoding/json"
+	"github.com/craftsman-apps/ambit/internal/identity"
 	"net/http"
 	"strings"
 	"testing"
@@ -166,7 +167,7 @@ func TestAdminEditsToolsInARule(t *testing.T) {
 		t.Fatalf("create: %d %s", r.Code, r.Body)
 	}
 	d := decodeAs[RuleDetail](t, do(t, h, "GET", "/api/access-rules/ml-time", admin, nil).Body.String())
-	if len(d.EffectiveServers) != 1 || !strings.Contains(d.EffectiveServers[0].CEL, `mcp.tool.target == "time" && jwt.groups.exists(g, g in ["ml-research"])`) {
+	if len(d.EffectiveServers) != 1 || !strings.Contains(d.EffectiveServers[0].CEL, `mcp.tool.target == "time" && `+identity.PrincipalGroups+`.exists(g, g in ["ml-research"])`) {
 		t.Fatalf("effective %+v", d.EffectiveServers)
 	}
 	// Narrow to one tool.

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"github.com/craftsman-apps/ambit/internal/identity"
 	"slices"
 	"strings"
 	"testing"
@@ -61,8 +62,8 @@ var (
 const (
 	pathOK  = `request.path == "/v1/chat/completions"`
 	textOf  = `llmRequest.messages.filter(m, m.role == "user")[size(llmRequest.messages.filter(m, m.role == "user")) - 1].content`
-	autoCEL = `jwt.groups.exists(g, g in ["eng", "ml"])`
-	mlCEL   = `jwt.groups.exists(g, g in ["ml"])`
+	autoCEL = identity.PrincipalGroups + `.exists(g, g in ["eng", "ml"])`
+	mlCEL   = identity.PrincipalGroups + `.exists(g, g in ["ml"])`
 )
 
 // The lines in route order, each: router access, path, condition, target access; the default last.
@@ -118,7 +119,7 @@ func TestUnpricedTargetFallsThrough(t *testing.T) {
 	RefuseUnpriced(&res, catalog, map[string]v1.ModelPrice{"google/gemma": {}, "google/pro": {}}, []string{"ml"})
 	CompileRouters([]v1.ModelRouter{router("auto", "Rules", "gemma", v1.RouterRoute{Model: "sonnet", Keywords: []string{"x"}})}, catalog, &res, route, nil, ClassifierInput{})
 	w := targets(t, byName(res.Objects)["router-auto"])[0][0]
-	if !strings.HasSuffix(w, `(`+`(`+mlCEL+`) && !jwt.groups.exists(g, g in ["ml"])`+`)`) {
+	if !strings.HasSuffix(w, `(`+`(`+mlCEL+`) && !`+identity.PrincipalGroups+`.exists(g, g in ["ml"])`+`)`) {
 		t.Fatalf("unpriced refusal missing from the line: %s", w)
 	}
 }

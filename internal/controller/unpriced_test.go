@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"github.com/craftsman-apps/ambit/internal/identity"
 	"strings"
 	"testing"
 
@@ -36,7 +37,7 @@ func TestRefuseUnpriced(t *testing.T) {
 		}
 		return ""
 	}
-	if got := expr("raw"); got != `(jwt.groups.exists(g, g in ["eng", "ml-research"])) && !jwt.groups.exists(g, g in ["eng", "ml-research"])` {
+	if got := expr("raw"); got != `(`+identity.PrincipalGroups+`.exists(g, g in ["eng", "ml-research"])) && !`+identity.PrincipalGroups+`.exists(g, g in ["eng", "ml-research"])` {
 		t.Fatalf("raw: %s", got)
 	}
 	if got := expr("echo"); strings.Contains(got, "!jwt") {

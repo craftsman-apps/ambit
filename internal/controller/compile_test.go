@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"github.com/craftsman-apps/ambit/internal/identity"
 	"reflect"
 	"strings"
 	"testing"
@@ -66,7 +67,7 @@ func TestRulesMergePerModelSortedAndDeduplicated(t *testing.T) {
 			rule("r3", nil, true, "gemma"),
 		}, route)
 	objs := byName(r.Objects)
-	if got := expr(t, objs["nemotron"]); got != `jwt.groups.exists(g, g in ["finance", "ml-research"])` {
+	if got := expr(t, objs["nemotron"]); got != identity.PrincipalGroups+`.exists(g, g in ["finance", "ml-research"])` {
 		t.Fatalf("nemotron: %s", got)
 	}
 	if got := expr(t, objs["gemma"]); got != "true" {
@@ -89,7 +90,7 @@ func TestUnknownModelMakesRuleDegradedButOthersStillApply(t *testing.T) {
 	if c.Status != metav1.ConditionFalse || c.Reason != "UnknownModel" || !strings.Contains(c.Message, "gemmaa") {
 		t.Fatalf("condition: %+v", c)
 	}
-	if got := expr(t, r.Objects[0]); got != `jwt.groups.exists(g, g in ["eng"])` {
+	if got := expr(t, r.Objects[0]); got != identity.PrincipalGroups+`.exists(g, g in ["eng"])` {
 		t.Fatalf("valid part of the rule should still apply: %s", got)
 	}
 }

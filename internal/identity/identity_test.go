@@ -1,6 +1,11 @@
 package identity
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/ext"
+)
 
 func TestCanonicalEmail(t *testing.T) {
 	for _, c := range []struct {
@@ -42,5 +47,45 @@ func TestFragmentsArePinned(t *testing.T) {
 	}
 	if JWTGate(true) != `has(jwt.sub) && `+HasEmail() || JWTGate(false) != `has(jwt.sub)` {
 		t.Error(JWTGate(true), JWTGate(false))
+	}
+}
+
+// The CEL email rule and the Go rule must agree (cel-go is not agentgateway's CEL; the acceptance test covers that).
+func TestEmailRuleParity(t *testing.T) {
+	env, err := cel.NewEnv(ext.Strings(), cel.Variable("jwt", cel.MapType(cel.StringType, cel.DynType)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog := func(expr string) cel.Program {
+		ast, iss := env.Compile(expr)
+		if iss.Err() != nil {
+			t.Fatal(iss.Err())
+		}
+		p, err := env.Program(ast)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	has, canon := prog(HasEmail()), prog(`jwt.email.trim().lowerAscii()`)
+	for _, in := range []string{"alice@acme.com", "  Alice@Acme.COM ", "ÄLICE@acme.com", "o'brien@acme.com", "", "alice", "a@b@c", "al ice@acme.com", "alice@", "@acme.com"} {
+		want, wantOK := CanonicalEmail(in)
+		act := map[string]any{"jwt": map[string]any{"email": in}}
+		v, _, err := has.Eval(act)
+		if err != nil || v.Value() != wantOK {
+			t.Errorf("HasEmail(%q) = %v, %v; want %v", in, v, err, wantOK)
+			continue
+		}
+		if wantOK {
+			if c, _, err := canon.Eval(act); err != nil || c.Value() != want {
+				t.Errorf("canonical(%q) = %v, %v; want %q", in, c, err, want)
+			}
+		}
+	}
+	// Not a string, or missing: never usable, never an error.
+	for _, jwt := range []map[string]any{{"email": 5}, {}} {
+		if v, _, err := has.Eval(map[string]any{"jwt": jwt}); err != nil || v.Value() != false {
+			t.Errorf("HasEmail(%v) = %v, %v; want false", jwt, v, err)
+		}
 	}
 }

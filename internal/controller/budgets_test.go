@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"github.com/craftsman-apps/ambit/internal/identity"
 	"strings"
 	"testing"
 
@@ -47,7 +48,7 @@ domain: ambit-llm
 		t.Fatalf("gateway descriptors %v", d)
 	}
 	first := d[0].(map[string]any)["entries"].([]any)[0].(map[string]any)["expression"]
-	if first != `jwt.groups.exists(g, g == "eng") ? "eng" : ""` {
+	if first != identity.PrincipalGroups+`.exists(g, g == "eng") ? "eng" : ""` {
 		t.Fatalf("member expression %v", first)
 	}
 	if fm, _, _ := unstructured.NestedString(p.Object, "spec", "traffic", "rateLimit", "global", "failureMode"); fm != "FailOpen" {
@@ -110,7 +111,7 @@ domain: ambit-llm
 		}
 	}
 	user := ds[1].(map[string]any)["entries"].([]any)
-	if user[0].(map[string]any)["name"] != "spend_group" || user[1].(map[string]any)["name"] != "spend_user" || user[1].(map[string]any)["expression"] != spendUser {
+	if user[0].(map[string]any)["name"] != "spend_group" || user[1].(map[string]any)["name"] != "spend_user" || user[1].(map[string]any)["expression"] != spendUser() {
 		t.Fatalf("user entries %v", user)
 	}
 }
@@ -159,8 +160,11 @@ func TestEffectiveBudgetsFirstByName(t *testing.T) {
 // A token without an email claim is still charged per person (by its subject); a failing expression would
 // make agentgateway skip both the check and the charge.
 func TestSpendUserFallsBackToSubject(t *testing.T) {
-	if spendUser != "has(jwt.email) ? jwt.email : jwt.sub" {
-		t.Fatal(spendUser)
+	old := RequireEmail
+	defer func() { RequireEmail = old }()
+	RequireEmail = false
+	if spendUser() != identity.Principal(false) || !strings.Contains(spendUser(), "jwt.sub") {
+		t.Fatal(spendUser())
 	}
 }
 

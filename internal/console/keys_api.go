@@ -63,6 +63,10 @@ func (c *Catalog) registerKeys(mux *http.ServeMux, read func(func(http.ResponseW
 	}))
 	if os.Getenv("AMBIT_TEST_HOOKS") == "true" { // test clusters only (chart: console.testHooks)
 		mux.HandleFunc("POST /api/test/keys/{id}/expire", allow("only admins can use test hooks", c.expireKey, RoleAdmin))
+		mux.HandleFunc("POST /api/test/keys/reset-limits", allow("only admins can use test hooks", func(w http.ResponseWriter, _ *http.Request, _ Session) {
+			c.Keys.ResetLimitsForTest()
+			w.WriteHeader(http.StatusNoContent)
+		}, RoleAdmin))
 	}
 }
 

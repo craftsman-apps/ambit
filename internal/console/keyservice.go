@@ -626,6 +626,13 @@ func (s *KeyService) Revoke(ctx context.Context, by Session, id string, admin bo
 	return err
 }
 
+// ResetLimitsForTest forgets the hourly creation counts. Only the acceptance-test hook calls it.
+func (s *KeyService) ResetLimitsForTest() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.created = nil
+}
+
 // ExpireForTest sets a key's until (raising its ceiling if needed). Only the acceptance-test hook calls it.
 func (s *KeyService) ExpireForTest(ctx context.Context, id string, u time.Time) error {
 	s.mu.Lock()

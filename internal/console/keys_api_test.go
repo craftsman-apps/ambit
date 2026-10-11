@@ -280,6 +280,42 @@ func TestExpireHook(t *testing.T) {
 	}
 }
 
+func TestResetLimitsHook(t *testing.T) {
+	t.Setenv("AMBIT_TEST_HOOKS", "")
+	f := newKeysFixture(t)
+	admin := f.cookie("root@acme.com", RoleAdmin)
+	if r := f.call(t, "POST", "/api/test/keys/reset-limits", admin, map[string]any{}); r.Code != http.StatusNotFound {
+		t.Fatal("test hook registered in a normal console:", r.Code)
+	}
+	t.Setenv("AMBIT_TEST_HOOKS", "true")
+	f = newKeysFixture(t)
+	admin = f.cookie("root@acme.com", RoleAdmin)
+	mira := f.cookie("mira@acme.com", RoleViewer)
+	body := map[string]any{"name": "x", "scope": "llm", "days": 30}
+	n := 0
+	for ; n < 30; n++ {
+		r := f.call(t, "POST", "/api/keys", mira, body)
+		if r.Code == http.StatusTooManyRequests {
+			break
+		}
+		if r.Code != http.StatusCreated {
+			t.Fatal(r.Code, r.Body.String())
+		}
+	}
+	if n != 10 {
+		t.Fatal("hourly limit hit after", n)
+	}
+	if r := f.call(t, "POST", "/api/test/keys/reset-limits", mira, map[string]any{}); r.Code != 403 {
+		t.Fatal("viewer:", r.Code)
+	}
+	if r := f.call(t, "POST", "/api/test/keys/reset-limits", admin, map[string]any{}); r.Code != 204 {
+		t.Fatal(r.Code)
+	}
+	if r := f.call(t, "POST", "/api/keys", mira, body); r.Code != http.StatusCreated {
+		t.Fatal("after reset:", r.Code, r.Body.String())
+	}
+}
+
 func TestRevokeOfUnreadableKeyIsNotFound(t *testing.T) {
 	f := newKeysFixture(t)
 	bad := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ambit-key-aaaaaaaaaaaa", Namespace: f.keys.Namespace,

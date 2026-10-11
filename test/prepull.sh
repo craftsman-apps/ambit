@@ -12,4 +12,6 @@ agw=$(sed -n 's/^AGENTGATEWAY_VERSION ?= //p' Makefile)
   cat test/*/*.yaml
 } | sed -nE 's/^[[:space:]-]*image:[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p' | grep -v -e '^ambit-' -e ':dev$' -e '{{' | sort -u > "$list"
 echo "cr.agentgateway.dev/agentgateway:$agw" >> "$list"
-xargs -P 4 -I{} sh -c 'docker exec '"$NODE"' crictl pull "{}" >/dev/null 2>&1 && echo "pulled {}" || echo "not pulled {}"' < "$list"
+# Images CI already loaded (the agentgateway ones, from hack/thirdparty-cache.sh) are not pulled again.
+xargs -P 4 -I{} sh -c 'if docker exec '"$NODE"' crictl inspecti -q "{}" >/dev/null 2>&1; then echo "present {}";
+  elif docker exec '"$NODE"' crictl pull "{}" >/dev/null 2>&1; then echo "pulled {}"; else echo "not pulled {}"; fi' < "$list"

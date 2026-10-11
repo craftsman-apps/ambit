@@ -30,6 +30,7 @@ print(yaml.safe_dump(c))
 EOF
 kind create cluster --config "$W/cluster.yaml" --kubeconfig "$KUBECONFIG" --wait 120s >/dev/null
 kind load docker-image "$IMG" --name "$CL" >/dev/null
+[[ -z "${QS_PRELOAD:-}" ]] || kind load image-archive "$QS_PRELOAD" --name "$CL" >/dev/null  # CI: cached third-party images
 ! kubectl -n kube-system get configmap coredns -o jsonpath='{.data.Corefile}' | grep -q localtest || fail "1 CoreDNS has a localtest rewrite"
 pass "1 kind cluster without DNS rewrite"
 

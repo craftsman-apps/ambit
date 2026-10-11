@@ -189,9 +189,9 @@ func run(ctx context.Context) error {
 			PublicURL: publicURL, SessionKey: keys.SessionKey, SessionTTL: time.Duration(hours) * time.Hour,
 			OnSignIn: func(c context.Context, sess console.Session) {
 				go func() { // never make sign-in wait for the key lock; Refresh keeps the newest sign-in, so order does not matter
-					switch err := keySvc.Refresh(c, sess); {
+					switch err := keySvc.RefreshAtSignIn(c, sess); {
 					case errors.Is(err, console.ErrNotLeader):
-						slog.Debug("key refresh skipped: not the key writer")
+						slog.Info("key refresh skipped: no key writer for 60 s; the next sign-in refreshes the keys", "email", sess.Email)
 					case err != nil:
 						slog.Error("key refresh at sign-in", "email", sess.Email, "err", err)
 					}

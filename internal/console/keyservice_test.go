@@ -1037,3 +1037,35 @@ func TestCreateWithANewerSignInUpdatesOtherKeys(t *testing.T) {
 		t.Fatalf("the older key kept the older sign-in: %+v", k)
 	}
 }
+
+func TestRefreshAtSignInWaitsForTheTerm(t *testing.T) {
+	oldWait, oldStep := refreshWait, refreshStep
+	refreshWait, refreshStep = 2*time.Second, 5*time.Millisecond
+	t.Cleanup(func() { refreshWait, refreshStep = oldWait, oldStep })
+	s, _ := newKeySvc(t)
+	ctx := context.Background()
+	if _, _, err := s.Create(ctx, alice("eng"), "k", ScopeLLM, 90); err != nil {
+		t.Fatal(err)
+	}
+	s.EndTermForTest() // the Lease gap after a restart
+	done := make(chan error)
+	go func() {
+		done <- s.RefreshAtSignIn(ctx, Session{Email: "alice@acme.com", Groups: []string{"ops"}, SignedIn: t0.Unix() + 10})
+	}()
+	time.Sleep(30 * time.Millisecond)
+	if err := s.StartTerm(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if keys, _ := s.List(ctx, "alice@acme.com"); len(keys) != 1 || keys[0].Groups[0] != "ops" {
+		t.Fatalf("refresh dropped during the Lease gap: %+v", keys)
+	}
+	// Never the leader: gives up after refreshWait.
+	refreshWait = 20 * time.Millisecond
+	s.EndTermForTest()
+	if err := s.RefreshAtSignIn(ctx, alice()); !errors.Is(err, ErrNotLeader) {
+		t.Fatal(err)
+	}
+}

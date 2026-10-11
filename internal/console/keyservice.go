@@ -560,6 +560,26 @@ func (s *KeyService) Refresh(ctx context.Context, sess Session) error {
 	return err
 }
 
+// refreshWait covers the Lease gap after a console restart (about 15 s); refreshStep spaces the attempts.
+var refreshWait, refreshStep = 60 * time.Second, 2 * time.Second
+
+// RefreshAtSignIn is Refresh for the sign-in hook: while no console holds the key Lease it retries for up to
+// refreshWait, so a sign-in during a restart still refreshes the person's keys. It then returns ErrNotLeader.
+func (s *KeyService) RefreshAtSignIn(ctx context.Context, sess Session) error {
+	deadline := time.Now().Add(refreshWait)
+	for {
+		err := s.Refresh(ctx, sess)
+		if !errors.Is(err, ErrNotLeader) || !time.Now().Before(deadline) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(refreshStep):
+		}
+	}
+}
+
 // OffboardKeys marks the owner record offboarded (creating it if needed), then deletes every key the person has.
 // It is idempotent; the identity provider retries it until it succeeds.
 func (s *KeyService) OffboardKeys(ctx context.Context, email, trigger string) (int, error) {

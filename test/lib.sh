@@ -186,3 +186,17 @@ pod_curl() {
   done
   echo 000
 }
+
+# Personal API keys. mkkey NAME SCOPE (llm|mcp|both): creates a key through the console API as the signed-in
+# user (the only way keys are made); sets KEY (shown once) and KID, and records KID in KEYIDS for cleanup.
+KEYIDS=()
+mkkey() {
+  local c
+  for _ in $(seq 1 15); do  # 503 while the console takes over the key Lease
+    c=$(api POST /api/keys "{\"name\":\"$1\",\"scope\":\"$2\",\"days\":30}"); [[ "$c" == 503 ]] || break; sleep 2
+  done
+  [[ "$c" == 201 ]] || fail "create key $1: HTTP $c $(cat "$W/api")"
+  KEY=$(uv run --no-project python -c 'import json,sys;print(json.load(open(sys.argv[1]))["key"])' "$W/api")
+  KID=$(uv run --no-project python -c 'import json,sys;print(json.load(open(sys.argv[1]))["view"]["id"])' "$W/api")
+  KEYIDS+=("$KID")
+}

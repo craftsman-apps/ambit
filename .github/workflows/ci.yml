@@ -116,7 +116,7 @@ jobs:
       matrix:
         part:
           - { name: a, steps: "0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 8 9 ext args", ui: true }
-          - { name: b, steps: "10 12", ui: false }
+          - { name: b, steps: "10 12 keys", ui: false }
     steps:
       # The runner's disk held the kind images, the build cache and Go's caches until "no space left on device"
       # (2026-10-08). Preinstalled tools this job never uses are removed in the background.

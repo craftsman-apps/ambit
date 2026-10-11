@@ -1,6 +1,6 @@
 # Test identity provider for step 2. NOT part of the Ambit package; stands in for a customer's Okta.
 # Test-only credentials: priya/priya-test-pass (ambit-admins), sam/sam-test-pass (ambit-approvers),
-# alice/alice-test-pass (eng), mira/mira-test-pass (ml-research). Keycloak admin: admin/admin.
+# alice/alice-test-pass (eng), mira/mira-test-pass (ml-research), noemail/noemail-test-pass (eng, no email), keytest/keytest-test-pass (eng; the key tests' offboarding user). Keycloak admin: admin/admin.
 # Client ambit-cli-test: password grant for tests only; access tokens carry groups and aud=ambit-gateway.
 # Realm saas (step 5) stands in for a SaaS app such as Jira: its own accounts alice/alice-saas-pass and
 # mira/mira-saas-pass, and the confidential client ambit-connect that Ambit's Connection uses (password grant on, so a test can get a token with the whoami audience).
@@ -121,6 +121,41 @@ data:
           ],
           "groups": [
             "/ambit-approvers"
+          ]
+        },
+        {
+          "username": "noemail",
+          "emailVerified": true,
+          "firstName": "No",
+          "lastName": "Email",
+          "enabled": true,
+          "credentials": [
+            {
+              "type": "password",
+              "value": "noemail-test-pass",
+              "temporary": false
+            }
+          ],
+          "groups": [
+            "/eng"
+          ]
+        },
+        {
+          "username": "keytest",
+          "email": "keytest@acme.test",
+          "emailVerified": true,
+          "firstName": "Key",
+          "lastName": "Test",
+          "enabled": true,
+          "credentials": [
+            {
+              "type": "password",
+              "value": "keytest-test-pass",
+              "temporary": false
+            }
+          ],
+          "groups": [
+            "/eng"
           ]
         },
         {

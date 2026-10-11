@@ -71,12 +71,14 @@ pass "1 a key in either header reaches the model; the model received no ambit_ v
 
 # 2 · refused: no credential, wrong key, broken JWT, wrong-scope key, valid JWT + wrong key
 TOK=$(token alice)
+# First prove a valid JWT works (after a Keycloak restart the gateway holds the old keys until the controller
+# refreshes them, every 5 minutes), so the JWT refusals below cannot pass merely because every JWT is rejected.
+wait_for 400 '[[ $(code -H "Authorization: Bearer $TOK") == 200 ]]' || fail "2 alice's JWT alone must work: $(cat "$W/llm")"
 [[ $(code) =~ ^40[13]$ ]] || fail "2 no credential: $(cat "$W/llm")"
 [[ $(code -H "Authorization: Bearer ambit_wrongwrongwrongwrongwrongwrongwrongwrongwro") == 403 ]] || fail "2 wrong key: $(cat "$W/llm")"
 [[ $(code -H "Authorization: Bearer eyJhbGciOiJSUzI1NiJ9.e30.x") == 403 ]] || fail "2 broken JWT: $(cat "$W/llm")"
 [[ $(code -H "x-api-key: $M") == 403 ]] || fail "2 an MCP-scoped key reached the LLM gateway: $(cat "$W/llm")"
 [[ $(code -H "Authorization: Bearer $TOK" -H "x-api-key: ambit_wrong") == 403 ]] || fail "2 JWT + wrong key: $(cat "$W/llm")"
-wait_for 400 '[[ $(code -H "Authorization: Bearer $TOK") == 200 ]]' || fail "2 alice's JWT alone must still work: $(cat "$W/llm")"  # the gateway the controller refreshes the Keycloak keys every 5 minutes
 pass "2 no credential, wrong key, broken JWT, wrong-scope key, JWT + wrong key: refused; JWT alone: allowed"
 
 # 3 · expiry is checked by the gateway on every request (the test hook sets until to the past, through the console)
@@ -91,14 +93,18 @@ if kubectl -n "$NS" label secret forge-test ambitproject.dev/key=true ambitproje
 fi
 grep -q "only the Ambit console may write personal API key objects" "$W/err" || fail "4a wrong refusal: $(cat "$W/err")"
 kubectl -n "$NS" delete secret forge-test >/dev/null
-! kubectl -n "$NS" delete secret "ambit-key-$MID" 2>/dev/null || fail "4a an admin's kubectl deleted a key directly"
+! kubectl -n "$NS" delete secret "ambit-key-$MID" 2>"$W/err" || fail "4a an admin's kubectl deleted a key directly"
+grep -q "only the Ambit console may write personal API key objects" "$W/err" || fail "4a direct delete refused for the wrong reason: $(cat "$W/err")"
 pass "4a a Secret relabelled into a key, and a direct delete of a key, are refused by admission"
 # 4b · a Secret with only the scope label (not protected) holding the hash of a known value gives no access
 FORGED=ambit_forgedforgedforgedforgedforgedforgedforged1
 HASH=$(printf %s "$FORGED" | shasum -a 256 | cut -d' ' -f1)
 kubectl -n "$NS" create secret generic forge-scope --from-literal=key="{\"keyHash\":\"sha256:$HASH\",\"metadata\":{\"keyId\":\"forged\",\"email\":\"admin@ambit.local\",\"groups\":[],\"until\":\"2099-01-01T00:00:00Z\"}}" >/dev/null
 kubectl -n "$NS" label secret forge-scope ambitproject.dev/key-llm=true >/dev/null
-sleep 10
+# Positive control: a real key made after the forged Secret is read through the same selectors; once it is accepted,
+# the forged Secret has had the time to load too.
+mkkey control-key llm
+wait_for 90 '[[ $(code -H "Authorization: Bearer $KEY") == 200 ]]' || fail "4b the control key is not accepted: $(cat "$W/llm")"
 [[ $(code -H "Authorization: Bearer $FORGED") == 403 ]] || fail "4b a Secret with only the scope label was accepted as a key: $(cat "$W/llm")"
 kubectl -n "$NS" delete secret forge-scope >/dev/null
 pass "4b a Secret labelled only key-llm, holding a known hash, gives 403"

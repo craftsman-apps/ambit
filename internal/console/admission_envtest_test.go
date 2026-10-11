@@ -31,7 +31,6 @@ const (
 	admNSController = "system:serviceaccount:kube-system:namespace-controller"
 	msgWriter       = "only the Ambit console may write personal API key objects"
 	msgLease        = "only the Ambit console may change the key Lease"
-	msgHolder       = "only the Ambit console holding the key Lease may write personal API key objects"
 )
 
 func admClient(t *testing.T, base *rest.Config, user, pod string) kubernetes.Interface {
@@ -178,7 +177,7 @@ func TestAdmissionFencesKeyObjects(t *testing.T) {
 	}
 	noLease := fresh("nolease")
 	if _, err := sec(podA).Create(ctx, keySecret(noLease, keyLabels), metav1.CreateOptions{}); err != nil {
-		t.Errorf("console pod without a Lease present must be allowed (holder policy not applied): %v", err)
+		t.Errorf("console pod without a Lease present must be allowed: %v", err)
 	}
 	if err := del(nsCtl, noLease); err != nil {
 		t.Errorf("namespace controller must delete a key Secret with no Lease: %v", err)
@@ -195,7 +194,6 @@ func TestAdmissionFencesKeyObjects(t *testing.T) {
 	// 2. Lease held by pod-a.
 	holder := "pod-a"
 	must(admin.Create(ctx, &coordv1.Lease{ObjectMeta: metav1.ObjectMeta{Name: "ambit-key-writer", Namespace: admNS}, Spec: coordv1.LeaseSpec{HolderIdentity: &holder}}))
-	waitRefused("pod-b writes while pod-a holds the Lease (holder policy)", podB, msgHolder)
 	leaseGone := func(c kubernetes.Interface) error {
 		return c.CoordinationV1().Leases(admNS).Delete(ctx, "ambit-key-writer", metav1.DeleteOptions{})
 	}
@@ -222,8 +220,13 @@ func TestAdmissionFencesKeyObjects(t *testing.T) {
 	if _, err := podA.CoreV1().ConfigMaps(admNS).Create(ctx, keyConfigMap(fresh("ev")), metav1.CreateOptions{}); err != nil {
 		t.Errorf("holder pod-a must write a key event: %v", err)
 	}
-	if err := del(podB, name); !refused(err, msgHolder) {
-		t.Errorf("pod-b delete must be refused by the holder policy, got %v", err)
+	// No Lease-holder check in admission (the API server's parameter cache can go stale): any console pod may
+	// write; which one does is decided by leader election inside the console.
+	if pb := fresh("podb"); true {
+		if _, err := sec(podB).Create(ctx, keySecret(pb, keyLabels), metav1.CreateOptions{}); err != nil {
+			t.Errorf("another console pod must be allowed while pod-a holds the Lease: %v", err)
+		}
+		_ = del(nsCtl, pb)
 	}
 	if err := del(adm, name); !refused(err, msgWriter) {
 		t.Errorf("admin delete must be refused, got %v", err)
@@ -239,18 +242,10 @@ func TestAdmissionFencesKeyObjects(t *testing.T) {
 		t.Errorf("holder pod-a must delete: %v", err)
 	}
 
-	// 4. Lease absent: the holder policy no longer applies, the writer policy still does.
+	// 4. Lease absent: the writer policy still decides.
 	if err := leaseGone(nsCtl); err != nil {
 		t.Fatalf("namespace controller must delete the Lease: %v", err)
 	}
-	waitUntil("holder policy lifted", func() bool {
-		name := fresh("probe")
-		_, err := sec(podB).Create(ctx, keySecret(name, keyLabels), metav1.CreateOptions{})
-		if err == nil {
-			_ = del(nsCtl, name)
-		}
-		return err == nil
-	})
 	for _, c := range []kubernetes.Interface{podA, podB} {
 		name := fresh("nolease")
 		if _, err := sec(c).Create(ctx, keySecret(name, keyLabels), metav1.CreateOptions{}); err != nil {

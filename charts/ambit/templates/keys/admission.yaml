@@ -7,12 +7,11 @@
 {{- $console := printf "system:serviceaccount:%s:ambit-console" $ns }}
 {{- $labels := list "ambitproject.dev/key" "ambitproject.dev/key-owner-record" "ambitproject.dev/key-event" }}
 # Personal API keys: key Secrets, owner records (Secrets) and key events (ConfigMaps) carry a label that starts with
-# ambitproject.dev/key. Only the console may write them, and only the console pod that holds the key Lease. Two
-# policies, so that teardown never depends on the Lease:
-#   ambit-keys-writer  no parameter: console service account with a pod name, or deletion by the namespace controller
-#                      and the garbage collector (so a namespace with keys can always be deleted).
-#   ambit-keys-holder  parameter = the Lease: while it exists, a console pod must be its holder. With no Lease the
-#                      policy does not apply (accepted takeover risk: any console pod, visible in the audit log).
+# ambitproject.dev/key. ambit-keys-writer lets only the console's service account (with a pod name) write them, and
+# lets the namespace controller and the garbage collector delete them (so a namespace with keys can always be
+# deleted). Which console pod writes is decided by the key Lease inside the console (leader election, one replica,
+# maxSurge 0, hourly repair). A holder check against the Lease in admission was removed: the API server's parameter
+# cache can go stale for hours, and the check then refused every key write, including offboarding's deletions.
 # Bindings select by object label first, so unrelated Secrets and ConfigMaps are never touched. On UPDATE and DELETE
 # a binding matches when the old or the new object matches, which also catches relabelling into a key.
 apiVersion: admissionregistration.k8s.io/v1
@@ -40,25 +39,6 @@ spec:
   validations:
     - expression: "variables.console || variables.cleanup"
       message: "only the Ambit console may write personal API key objects"
----
-apiVersion: admissionregistration.k8s.io/v1
-kind: ValidatingAdmissionPolicy
-metadata:
-  name: ambit-keys-holder
-spec:
-  failurePolicy: Fail
-  paramKind: { apiVersion: coordination.k8s.io/v1, kind: Lease }
-  matchConstraints:
-    resourceRules:
-      - apiGroups: [""]
-        apiVersions: [v1]
-        operations: [CREATE, UPDATE, DELETE]
-        resources: [secrets, configmaps]
-  validations:
-    - expression: >-
-        request.userInfo.username != {{ $console | quote }} ||
-        (has(request.userInfo.extra) && request.userInfo.extra["authentication.kubernetes.io/pod-name"][0] == params.spec.holderIdentity)
-      message: "only the Ambit console holding the key Lease may write personal API key objects"
 {{- range $i, $label := $labels }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -71,22 +51,10 @@ spec:
   matchResources:
     namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ $ns }} } }
     objectSelector: { matchExpressions: [{ key: {{ $label | quote }}, operator: Exists }] }
----
-apiVersion: admissionregistration.k8s.io/v1
-kind: ValidatingAdmissionPolicyBinding
-metadata:
-  name: ambit-keys-holder-{{ $i }}
-spec:
-  policyName: ambit-keys-holder
-  validationActions: [Deny]
-  paramRef: { name: ambit-key-writer, namespace: {{ $ns }}, parameterNotFoundAction: Allow }
-  matchResources:
-    namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ $ns }} } }
-    objectSelector: { matchExpressions: [{ key: {{ $label | quote }}, operator: Exists }] }
 {{- end }}
 ---
-# The Lease names the one console pod that may write keys: only the console changes it (the holder policy above
-# applies while it exists). CREATE stays open because the console creates it; namespace teardown may delete it.
+# The Lease names the one console pod that may write keys: only the console changes it. CREATE stays open because the
+# console creates it; namespace teardown may delete it.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:

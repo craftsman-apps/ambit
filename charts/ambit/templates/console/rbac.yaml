@@ -69,7 +69,7 @@ rules:
     resources: [serverrequests/status]
     verbs: [update]
   # Personal API keys: key Secrets, owner records (Secrets) and key events (ConfigMaps) in this namespace. RBAC
-  # cannot limit by label; the ambit-keys-writer and ambit-keys-holder admission policies limit what the console
+  # cannot limit by label; the ambit-keys-writer admission policy limits what the console
   # may change. The Lease elects the one console pod that writes keys; it is never deleted by the console.
   - apiGroups: [""]
     resources: [secrets, configmaps]

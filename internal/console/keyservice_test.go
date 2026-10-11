@@ -905,3 +905,35 @@ func TestListDoesNotWaitForTheLock(t *testing.T) {
 		t.Fatal("List waited for the lock")
 	}
 }
+
+func TestOffboardKeysReplacesAnUnreadableOwnerRecord(t *testing.T) {
+	s, _ := newKeySvc(t)
+	ctx := context.Background()
+	_, _, _ = s.Create(ctx, alice("eng"), "a", ScopeLLM, 90)
+	_, _, _ = s.Create(ctx, alice("eng"), "b", ScopeMCP, 90)
+	var raw corev1.Secret
+	if err := s.Client.Get(ctx, client.ObjectKey{Namespace: "ambit-system", Name: "ambit-key-owner-" + ownerHash("alice@acme.com")}, &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw.Data = map[string][]byte{"owner.json": []byte("{")}
+	if err := s.Client.Update(ctx, &raw); err != nil {
+		t.Fatal(err)
+	}
+	n, err := s.OffboardKeys(ctx, "Alice@Acme.com", "scim PATCH active=false")
+	if err != nil || n != 2 {
+		t.Fatal(n, err)
+	}
+	if keys, _ := s.List(ctx, "alice@acme.com"); len(keys) != 0 {
+		t.Fatalf("keys left: %+v", keys)
+	}
+	o, err := s.owner(ctx, "alice@acme.com")
+	if err != nil || !o.Offboarded || o.Email != "alice@acme.com" {
+		t.Fatalf("owner %+v %v", o, err)
+	}
+	if ev, _ := keyChanges(s); ev[0].Action != "offboard-delete" || ev[2].Action != "offboard" {
+		t.Fatalf("%+v", ev)
+	}
+	if _, _, err := s.Create(ctx, alice(), "c", ScopeLLM, 90); !errors.Is(err, ErrOffboarded) {
+		t.Fatal("created after offboarding:", err)
+	}
+}

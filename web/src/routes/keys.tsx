@@ -53,6 +53,9 @@ function CreateKey({ settings, onClose }: { settings: KeySettings; onClose: () =
   const [days, setDays] = useState(String(options.includes(90) ? 90 : options[options.length - 1] ?? 30));
   const [created, setCreated] = useState<Created | null>(null); // the only place the plain key lives
   const create = useMutation({
+    // gcTime 0 and reset() on Done: the plain key must not stay in TanStack's mutation cache after it is dismissed.
+    // (The query client is deliberately not exposed on window to assert this in a browser test.)
+    gcTime: 0,
     mutationFn: () => sendJSON("POST", "/api/keys", { name: name.trim(), scope, days: Number(days) }) as Promise<Created>,
     onSuccess: (c) => { setCreated(c); qc.invalidateQueries({ queryKey: ["keys"] }); },
   });
@@ -63,7 +66,7 @@ function CreateKey({ settings, onClose }: { settings: KeySettings; onClose: () =
         <p className="font-medium">This is the only time the key is shown. Store it now.</p>
         <CopyBlock text={created.key} testId="new-key" label="Key" />
         {Object.entries(created.snippets).map(([n, text]) => <CopyBlock key={n} text={text} testId={`snippet-${n}`} label={snippetTitle[n] ?? n} />)}
-        <Button className="w-auto" onClick={() => { setCreated(null); onClose(); }}>Done</Button>
+        <Button className="w-auto" onClick={() => { setCreated(null); create.reset(); onClose(); }}>Done</Button>
       </div>
     );
   }

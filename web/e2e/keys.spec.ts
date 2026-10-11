@@ -11,35 +11,41 @@ async function signInAsAdmin(page: Page) {
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Login" }).click();
   await expect(page.getByTestId("signed-in-as")).toHaveText("Signed in as admin (bootstrap)");
+  // The hourly creation count is in the console's memory; start each test from zero.
+  expect((await page.request.post("/api/test/keys/reset-limits", { data: {} })).status()).toBe(204);
 }
 
 const nav = (page: Page) => page.getByRole("navigation", { name: "Console" });
 type KeyRow = { id: string; name: string };
 const listKeys = async (page: Page): Promise<KeyRow[]> => (await (await page.request.get("/api/keys")).json()).keys;
-const revokeAll = async (page: Page) => { for (const k of await listKeys(page)) await page.request.delete(`/api/keys/${k.id}`); };
+const revokeAll = async (page: Page) => { for (const k of (await listKeys(page)).filter((k) => k.name.startsWith("e2e"))) await page.request.delete(`/api/keys/${k.id}`); };
 const createViaAPI = (page: Page, name: string) =>
   page.request.post("/api/keys", { data: { name, scope: "llm", days: 30 } });
 
 test("create a key, see it once, revoke it", async ({ page }) => {
   await signInAsAdmin(page);
-  await nav(page).getByRole("link", { name: "Keys", exact: true }).first().click();
-  await page.getByRole("button", { name: "Create key" }).click();
-  await page.getByLabel("Name").fill("e2e laptop");
-  await page.getByLabel("Scope").selectOption("both");
-  await page.getByLabel("End date").selectOption("30");
-  await page.getByRole("button", { name: "Create", exact: true }).click();
-  const key = await page.getByTestId("new-key").textContent();
-  expect(key).toMatch(/^ambit_[0-9A-Za-z]{43}$/);
-  await expect(page.getByText("This is the only time the key is shown")).toBeVisible();
-  await expect(page.getByTestId("snippet-claudeCode")).toContainText(key!);
-  await page.getByRole("button", { name: "Done" }).click();
-  await expect(page.getByTestId("new-key")).toHaveCount(0);
-  const row = page.getByRole("row", { name: /e2e laptop/ });
-  await expect(row).toContainText(key!.slice(0, 10));
-  await expect(row).not.toContainText(key!.slice(10));
-  await row.getByRole("button", { name: "Revoke" }).click();
-  await page.getByRole("button", { name: "Revoke key" }).click(); // in-page confirmation, no window.confirm
-  await expect(row).toHaveCount(0);
+  try {
+    await nav(page).getByRole("link", { name: "Keys", exact: true }).first().click();
+    await page.getByRole("button", { name: "Create key" }).click();
+    await page.getByLabel("Name").fill("e2e laptop");
+    await page.getByLabel("Scope").selectOption("both");
+    await page.getByLabel("End date").selectOption("30");
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+    const key = await page.getByTestId("new-key").textContent();
+    expect(key).toMatch(/^ambit_[0-9A-Za-z]{43}$/);
+    await expect(page.getByText("This is the only time the key is shown")).toBeVisible();
+    await expect(page.getByTestId("snippet-claudeCode")).toContainText(key!);
+    await page.getByRole("button", { name: "Done" }).click();
+    await expect(page.getByTestId("new-key")).toHaveCount(0);
+    const row = page.getByRole("row", { name: /e2e laptop/ });
+    await expect(row).toContainText(key!.slice(0, 10));
+    await expect(row).not.toContainText(key!.slice(10));
+    await row.getByRole("button", { name: "Revoke" }).click();
+    await page.getByRole("button", { name: "Revoke key" }).click(); // in-page confirmation, no window.confirm
+    await expect(row).toHaveCount(0);
+  } finally {
+    await revokeAll(page);
+  }
 });
 
 test("admins see every key and the settings read-only", async ({ page }) => {

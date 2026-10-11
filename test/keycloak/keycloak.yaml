@@ -1,4 +1,5 @@
 # Test identity provider for step 2. NOT part of the Ambit package; stands in for a customer's Okta.
+# The realm's user profile makes email optional, so user noemail can get a token without an email claim.
 # Test-only credentials: priya/priya-test-pass (ambit-admins), sam/sam-test-pass (ambit-approvers),
 # alice/alice-test-pass (eng), mira/mira-test-pass (ml-research), noemail/noemail-test-pass (eng, no email), keytest/keytest-test-pass (eng; the key tests' offboarding user). Keycloak admin: admin/admin.
 # Client ambit-cli-test: password grant for tests only; access tokens carry groups and aud=ambit-gateway.
@@ -14,6 +15,7 @@ data:
       "realm": "acme",
       "enabled": true,
       "sslRequired": "none",
+      "components": {"org.keycloak.userprofile.UserProfileProvider": [{"providerId": "declarative-user-profile", "config": {"kc.user.profile.config": ["{\"attributes\": [{\"name\": \"username\", \"displayName\": \"${username}\", \"validations\": {\"length\": {\"min\": 3, \"max\": 255}, \"username-prohibited-characters\": {}, \"up-username-not-idn-homograph\": {}}, \"permissions\": {\"view\": [\"admin\", \"user\"], \"edit\": [\"admin\", \"user\"]}, \"multivalued\": false}, {\"name\": \"email\", \"displayName\": \"${email}\", \"validations\": {\"email\": {}, \"length\": {\"max\": 255}}, \"permissions\": {\"view\": [\"admin\", \"user\"], \"edit\": [\"admin\", \"user\"]}, \"multivalued\": false}, {\"name\": \"firstName\", \"displayName\": \"${firstName}\", \"validations\": {\"length\": {\"max\": 255}}, \"permissions\": {\"view\": [\"admin\", \"user\"], \"edit\": [\"admin\", \"user\"]}, \"multivalued\": false}, {\"name\": \"lastName\", \"displayName\": \"${lastName}\", \"validations\": {\"length\": {\"max\": 255}}, \"permissions\": {\"view\": [\"admin\", \"user\"], \"edit\": [\"admin\", \"user\"]}, \"multivalued\": false}]}"]}}]},
       "groups": [
         {
           "name": "ambit-admins"

@@ -24,11 +24,12 @@ PATCH_ON='{"Operations":[{"op":"replace","path":"active","value":true}]}'
 PATCH_OFF='{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"Replace","path":"active","value":"False"}]}'
 past() { date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ; }
 cleanup() {
-  [[ -n "$DEACTIVATED" ]] && scim PATCH "/Users/$SCIM_ID" "$PATCH_ON" >/dev/null 2>&1 || true   # R3-3: clears the block list and the owner flag
   kubectl -n "$NS" delete "accessrules.$G" keys-everyone-mock keys-eng-mock --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" delete "budgets.$G" keys-mira --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" delete secret forge-test forge-scope --ignore-not-found >/dev/null 2>&1 || true
   [[ -n "$DISABLED" ]] && helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --wait --timeout 5m >/dev/null 2>&1 || true
+  # R3-3: reactivation clears the block list and the owner flag (the console answers 503 until it holds the key Lease)
+  [[ -n "$DEACTIVATED" ]] && { wait_for 60 '[[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_OFF") == 200 ]]' && wait_for 60 '[[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_ON") == 200 ]]'; } >/dev/null 2>&1 || true
   local pw; pw=$(kubectl -n "$NS" get secret ambit-initial-admin -o jsonpath='{.data.password}' 2>/dev/null | base64 -d) || true
   if sign_in local admin@ambit.local "$pw" >/dev/null 2>&1; then
     for id in ${KEYIDS[@]+"${KEYIDS[@]}"}; do api DELETE "/api/admin/keys/$id" >/dev/null 2>&1 || true; done
@@ -38,9 +39,9 @@ trap 'rc=$?; cleanup; on_exit "$rc"' EXIT
 
 ensure_llm_setup "$NS"
 # The Keycloak realm is imported once, at its first start: restart it when the realm lacks this test's users.
-if [[ -z "$(token keytest 2>/dev/null || true)" ]]; then
+if [[ -z "$(token keytest 2>/dev/null || true)" || -z "$(token noemail 2>/dev/null || true)" ]]; then
   kubectl -n "$NS" rollout restart deploy/keycloak >/dev/null && kubectl -n "$NS" rollout status deploy/keycloak --timeout=300s >/dev/null
-  wait_for 120 '[[ -n "$(token keytest 2>/dev/null)" ]]' || fail "0 keycloak realm has no user keytest"
+  wait_for 120 '[[ -n "$(token keytest 2>/dev/null)" && -n "$(token noemail 2>/dev/null)" ]]' || fail "0 keycloak realm lacks the users keytest or noemail"
 fi
 kubectl -n "$NS" apply -f - >/dev/null <<EOF
 apiVersion: $G/v1alpha1
@@ -50,6 +51,13 @@ spec: { allSignedIn: true, models: [mock-echo] }
 EOF
 PW=$(kubectl -n "$NS" get secret ambit-initial-admin -o jsonpath='{.data.password}' | base64 -d)
 SCIM_TOKEN=$(kubectl -n "$NS" get secret ambit-console-keys -o jsonpath='{.data.scim-token}' | base64 -d)
+# a run that stopped half way may have left keytest offboarded: reactivate it first
+if [[ $(scim GET '/Users?filter=userName%20eq%20%22keytest@acme.test%22') == 200 ]]; then
+  OLD_ID=$(field 'd["Resources"][0]["id"] if d.get("Resources") else ""')
+  # ponytail: a failed deactivation (503) can leave the block set with the user still active, and PATCH active=true on an
+  # active user changes nothing; deactivating again, then reactivating, completes and clears it.
+  [[ -z "$OLD_ID" ]] || { wait_for 60 '[[ $(scim PATCH "/Users/$OLD_ID" "$PATCH_OFF") == 200 ]]' && wait_for 60 '[[ $(scim PATCH "/Users/$OLD_ID" "$PATCH_ON") == 200 ]]'; } || true
+fi
 sign_in local admin@ambit.local "$PW"
 [[ $(api POST /api/test/keys/reset-limits '{}') == 204 ]] || fail "0 reset-limits hook: $(cat "$W/api")"
 mkkey llm-key llm; K=$KEY; KID_K=$KID
@@ -68,7 +76,7 @@ TOK=$(token alice)
 [[ $(code -H "Authorization: Bearer eyJhbGciOiJSUzI1NiJ9.e30.x") == 403 ]] || fail "2 broken JWT: $(cat "$W/llm")"
 [[ $(code -H "x-api-key: $M") == 403 ]] || fail "2 an MCP-scoped key reached the LLM gateway: $(cat "$W/llm")"
 [[ $(code -H "Authorization: Bearer $TOK" -H "x-api-key: ambit_wrong") == 403 ]] || fail "2 JWT + wrong key: $(cat "$W/llm")"
-[[ $(code -H "Authorization: Bearer $TOK") == 200 ]] || fail "2 alice's JWT alone must still work: $(cat "$W/llm")"
+wait_for 400 '[[ $(code -H "Authorization: Bearer $TOK") == 200 ]]' || fail "2 alice's JWT alone must still work: $(cat "$W/llm")"  # the gateway the controller refreshes the Keycloak keys every 5 minutes
 pass "2 no credential, wrong key, broken JWT, wrong-scope key, JWT + wrong key: refused; JWT alone: allowed"
 
 # 3 · expiry is checked by the gateway on every request (the test hook sets until to the past, through the console)
@@ -200,9 +208,10 @@ wait_for 90 '[[ $(code -H "x-api-key: $KT") =~ ^40[13]$ ]]' || fail "12 with key
 [[ $(code -H "Authorization: Bearer $KT") =~ ^40[13]$ ]] || fail "12 with keys off a bearer key is accepted: $(cat "$W/llm")"
 [[ $(code -H "Authorization: Bearer $(token keytest)") == 200 ]] || fail "12 with keys off a group-rule JWT user is refused: $(cat "$W/llm")"
 DEACTIVATED=1
-[[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_OFF") == 200 ]] || fail "12 deactivate: $(cat "$W/api")"
+# the new console pod answers 503 ("retry") until it holds the key Lease (up to the 15 s lease time)
+wait_for 60 '[[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_OFF") == 200 ]]' || fail "12 deactivate: $(cat "$W/api")"
 wait_for 30 '[[ $(code -H "Authorization: Bearer $(token keytest)") == 403 ]]' || fail "12 with keys off an offboarded JWT user is not refused: $(cat "$W/llm")"
-[[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_ON") == 200 ]] || fail "12 reactivate: $(cat "$W/api")"
+wait_for 60 '[[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_ON") == 200 ]]' || fail "12 reactivate: $(cat "$W/api")"
 DEACTIVATED=""
 helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --wait --timeout 5m >/dev/null
 DISABLED=""

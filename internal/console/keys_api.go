@@ -28,6 +28,26 @@ type KeyView struct {
 	Until    time.Time  `json:"until"`
 	Owner    string     `json:"owner,omitempty"` // admin list only
 	LastUsed *time.Time `json:"lastUsed"`        // null when unknown
+	// Status is active, stops-soon (within 7 days) or stopped (past until, not yet cleaned up). StopsBecause is
+	// inactivity (until comes from the owner's last sign-in, before the end date) or end-date.
+	Status       string `json:"status"`
+	StopsBecause string `json:"stopsBecause"`
+}
+
+const stopsSoon = 7 * 24 * time.Hour
+
+func keyStatus(k Key, now time.Time) (status, because string) {
+	because = "end-date"
+	if k.Until.Before(k.Ceiling) {
+		because = "inactivity"
+	}
+	switch {
+	case !k.Until.After(now):
+		return "stopped", because
+	case k.Until.Sub(now) <= stopsSoon:
+		return "stops-soon", because
+	}
+	return "active", because
 }
 
 func (c *Catalog) registerKeys(mux *http.ServeMux, read func(func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc,
@@ -117,8 +137,10 @@ func (c *Catalog) views(ctx context.Context, keys []Key, withOwner, lastUsed boo
 		}
 	}
 	out := make([]KeyView, 0, len(keys))
+	now := c.Keys.now()
 	for _, k := range keys {
 		v := KeyView{ID: k.ID, Name: k.Name, Prefix: k.Prefix, Scope: k.Scope, Created: k.Created, Expires: k.Expires, Until: k.Until}
+		v.Status, v.StopsBecause = keyStatus(k, now)
 		if withOwner {
 			v.Owner = k.Email
 		}

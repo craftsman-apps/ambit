@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { sendJSON } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Shell } from "@/components/shell";
-import { day, type KeyList } from "@/routes/keys";
+import { day, statusText, type KeyList } from "@/routes/keys";
 
 type KeyEvent = { at: string; actor: string; action: string; keyId: string; email: string; detail: string };
 async function get<T>(url: string): Promise<T> {
@@ -44,12 +44,12 @@ export function SettingsKeysPage() {
         {!!keys.data?.keys.length && (
           <table className="w-full border-collapse text-left">
             <thead><tr className="border-b border-line text-muted"><th className="py-1.5 font-normal">Owner</th><th className="font-normal">Name</th>
-              <th className="font-normal">Starts with</th><th className="font-normal">Stops on</th><th className="font-normal">Last used</th><th /></tr></thead>
+              <th className="font-normal">Starts with</th><th className="font-normal">Status</th><th className="font-normal">Stops on</th><th className="font-normal">Last used</th><th /></tr></thead>
             <tbody>
               {keys.data.keys.map((k) => (
                 <tr key={k.id} className="border-b border-line-soft">
                   <td className="py-1.5">{k.owner}</td><td>{k.name}</td><td className="font-mono text-[12px]">{k.prefix}</td>
-                  <td>{day(k.until)}</td><td>{k.lastUsed ? day(k.lastUsed) : "unknown"}</td>
+                  <td>{statusText(k)}</td><td>{day(k.until)}</td><td>{k.lastUsed ? day(k.lastUsed) : "unknown"}</td>
                   <td className="text-right">
                     {confirm === k.id ? (
                       <span className="inline-flex gap-2" role="alert">

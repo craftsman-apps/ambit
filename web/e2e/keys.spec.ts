@@ -68,6 +68,9 @@ test("a key that stops within 7 days shows a banner", async ({ page }) => {
     await page.goto("/");
     await expect(page.getByTestId("key-banner")).toContainText("e2e banner");
     await expect(page.getByTestId("key-banner")).toContainText("stops on");
+    await expect(page.getByTestId("key-banner")).toContainText("Sign in again"); // until is before the end date: inactivity
+    await page.goto("/keys");
+    await expect(page.getByRole("row", { name: /e2e banner/ }).getByRole("cell", { name: "Stops soon", exact: true })).toBeVisible();
   } finally {
     await revokeAll(page);
   }

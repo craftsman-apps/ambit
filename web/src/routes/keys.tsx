@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Shell } from "@/components/shell";
 
 export type KeyView = { id: string; name: string; prefix: string; scope: "llm" | "mcp" | "both"; created: string;
-  expires: string; until: string; owner?: string; lastUsed: string | null };
+  expires: string; until: string; owner?: string; lastUsed: string | null;
+  status: "active" | "stops-soon" | "stopped"; stopsBecause: "inactivity" | "end-date" };
 export type KeySettings = { enabled: boolean; inactivityDays: number; maxDays: number };
 export type KeyList = { settings: KeySettings; keys: KeyView[] };
 type Created = { key: string; view: KeyView; snippets: Record<string, string> };
@@ -21,6 +22,10 @@ export const useKeys = (lastUsed = true) => useQuery({ queryKey: ["keys", lastUs
 
 const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-[13px] outline-none focus:border-accent";
 export const day = (iso: string) => iso.slice(0, 10);
+// "inactivity": the owner's last sign-in sets the stop, before the key's end date.
+export const statusText = (k: KeyView) => k.status === "stopped"
+  ? (k.stopsBecause === "inactivity" ? "Stopped — owner inactive" : "Stopped — end date")
+  : k.status === "stops-soon" ? "Stops soon" : "Active";
 const scopeName = { llm: "LLM", mcp: "MCP", both: "LLM and MCP" } as const;
 const snippetTitle: Record<string, string> = { claudeCode: "Claude Code", cursor: "Cursor", openai: "OpenAI clients", anthropic: "Anthropic clients", mcp: "MCP" };
 
@@ -129,12 +134,12 @@ export function KeysPage() {
           <table className="w-full border-collapse text-left">
             <thead><tr className="border-b border-line text-muted">
               <th className="py-1.5 font-normal">Name</th><th className="font-normal">Scope</th><th className="font-normal">Starts with</th>
-              <th className="font-normal">Stops on</th><th className="font-normal">Last used</th><th /></tr></thead>
+              <th className="font-normal">Status</th><th className="font-normal">Stops on</th><th className="font-normal">Last used</th><th /></tr></thead>
             <tbody>
               {q.data.keys.map((k) => (
                 <tr key={k.id} className="border-b border-line-soft">
                   <td className="py-1.5">{k.name}</td><td>{scopeName[k.scope]}</td>
-                  <td className="font-mono text-[12px]">{k.prefix}</td><td>{day(k.until)}</td>
+                  <td className="font-mono text-[12px]">{k.prefix}</td><td>{statusText(k)}</td><td>{day(k.until)}</td>
                   <td>{k.lastUsed ? day(k.lastUsed) : "unknown"}</td>
                   <td className="text-right">
                     {confirm === k.id ? (

@@ -3,9 +3,11 @@ package console
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -360,5 +362,35 @@ func TestCreateWithASessionFromBeforeTheUpgrade(t *testing.T) {
 	r := f.call(t, "POST", "/api/keys", ck, map[string]any{"name": "laptop", "scope": "llm", "days": 30})
 	if r.Code != http.StatusUnauthorized || !strings.Contains(r.Body.String(), "Sign in again to create keys") {
 		t.Fatal(r.Code, r.Body.String())
+	}
+}
+
+// Each key shows why and when it stops: inactivity of its owner (until before its end date) or its end date.
+func TestKeyStatus(t *testing.T) {
+	f := newKeysFixture(t)
+	ck := f.cookie("mira@acme.com", RoleViewer)
+	f.create(t, ck, "llm", 30)  // until = end date = t0+30d
+	f.create(t, ck, "llm", 365) // until = sign-in + 30d, before the end date
+	status := func(now time.Time) []string {
+		f.keys.Now = func() time.Time { return now }
+		var list struct{ Keys []map[string]any }
+		json.Unmarshal(f.call(t, "GET", "/api/keys?lastUsed=false", ck, nil).Body.Bytes(), &list)
+		var out []string
+		for _, k := range list.Keys {
+			out = append(out, fmt.Sprint(k["status"], "/", k["stopsBecause"]))
+		}
+		return out
+	}
+	for _, c := range []struct {
+		now  time.Time
+		want string
+	}{
+		{t0, "active/end-date active/inactivity"},
+		{t0.AddDate(0, 0, 24), "stops-soon/end-date stops-soon/inactivity"},
+		{t0.AddDate(0, 0, 30), "stopped/end-date stopped/inactivity"},
+	} {
+		if got := strings.Join(slices.Sorted(slices.Values(status(c.now))), " "); got != c.want {
+			t.Errorf("at %v: %s, want %s", c.now, got, c.want)
+		}
 	}
 }

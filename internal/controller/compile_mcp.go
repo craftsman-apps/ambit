@@ -179,7 +179,7 @@ func target(s v1.Server) (map[string]any, bool) {
 }
 
 // connectionPolicy makes the gateway ask the console's broker (extAuth) for the calling user's own
-// token for the app, naming the user by the validated jwt.email claim, and send it upstream as
+// token for the app, naming the user by the request identity (key or JWT), and send it upstream as
 // Authorization. The user's gateway JWT is never forwarded (the gateway removes it after validation).
 // Without a grant the broker adds no token, so only this server drops out of the user's session.
 // FailOpen: if the broker is down, these servers fail the same way instead of every session failing.
@@ -191,7 +191,7 @@ func connectionPolicy(s v1.Server) *unstructured.Unstructured {
 			"failureMode": "FailOpen",
 			"http": map[string]any{
 				"path":                   strconv.Quote("/v1/connection/" + s.Spec.Connection), // a CEL string literal
-				"addRequestHeaders":      map[string]any{"x-ambit-user": "jwt.email"},
+				"addRequestHeaders":      map[string]any{"x-ambit-user": principal()},
 				"allowedRequestHeaders":  []any{},
 				"allowedResponseHeaders": []any{"authorization"},
 			},

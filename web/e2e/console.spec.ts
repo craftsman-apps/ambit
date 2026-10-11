@@ -63,7 +63,7 @@ test("admin creates a rule in the form, sees the merged policy, and deletes it",
   await page.getByRole("button", { name: "Create rule" }).click();
   await expect(page).toHaveURL(/rule=ui-test-finance/);
   await expect(page.getByText("created in the console by admin@ambit.local")).toBeVisible();
-  await expect(page.getByText(/jwt\.groups\.exists\(g, g in \["finance"/)).toBeVisible();
+  await expect(page.getByText(/\(has\(apiKey\.keyId\) \? apiKey\.groups : \(has\(jwt\.groups\) \? jwt\.groups : \[\]\)\)\.exists\(g, g in \["finance"/)).toBeVisible();
   await page.getByRole("button", { name: "Delete", exact: true }).click();
   await page.getByRole("button", { name: "Delete ui-test-finance" }).click();
   await expect(page.getByRole("cell", { name: "ui-test-finance" })).toHaveCount(0);

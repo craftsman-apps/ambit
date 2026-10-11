@@ -23,6 +23,7 @@ import (
 
 func main() {
 	ns := os.Getenv("AMBIT_NAMESPACE")
+	requireEmail := flag.Bool("require-email", true, "gateway JWTs must carry a usable email (llm/mcp.jwt.requireEmail)")
 	route := flag.String("llm-route", "ambit-llm", "HTTPRoute that every model attaches to")
 	rlService := flag.String("ratelimit-service", "", "Service of envoy's ratelimit for Budgets; empty turns budgets off")
 	rlPort := flag.Int64("ratelimit-port", 8081, "gRPC port of the ratelimit service")
@@ -35,6 +36,7 @@ func main() {
 	routerDep := flag.String("router-deployment", "", "ambit-router's Deployment (routers of type LLM); empty: not installed")
 	routerReplicas := flag.Int("router-replicas", 2, "ambit-router replicas while a router of type LLM exists")
 	flag.Parse()
+	controller.RequireEmail = *requireEmail
 	ctrl.SetLogger(zap.New())
 	log := ctrl.Log.WithName("setup")
 	if ns == "" {

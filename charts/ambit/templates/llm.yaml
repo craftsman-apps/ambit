@@ -20,9 +20,10 @@ spec:
       matches: [{ path: { type: PathPrefix, value: / } }]
       # The token broker trusts X-Ambit-User from gateway pods; a client's own must never reach a model,
       # whose baseURL could point anywhere.
+      # After authentication: a valid JWT is already removed by the gateway; what is left in Authorization or x-api-key is a key, which must never reach a model or an MCP server. Providers' own credentials are added later (backend auth).
       filters:
         - type: RequestHeaderModifier
-          requestHeaderModifier: { remove: [X-Ambit-User] }
+          requestHeaderModifier: { remove: [X-Ambit-User, x-api-key, authorization] }
       backendRefs: [{ group: agentgateway.dev, kind: AgentgatewayModel, name: "*" }]
 ---
 apiVersion: agentgateway.dev/v1alpha1
@@ -34,21 +35,8 @@ spec:
   traffic:
     # Only the APIs the gateway parses. Any other path would pass through to the provider with the model's
     # credential, unlogged and uncounted (the route must match "/" above). /v1/completions is not parsed.
-    authorization:
-      action: Deny
-      policy:
-        matchExpressions:
-          - '!(request.path in ["/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/embeddings", "/v1/models"])'
-    jwtAuthentication:
-      mode: Strict
-      providers:
-        - issuer: {{ $jwt.issuer | quote }}
-          {{- with $jwt.audiences }}
-          audiences: {{ toJson . }}
-          {{- end }}
-          jwks:
-            remote:
-              url: {{ $jwt.jwksURL | quote }}
+    # A request must also pass the identity gate: a valid key, or else a valid JWT.
+    {{- include "ambit.gatewayAuth" (dict "root" $ "jwt" $jwt "scope" "llm" "extra" (list "request.path in [\"/v1/chat/completions\", \"/v1/messages\", \"/v1/responses\", \"/v1/embeddings\", \"/v1/models\"]")) | nindent 4 }}
 ---
 # The routing label (x-ambit-route) is set only by Ambit (ambit-router, PR 2). A client's own copy is removed at
 # the Gateway, before routing. PreRouting matters: a Gateway-level transformation in the normal phase is replaced

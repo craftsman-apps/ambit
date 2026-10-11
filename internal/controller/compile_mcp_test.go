@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/identity"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -70,9 +71,9 @@ func TestToolRulesCompileToOneExpression(t *testing.T) {
 		toolRule("ml-time", []string{"ml-research"}, false, v1.ServerAccess{Name: "time", Tools: []string{"get_current_time", "convert_time"}}),
 		toolRule("ml-all", []string{"ml-research"}, false, v1.ServerAccess{Name: "everything"}),
 	}, route)
-	want := `mcp.tool.target == "everything" && jwt.groups.exists(g, g in ["ml-research"])` +
-		` || mcp.tool.target == "time" && mcp.tool.name == "convert_time" && jwt.groups.exists(g, g in ["ml-research"])` +
-		` || mcp.tool.target == "time" && mcp.tool.name == "get_current_time" && jwt.groups.exists(g, g in ["eng", "ml-research"])`
+	want := `mcp.tool.target == "everything" && ` + identity.PrincipalGroups + `.exists(g, g in ["ml-research"])` +
+		` || mcp.tool.target == "time" && mcp.tool.name == "convert_time" && ` + identity.PrincipalGroups + `.exists(g, g in ["ml-research"])` +
+		` || mcp.tool.target == "time" && mcp.tool.name == "get_current_time" && ` + identity.PrincipalGroups + `.exists(g, g in ["eng", "ml-research"])`
 	if got := mcpExpr(t, r); got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}
@@ -153,7 +154,7 @@ func TestServerCELIsThePartForOneServer(t *testing.T) {
 		toolRule("eng-time", []string{"eng"}, false, v1.ServerAccess{Name: "time", Tools: []string{"get_current_time"}}),
 		toolRule("ml-all", []string{"ml-research"}, false, v1.ServerAccess{Name: "everything"}),
 	}
-	if got := ServerCEL(servers, rules, "time"); got != `mcp.tool.target == "time" && mcp.tool.name == "get_current_time" && jwt.groups.exists(g, g in ["eng"])` {
+	if got := ServerCEL(servers, rules, "time"); got != `mcp.tool.target == "time" && mcp.tool.name == "get_current_time" && `+identity.PrincipalGroups+`.exists(g, g in ["eng"])` {
 		t.Fatalf("time: %s", got)
 	}
 	if got := ServerCEL(servers, nil, "time"); got != "false" {
@@ -190,7 +191,7 @@ func TestRemoteServersAndPerUserTokens(t *testing.T) {
 	}
 	ea, _, _ := unstructured.NestedMap(p.Object, "spec", "backend", "extAuth")
 	h := ea["http"].(map[string]any)
-	if h["path"] != `"/v1/connection/github"` || h["addRequestHeaders"].(map[string]any)["x-ambit-user"] != "jwt.email" ||
+	if h["path"] != `"/v1/connection/github"` || h["addRequestHeaders"].(map[string]any)["x-ambit-user"] != identity.Principal(true) ||
 		ea["failureMode"] != "FailOpen" || ea["backendRef"].(map[string]any)["port"] != int64(BrokerPort) {
 		t.Fatalf("extAuth %v", ea)
 	}
@@ -341,5 +342,13 @@ func TestAccessPolicyLimitsConnectTime(t *testing.T) {
 	p := find(t, r.Objects, "AgentgatewayPolicy", MCPBackendName+"-access")
 	if got, _, _ := unstructured.NestedString(p.Object, "spec", "backend", "tcp", "connectTimeout"); got != "2s" {
 		t.Fatalf("connectTimeout %q", got)
+	}
+}
+
+func TestConnectionPolicyNamesTheRequestIdentity(t *testing.T) {
+	o := connectionPolicy(v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "gh", Namespace: "ambit-system"}, Spec: v1.ServerSpec{Connection: "github"}})
+	h, _, _ := unstructured.NestedString(o.Object, "spec", "backend", "extAuth", "http", "addRequestHeaders", "x-ambit-user")
+	if h != identity.Principal(true) {
+		t.Fatalf("x-ambit-user = %s", h)
 	}
 }

@@ -60,7 +60,8 @@ data:
                     self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n")
                 self.wfile.write(b"data: [DONE]\n\n")
                 return
-            out = json.dumps({"id": "c1", "object": "chat.completion", "model": model, **({"usage": usage} if usage else {}),
+            seen = {"headers": sorted(k.lower() for k in self.headers.keys()), "ambit_value": any("ambit_" in v for v in self.headers.values())}  # what reached the model (key tests)
+            out = json.dumps({"id": "c1", "object": "chat.completion", "model": model, **({"usage": usage} if usage else {}), "x_seen": seen,
                               "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}]}).encode()
             self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(out)))
             self.end_headers(); self.wfile.write(out)

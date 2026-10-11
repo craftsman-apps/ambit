@@ -1,6 +1,7 @@
 package console
 
 import (
+	"context"
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"net/http"
 	"net/http/httptest"
@@ -98,5 +99,24 @@ func TestCallsSelectTheRouter(t *testing.T) {
 	}
 	if got := routerOf("mock/echo", "mock/echo"); got != "" { // a direct request: no router
 		t.Fatalf("direct request shows router %q", got)
+	}
+}
+
+func TestCallsSelectKeyIdentityAndSubject(t *testing.T) {
+	for _, a := range []string{"ambit.key_id", "ambit.identity", "jwt.sub"} {
+		if !strings.Contains(callsSQL, "LogAttributes['"+a+"']") {
+			t.Fatal("calls query does not read " + a)
+		}
+	}
+}
+
+func TestKeysLastUsedSQL(t *testing.T) {
+	for _, s := range []string{"max(Timestamp)", "LogAttributes['ambit.key_id']", "{ids:Array(String)}", "GROUP BY", "Timestamp >= {from:DateTime64(9)}"} {
+		if !strings.Contains(keysLastUsedSQL, s) {
+			t.Errorf("missing %q in %s", s, keysLastUsedSQL)
+		}
+	}
+	if got, err := (&Audit{}).KeysLastUsed(context.Background(), nil, time.Time{}); err != nil || len(got) != 0 {
+		t.Fatal(got, err) // no ids, no query (DB is nil)
 	}
 }

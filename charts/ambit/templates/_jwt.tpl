@@ -9,9 +9,9 @@ Usage: fromJson (include "ambit.jwt" (dict "root" $ "jwt" .Values.llm.jwt "name"
 {{- if or $j.issuer $j.jwksURL $j.audiences -}}
 {{- fail (printf "%s.jwt.dex=true sets the issuer itself: leave %s.jwt.issuer, audiences and jwksURL empty" .name .name) -}}
 {{- end -}}
-{{- toJson (dict "issuer" (printf "%s/dex" .root.Values.console.url) "audiences" (list "ambit-cli") "jwksURL" (printf "http://ambit-dex.%s.svc:5556/dex/keys" .root.Release.Namespace)) -}}
+{{- toJson (dict "issuer" (printf "%s/dex" .root.Values.console.url) "audiences" (list "ambit-cli") "jwksURL" (printf "http://ambit-dex.%s.svc:5556/dex/keys" .root.Release.Namespace) "requireEmail" (ne (toString $j.requireEmail) "false")) -}}
 {{- else -}}
-{{- toJson $j -}}
+{{- toJson (merge (dict "requireEmail" (ne (toString $j.requireEmail) "false")) (omit $j "requireEmail")) -}}
 {{- end -}}
 {{- end -}}
 

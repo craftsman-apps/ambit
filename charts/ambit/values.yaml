@@ -29,6 +29,8 @@ gateway:
     nodePort: null
 
 console:
+  # Must be 1: personal API keys and sessions need a single console (the chart refuses more).
+  replicas: 1
   # Public URL of the console. Dex's issuer is this URL + /dex.
   url: https://console.example.com
   # Hostname matched by the HTTPRoute. Must match the host in console.url.
@@ -46,6 +48,8 @@ console:
   sessionHours: 1
   # kind tests only: shows test presets
   testPresets: false
+  # Test-only endpoints (expire a key on demand); never enable in production.
+  testHooks: false
 
 bootstrapAdmin:
   # Local password sign-in (admin@ambit.local) for first setup. Set false once SSO works:
@@ -68,6 +72,16 @@ llm:
     issuer: ""
     audiences: []
     jwksURL: ""
+    # Refuse gateway JWTs without a usable email claim. Offboarding, per-person budgets and audit are keyed by email; with false, such tokens are identified by their subject and offboarding cannot block them before they expire.
+    requireEmail: true
+
+apiKeys:
+  # Personal API keys (console: Keys). false: the gateways accept JWTs only; existing keys are kept but refused.
+  enabled: true
+  # A key stops when its owner has not signed in to the console for this many days (1-365).
+  inactivityDays: 30
+  # The longest end date a person may choose: 30, 90 or 365.
+  maxDays: 365
 
 routing:
   router:
@@ -116,6 +130,8 @@ mcp:
     issuer: ""
     audiences: []
     jwksURL: ""
+    # Refuse gateway JWTs without a usable email claim. Offboarding, per-person budgets and audit are keyed by email; with false, such tokens are identified by their subject and offboarding cannot block them before they expire.
+    requireEmail: true
 
 evidence:
   # Audit trail: the gateway's access logs through an OpenTelemetry Collector into ClickHouse, searchable

@@ -4,7 +4,13 @@ metadata:
   name: ambit-console
   labels: { app.kubernetes.io/name: ambit-console }
 spec:
-  replicas: 1  # ponytail: bootstrap has no leader election; add it before running 2+ replicas
+  {{- if gt (int .Values.console.replicas) 1 }}{{ fail "console.replicas must be 1: personal API keys and sessions need a single console (spec: one writer)" }}{{ end }}
+  replicas: {{ .Values.console.replicas }}
+  # RollingUpdate with maxSurge 0 keeps the strategy type, which a Helm upgrade of an existing install cannot change
+  # (server-side apply keeps the live rollingUpdate block). maxSurge 0: no second pod during a rollout except while
+  # the old pod shuts down. Only leader election on the key Lease (with this one replica, maxSurge 0 and the hourly
+  # repair) keeps that overlap from writing keys; the admission policies do not check which pod holds the Lease.
+  strategy: { type: RollingUpdate, rollingUpdate: { maxSurge: 0, maxUnavailable: 1 } }
   selector:
     matchLabels: { app.kubernetes.io/name: ambit-console }
   template:
@@ -28,11 +34,23 @@ spec:
             {{- if .Values.console.testPresets }}
             - { name: AMBIT_TEST_PRESETS, value: "1" }
             {{- end }}
+            {{- if .Values.console.testHooks }}
+            - { name: AMBIT_TEST_HOOKS, value: "true" }
+            {{- end }}
+            {{- $scheme := (urlParse .Values.console.url).scheme }}
+            {{- $port := regexFind ":[0-9]+$" (urlParse .Values.console.url).host }}
+            - { name: AMBIT_LLM_URL, value: {{ printf "%s://%s%s" $scheme .Values.llm.host $port | quote }} }
+            - { name: AMBIT_MCP_URL, value: {{ printf "%s://%s%s/mcp" $scheme .Values.mcp.host $port | quote }} }
             {{- $opts := list }}
             {{- range .Values.sso.connectors }}
             {{- $opts = append $opts (dict "id" .id "name" (.name | default .id)) }}
             {{- end }}
             - { name: AMBIT_SSO_CONNECTORS, value: {{ $opts | toJson | quote }} }
+            - { name: AMBIT_KEYS_ENABLED, value: {{ .Values.apiKeys.enabled | quote }} }
+            - { name: AMBIT_KEYS_INACTIVITY_DAYS, value: {{ .Values.apiKeys.inactivityDays | quote }} }
+            - { name: AMBIT_KEYS_MAX_DAYS, value: {{ .Values.apiKeys.maxDays | quote }} }
+            - name: AMBIT_POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
             - name: AMBIT_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
             {{- if .Values.console.caBundleSecret }}

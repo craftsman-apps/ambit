@@ -25,7 +25,8 @@ type AuthConfig struct {
 	PublicURL      string // console URL; the callback is PublicURL + /auth/callback
 	SessionKey     []byte
 	SessionTTL     time.Duration
-	Sessions       *SessionStore // optional; a new one is created when nil
+	Sessions       *SessionStore                        // optional; a new one is created when nil
+	OnSignIn       func(ctx context.Context, s Session) // called after a verified sign-in; errors are its own to log
 }
 
 type Auth struct {
@@ -35,6 +36,7 @@ type Auth struct {
 	codec    Codec
 	ttl      time.Duration
 	secure   bool
+	onSignIn func(ctx context.Context, s Session)
 }
 
 // loginTx is kept in a short-lived signed cookie between /auth/login and /auth/callback.
@@ -63,6 +65,7 @@ func NewAuth(ctx context.Context, c AuthConfig) (*Auth, error) {
 		codec:    Codec{Key: c.SessionKey},
 		ttl:      c.SessionTTL,
 		secure:   strings.HasPrefix(c.PublicURL, "https://"),
+		onSignIn: c.OnSignIn,
 	}, nil
 }
 
@@ -181,10 +184,13 @@ func (a *Auth) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 	boot := cl.Federated.ConnectorID == "local" && cl.Email == BootstrapEmail
 	s := Session{ID: randomString(), Sub: idt.Subject, Email: cl.Email, Name: cl.Name, Groups: cl.Groups, Bootstrap: boot,
-		Role: roleFor(cl.Federated.ConnectorID, cl.Email, cl.Groups), Exp: time.Now().Add(a.ttl).Unix()}
+		Role: roleFor(cl.Federated.ConnectorID, cl.Email, cl.Groups), Exp: time.Now().Add(a.ttl).Unix(), SignedIn: time.Now().Unix()}
 	a.Sessions.Add(s.ID, s.Email, s.Exp)
 	http.SetCookie(w, a.cookie(SessionCookie, a.codec.Encode(s), int(a.ttl.Seconds()), "/"))
 	slog.Info("signed in", "email", s.Email, "role", s.Role, "connector", cl.Federated.ConnectorID)
+	if a.onSignIn != nil { // the hook is called in line; it must not block (the console's hook starts a goroutine)
+		a.onSignIn(context.WithoutCancel(r.Context()), s)
+	}
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 

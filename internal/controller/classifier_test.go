@@ -3,8 +3,12 @@ package controller
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/craftsman-apps/ambit/internal/identity"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
@@ -143,5 +147,13 @@ func TestMarkRunningIgnoresAnotherServersMCPServer(t *testing.T) {
 		if got := meta.IsStatusConditionTrue(servers[i].Status.Conditions, "Ready"); got != want {
 			t.Errorf("%s running=%v, want %v", servers[i].Name, got, want)
 		}
+	}
+}
+
+func TestClassifierSendsRequestGroups(t *testing.T) {
+	cfg := routerconfig.Config{Hash: "h", Routers: []routerconfig.Router{{Name: "a", Wire: "auto"}}}
+	o := classifyPolicy("ns", "ambit-llm", "ambit-router", cfg)
+	if !strings.Contains(fmt.Sprint(o.Object), identity.PrincipalGroups) {
+		t.Fatal("ambit.groups must be the request identity's groups")
 	}
 }

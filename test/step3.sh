@@ -46,8 +46,8 @@ pass "1 controller ready; 2 models accepted by agentgateway; 2 access rules comp
 
 A=$(token alice); M=$(token mira)
 # 2 · no token
-[[ $(llm "" "$GEMMA") == 401 ]] || fail "2 request without a token was not rejected"
-pass "2 no token -> 401"
+[[ $(llm "" "$GEMMA") =~ ^40[13]$ ]] || fail "2 request without a token was not rejected"
+pass "2 no token -> 401 or 403 (the Require rule answers 403: JWT auth is permissive)"
 
 # 3 · U3: denied, with a machine-readable reason, before any provider call
 [[ $(llm "$A" "$NEMO") == 403 ]] || fail "3 alice got $(cat "$W/llm") for the restricted model"
@@ -77,7 +77,7 @@ kubectl -n "$NS" delete "accessrules.$G" ml-research-nemotron >/dev/null
 wait_expr nemotron-3-super false
 [[ $(llm "$M" "$NEMO") == 403 ]] || fail "7 mira reached a model with no access rule"
 kubectl -n "$NS" apply -f test/llm/objects.yaml >/dev/null
-wait_expr nemotron-3-super 'jwt.groups.exists(g, g in ["ml-research"])'
+wait_expr nemotron-3-super '(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in ["ml-research"])'
 pass "7 no rule -> expression false -> 403; rule restored"
 
 # 8 · a rule naming a missing model is Degraded, and says which name
@@ -123,7 +123,7 @@ pass "9 generated object owned by its Model, no Argo CD metadata; a reconcile le
 # 10 · a manual edit of a generated object is reverted
 kubectl -n "$NS" patch agentgatewaymodel nemotron-3-super --type=json \
   -p '[{"op":"replace","path":"/spec/policies/authorization/policy/matchExpressions","value":["true"]}]' >/dev/null
-wait_expr nemotron-3-super 'jwt.groups.exists(g, g in ["ml-research"])'
+wait_expr nemotron-3-super '(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in ["ml-research"])'
 pass "10 manual edit (opening the model to everyone) reverted by the controller"
 
 # 11 · chart renders identically with LLM traffic on

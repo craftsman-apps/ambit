@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/controller"
@@ -38,6 +39,12 @@ type Catalog struct {
 	PublicURL  string
 	Connectors []Connector
 	HTTP       *http.Client // for reaching identity providers; nil uses a 10-second client
+	// Keys serves personal API keys; nil leaves the key routes out. LLMURL and MCPURL are the gateway URLs shown in
+	// the copy-ready snippets. LastUsed overrides the audit lookup of each key's last use (tests).
+	Keys     *KeyService
+	LLMURL   string
+	MCPURL   string
+	LastUsed func(ctx context.Context, ids []string, from time.Time) (map[string]time.Time, error)
 	// Conns serves "My connections" and the connect flow; nil when no grants namespace is configured.
 	Conns *Connections
 	// SCIM receives users from the identity provider and offboards deactivated ones; nil without Conns.
@@ -162,6 +169,7 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 			h(w, r, s)
 		})
 	}
+	c.registerKeys(mux, read, allow)
 	write := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
 		return allow("only admins can change access rules", h, RoleAdmin)
 	}

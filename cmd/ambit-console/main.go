@@ -36,6 +36,27 @@ func env(k, def string) string {
 	return def
 }
 
+// envInt reads an integer setting; an unset or invalid value gives def.
+func envInt(k string, def int) int {
+	if n, err := strconv.Atoi(os.Getenv(k)); err == nil {
+		return n
+	}
+	return def
+}
+
+// keySettingsFromEnv reads the key settings; values the service cannot work with stop the start.
+func keySettingsFromEnv() (console.KeySettings, error) {
+	k := console.KeySettings{Enabled: os.Getenv("AMBIT_KEYS_ENABLED") != "false",
+		InactivityDays: envInt("AMBIT_KEYS_INACTIVITY_DAYS", 30), MaxDays: envInt("AMBIT_KEYS_MAX_DAYS", 365)}
+	if k.InactivityDays < 1 || k.InactivityDays > 365 {
+		return k, fmt.Errorf("AMBIT_KEYS_INACTIVITY_DAYS is %d; it must be 1 to 365", k.InactivityDays)
+	}
+	if k.MaxDays != 30 && k.MaxDays != 90 && k.MaxDays != 365 {
+		return k, fmt.Errorf("AMBIT_KEYS_MAX_DAYS is %d; it must be 30, 90 or 365", k.MaxDays)
+	}
+	return k, nil
+}
+
 // retry runs f until it succeeds or ctx ends. Dex may still be starting when the console starts.
 func retry(ctx context.Context, what string, f func() error) error {
 	for delay := time.Second; ; delay = min(delay*2, 15*time.Second) {
@@ -132,11 +153,50 @@ func run(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+	podName := os.Getenv("AMBIT_POD_NAME")
+	if podName == "" {
+		return errors.New("AMBIT_POD_NAME is required: it names this console in the key Lease")
+	}
+	keySettings, err := keySettingsFromEnv()
+	if err != nil {
+		return err
+	}
+	keySvc := &console.KeyService{Client: objects, Namespace: ns, Now: time.Now, Settings: keySettings}
+	go console.RunLeader(ctx, kube, ns, podName, keySvc.StartTerm, keySvc.EndTerm)
+	go func() { // the hourly full repair bounds any stale write or interrupted refresh to one hour
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				switch rep, err := keySvc.Repair(ctx); {
+				case errors.Is(err, console.ErrNotLeader):
+					slog.Debug("key repair skipped: not the key writer")
+				case err != nil:
+					slog.Error("key repair", "err", err)
+				default:
+					slog.Info("key repair", "deleted", rep.Deleted, "updated", rep.Updated)
+				}
+			}
+		}
+	}()
 	var auth *console.Auth
 	if err := retry(ctx, "dex discovery", func() (e error) {
 		auth, e = console.NewAuth(ctx, console.AuthConfig{
 			Issuer: publicURL + "/dex", InternalIssuer: os.Getenv("AMBIT_DEX_URL"), ClientID: console.ClientID, ClientSecret: keys.ClientSecret,
 			PublicURL: publicURL, SessionKey: keys.SessionKey, SessionTTL: time.Duration(hours) * time.Hour,
+			OnSignIn: func(c context.Context, sess console.Session) {
+				go func() { // never make sign-in wait for the key lock; Refresh keeps the newest sign-in, so order does not matter
+					switch err := keySvc.RefreshAtSignIn(c, sess); {
+					case errors.Is(err, console.ErrNotLeader):
+						slog.Info("key refresh skipped: no key writer for 60 s; the next sign-in refreshes the keys", "email", sess.Email)
+					case err != nil:
+						slog.Error("key refresh at sign-in", "email", sess.Email, "err", err)
+					}
+				}()
+			},
 		})
 		return e
 	}); err != nil {
@@ -212,7 +272,7 @@ func run(ctx context.Context) error {
 	}
 	var scim *console.SCIM
 	if conns != nil {
-		scim = &console.SCIM{Client: objects, Namespace: ns, Token: keys.SCIMToken, Conns: conns, Sessions: auth.Sessions}
+		scim = &console.SCIM{Client: objects, Namespace: ns, Token: keys.SCIMToken, Conns: conns, Sessions: auth.Sessions, Keys: keySvc}
 	}
 	catalogPresets, err := presets.All()
 	if err != nil {
@@ -232,7 +292,8 @@ func run(ctx context.Context) error {
 		RatelimitMode: os.Getenv("AMBIT_RATELIMIT_FAILURE_MODE"), Protection: os.Getenv("AMBIT_PROTECTION") == "true", ModelRouting: os.Getenv("AMBIT_MODEL_ROUTING") == "true",
 		XDSAddr: os.Getenv("AMBIT_XDS_ADDR")}
 	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), console.LoginOptions{Bootstrap: bootstrapAdmin, SSO: sso},
-		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, Budgets: budgets, Dependencies: deps, Prices: prices, Tools: reader, Presets: catalogPresets}), ReadHeaderTimeout: 10 * time.Second}
+		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, Budgets: budgets, Dependencies: deps, Prices: prices, Tools: reader, Presets: catalogPresets,
+			Keys: keySvc, LLMURL: os.Getenv("AMBIT_LLM_URL"), MCPURL: os.Getenv("AMBIT_MCP_URL")}), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)

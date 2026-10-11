@@ -170,7 +170,7 @@ func classifyPolicy(ns, route, service string, cfg routerconfig.Config) *unstruc
 				"policy": map[string]any{
 					"backendRef":        map[string]any{"name": service, "port": int64(9000)},
 					"failureMode":       "FailOpen",
-					"requestAttributes": map[string]any{"ambit.groups": "jwt.groups", "ambit.config": "'" + hash + "'"},
+					"requestAttributes": map[string]any{"ambit.groups": principalGroups, "ambit.config": "'" + hash + "'"},
 					"processingOptions": map[string]any{
 						"requestHeaderMode": "Send", "requestBodyMode": "None", "allowModeOverride": true,
 						"responseHeaderMode": "Skip", "responseBodyMode": "None",

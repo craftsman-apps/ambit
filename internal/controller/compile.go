@@ -125,7 +125,7 @@ func CEL(a Access) string {
 	for i, g := range a.Groups {
 		q[i] = strconv.Quote(g) // group names are restricted by the CRD pattern, so Go quoting is valid CEL
 	}
-	return "jwt.groups.exists(g, g in [" + strings.Join(q, ", ") + "])"
+	return principalGroups + ".exists(g, g in [" + strings.Join(q, ", ") + "])"
 }
 
 // modelAuth is how the gateway authenticates to the provider: AWS keys for Bedrock or a Google key file for VertexAI,

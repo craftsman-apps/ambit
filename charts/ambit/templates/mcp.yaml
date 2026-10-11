@@ -19,9 +19,10 @@ spec:
     - name: mcp
       matches: [{ path: { type: PathPrefix, value: /mcp } }]
       # The token broker trusts X-Ambit-User from gateway pods; a client's own must never reach a server.
+      # After authentication: a valid JWT is already removed by the gateway; what is left in Authorization or x-api-key is a key, which must never reach a model or an MCP server. Providers' own credentials are added later (backend auth).
       filters:
         - type: RequestHeaderModifier
-          requestHeaderModifier: { remove: [X-Ambit-User] }
+          requestHeaderModifier: { remove: [X-Ambit-User, x-api-key, authorization] }
       backendRefs: [{ group: agentgateway.dev, kind: AgentgatewayBackend, name: ambit-mcp }]
 ---
 apiVersion: agentgateway.dev/v1alpha1
@@ -31,16 +32,7 @@ metadata:
 spec:
   targetRefs: [{ group: gateway.networking.k8s.io, kind: HTTPRoute, name: ambit-mcp }]
   traffic:
-    jwtAuthentication:
-      mode: Strict
-      providers:
-        - issuer: {{ $jwt.issuer | quote }}
-          {{- with $jwt.audiences }}
-          audiences: {{ toJson . }}
-          {{- end }}
-          jwks:
-            remote:
-              url: {{ $jwt.jwksURL | quote }}
+    {{- include "ambit.gatewayAuth" (dict "root" $ "jwt" $jwt "scope" "mcp" "extra" (list)) | nindent 4 }}
 {{- end }}
 {{- if .Values.mcp.enabled }}
 ---

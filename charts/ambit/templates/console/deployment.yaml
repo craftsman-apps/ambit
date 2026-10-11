@@ -4,7 +4,9 @@ metadata:
   name: ambit-console
   labels: { app.kubernetes.io/name: ambit-console }
 spec:
-  replicas: 1  # ponytail: bootstrap has no leader election; add it before running 2+ replicas
+  {{- if gt (int .Values.console.replicas) 1 }}{{ fail "console.replicas must be 1: personal API keys and sessions need a single console (spec: one writer)" }}{{ end }}
+  replicas: {{ .Values.console.replicas }}
+  strategy: { type: Recreate }
   selector:
     matchLabels: { app.kubernetes.io/name: ambit-console }
   template:
@@ -33,6 +35,11 @@ spec:
             {{- $opts = append $opts (dict "id" .id "name" (.name | default .id)) }}
             {{- end }}
             - { name: AMBIT_SSO_CONNECTORS, value: {{ $opts | toJson | quote }} }
+            - { name: AMBIT_KEYS_ENABLED, value: {{ .Values.apiKeys.enabled | quote }} }
+            - { name: AMBIT_KEYS_INACTIVITY_DAYS, value: {{ .Values.apiKeys.inactivityDays | quote }} }
+            - { name: AMBIT_KEYS_MAX_DAYS, value: {{ .Values.apiKeys.maxDays | quote }} }
+            - name: AMBIT_POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
             - name: AMBIT_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
             {{- if .Values.console.caBundleSecret }}

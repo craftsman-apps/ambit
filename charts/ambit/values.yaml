@@ -29,6 +29,8 @@ gateway:
     nodePort: null
 
 console:
+  # Must be 1: personal API keys and sessions need a single console (the chart refuses more).
+  replicas: 1
   # Public URL of the console. Dex's issuer is this URL + /dex.
   url: https://console.example.com
   # Hostname matched by the HTTPRoute. Must match the host in console.url.

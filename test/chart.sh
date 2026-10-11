@@ -68,4 +68,45 @@ grep -q 'action: Require' <<<"$off" || { echo "FAIL chart: keys off keeps the Re
 noemail=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set llm.jwt.requireEmail=false --set mcp.jwt.requireEmail=false)
 ! grep -q "jwt.email.trim().matches" <<<"$(sed -n '/name: ambit-llm-auth/,/^---/p' <<<"$noemail")" || { echo "FAIL chart: requireEmail=false must not require an email"; exit 1; }
 grep -q -- '--require-email=false' <<<"$noemail" || { echo "FAIL chart: controller flag"; exit 1; }
+check_qs "pols={x['metadata']['name']:x['spec'] for x in docs if x['kind']=='ValidatingAdmissionPolicy'}
+assert set(pols)=={'ambit-keys-writer','ambit-keys-holder'}, list(pols)
+w,h=pols['ambit-keys-writer'],pols['ambit-keys-holder']
+assert w['failurePolicy']=='Fail' and h['failurePolicy']=='Fail', (w,h)
+assert 'paramKind' not in w and h['paramKind']=={'apiVersion':'coordination.k8s.io/v1','kind':'Lease'}, (w,h)
+for p in (w,h):
+  rs=p['matchConstraints']['resourceRules'][0]
+  assert set(rs['resources'])=={'secrets','configmaps'} and set(rs['operations'])=={'CREATE','UPDATE','DELETE'}, rs
+import json
+we=json.dumps(w)
+for s in ['system:serviceaccount:ambit-system:ambit-console','authentication.kubernetes.io/pod-name','system:serviceaccount:kube-system:namespace-controller','system:serviceaccount:kube-system:generic-garbage-collector']:
+  assert s in we, s
+assert [v['expression'] for v in w['validations']]==['variables.console || variables.cleanup'], w['validations']
+assert w['validations'][0]['message']=='only the Ambit console may write personal API key objects', w
+assert 'params.spec.holderIdentity' in json.dumps(h['validations']), h
+assert h['validations'][0]['message']=='only the Ambit console holding the key Lease may write personal API key objects', h
+sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event']
+bs={x['metadata']['name']:x['spec'] for x in docs if x['kind']=='ValidatingAdmissionPolicyBinding'}
+assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(3)}|{'ambit-keys-holder-%d'%i for i in range(3)}, list(bs)
+for n,b in bs.items():
+  kind=n.split('-')[2]; i=int(n[-1])
+  assert b['policyName']=='ambit-keys-'+kind and b['validationActions']==['Deny'], b
+  assert b['matchResources']['namespaceSelector']=={'matchLabels':{'kubernetes.io/metadata.name':'ambit-system'}}, b
+  assert b['matchResources']['objectSelector']=={'matchExpressions':[{'key':sel[i],'operator':'Exists'}]}, b
+  if kind=='writer': assert 'paramRef' not in b, b
+  else: assert b['paramRef']=={'name':'ambit-key-writer','namespace':'ambit-system','parameterNotFoundAction':'Allow'}, b" "admission: two policies, six bindings, console-only writes, Lease holder fencing, cleanup exempt"
+check_qs "r=one('Role','ambit-console')['rules']
+rule=[x for x in r if x['apiGroups']==[''] and set(x['resources'])=={'secrets','configmaps'} and not x.get('resourceNames')]
+assert any(set(x['verbs'])=={'get','list','watch','create','update','delete'} for x in rule), r
+l=[x for x in r if x['apiGroups']==['coordination.k8s.io']]
+assert len(l)==1 and l[0]['resources']==['leases'] and set(l[0]['verbs'])=={'get','create','update'}, l" "console Role: key objects and Lease (no Lease delete)"
+check_qs "d=one('Deployment','ambit-console')['spec']
+assert d['strategy']=={'type':'Recreate'} and d['replicas']==1, d
+e={x['name']:x for x in d['template']['spec']['containers'][0]['env']}
+assert e['AMBIT_KEYS_ENABLED']['value']=='true' and e['AMBIT_KEYS_INACTIVITY_DAYS']['value']=='30' and e['AMBIT_KEYS_MAX_DAYS']['value']=='365', e
+assert e['AMBIT_POD_NAME']['valueFrom']['fieldRef']['fieldPath']=='metadata.name', e" "console: Recreate, key settings, pod name"
+! helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set console.replicas=2 >/dev/null 2>&1 || { echo "FAIL chart: console.replicas>1 must be refused"; exit 1; }
+! helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --kube-version 1.29.0 >/dev/null 2>&1 || { echo "FAIL chart: Kubernetes < 1.30 must be refused"; exit 1; }
+helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --kube-version v1.30.4-eks-a737599 >/dev/null || { echo "FAIL chart: vendor-suffixed 1.30 must render"; exit 1; }
+! helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set apiKeys.maxDays=60 >/dev/null 2>&1 || { echo "FAIL chart: maxDays must be 30, 90 or 365"; exit 1; }
+! helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set apiKeys.inactivityDays=0 >/dev/null 2>&1 || { echo "FAIL chart: inactivityDays 1-365"; exit 1; }
 echo "PASS chart"

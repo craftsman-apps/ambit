@@ -70,7 +70,8 @@ test("a key that stops within 7 days shows a banner", async ({ page }) => {
 test("the hourly limit shows its message", async ({ page }) => {
   await signInAsAdmin(page);
   try {
-    // Fill the hourly allowance of 10 through the API (earlier tests this hour count too).
+    // Create keys through the API until the hourly allowance of 10 is used; earlier keys this hour count too,
+    // so stop at the first 429 (at most 10 tries).
     for (let i = 0; i < 10; i++) {
       const r = await createViaAPI(page, `e2e fill ${i}`);
       if (r.status() === 429) break;

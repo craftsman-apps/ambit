@@ -165,6 +165,7 @@ func (c *Catalog) createKey(w http.ResponseWriter, r *http.Request, s Session) {
 		keyErr(w, err)
 		return
 	}
+	w.Header().Set("Cache-Control", "no-store") // the answer holds the key, shown once
 	writeJSON(w, http.StatusCreated, map[string]any{"key": plain, "view": c.views(r.Context(), []Key{k}, false)[0],
 		"snippets": snippets(c.LLMURL, c.MCPURL, plain, k.Scope)})
 }

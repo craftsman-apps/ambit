@@ -45,6 +45,9 @@ assert {"name":"AMBIT_DEX_URL","value":"http://ambit-dex:5556/dex"} in e' "conso
 check_qs 'e=one("Deployment","ambit-console")["spec"]["template"]["spec"]["containers"][0]["env"]
 assert {"name":"AMBIT_LLM_URL","value":"http://llm.localtest.me:8080"} in e and {"name":"AMBIT_MCP_URL","value":"http://mcp.localtest.me:8080/mcp"} in e, e
 assert not [x for x in e if x["name"]=="AMBIT_TEST_HOOKS"], "test hooks must be off by default"' "console gets the LLM and MCP URLs for key snippets"
+ext=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set console.url=https://console.example.com --set llm.host=llm.example.com --set mcp.host=mcp.example.com --set gateway.tls.enabled=false)
+qs=$ext check_qs 'e=one("Deployment","ambit-console")["spec"]["template"]["spec"]["containers"][0]["env"]
+assert {"name":"AMBIT_LLM_URL","value":"https://llm.example.com"} in e and {"name":"AMBIT_MCP_URL","value":"https://mcp.example.com/mcp"} in e, e' "snippet URLs take https from console.url even when the gateway does not terminate TLS"
 check 'e=one("Deployment","ambit-console")["spec"]["template"]["spec"]["containers"][0]["env"]
 assert {"name":"AMBIT_TEST_HOOKS","value":"true"} in e' "kind values enable the test hooks"
 check 'c=yaml.safe_load(one("Secret","ambit-dex-config")["stringData"]["config.yaml"])

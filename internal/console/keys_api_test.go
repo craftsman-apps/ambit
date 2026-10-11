@@ -56,6 +56,9 @@ func (f *keysFixture) create(t *testing.T, ck *http.Cookie, scope string, days i
 	if r.Code != http.StatusCreated {
 		t.Fatal(r.Code, r.Body.String())
 	}
+	if r.Header().Get("Cache-Control") != "no-store" {
+		t.Fatal("create response may be cached:", r.Header())
+	}
 	var c createdKey
 	if err := json.Unmarshal(r.Body.Bytes(), &c); err != nil {
 		t.Fatal(err)

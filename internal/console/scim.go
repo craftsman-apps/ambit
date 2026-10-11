@@ -414,6 +414,13 @@ func (s *SCIM) replace(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if u.Active && u.Email != prev && s.Keys != nil { // keys follow the identity: new keys go under the new email
+		if _, err := s.Keys.OffboardKeys(r.Context(), prev, "scim PUT email change"); err != nil && !errors.Is(err, ErrBadInput) {
+			slog.Error("scim: delete keys of the previous email", "email", prev, "err", err)
+			scimRetry(w)
+			return
+		}
+	}
 	if err := s.save(r.Context(), u); err != nil {
 		scimErr(w, http.StatusInternalServerError, "could not save the user")
 		return

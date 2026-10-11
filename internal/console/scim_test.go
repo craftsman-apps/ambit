@@ -601,3 +601,43 @@ func TestSCIMUsesCanonicalEmails(t *testing.T) {
 		}
 	}
 }
+
+// Keys follow the identity: when the email changes, keys under the old email are deleted (the person creates new
+// ones under the new email). A failure answers 503 and saves nothing, so the identity provider retries.
+func TestPUTChangingEmailDeletesKeysOfTheOldEmail(t *testing.T) {
+	mux, s, _, c := scimFixture(t)
+	ctx := context.Background()
+	id := provision(t, mux, "old@acme.test")
+	newKey(t, s, "old@acme.test")
+	put := func() *httptest.ResponseRecorder {
+		return scimDo(t, mux, "PUT", "/scim/v2/Users/"+id, scimToken, map[string]any{"userName": "old@acme.test", "active": true,
+			"emails": []any{map[string]any{"value": "New@acme.test", "primary": true}}})
+	}
+	keysClient := s.Keys.Client
+	s.Keys.Client = interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
+		return errors.New("injected")
+	}})
+	if r := put(); r.Code != http.StatusServiceUnavailable {
+		t.Fatalf("failure: %d %s", r.Code, r.Body)
+	}
+	if u, _ := s.load(ctx, id); u.Email != "old@acme.test" {
+		t.Fatal("email change saved although its keys were not deleted")
+	}
+	s.Keys.Client = keysClient
+	if r := put(); r.Code != 200 {
+		t.Fatalf("%d %s", r.Code, r.Body)
+	}
+	if keys, _ := s.Keys.ListAll(ctx); len(keys) != 0 {
+		t.Fatalf("keys under the old email survived: %+v", keys)
+	}
+	if b := blocked(t, c); strings.Contains(b, "acme.test") {
+		t.Fatalf("an email change blocked someone at the gateway: %s", b)
+	}
+	newKey(t, s, "new@acme.test")
+	if r := put(); r.Code != 200 { // the same PUT again changes nothing
+		t.Fatalf("%d %s", r.Code, r.Body)
+	}
+	if keys, _ := s.Keys.ListAll(ctx); len(keys) != 1 {
+		t.Fatalf("a PUT without an email change deleted keys: %+v", keys)
+	}
+}

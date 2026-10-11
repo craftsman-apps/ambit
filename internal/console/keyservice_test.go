@@ -1,8 +1,11 @@
 package console
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -76,7 +79,7 @@ func TestCreateWritesOwnerFirstAndAKey(t *testing.T) {
 	if err := s.Client.Get(context.Background(), client.ObjectKey{Namespace: "ambit-system", Name: "ambit-key-owner-" + ownerHash("alice@acme.com")}, &o); err != nil {
 		t.Fatal("owner record missing:", err)
 	}
-	if ev, _ := s.Events(context.Background()); len(ev) != 1 || ev[0].Action != "create" || ev[0].KeyID != k.ID {
+	if ev, _ := keyChanges(s); len(ev) != 1 || ev[0].Action != "create" || ev[0].KeyID != k.ID {
 		t.Fatalf("events %+v", ev)
 	}
 }
@@ -232,7 +235,7 @@ func TestRefreshIsMonotonicAndDeletesExpired(t *testing.T) {
 	if len(keys) != 1 || len(keys[0].Groups) != 1 || !keys[0].Until.Equal(now.AddDate(0, 0, 30)) {
 		t.Fatalf("an older refresh must not win: %+v", keys)
 	}
-	ev, _ := s.Events(ctx)
+	ev, _ := keyChanges(s)
 	if len(ev) != 2 || ev[0].Action != "refresh" || ev[0].Detail != "keys=1" {
 		t.Fatalf("one refresh event expected (the older one changed nothing): %+v", ev)
 	}
@@ -575,7 +578,7 @@ func TestEventsOlderThan400DaysAreDeleted(t *testing.T) {
 	_, _, _ = s.Create(ctx, alice(), "a", ScopeLLM, 30)
 	clk.Set(t0.AddDate(0, 0, 401))
 	_, _ = s.Repair(ctx)
-	if ev, _ := s.Events(ctx); len(ev) != 1 || ev[0].Action != "cleanup-delete" {
+	if ev, _ := keyChanges(s); len(ev) != 1 || ev[0].Action != "cleanup-delete" {
 		t.Fatalf("%+v", ev) // the create event is gone; the key's cleanup deletion is recorded
 	}
 }
@@ -585,7 +588,7 @@ func TestEventsHoldNoSecrets(t *testing.T) {
 	ctx := context.Background()
 	plain, k, _ := s.Create(ctx, alice(), "a", ScopeLLM, 30)
 	var cms corev1.ConfigMapList
-	if err := s.Client.List(ctx, &cms, client.HasLabels{keyEventLabel}); err != nil || len(cms.Items) != 1 {
+	if err := s.Client.List(ctx, &cms, client.HasLabels{keyEventLabel}); err != nil || len(cms.Items) == 0 {
 		t.Fatal(err, len(cms.Items))
 	}
 	for _, v := range cms.Items[0].Data {
@@ -735,4 +738,170 @@ func TestKeyReadsAreLabelFiltered(t *testing.T) {
 	_ = s.Revoke(ctx, alice(), k.ID, false)
 	_, _ = s.OffboardKeys(ctx, "alice@acme.com", "scim")
 	_ = s.Reactivate(ctx, "alice@acme.com")
+}
+
+// keyChanges returns the recorded events except the start-of-term settings record.
+func keyChanges(s *KeyService) ([]KeyEvent, error) {
+	ev, err := s.Events(context.Background())
+	return slices.DeleteFunc(ev, func(e KeyEvent) bool { return e.Action == "settings-changed" }), err
+}
+
+func fastTermBackoff(t *testing.T) {
+	old := termBackoff
+	termBackoff = wait.Backoff{Duration: time.Millisecond, Factor: 2, Cap: 4 * time.Millisecond, Steps: 1 << 30}
+	t.Cleanup(func() { termBackoff = old })
+}
+
+func captureLogs(t *testing.T) *lockedBuffer {
+	b := &lockedBuffer{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(b, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	return b
+}
+
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+func TestStartTermKeepsRetryingPastTheCap(t *testing.T) {
+	fastTermBackoff(t) // 1, 2, 4 ms, then 4 ms forever
+	var lists atomic.Int32
+	c := fake.NewClientBuilder().WithInterceptorFuncs(interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, l client.ObjectList, opts ...client.ListOption) error {
+		if lists.Add(1) <= 12 {
+			return errors.New("api server unavailable")
+		}
+		return c.List(ctx, l, opts...)
+	}}).Build()
+	s := &KeyService{Client: c, Namespace: "ambit-system", Settings: KeySettings{Enabled: true, InactivityDays: 30, MaxDays: 365}, Now: time.Now}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := s.StartTerm(ctx); err != nil || !s.Writable() {
+		t.Fatalf("gave up after %d listings: %v", lists.Load(), err)
+	}
+}
+
+func TestUnreadableOwnerRecordDeletesItsKeysAndTermStarts(t *testing.T) {
+	fastTermBackoff(t)
+	s, _ := newKeySvc(t)
+	ctx := context.Background()
+	_, ka, _ := s.Create(ctx, alice("eng"), "a", ScopeLLM, 90)
+	_, kb, _ := s.Create(ctx, Session{Email: "bob@acme.com", SignedIn: t0.Unix()}, "b", ScopeLLM, 90)
+	var o corev1.Secret
+	if err := s.Client.Get(ctx, client.ObjectKey{Namespace: "ambit-system", Name: "ambit-key-owner-" + ownerHash("alice@acme.com")}, &o); err != nil {
+		t.Fatal(err)
+	}
+	o.Data = map[string][]byte{"owner.json": []byte("{")}
+	if err := s.Client.Update(ctx, &o); err != nil {
+		t.Fatal(err)
+	}
+	lead, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := s.StartTerm(lead); err != nil || !s.Writable() {
+		t.Fatal("term did not start:", err)
+	}
+	all, _ := s.ListAll(ctx)
+	if len(all) != 1 || all[0].ID != kb.ID {
+		t.Fatalf("left %+v", all)
+	}
+	ev, _ := keyChanges(s)
+	if ev[0].Action != "repair-delete" || ev[0].KeyID != ka.ID {
+		t.Fatalf("%+v", ev)
+	}
+}
+
+func TestStartTermSurvivesAKeyThatCannotBeWritten(t *testing.T) {
+	fastTermBackoff(t)
+	logs := captureLogs(t)
+	var stuck atomic.Value
+	stuck.Store("")
+	s, _ := newKeySvcWith(t, interceptor.Funcs{Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+		if obj.GetName() == stuck.Load().(string) {
+			return errors.New("admission refused")
+		}
+		return c.Update(ctx, obj, opts...)
+	}})
+	ctx := context.Background()
+	_, k1, _ := s.Create(ctx, alice("eng"), "a", ScopeLLM, 365)
+	_, k2, _ := s.Create(ctx, alice("eng"), "b", ScopeLLM, 365)
+	stuck.Store("ambit-key-" + k1.ID)
+	s.Settings.MaxDays = 30 // both keys need a lower ceiling
+	lead, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := s.StartTerm(lead); err != nil || !s.Writable() {
+		t.Fatal("one stuck key blocked the term:", err)
+	}
+	keys, _ := s.List(ctx, "alice@acme.com")
+	for _, k := range keys {
+		lowered := !k.Ceiling.After(k.Created.AddDate(0, 0, 30))
+		if (k.ID == k2.ID) != lowered {
+			t.Fatalf("key %s lowered=%v", k.ID, lowered)
+		}
+	}
+	if !strings.Contains(logs.String(), "admission refused") {
+		t.Fatalf("error not logged: %s", logs.String())
+	}
+	if _, err := s.Repair(ctx); err == nil {
+		t.Fatal("the hourly repair hid the stuck key")
+	}
+}
+
+func TestStartTermRecordsSettingsChanges(t *testing.T) {
+	s, _ := newKeySvc(t) // first start records
+	ctx := context.Background()
+	settings := func() []KeyEvent {
+		ev, _ := s.Events(ctx)
+		return slices.DeleteFunc(ev, func(e KeyEvent) bool { return e.Action != "settings-changed" })
+	}
+	if ev := settings(); len(ev) != 1 || ev[0].Detail != "enabled=true inactivityDays=30 maxDays=365" {
+		t.Fatalf("%+v", ev)
+	}
+	if err := s.StartTerm(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if ev := settings(); len(ev) != 1 {
+		t.Fatalf("same settings recorded again: %+v", ev)
+	}
+	s.Settings.MaxDays = 90
+	if err := s.StartTerm(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if ev := settings(); len(ev) != 2 || ev[0].Detail != "enabled=true inactivityDays=30 maxDays=90" {
+		t.Fatalf("%+v", ev)
+	}
+}
+
+func TestListDoesNotWaitForTheLock(t *testing.T) {
+	s, _ := newKeySvc(t)
+	ctx := context.Background()
+	_, _, _ = s.Create(ctx, alice(), "a", ScopeLLM, 90)
+	s.mu.Lock() // as a long repair would
+	defer s.mu.Unlock()
+	done := make(chan int)
+	go func() {
+		keys, _ := s.List(ctx, "alice@acme.com")
+		all, _ := s.ListAll(ctx)
+		done <- len(keys) + len(all)
+	}()
+	select {
+	case n := <-done:
+		if n != 2 {
+			t.Fatal(n)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("List waited for the lock")
+	}
 }

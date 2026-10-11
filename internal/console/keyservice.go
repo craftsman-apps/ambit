@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"regexp"
@@ -61,17 +62,22 @@ type RepairReport struct{ Deleted, Updated int }
 
 func (s *KeyService) now() time.Time { return s.Now().UTC().Truncate(time.Second) }
 
-// StartTerm begins a leadership term: under the lock it repairs every key (retrying until it succeeds or lead
-// ends) and only then, if lead is still live, accepts writes until lead ends.
+// StartTerm begins a leadership term: under the lock it repairs every key (retrying until the listings succeed
+// or lead ends; once capped, retries repeat every 30 s) and only then, if lead is still live, records changed
+// settings and accepts writes until lead ends. Errors on single objects are logged and left to the hourly repair.
 func (s *KeyService) StartTerm(lead context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.term = nil
 	var last error
-	err := wait.ExponentialBackoffWithContext(lead, termBackoff, func(ctx context.Context) (bool, error) {
-		if _, last = s.repairLocked(ctx); last != nil {
-			slog.Warn("key repair at the start of a term failed; retrying", "err", last)
+	err := termBackoff.DelayFunc().Until(lead, true, false, func(ctx context.Context) (bool, error) {
+		_, objErrs, err := s.repairLocked(ctx)
+		if last = err; err != nil {
+			slog.Warn("key repair at the start of a term failed; retrying", "err", err)
 			return false, nil
+		}
+		if objErrs != nil {
+			slog.Error("key repair at the start of a term left some objects unrepaired; the hourly repair retries them", "err", objErrs)
 		}
 		return true, nil
 	})
@@ -81,8 +87,28 @@ func (s *KeyService) StartTerm(lead context.Context) error {
 	if err != nil {
 		return errors.Join(err, last)
 	}
+	s.recordSettings(lead)
 	s.term = lead
 	return nil
+}
+
+// recordSettings records a settings-changed event when the settings differ from the last recorded ones.
+// Call it holding s.mu.
+func (s *KeyService) recordSettings(ctx context.Context) {
+	cur := fmt.Sprintf("enabled=%t inactivityDays=%d maxDays=%d", s.Settings.Enabled, s.Settings.InactivityDays, s.Settings.MaxDays)
+	ev, err := s.Events(ctx)
+	if err != nil {
+		slog.Error("key settings: events unreadable; recording the settings again", "err", err)
+	}
+	for _, e := range ev { // newest first
+		if e.Action == "settings-changed" {
+			if e.Detail == cur {
+				return
+			}
+			break
+		}
+	}
+	s.event(ctx, consoleActor, "settings-changed", "", "", cur)
 }
 
 // Writable reports whether this console may change keys now. It takes the lock; never call it while holding it.
@@ -207,9 +233,8 @@ func (s *KeyService) recent(email string, now time.Time) []time.Time {
 }
 
 // List returns one person's keys, oldest first.
+// Reads take no lock: they only query the API server and must not wait behind a repair.
 func (s *KeyService) List(ctx context.Context, email string) ([]Key, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	email, ok := identity.CanonicalEmail(email)
 	if !ok {
 		return nil, ErrBadInput
@@ -219,8 +244,6 @@ func (s *KeyService) List(ctx context.Context, email string) ([]Key, error) {
 
 // ListAll returns every readable key, oldest first.
 func (s *KeyService) ListAll(ctx context.Context) ([]Key, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	secs, err := s.keySecrets(ctx, client.MatchingLabels{keyLabel: "true"})
 	if err != nil {
 		return nil, err
@@ -269,8 +292,14 @@ func (s *KeyService) owner(ctx context.Context, email string) (Owner, error) {
 	if err := s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: "ambit-key-owner-" + ownerHash(email)}, &sec); err != nil {
 		return Owner{}, err
 	}
-	return OwnerFromSecret(&sec)
+	o, err := OwnerFromSecret(&sec)
+	if err != nil {
+		return Owner{}, fmt.Errorf("%w: %v", errBadOwner, err)
+	}
+	return o, nil
 }
+
+var errBadOwner = errors.New("owner record unreadable")
 
 // changeOwner re-reads the owner record, lets rule change it (exists is false when there is none yet) and writes
 // it when rule says so, version-checked, retrying on conflict.
@@ -614,20 +643,21 @@ func (s *KeyService) Repair(ctx context.Context) (RepairReport, error) {
 		return RepairReport{}, err
 	}
 	defer cancel()
-	return s.repairLocked(ctx)
+	rep, objErrs, err := s.repairLocked(ctx)
+	return rep, errors.Join(err, objErrs)
 }
 
 // repairLocked deletes unreadable keys, keys without an owner record, keys of offboarded people and keys past
-// until; brings the rest in line with their owner records; and deletes events past retention. Call it holding s.mu.
-func (s *KeyService) repairLocked(ctx context.Context) (RepairReport, error) {
-	var rep RepairReport
+// until; brings the rest in line with their owner records; and deletes events past retention. err reports a
+// failed listing (nothing was checked); objErrs the objects that could not be repaired. Call it holding s.mu.
+func (s *KeyService) repairLocked(ctx context.Context) (rep RepairReport, objErrs, err error) {
 	blocked, err := s.blockedEmails(ctx)
 	if err != nil {
-		return rep, err
+		return rep, nil, err
 	}
 	secs, err := s.keySecrets(ctx, client.MatchingLabels{keyLabel: "true"})
 	if err != nil {
-		return rep, err
+		return rep, nil, err
 	}
 	var errs []error
 	byOwner := map[string][]Key{}
@@ -651,7 +681,7 @@ func (s *KeyService) repairLocked(ctx context.Context) (RepairReport, error) {
 	for _, email := range emails {
 		keys := byOwner[email]
 		o, err := s.owner(ctx, email)
-		if err != nil && !apierrors.IsNotFound(err) {
+		if err != nil && !apierrors.IsNotFound(err) && !errors.Is(err, errBadOwner) {
 			errs = append(errs, err)
 			continue
 		}
@@ -664,7 +694,7 @@ func (s *KeyService) repairLocked(ctx context.Context) (RepairReport, error) {
 			}
 			continue
 		}
-		for _, k := range keys { // no owner record, or offboarded
+		for _, k := range keys { // no readable owner record, or offboarded: fail closed
 			_, err := s.changeKey(ctx, k.ID, func(*Key) (keyOp, error) { return keyDelete, nil }, "repair-delete", consoleActor)
 			if err == nil {
 				rep.Deleted++
@@ -676,7 +706,7 @@ func (s *KeyService) repairLocked(ctx context.Context) (RepairReport, error) {
 	if err := s.cleanupEvents(ctx); err != nil {
 		errs = append(errs, err)
 	}
-	return rep, errors.Join(errs...)
+	return rep, errors.Join(errs...), nil
 }
 
 // deleteUnreadable deletes a key-labelled Secret that still cannot be decoded after a re-read.

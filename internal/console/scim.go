@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/craftsman-apps/ambit/internal/identity"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -233,16 +234,25 @@ type scimBody struct {
 func (b scimBody) email() string {
 	for _, e := range b.Emails {
 		if e.Primary {
-			return strings.ToLower(e.Value)
+			return scimEmail(e.Value)
 		}
 	}
 	if len(b.Emails) > 0 {
-		return strings.ToLower(b.Emails[0].Value)
+		return scimEmail(b.Emails[0].Value)
 	}
 	if strings.Contains(b.UserName, "@") {
-		return strings.ToLower(b.UserName)
+		return scimEmail(b.UserName)
 	}
 	return ""
+}
+
+// scimEmail is the canonical email (A-Z lower-cased only, as key owners and the gateway's lowerAscii); an
+// unusable one is kept as sent, trimmed (it can own no keys, and offboarding reports that).
+func scimEmail(v string) string {
+	if c, ok := identity.CanonicalEmail(v); ok {
+		return c
+	}
+	return strings.TrimSpace(v)
 }
 
 func readBody(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -557,7 +567,7 @@ func (s *SCIM) setBlocked(ctx context.Context, email string, blocked bool) error
 		present := false
 		keep := []string{}
 		for _, e := range emails {
-			if strings.EqualFold(e, email) {
+			if scimEmail(e) == scimEmail(email) {
 				present = true
 			} else {
 				keep = append(keep, e)
@@ -567,7 +577,7 @@ func (s *SCIM) setBlocked(ctx context.Context, email string, blocked bool) error
 			return nil // nothing would change: do not write the shared list
 		}
 		if blocked {
-			keep = append(keep, strings.ToLower(email))
+			keep = append(keep, scimEmail(email))
 		}
 		sort.Strings(keep)
 		b, _ := json.Marshal(keep)

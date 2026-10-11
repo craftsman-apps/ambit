@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/craftsman-apps/ambit/internal/identity"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -572,5 +573,31 @@ func TestActivePatchOnActiveUserDoesNoWrites(t *testing.T) {
 	}
 	if writes != 0 {
 		t.Fatalf("%d ConfigMap writes", writes)
+	}
+}
+
+// SCIM emails are canonical like key owners and the gateway (lowerAscii): only A-Z are lower-cased.
+func TestSCIMUsesCanonicalEmails(t *testing.T) {
+	mux, s, _, c := scimFixture(t)
+	ctx := context.Background()
+	for _, email := range []string{"Carol@ACME.test", "Ärzte@Acme.test"} {
+		id := provision(t, mux, email)
+		newKey(t, s, email)
+		if r := patchActive(t, mux, id, false); r.Code != 200 {
+			t.Fatalf("%s: %d %s", email, r.Code, r.Body)
+		}
+		canon, _ := identity.CanonicalEmail(email)
+		if keys, _ := s.Keys.List(ctx, canon); len(keys) != 0 {
+			t.Fatalf("%s: keys survived deactivation: %+v", email, keys)
+		}
+		if b := blocked(t, c); !strings.Contains(b, `"`+canon+`"`) {
+			t.Fatalf("%s: block list %s does not hold %s", email, b, canon)
+		}
+		if r := patchActive(t, mux, id, true); r.Code != 200 {
+			t.Fatalf("%s: %d %s", email, r.Code, r.Body)
+		}
+		if b := blocked(t, c); strings.Contains(b, `"`+canon+`"`) {
+			t.Fatalf("%s: still blocked after reactivation: %s", email, b)
+		}
 	}
 }

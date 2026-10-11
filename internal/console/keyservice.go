@@ -25,13 +25,14 @@ import (
 )
 
 var (
-	ErrKeysOff    = errors.New("keys are switched off")
-	ErrNotLeader  = errors.New("this console is not the key writer; try again in a few seconds")
-	ErrOffboarded = errors.New("this person is offboarded")
-	ErrTooMany    = errors.New("a person may have at most 20 keys")
-	ErrTooFast    = errors.New("at most 10 keys per hour")
-	ErrBadInput   = errors.New("invalid key request")
-	ErrNotFound   = errors.New("no such key")
+	ErrKeysOff     = errors.New("keys are switched off")
+	ErrNotLeader   = errors.New("this console is not the key writer; try again in a few seconds")
+	ErrOffboarded  = errors.New("this person is offboarded")
+	ErrTooMany     = errors.New("a person may have at most 20 keys")
+	ErrTooFast     = errors.New("at most 10 keys per hour")
+	ErrBadInput    = errors.New("invalid key request")
+	ErrNotFound    = errors.New("no such key")
+	ErrSignInAgain = errors.New("Sign in again to create keys") // the session predates sign-in times (before the upgrade)
 )
 
 const (
@@ -169,8 +170,11 @@ func (s *KeyService) Create(ctx context.Context, sess Session, name string, scop
 	email, ok := identity.CanonicalEmail(sess.Email)
 	name = strings.TrimSpace(name)
 	if !ok || name == "" || len(name) > 100 || (scope != ScopeLLM && scope != ScopeMCP && scope != ScopeBoth) ||
-		!slices.Contains([]int{30, 90, 365}, days) || days > s.Settings.MaxDays || sess.SignedIn == 0 {
+		!slices.Contains([]int{30, 90, 365}, days) || days > s.Settings.MaxDays {
 		return "", Key{}, ErrBadInput
+	}
+	if sess.SignedIn == 0 {
+		return "", Key{}, ErrSignInAgain
 	}
 	if blocked, err := s.blockedEmails(ctx); err != nil {
 		return "", Key{}, err

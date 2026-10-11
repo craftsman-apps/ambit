@@ -119,7 +119,7 @@ func TestCreateRefusals(t *testing.T) {
 		{alice(), "x", "all", 90, ErrBadInput},
 		{alice(), "x", ScopeLLM, 60, ErrBadInput},
 		{alice(), "x", ScopeLLM, 0, ErrBadInput},
-		{Session{Email: "alice@acme.com"}, "x", ScopeLLM, 90, ErrBadInput}, // no verified sign-in time
+		{Session{Email: "alice@acme.com"}, "x", ScopeLLM, 90, ErrSignInAgain}, // a session from before the upgrade
 		{Session{Email: "Bob@ACME.com", SignedIn: t0.Unix()}, "x", ScopeLLM, 90, ErrOffboarded},
 		{Session{Email: "no email", SignedIn: t0.Unix()}, "x", ScopeLLM, 90, ErrBadInput},
 	} {

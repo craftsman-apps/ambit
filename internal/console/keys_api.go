@@ -80,6 +80,8 @@ func keyErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrBadInput):
 		writeErr(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, ErrSignInAgain):
+		writeErr(w, http.StatusUnauthorized, err.Error())
 	case errors.Is(err, ErrKeysOff):
 		writeErr(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrOffboarded):

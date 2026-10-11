@@ -350,3 +350,15 @@ func TestKeyListWithoutLastUse(t *testing.T) {
 		t.Fatalf("the Keys page lost its last use (%d queries)", queries)
 	}
 }
+
+// Sessions created before the upgrade carry no sign-in time: the person is told to sign in again.
+func TestCreateWithASessionFromBeforeTheUpgrade(t *testing.T) {
+	f := newKeysFixture(t)
+	s := Session{ID: randomString(), Email: "mira@acme.com", Role: RoleViewer, Exp: time.Now().Add(time.Hour).Unix()}
+	f.auth.Sessions.Add(s.ID, s.Email, s.Exp)
+	ck := &http.Cookie{Name: SessionCookie, Value: f.auth.codec.Encode(s)}
+	r := f.call(t, "POST", "/api/keys", ck, map[string]any{"name": "laptop", "scope": "llm", "days": 30})
+	if r.Code != http.StatusUnauthorized || !strings.Contains(r.Body.String(), "Sign in again to create keys") {
+		t.Fatal(r.Code, r.Body.String())
+	}
+}

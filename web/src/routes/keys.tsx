@@ -85,6 +85,13 @@ function CreateKey({ settings, onClose }: { settings: KeySettings; onClose: () =
             {options.map((d) => <option key={d} value={d}>{d} days from now</option>)}</select></label>
       </div>
       {create.isError && <p className="text-bad" role="alert">{create.error.message}</p>}
+      {create.isError && create.error.message.startsWith("Sign in again") && (
+        // sessions from before the upgrade carry no sign-in time; signing out and in again gives one
+        <Button type="button" variant="outline" className="w-auto" onClick={async () => {
+          await fetch("/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => null);
+          window.location.assign("/login");
+        }}>Sign out and sign in again</Button>
+      )}
       <div className="flex gap-2">
         <Button type="submit" className="w-auto" disabled={create.isPending}>Create</Button>
         <Button type="button" variant="outline" className="w-auto" onClick={onClose}>Cancel</Button>

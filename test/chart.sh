@@ -69,7 +69,7 @@ noemail=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.
 ! grep -q "jwt.email.trim().matches" <<<"$(sed -n '/name: ambit-llm-auth/,/^---/p' <<<"$noemail")" || { echo "FAIL chart: requireEmail=false must not require an email"; exit 1; }
 grep -q -- '--require-email=false' <<<"$noemail" || { echo "FAIL chart: controller flag"; exit 1; }
 check_qs "pols={x['metadata']['name']:x['spec'] for x in docs if x['kind']=='ValidatingAdmissionPolicy'}
-assert set(pols)=={'ambit-keys-writer','ambit-keys-holder'}, list(pols)
+assert set(pols)=={'ambit-keys-writer','ambit-keys-holder','ambit-key-lease'}, list(pols)
 w,h=pols['ambit-keys-writer'],pols['ambit-keys-holder']
 assert w['failurePolicy']=='Fail' and h['failurePolicy']=='Fail', (w,h)
 assert 'paramKind' not in w and h['paramKind']=={'apiVersion':'coordination.k8s.io/v1','kind':'Lease'}, (w,h)
@@ -86,7 +86,8 @@ assert 'params.spec.holderIdentity' in json.dumps(h['validations']), h
 assert h['validations'][0]['message']=='only the Ambit console holding the key Lease may write personal API key objects', h
 sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event']
 bs={x['metadata']['name']:x['spec'] for x in docs if x['kind']=='ValidatingAdmissionPolicyBinding'}
-assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(3)}|{'ambit-keys-holder-%d'%i for i in range(3)}, list(bs)
+assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(3)}|{'ambit-keys-holder-%d'%i for i in range(3)}|{'ambit-key-lease'}, list(bs)
+bs.pop('ambit-key-lease')
 for n,b in bs.items():
   kind=n.split('-')[2]; i=int(n[-1])
   assert b['policyName']=='ambit-keys-'+kind and b['validationActions']==['Deny'], b
@@ -94,6 +95,16 @@ for n,b in bs.items():
   assert b['matchResources']['objectSelector']=={'matchExpressions':[{'key':sel[i],'operator':'Exists'}]}, b
   if kind=='writer': assert 'paramRef' not in b, b
   else: assert b['paramRef']=={'name':'ambit-key-writer','namespace':'ambit-system','parameterNotFoundAction':'Allow'}, b" "admission: two policies, six bindings, console-only writes, Lease holder fencing, cleanup exempt"
+check_qs "p=one('ValidatingAdmissionPolicy','ambit-key-lease')['spec']
+assert p['failurePolicy']=='Fail' and 'paramKind' not in p, p
+r=p['matchConstraints']['resourceRules'][0]
+assert r['apiGroups']==['coordination.k8s.io'] and r['resources']==['leases'] and set(r['operations'])=={'UPDATE','DELETE'} and r['resourceNames']==['ambit-key-writer'], r
+e=p['validations'][0]['expression']
+for s in ['system:serviceaccount:ambit-system:ambit-console','system:serviceaccount:kube-system:namespace-controller','system:serviceaccount:kube-system:generic-garbage-collector']: assert s in e, s
+assert p['validations'][0]['message']=='only the Ambit console may change the key Lease', p
+b=one('ValidatingAdmissionPolicyBinding','ambit-key-lease')['spec']
+assert b['policyName']=='ambit-key-lease' and b['validationActions']==['Deny'] and 'paramRef' not in b, b
+assert b['matchResources']['namespaceSelector']=={'matchLabels':{'kubernetes.io/metadata.name':'ambit-system'}}, b" "admission: only the console changes the key Lease"
 check_qs "r=one('Role','ambit-console')['rules']
 rule=[x for x in r if x['apiGroups']==[''] and set(x['resources'])=={'secrets','configmaps'} and not x.get('resourceNames')]
 assert any(set(x['verbs'])=={'get','list','watch','create','update','delete'} for x in rule), r

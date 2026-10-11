@@ -30,6 +30,7 @@ const (
 	admConsoleUser  = "system:serviceaccount:ambit-system:ambit-console"
 	admNSController = "system:serviceaccount:kube-system:namespace-controller"
 	msgWriter       = "only the Ambit console may write personal API key objects"
+	msgLease        = "only the Ambit console may change the key Lease"
 	msgHolder       = "only the Ambit console holding the key Lease may write personal API key objects"
 )
 
@@ -84,7 +85,7 @@ func TestAdmissionFencesKeyObjects(t *testing.T) {
 	}
 	must(admin.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: admNS, Labels: map[string]string{"kubernetes.io/metadata.name": admNS}}}))
 	// Everyone may write Secrets and ConfigMaps by RBAC; admission is what is under test.
-	must(admin.Create(ctx, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "writers"}, Rules: []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"secrets", "configmaps"}, Verbs: []string{"*"}}}}))
+	must(admin.Create(ctx, &rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "writers"}, Rules: []rbacv1.PolicyRule{{APIGroups: []string{""}, Resources: []string{"secrets", "configmaps"}, Verbs: []string{"*"}}, {APIGroups: []string{"coordination.k8s.io"}, Resources: []string{"leases"}, Verbs: []string{"*"}}}}))
 	must(admin.Create(ctx, &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "writers"}, RoleRef: rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "writers"},
 		Subjects: []rbacv1.Subject{{APIGroup: "rbac.authorization.k8s.io", Kind: "Group", Name: "system:authenticated"}}}))
 	for _, doc := range strings.Split(string(rendered), "\n---") {
@@ -133,6 +134,33 @@ func TestAdmissionFencesKeyObjects(t *testing.T) {
 
 	// 1. No Lease.
 	waitRefused("admin writes a key Secret (writer policy)", adm, msgWriter)
+	// Each binding has its own object selector; wait for all three.
+	waitUntil := func(what string, refusedNow func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(60 * time.Second)
+		for !refusedNow() {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: still not refused after 60 s", what)
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
+	waitUntil("owner-record binding", func() bool {
+		name := fresh("probe")
+		_, err := sec(adm).Create(ctx, keySecret(name, map[string]string{"ambitproject.dev/key-owner-record": "true"}), metav1.CreateOptions{})
+		if err == nil {
+			_ = del(nsCtl, name)
+		}
+		return refused(err, msgWriter)
+	})
+	waitUntil("key-event binding", func() bool {
+		name := fresh("probe")
+		_, err := adm.CoreV1().ConfigMaps(admNS).Create(ctx, keyConfigMap(name), metav1.CreateOptions{})
+		if err == nil {
+			_ = adm.CoreV1().ConfigMaps(admNS).Delete(ctx, name, metav1.DeleteOptions{})
+		}
+		return refused(err, msgWriter)
+	})
 	if _, err := sec(other).Create(ctx, keySecret("plain", nil), metav1.CreateOptions{}); err != nil {
 		t.Errorf("unlabelled Secret by any user must succeed: %v", err)
 	}
@@ -168,6 +196,20 @@ func TestAdmissionFencesKeyObjects(t *testing.T) {
 	holder := "pod-a"
 	must(admin.Create(ctx, &coordv1.Lease{ObjectMeta: metav1.ObjectMeta{Name: "ambit-key-writer", Namespace: admNS}, Spec: coordv1.LeaseSpec{HolderIdentity: &holder}}))
 	waitRefused("pod-b writes while pod-a holds the Lease (holder policy)", podB, msgHolder)
+	leaseGone := func(c kubernetes.Interface) error {
+		return c.CoordinationV1().Leases(admNS).Delete(ctx, "ambit-key-writer", metav1.DeleteOptions{})
+	}
+	waitUntil("Lease policy", func() bool { return refused(leaseGone(adm), msgLease) })
+	if l, err := getLease(ctx, adm); err != nil {
+		t.Fatal(err)
+	} else {
+		if _, err := adm.CoordinationV1().Leases(admNS).Update(ctx, l, metav1.UpdateOptions{}); !refused(err, msgLease) {
+			t.Errorf("admin Lease update must be refused, got %v", err)
+		}
+		if _, err := podA.CoordinationV1().Leases(admNS).Update(ctx, l, metav1.UpdateOptions{}); err != nil {
+			t.Errorf("console Lease update must be allowed: %v", err)
+		}
+	}
 	name := fresh("held")
 	s, err := sec(podA).Create(ctx, keySecret(name, keyLabels), metav1.CreateOptions{})
 	if err != nil {
@@ -196,4 +238,31 @@ func TestAdmissionFencesKeyObjects(t *testing.T) {
 	if err := del(podA, name); err != nil {
 		t.Errorf("holder pod-a must delete: %v", err)
 	}
+
+	// 4. Lease absent: the holder policy no longer applies, the writer policy still does.
+	if err := leaseGone(nsCtl); err != nil {
+		t.Fatalf("namespace controller must delete the Lease: %v", err)
+	}
+	waitUntil("holder policy lifted", func() bool {
+		name := fresh("probe")
+		_, err := sec(podB).Create(ctx, keySecret(name, keyLabels), metav1.CreateOptions{})
+		if err == nil {
+			_ = del(nsCtl, name)
+		}
+		return err == nil
+	})
+	for _, c := range []kubernetes.Interface{podA, podB} {
+		name := fresh("nolease")
+		if _, err := sec(c).Create(ctx, keySecret(name, keyLabels), metav1.CreateOptions{}); err != nil {
+			t.Errorf("console pod must write while the Lease is absent: %v", err)
+		}
+		_ = del(nsCtl, name)
+	}
+	if _, err := sec(adm).Create(ctx, keySecret(fresh("adm"), keyLabels), metav1.CreateOptions{}); !refused(err, msgWriter) {
+		t.Errorf("admin must still be refused by the writer policy while the Lease is absent, got %v", err)
+	}
+}
+
+func getLease(ctx context.Context, c kubernetes.Interface) (*coordv1.Lease, error) {
+	return c.CoordinationV1().Leases(admNS).Get(ctx, "ambit-key-writer", metav1.GetOptions{})
 }

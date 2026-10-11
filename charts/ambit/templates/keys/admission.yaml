@@ -84,3 +84,35 @@ spec:
     namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ $ns }} } }
     objectSelector: { matchExpressions: [{ key: {{ $label | quote }}, operator: Exists }] }
 {{- end }}
+---
+# The Lease names the one console pod that may write keys: only the console changes it (the holder policy above
+# applies while it exists). CREATE stays open because the console creates it; namespace teardown may delete it.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: ambit-key-lease
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [coordination.k8s.io]
+        apiVersions: [v1]
+        operations: [UPDATE, DELETE]
+        resources: [leases]
+        resourceNames: [ambit-key-writer]
+  validations:
+    - expression: >-
+        request.userInfo.username == {{ $console | quote }} ||
+        (request.operation == "DELETE" &&
+        request.userInfo.username in ["system:serviceaccount:kube-system:namespace-controller", "system:serviceaccount:kube-system:generic-garbage-collector"])
+      message: "only the Ambit console may change the key Lease"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ambit-key-lease
+spec:
+  policyName: ambit-key-lease
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ $ns }} } }

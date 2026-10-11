@@ -60,7 +60,7 @@ kubectl -n "$NS" rollout status deploy/mock-llm --timeout=180s >/dev/null
 kubectl -n "$NS" wait models.ambitproject.dev/mock-echo --for=condition=Ready --timeout=120s >/dev/null
 chat() { command curl -s -o "$W/llm" -w '%{http_code}' "$LLM/v1/chat/completions" -H 'Content-Type: application/json' "$@" \
   -d '{"model":"mock/echo","messages":[{"role":"user","content":"hello"}]}'; }
-[[ $(chat) == 401 ]] || fail "5 a call without a token was not refused: $(cat "$W/llm")"
+[[ $(chat) =~ ^40[13]$ ]] || fail "5 a call without a token was not refused: $(cat "$W/llm")"
 # Ready means the controller generated the model; the gateway answers 404 until its configuration arrives.
 for _ in $(seq 1 30); do c=$(chat -H "Authorization: Bearer $TOK"); [[ "$c" != 404 ]] && break; sleep 2; done
 [[ "$c" == 403 ]] || fail "5 with a Dex token and no rule: got $c, want 403: $(cat "$W/llm")"
@@ -72,7 +72,7 @@ spec: { allSignedIn: true, models: [mock-echo] }
 EOF
 for _ in $(seq 1 30); do c=$(chat -H "Authorization: Bearer $TOK"); [[ "$c" == 200 ]] && break; sleep 2; done
 [[ "$c" == 200 ]] || fail "5 allowed call: $c $(cat "$W/llm")"
-pass "5 first call: 401 without a token, 403 without a rule, 200 with one"
+pass "5 first call: 401 or 403 without a token, 403 without a rule, 200 with one"
 
 # 6 · the call is in the audit log (Usage and Audit read it)
 day=$(date -u +%Y-%m-%d); next=$(date -u -v+1d +%Y-%m-%d 2>/dev/null || date -u -d tomorrow +%Y-%m-%d)

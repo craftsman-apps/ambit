@@ -30,8 +30,8 @@ pass "1 2 servers Ready in ToolHive; backend and access policy accepted by agent
 # 2 · no token
 code=$(command curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' "$MCP")
-[[ "$code" == 401 ]] || fail "2 request without a token returned $code"
-pass "2 no token -> 401"
+[[ "$code" =~ ^40[13]$ ]] || fail "2 request without a token returned $code"
+pass "2 no token -> 401 or 403 (the Require rule answers 403: JWT auth is permissive)"
 
 # 3 · U5: alice (eng) sees exactly the one tool her rule names
 tools "$(token alice)"

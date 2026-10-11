@@ -46,8 +46,8 @@ pass "1 controller ready; 2 models accepted by agentgateway; 2 access rules comp
 
 A=$(token alice); M=$(token mira)
 # 2 · no token
-[[ $(llm "" "$GEMMA") == 401 ]] || fail "2 request without a token was not rejected"
-pass "2 no token -> 401"
+[[ $(llm "" "$GEMMA") =~ ^40[13]$ ]] || fail "2 request without a token was not rejected"
+pass "2 no token -> 401 or 403 (the Require rule answers 403: JWT auth is permissive)"
 
 # 3 · U3: denied, with a machine-readable reason, before any provider call
 [[ $(llm "$A" "$NEMO") == 403 ]] || fail "3 alice got $(cat "$W/llm") for the restricted model"

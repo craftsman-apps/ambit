@@ -40,7 +40,7 @@ func TestRefuseUnpriced(t *testing.T) {
 	if got := expr("raw"); got != `(`+identity.PrincipalGroups+`.exists(g, g in ["eng", "ml-research"])) && !`+identity.PrincipalGroups+`.exists(g, g in ["eng", "ml-research"])` {
 		t.Fatalf("raw: %s", got)
 	}
-	if got := expr("echo"); strings.Contains(got, "!jwt") {
+	if got := expr("echo"); strings.Contains(got, "!"+identity.PrincipalGroups) {
 		t.Fatalf("echo restricted: %s", got)
 	}
 	if RefuseUnpriced(&res, models, pricingByModel(models), nil) != nil {

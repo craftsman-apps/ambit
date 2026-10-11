@@ -7,7 +7,9 @@ that person's token: the same access rules, budgets, audit records and offboardi
 ## What a key is, and is not
 
 - A key is a **personal credential**. It carries the access of its owner, never more. It carries the groups
-  the owner had at their last console sign-in.
+  the owner had at their last console sign-in, for up to `apiKeys.inactivityDays`. When you remove someone from
+  a group in the identity provider, their keys lose that group at their next console sign-in. For an immediate
+  effect, offboard the person (or revoke their keys).
 - A key is **not a service account**. It belongs to a person and stops when that person is offboarded or has
   not signed in to the console for a while.
 - The key is **shown once**, when you create it. Ambit stores only a SHA-256 hash and a short display prefix
@@ -83,16 +85,26 @@ A key that has stopped is deleted and is never revived. The person creates a new
 lowers existing end dates for good, and a later raise of `apiKeys.maxDays` does not extend them. Changing
 `apiKeys.inactivityDays` recomputes when each key stops, never past its end date.
 
-Seven days before a key stops, the console shows a banner on every page to its owner. Ambit sends no email.
+Each key shows a status: **Active**, **Stops soon** (within 7 days), **Stopped — owner inactive** (no console
+sign-in for `apiKeys.inactivityDays`) or **Stopped — end date**. A stopped key is deleted within the hour.
+
+Seven days before a key stops, the console shows a banner on every page to its owner. If the key stops because
+the owner has not signed in, the banner asks them to sign in again; if it reaches its end date, the banner asks
+them to create a new key before that date. Ambit sends no email.
+
+If the console says **Sign in again to create keys**, your session started before this release. Sign out and
+sign in again.
 
 ## What admins see
 
 Under **Settings → Keys**, admins see:
 
-- every key with its owner, scope, end date and last use (last use needs the audit trail, otherwise it shows
+- every key with its owner, status, end date and last use (last use needs the audit trail, otherwise it shows
   as unknown);
 - a button to **revoke** any key;
-- the **History** of key changes: who created or revoked which key, and when. It never shows a key or its hash;
+- the **History** of key changes: who created or revoked which key, offboarding, settings changes, and sign-ins
+  that changed a person's groups, with the time. It shows the newest 500 changes and never shows a key or its
+  hash. Every sign-in that refreshes keys is also written to the console log;
 - the three settings, **read-only**. They are Helm values.
 
 Everyone who can sign in can create keys. A person sees and revokes only their own keys.
@@ -104,7 +116,7 @@ before it serves requests.
 
 | Value | Default | Meaning |
 |---|---|---|
-| `apiKeys.enabled` | `true` | `false`: the gateways accept tokens only, and every key is refused after the next gateway update (a few seconds), even if the console is down. Keys are kept. Creating a key answers 409. Revoking still works. Switching back on restores keys that have not stopped. |
+| `apiKeys.enabled` | `true` | `false`: the gateways accept tokens only, and every key is refused after the next gateway update (a few seconds), even if the console is down. Keys are kept. Creating a key answers 409. Revoking still works. Switching back on restores keys that have not stopped. This is the **emergency stop for all keys**: deleting key Secrets with `kubectl` is refused by design. |
 | `apiKeys.inactivityDays` | `30` | Days without a console sign-in before a key stops (1 to 365). |
 | `apiKeys.maxDays` | `365` | Longest end date a person may choose: 30, 90 or 365. |
 | `llm.jwt.requireEmail` | `true` | Refuse tokens without a usable `email` claim at the LLM gateway. |
@@ -121,6 +133,9 @@ When the identity provider deactivates or deletes a person (SCIM), Ambit:
 2. deletes all their keys, and records how many.
 
 Reactivating the person removes the block. Their old keys stay deleted. They create new ones.
+
+When the identity provider changes a person's email, Ambit deletes the keys under the old email. Keys follow
+the identity: the person creates new keys, which carry the new email.
 
 While keys are still left to delete, the SCIM endpoint answers **503** with `Retry-After: 30`. Identity
 providers retry on 503, so the change completes later. Offboarding of SaaS grants is described in
@@ -153,12 +168,23 @@ ID, never the key.
   restart, key writes are refused for about 15 seconds (the answer is 503) while the old Lease expires.
 - **Admission policies.** The chart installs two `ValidatingAdmissionPolicy` objects. `ambit-keys-writer` lets
   only the console's service account write key Secrets, owner records and key events. `ambit-key-lease` lets
-  only the console change or delete the Lease. The namespace controller and the garbage collector may
+  only the console change or delete the Lease, so no other component can take the Lease over, or delete it
+  and so stop key writes. The namespace controller and the garbage collector may
   delete these objects, so a namespace can always be removed. This needs `kube-controller-manager` started
   with `--use-service-account-credentials`. kind and most kubeadm-based clusters start it this way. On managed
   services (EKS, GKE, AKS) you cannot see this flag; check with your provider. Without it, the namespace
   controller runs as a shared account that this policy does not allow, and a namespace that holds keys cannot
-  be deleted until you delete the key objects first.
+  be deleted. Deleting the key objects yourself is refused too. Run `helm uninstall` first (it removes the
+  policies), or delete the `ambit-keys-writer-*` policy bindings, then delete the namespace.
+- **Uninstall.** `helm uninstall` removes the policies but not the key Secrets, owner records and key events:
+  the console created them, not Helm. They work again if you install Ambit again in the same namespace. If you
+  do not want that, delete them after the uninstall:
+
+  ```bash
+  kubectl -n <namespace> delete secret -l ambitproject.dev/key=true
+  kubectl -n <namespace> delete secret -l ambitproject.dev/key-owner-record=true
+  kubectl -n <namespace> delete configmap -l ambitproject.dev/key-event=true
+  ```
 - **No Lease-holder check.** The policies do not check which console pod holds the Lease. This is on purpose.
   The API server can keep an old copy of the Lease for hours, and a check on that copy refused every key
   write, including the deletions that offboarding needs. Do not add such a check. The console decides which

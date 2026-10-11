@@ -1,6 +1,7 @@
 package console
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -105,13 +106,17 @@ var testSPA = fstest.MapFS{
 }
 
 func newTestServer(t *testing.T, f *fakeIssuer) (*httptest.Server, *http.Client) {
+	return newTestServerWith(t, f, nil)
+}
+
+func newTestServerWith(t *testing.T, f *fakeIssuer, onSignIn func(context.Context, Session)) (*httptest.Server, *http.Client) {
 	t.Helper()
 	var ts *httptest.Server
 	ts = httptest.NewUnstartedServer(nil)
 	ts.Start()
 	auth, err := NewAuth(t.Context(), AuthConfig{
 		Issuer: f.srv.URL, ClientID: "ambit-console", ClientSecret: "s3cret",
-		PublicURL: ts.URL, SessionKey: []byte("0123456789abcdef0123456789abcdef"), SessionTTL: 8 * time.Hour,
+		PublicURL: ts.URL, SessionKey: []byte("0123456789abcdef0123456789abcdef"), SessionTTL: 8 * time.Hour, OnSignIn: onSignIn,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -366,5 +371,17 @@ func TestParseConnectors(t *testing.T) {
 	}
 	if _, err := ParseConnectors(`{not json`); err == nil {
 		t.Fatal("bad JSON accepted")
+	}
+}
+
+func TestSignInRecordsTimeAndCallsHook(t *testing.T) {
+	f := newFakeIssuer(t)
+	var got Session
+	ts, c := newTestServerWith(t, f, func(ctx context.Context, s Session) { got = s })
+	if r := signIn(t, ts, c, f, false); r.StatusCode != http.StatusFound {
+		t.Fatal(r.StatusCode)
+	}
+	if got.Email != BootstrapEmail || got.SignedIn == 0 || time.Since(time.Unix(got.SignedIn, 0)) > time.Minute {
+		t.Fatalf("hook got %+v", got)
 	}
 }

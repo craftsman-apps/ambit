@@ -36,6 +36,14 @@ func env(k, def string) string {
 	return def
 }
 
+// envInt reads an integer setting; an unset or invalid value gives def.
+func envInt(k string, def int) int {
+	if n, err := strconv.Atoi(os.Getenv(k)); err == nil {
+		return n
+	}
+	return def
+}
+
 // retry runs f until it succeeds or ctx ends. Dex may still be starting when the console starts.
 func retry(ctx context.Context, what string, f func() error) error {
 	for delay := time.Second; ; delay = min(delay*2, 15*time.Second) {
@@ -132,11 +140,43 @@ func run(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+	podName := os.Getenv("AMBIT_POD_NAME")
+	if podName == "" {
+		return errors.New("AMBIT_POD_NAME is required: it names this console in the key Lease")
+	}
+	keySvc := &console.KeyService{Client: objects, Namespace: ns, Now: time.Now, Settings: console.KeySettings{
+		Enabled: os.Getenv("AMBIT_KEYS_ENABLED") != "false", InactivityDays: envInt("AMBIT_KEYS_INACTIVITY_DAYS", 30),
+		MaxDays: envInt("AMBIT_KEYS_MAX_DAYS", 365)}}
+	go console.RunLeader(ctx, kube, ns, podName, keySvc.StartTerm, keySvc.EndTerm)
+	go func() { // the hourly full repair bounds any stale write or interrupted refresh to one hour
+		t := time.NewTicker(time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				switch rep, err := keySvc.Repair(ctx); {
+				case errors.Is(err, console.ErrNotLeader):
+					slog.Debug("key repair skipped: not the key writer")
+				case err != nil:
+					slog.Error("key repair", "err", err)
+				default:
+					slog.Info("key repair", "deleted", rep.Deleted, "updated", rep.Updated)
+				}
+			}
+		}
+	}()
 	var auth *console.Auth
 	if err := retry(ctx, "dex discovery", func() (e error) {
 		auth, e = console.NewAuth(ctx, console.AuthConfig{
 			Issuer: publicURL + "/dex", InternalIssuer: os.Getenv("AMBIT_DEX_URL"), ClientID: console.ClientID, ClientSecret: keys.ClientSecret,
 			PublicURL: publicURL, SessionKey: keys.SessionKey, SessionTTL: time.Duration(hours) * time.Hour,
+			OnSignIn: func(c context.Context, sess console.Session) {
+				if err := keySvc.Refresh(c, sess); err != nil && !errors.Is(err, console.ErrNotLeader) {
+					slog.Error("key refresh at sign-in", "email", sess.Email, "err", err)
+				}
+			},
 		})
 		return e
 	}); err != nil {

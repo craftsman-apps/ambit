@@ -118,12 +118,15 @@ func (s *KeyService) Writable() bool {
 	return s.term != nil && s.term.Err() == nil
 }
 
-// EndTermForTest ends the current term as if the Lease were lost.
-func (s *KeyService) EndTermForTest() {
+// EndTerm ends the current term; the leader calls it when the Lease is lost.
+func (s *KeyService) EndTerm() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.term = nil
 }
+
+// EndTermForTest ends the current term as if the Lease were lost.
+func (s *KeyService) EndTermForTest() { s.EndTerm() }
 
 // opCtx returns a context cancelled by either the request or the end of the term. Call it holding s.mu.
 func (s *KeyService) opCtx(req context.Context) (context.Context, context.CancelFunc, error) {

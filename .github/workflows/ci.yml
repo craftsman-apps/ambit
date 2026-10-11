@@ -30,6 +30,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    # The image binaries are static (cgo off). The tests use the same setting, so the image build below reuses
+    # everything they compiled instead of compiling all dependencies again (3.2 of 4.5 min, 2026-10-10).
+    env: { CGO_ENABLED: "0" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0 }
@@ -59,11 +62,13 @@ jobs:
         run: test/alerts.sh
       # The image for both e2e parts, built once: Go's cache is warm here (setup-go and the tests above), and web/dist
       # is already built. Docker builds inside the e2e jobs compiled everything again (6.4 min each, 2026-10-08).
+      # No -trimpath: it would change Go's cache keys and compile everything again; this image is for tests only
+      # (release.yml builds the released one from the Dockerfile).
       - name: Build the Ambit image for the e2e jobs
         if: ${{ !github.event.pull_request.draft }}
         run: |
           for c in ambit-console ambit-controller ambit ambit-guard ambit-router; do
-            CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "bin/$c" "./cmd/$c"
+            go build -ldflags="-s -w" -o "bin/$c" "./cmd/$c"
           done
           docker build --target prebuilt -t ambit-console:dev .
           docker build -t ambit-whoami:dev -f test/whoami/Dockerfile .  # test-only MCP server (step 5)

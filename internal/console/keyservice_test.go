@@ -1069,3 +1069,30 @@ func TestRefreshAtSignInWaitsForTheTerm(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Okta sends active=true for every user on every sync: Reactivate must not queue behind a long repair.
+func TestReactivateOfAnActivePersonDoesNotWaitForTheLock(t *testing.T) {
+	s, _ := newKeySvc(t)
+	ctx := context.Background()
+	if _, _, err := s.Create(ctx, alice("eng"), "k", ScopeLLM, 90); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock() // as a long repair would
+	done := make(chan error, 2)
+	go func() {
+		done <- s.Reactivate(ctx, "alice@acme.com") // owner record, not offboarded
+		done <- s.Reactivate(ctx, "erin@acme.com")  // no owner record
+	}()
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(2 * time.Second):
+			s.mu.Unlock()
+			t.Fatal("Reactivate waited for the lock")
+		}
+	}
+	s.mu.Unlock()
+}

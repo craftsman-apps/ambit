@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/craftsman-apps/ambit/internal/identity"
@@ -54,7 +55,8 @@ type KeyService struct {
 	PerHour   int // creations per person per hour; 0 means 10
 
 	mu      sync.Mutex
-	term    context.Context // live while this console holds the key Lease; read and written only under mu
+	term    context.Context                 // live while this console holds the key Lease; read and written only under mu
+	live    atomic.Pointer[context.Context] // a copy of term for lock-free reads (Reactivate's fast path)
 	created map[string][]time.Time
 	seq     uint64 // orders events recorded within the same second
 }
@@ -73,7 +75,7 @@ func (s *KeyService) StartTerm(lead context.Context) error {
 		return err
 	}
 	if s.term != nil && s.term.Err() != nil {
-		s.term = nil
+		s.setTerm(nil)
 	}
 	var last error
 	err := termBackoff.DelayFunc().Until(lead, true, false, func(ctx context.Context) (bool, error) {
@@ -94,7 +96,7 @@ func (s *KeyService) StartTerm(lead context.Context) error {
 		return errors.Join(err, last)
 	}
 	s.recordSettings(lead)
-	s.term = lead
+	s.setTerm(lead)
 	return nil
 }
 
@@ -131,7 +133,13 @@ func (s *KeyService) Writable() bool {
 func (s *KeyService) EndTerm() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.term = nil
+	s.setTerm(nil)
+}
+
+// setTerm publishes the term. Call it holding s.mu.
+func (s *KeyService) setTerm(t context.Context) {
+	s.term = t
+	s.live.Store(&t)
 }
 
 // EndTermForTest ends the current term as if the Lease were lost.
@@ -626,6 +634,16 @@ func (s *KeyService) OffboardKeys(ctx context.Context, email, trigger string) (i
 
 // Reactivate clears the owner record's offboarded flag so the person may create keys again.
 func (s *KeyService) Reactivate(ctx context.Context, email string) error {
+	// Fast path without the lock (the identity provider sends active=true for every user on every sync): no
+	// owner record, or a readable one that is not offboarded, leaves nothing to undo.
+	if t := s.live.Load(); t == nil || *t == nil || (*t).Err() != nil {
+		return ErrNotLeader
+	}
+	if c, ok := identity.CanonicalEmail(email); ok {
+		if o, err := s.owner(ctx, c); apierrors.IsNotFound(err) || (err == nil && !o.Offboarded) {
+			return nil
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	ctx, cancel, err := s.opCtx(ctx)

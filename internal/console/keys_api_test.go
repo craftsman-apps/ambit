@@ -229,7 +229,10 @@ func TestKeyViewFillsLastUsed(t *testing.T) {
 	f := newKeysFixture(t)
 	f.keys.Client = f.k8s
 	cat := &Catalog{Client: f.k8s, Namespace: f.keys.Namespace, Keys: f.keys,
-		LastUsed: func(_ context.Context, ids []string) (map[string]time.Time, error) {
+		LastUsed: func(_ context.Context, ids []string, from time.Time) (map[string]time.Time, error) {
+			if !from.Equal(t0) {
+				t.Errorf("last use searched from %v, want the oldest key's creation %v", from, t0)
+			}
 			m := map[string]time.Time{}
 			for _, id := range ids {
 				m[id] = t0.Add(time.Hour)
@@ -328,5 +331,22 @@ func TestRevokeOfUnreadableKeyIsNotFound(t *testing.T) {
 	}
 	if err := f.keys.Revoke(context.Background(), Session{Email: "root@acme.com"}, "aaaaaaaaaaaa", true); err != ErrNotFound {
 		t.Fatal(err)
+	}
+}
+
+func TestKeyListWithoutLastUse(t *testing.T) {
+	f := newKeysFixture(t)
+	queries := 0
+	cat := &Catalog{Client: f.k8s, Namespace: f.keys.Namespace, Keys: f.keys,
+		LastUsed: func(context.Context, []string, time.Time) (map[string]time.Time, error) { queries++; return nil, nil }}
+	h := NewServer(f.auth, testSPA, LoginOptions{}, cat)
+	ck := f.cookie("mira@acme.com", RoleViewer)
+	f.create(t, ck, "llm", 30)
+	r := do(t, h, "GET", "/api/keys?lastUsed=false", ck, nil)
+	if r.Code != 200 || !strings.Contains(r.Body.String(), `"lastUsed":null`) || queries != 0 {
+		t.Fatalf("lastUsed=false queried the audit %d times: %d %s", queries, r.Code, r.Body.String())
+	}
+	if do(t, h, "GET", "/api/keys", ck, nil); queries != 1 {
+		t.Fatalf("the Keys page lost its last use (%d queries)", queries)
 	}
 }

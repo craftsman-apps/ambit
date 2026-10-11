@@ -96,17 +96,21 @@ func keyErr(w http.ResponseWriter, err error) {
 	}
 }
 
-// views turns keys into KeyViews, adding each key's last use when the audit can tell. A failed lookup is
-// logged and leaves lastUsed null: the list is still useful.
-func (c *Catalog) views(ctx context.Context, keys []Key, withOwner bool) []KeyView {
+// views turns keys into KeyViews, adding each key's last use (when lastUsed is set) when the audit can tell. A
+// failed lookup is logged and leaves lastUsed null: the list is still useful.
+func (c *Catalog) views(ctx context.Context, keys []Key, withOwner, lastUsed bool) []KeyView {
 	last := map[string]time.Time{}
-	if lookup := c.lastUsedFunc(); lookup != nil && len(keys) > 0 {
+	if lookup := c.lastUsedFunc(); lookup != nil && lastUsed && len(keys) > 0 {
 		ids := make([]string, len(keys))
+		from := keys[0].Created
 		for i, k := range keys {
 			ids[i] = k.ID
+			if k.Created.Before(from) {
+				from = k.Created
+			}
 		}
 		var err error
-		if last, err = lookup(ctx, ids); err != nil {
+		if last, err = lookup(ctx, ids, from); err != nil {
 			slog.Warn("last use of keys unknown", "err", err)
 		}
 	}
@@ -124,7 +128,7 @@ func (c *Catalog) views(ctx context.Context, keys []Key, withOwner bool) []KeyVi
 	return out
 }
 
-func (c *Catalog) lastUsedFunc() func(context.Context, []string) (map[string]time.Time, error) {
+func (c *Catalog) lastUsedFunc() func(context.Context, []string, time.Time) (map[string]time.Time, error) {
 	if c.LastUsed != nil {
 		return c.LastUsed
 	}
@@ -140,7 +144,9 @@ func (c *Catalog) myKeys(w http.ResponseWriter, r *http.Request, s Session) {
 		keyErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"settings": c.keySettings(), "keys": c.views(r.Context(), keys, false)})
+	// ?lastUsed=false (the banner on every page) skips the audit query
+	lastUsed := r.URL.Query().Get("lastUsed") != "false"
+	writeJSON(w, http.StatusOK, map[string]any{"settings": c.keySettings(), "keys": c.views(r.Context(), keys, false, lastUsed)})
 }
 
 func (c *Catalog) allKeys(w http.ResponseWriter, r *http.Request, _ Session) {
@@ -149,7 +155,7 @@ func (c *Catalog) allKeys(w http.ResponseWriter, r *http.Request, _ Session) {
 		keyErr(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"settings": c.keySettings(), "keys": c.views(r.Context(), keys, true)})
+	writeJSON(w, http.StatusOK, map[string]any{"settings": c.keySettings(), "keys": c.views(r.Context(), keys, true, true)})
 }
 
 func (c *Catalog) createKey(w http.ResponseWriter, r *http.Request, s Session) {
@@ -170,7 +176,7 @@ func (c *Catalog) createKey(w http.ResponseWriter, r *http.Request, s Session) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store") // the answer holds the key, shown once
-	writeJSON(w, http.StatusCreated, map[string]any{"key": plain, "view": c.views(r.Context(), []Key{k}, false)[0],
+	writeJSON(w, http.StatusCreated, map[string]any{"key": plain, "view": c.views(r.Context(), []Key{k}, false, false)[0],
 		"snippets": snippets(c.LLMURL, c.MCPURL, plain, k.Scope)})
 }
 

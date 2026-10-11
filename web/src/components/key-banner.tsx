@@ -4,7 +4,7 @@ const WEEK = 7 * 864e5;
 
 // One line when any of the person's own keys stops within 7 days.
 export function KeyBanner() {
-  const soon = useKeys().data?.keys.find((k) => {
+  const soon = useKeys(false).data?.keys.find((k) => {
     const left = new Date(k.until).getTime() - Date.now();
     return left > 0 && left <= WEEK;
   });

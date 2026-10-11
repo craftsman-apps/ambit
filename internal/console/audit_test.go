@@ -111,12 +111,12 @@ func TestCallsSelectKeyIdentityAndSubject(t *testing.T) {
 }
 
 func TestKeysLastUsedSQL(t *testing.T) {
-	for _, s := range []string{"max(Timestamp)", "LogAttributes['ambit.key_id']", "{ids:Array(String)}", "GROUP BY"} {
+	for _, s := range []string{"max(Timestamp)", "LogAttributes['ambit.key_id']", "{ids:Array(String)}", "GROUP BY", "Timestamp >= {from:DateTime64(9)}"} {
 		if !strings.Contains(keysLastUsedSQL, s) {
 			t.Errorf("missing %q in %s", s, keysLastUsedSQL)
 		}
 	}
-	if got, err := (&Audit{}).KeysLastUsed(context.Background(), nil); err != nil || len(got) != 0 {
+	if got, err := (&Audit{}).KeysLastUsed(context.Background(), nil, time.Time{}); err != nil || len(got) != 0 {
 		t.Fatal(got, err) // no ids, no query (DB is nil)
 	}
 }

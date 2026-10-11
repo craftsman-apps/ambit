@@ -44,7 +44,7 @@ type Catalog struct {
 	Keys     *KeyService
 	LLMURL   string
 	MCPURL   string
-	LastUsed func(ctx context.Context, ids []string) (map[string]time.Time, error)
+	LastUsed func(ctx context.Context, ids []string, from time.Time) (map[string]time.Time, error)
 	// Conns serves "My connections" and the connect flow; nil when no grants namespace is configured.
 	Conns *Connections
 	// SCIM receives users from the identity provider and offboards deactivated ones; nil without Conns.

@@ -15,8 +15,9 @@ async function get<T>(url: string): Promise<T> {
   if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `${url} returned ${r.status}`);
   return r.json();
 }
-// Shared with the banner. Holds key lists only, never a plain key.
-export const useKeys = () => useQuery({ queryKey: ["keys"], queryFn: () => get<KeyList>("/api/keys"), refetchInterval: 60_000 });
+// Key lists only, never a plain key. The banner (on every page) asks without last use, which costs an audit query.
+export const useKeys = (lastUsed = true) => useQuery({ queryKey: ["keys", lastUsed],
+  queryFn: () => get<KeyList>(lastUsed ? "/api/keys" : "/api/keys?lastUsed=false"), refetchInterval: 60_000 });
 
 const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-[13px] outline-none focus:border-accent";
 export const day = (iso: string) => iso.slice(0, 10);

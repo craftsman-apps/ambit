@@ -148,16 +148,19 @@ func (a *Audit) Calls(ctx context.Context, email string, from, to time.Time, lim
 }
 
 const keysLastUsedSQL = `SELECT LogAttributes['ambit.key_id'], max(Timestamp) FROM otel_logs
-WHERE LogAttributes['ambit.key_id'] != '' AND has({ids:Array(String)}, LogAttributes['ambit.key_id'])
+WHERE Timestamp >= {from:DateTime64(9)}
+  AND LogAttributes['ambit.key_id'] != '' AND has({ids:Array(String)}, LogAttributes['ambit.key_id'])
 GROUP BY LogAttributes['ambit.key_id']`
 
-// KeysLastUsed returns the time of each key's latest gateway call; keys never used are absent.
-func (a *Audit) KeysLastUsed(ctx context.Context, ids []string) (map[string]time.Time, error) {
+// KeysLastUsed returns the time of each key's latest gateway call since from (the oldest key's creation, so the
+// scan is bounded); keys never used are absent.
+func (a *Audit) KeysLastUsed(ctx context.Context, ids []string, from time.Time) (map[string]time.Time, error) {
 	out := map[string]time.Time{}
 	if len(ids) == 0 {
 		return out, nil
 	}
-	rows, err := a.DB.QueryContext(clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{"ids": arrayLiteral(ids)})), keysLastUsedSQL)
+	rows, err := a.DB.QueryContext(clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{"ids": arrayLiteral(ids),
+		"from": from.UTC().Format("2006-01-02 15:04:05.000000000")})), keysLastUsedSQL)
 	if err != nil {
 		return nil, err
 	}

@@ -23,6 +23,8 @@ spec:
             {{- if .Values.protection.enabled }}
             - --argument-limits  # ambit-guard enforces argument limits in access rules
             {{- end }}
+            # One flag for both gateways: if either relaxes the email rule, the principal falls back to the JWT subject on both (the safe superset).
+            - --require-email={{ and (ne (toString .Values.llm.jwt.requireEmail) "false") (ne (toString .Values.mcp.jwt.requireEmail) "false") }}
             - --tools-refresh={{ .Values.protection.toolsRefresh }}
             - --xds-addr={{ .Release.Name }}-agentgateway.{{ .Release.Namespace }}.svc:9978
             {{- if .Values.mcp.enabled }}

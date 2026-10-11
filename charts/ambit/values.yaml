@@ -68,6 +68,16 @@ llm:
     issuer: ""
     audiences: []
     jwksURL: ""
+    # Refuse gateway JWTs without a usable email claim. Offboarding, per-person budgets and audit are keyed by email; with false, such tokens are identified by their subject and offboarding cannot block them before they expire.
+    requireEmail: true
+
+apiKeys:
+  # Personal API keys (console: Keys). false: the gateways accept JWTs only; existing keys are kept but refused.
+  enabled: true
+  # A key stops when its owner has not signed in to the console for this many days (1-365).
+  inactivityDays: 30
+  # The longest end date a person may choose: 30, 90 or 365.
+  maxDays: 365
 
 routing:
   router:
@@ -116,6 +126,8 @@ mcp:
     issuer: ""
     audiences: []
     jwksURL: ""
+    # Refuse gateway JWTs without a usable email claim. Offboarding, per-person budgets and audit are keyed by email; with false, such tokens are identified by their subject and offboarding cannot block them before they expire.
+    requireEmail: true
 
 evidence:
   # Audit trail: the gateway's access logs through an OpenTelemetry Collector into ClickHouse, searchable

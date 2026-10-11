@@ -64,8 +64,13 @@ spec:
     accessLog:
       attributes:
         add:
-          - { name: jwt.email, expression: "jwt.email" }
-          - { name: jwt.groups, expression: "jwt.groups" }
+          {{- $v := include "ambit.identity.validKey" . }}{{ $p := include "ambit.identity.presented" . }}
+          - { name: jwt.email, expression: {{ printf "(%s) ? apiKey.email : ((%s) ? \"\" : (has(jwt.email) ? jwt.email.trim().lowerAscii() : \"\"))" $v $p | quote }} }
+          - { name: jwt.groups, expression: {{ printf "(%s) ? apiKey.groups : ((%s) ? [] : (has(jwt.groups) ? jwt.groups : []))" $v $p | quote }} }
+          # Overrides agentgateway's built-in jwt.sub (log.rs suppresses built-ins named here): never a JWT's subject on a key request.
+          - { name: jwt.sub, expression: {{ printf "(%s) || (%s) ? \"\" : (has(jwt.sub) ? jwt.sub : \"\")" $v $p | quote }} }
+          - { name: ambit.key_id, expression: {{ printf "(%s) ? apiKey.keyId : \"\"" $v | quote }} }
+          - { name: ambit.identity, expression: {{ printf "(%s) ? \"key\" : ((%s) ? \"invalid key\" : \"jwt\")" $v $p | quote }} }
           # The model name the client asked for (a ModelRouter such as "auto"); gen_ai.request.model is the one that answered.
           - { name: ambit.router, expression: "metadata.agentgateway_user_model" }
           # A classifier's label and its reason (set by ambit-router, PR 2); empty for type Rules.

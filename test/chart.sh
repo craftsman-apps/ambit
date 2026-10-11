@@ -47,4 +47,25 @@ assert "passwordConnector" not in c["oauth2"] and "staticClients" not in c, c' "
 ! helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set llm.jwt.issuer=https://idp.example.com >/dev/null 2>&1 || { echo "FAIL chart: jwt.dex with jwt.issuer must be refused"; exit 1; }
 nopw=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set bootstrapAdmin.enabled=false)
 grep -q 'ambit-cli' <<<"$nopw" && ! grep -q 'passwordConnector' <<<"$nopw" || { echo "FAIL chart: without local accounts, keep ambit-cli but no password grant"; exit 1; }
+# Personal API keys (spec 3.1-3.5): both gateways accept keys and JWTs, a Require rule decides, headers are removed.
+for g in llm mcp; do
+check_qs "p=one('AgentgatewayPolicy','ambit-$g-auth')['spec']['traffic']
+assert p['jwtAuthentication']['mode']=='Permissive', p
+k=p['apiKeyAuthentication']
+assert k['mode']=='Permissive' and k['secretSelector']['matchLabels']=={'ambitproject.dev/key':'true','ambitproject.dev/key-$g':'true'}, k
+assert 'x-api-key' in k['location']['expression'], k
+a=p['authorization']; assert a['action']=='Require', a
+r=one('HTTPRoute','ambit-$g')['spec']['rules'][0]['filters'][0]['requestHeaderModifier']['remove']
+assert set(r)=={'X-Ambit-User','x-api-key','authorization'}, r" "$g gateway: keys + JWT, Require, credential headers removed"
+done
+check_qs "a=one('AgentgatewayPolicy','ambit-access-log')['spec']['frontend']['accessLog']['attributes']['add']
+n={x['name']:x['expression'] for x in a}
+assert set(['jwt.email','jwt.groups','jwt.sub','ambit.key_id','ambit.identity'])<=set(n), n
+assert n['ambit.identity'].endswith(': \"jwt\")'), n['ambit.identity']" "audit records one identity, the key id and how it was decided"
+off=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set apiKeys.enabled=false)
+! grep -q apiKeyAuthentication <<<"$off" || { echo "FAIL chart: apiKeys.enabled=false must not render apiKeyAuthentication"; exit 1; }
+grep -q 'action: Require' <<<"$off" || { echo "FAIL chart: keys off keeps the Require rules"; exit 1; }
+noemail=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set llm.jwt.requireEmail=false --set mcp.jwt.requireEmail=false)
+! grep -q "jwt.email.trim().matches" <<<"$(sed -n '/name: ambit-llm-auth/,/^---/p' <<<"$noemail")" || { echo "FAIL chart: requireEmail=false must not require an email"; exit 1; }
+grep -q -- '--require-email=false' <<<"$noemail" || { echo "FAIL chart: controller flag"; exit 1; }
 echo "PASS chart"

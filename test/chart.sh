@@ -125,4 +125,11 @@ assert e['AMBIT_POD_NAME']['valueFrom']['fieldRef']['fieldPath']=='metadata.name
 helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --kube-version v1.30.4-eks-a737599 >/dev/null || { echo "FAIL chart: vendor-suffixed 1.30 must render"; exit 1; }
 ! helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set apiKeys.maxDays=60 >/dev/null 2>&1 || { echo "FAIL chart: maxDays must be 30, 90 or 365"; exit 1; }
 ! helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set apiKeys.inactivityDays=0 >/dev/null 2>&1 || { echo "FAIL chart: inactivityDays 1-365"; exit 1; }
+# NOTES warn when a gateway accepts JWTs without an email (offboarding cannot block them). Client-side dry run: no cluster.
+notes() { KUBECONFIG=/dev/null helm install ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --dry-run=client "$@" | sed -n '/^NOTES:/,$p'; }
+warn='JWTs without an email are accepted; offboarding cannot block them before they expire'
+! grep -qF "$warn" <<<"$(notes)" || { echo "FAIL chart: no requireEmail warning by default"; exit 1; }
+for g in llm mcp; do
+  grep -qF "$warn" <<<"$(notes --set $g.jwt.requireEmail=false)" || { echo "FAIL chart: NOTES must warn when $g.jwt.requireEmail=false"; exit 1; }
+done
 echo "PASS chart"

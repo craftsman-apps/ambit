@@ -8,3 +8,9 @@ Password (created by the console at first start):
 {{- else }}
 Bootstrap admin: turned off. Sign in with: {{ range .Values.sso.connectors }}{{ .name | default .id }} {{ end }}
 {{- end }}
+{{- range $g := list "llm" "mcp" }}
+{{- if eq (toString (index $.Values $g).jwt.requireEmail) "false" }}
+
+WARNING: {{ $g }}.jwt.requireEmail is false. JWTs without an email are accepted; offboarding cannot block them before they expire.
+{{- end }}
+{{- end }}

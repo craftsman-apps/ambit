@@ -8,7 +8,8 @@ spec:
   replicas: {{ .Values.console.replicas }}
   # RollingUpdate with maxSurge 0 keeps the strategy type, which a Helm upgrade of an existing install cannot change
   # (server-side apply keeps the live rollingUpdate block). maxSurge 0: no second pod during a rollout except while
-  # the old pod shuts down; the key Lease and the ambit-keys admission policies keep that overlap from writing keys.
+  # the old pod shuts down. Only leader election on the key Lease (with this one replica, maxSurge 0 and the hourly
+  # repair) keeps that overlap from writing keys; the admission policies do not check which pod holds the Lease.
   strategy: { type: RollingUpdate, rollingUpdate: { maxSurge: 0, maxUnavailable: 1 } }
   selector:
     matchLabels: { app.kubernetes.io/name: ambit-console }

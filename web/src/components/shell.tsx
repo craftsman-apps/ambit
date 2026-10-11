@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Link, Navigate } from "@tanstack/react-router";
 import { useMe, useModels, useRequests, useRules, useServers } from "@/api";
 import { Button } from "@/components/ui/button";
+import { KeyBanner } from "@/components/key-banner";
 import { ThemeSwitch } from "@/components/theme-switch";
 
 function NavLink({ to, children, count }: { to: string; children: ReactNode; count?: number }) {
@@ -51,7 +52,8 @@ export function Shell({ crumb, children }: { crumb: string; children: ReactNode 
         {u.role === "admin" && <><Section>Evidence</Section><NavLink to="/audit">Audit</NavLink><NavLink to="/usage">Usage</NavLink></>}
         <Section>You</Section>
         <NavLink to="/connections">My connections</NavLink>
-        {u.role === "admin" && <><Section>Settings</Section><NavLink to="/settings/sign-in">Sign-in</NavLink><NavLink to="/settings/apps">Apps</NavLink><NavLink to="/settings/offboarding">Offboarding</NavLink><NavLink to="/settings/dependencies">Dependencies</NavLink></>}
+        <NavLink to="/keys">Keys</NavLink>
+        {u.role === "admin" && <><Section>Settings</Section><NavLink to="/settings/sign-in">Sign-in</NavLink><NavLink to="/settings/apps">Apps</NavLink><NavLink to="/settings/keys">Keys</NavLink><NavLink to="/settings/offboarding">Offboarding</NavLink><NavLink to="/settings/dependencies">Dependencies</NavLink></>}
       </nav>
       <div className="grid grid-rows-[auto_1fr]">
         <header className="flex items-center justify-between border-b border-line bg-surface px-4 py-2">
@@ -65,6 +67,7 @@ export function Shell({ crumb, children }: { crumb: string; children: ReactNode 
             </form>
           </div>
         </header>
+        <KeyBanner />
         <main className="min-w-0 bg-surface">{children}</main>
       </div>
     </div>

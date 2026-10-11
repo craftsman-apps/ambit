@@ -3,6 +3,7 @@ package console
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"slices"
@@ -944,5 +945,74 @@ func TestStaleStartTermDoesNotEndALiveTerm(t *testing.T) {
 	cancel()
 	if err := s.StartTerm(lead1); err == nil || !s.Writable() {
 		t.Fatal("a stale start ended the live term:", err, s.Writable())
+	}
+}
+
+// A component that may create Secrets (but not pods) plants an unlabelled owner record before alice's first key.
+func TestForgedOwnerRecordIsIgnored(t *testing.T) {
+	s, _ := newKeySvc(t)
+	ctx := context.Background()
+	forged, _ := json.Marshal(Owner{Email: "alice@acme.com", Groups: []string{"admins"}, SignedIn: t0.AddDate(5, 0, 0)})
+	if err := s.Client.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ambit-key-owner-" + ownerHash("alice@acme.com"),
+		Namespace: "ambit-system"}, Data: map[string][]byte{"owner.json": forged}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.owner(ctx, "alice@acme.com"); !errors.Is(err, errBadOwner) {
+		t.Fatal("unlabelled owner record accepted:", err)
+	}
+	_, k, err := s.Create(ctx, alice("eng"), "k", ScopeLLM, 365)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(k.Groups, []string{"eng"}) || !k.Until.Equal(t0.AddDate(0, 0, 30)) || !k.SignedIn.Equal(t0) {
+		t.Fatalf("key took the forged record: %+v", k)
+	}
+	o, err := s.owner(ctx, "alice@acme.com")
+	if err != nil || !slices.Equal(o.Groups, []string{"eng"}) {
+		t.Fatalf("owner record not replaced: %+v %v", o, err)
+	}
+	if _, err := s.Repair(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if keys, _ := s.List(ctx, "alice@acme.com"); len(keys) != 1 || !slices.Equal(keys[0].Groups, []string{"eng"}) || !keys[0].Until.Equal(k.Until) {
+		t.Fatalf("repair copied forged groups: %+v", keys)
+	}
+}
+
+func TestOwnerRecordForAnotherEmailIsBad(t *testing.T) {
+	s, _ := newKeySvc(t)
+	ctx := context.Background()
+	o := Owner{Email: "mallory@acme.com", Groups: []string{"admins"}, SignedIn: t0}
+	sec := o.Secret("ambit-system")
+	sec.Name = "ambit-key-owner-" + ownerHash("alice@acme.com")
+	if err := s.Client.Create(ctx, sec); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.owner(ctx, "alice@acme.com"); !errors.Is(err, errBadOwner) {
+		t.Fatal("owner record of another email accepted:", err)
+	}
+}
+
+func TestOffboardAndReactivateLabelAPlantedOwnerRecord(t *testing.T) {
+	s, _ := newKeySvc(t)
+	ctx := context.Background()
+	for _, email := range []string{"alice@acme.com", "bob@acme.com"} {
+		raw, _ := json.Marshal(Owner{Email: email, Groups: []string{"admins"}, SignedIn: t0})
+		if err := s.Client.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ambit-key-owner-" + ownerHash(email),
+			Namespace: "ambit-system"}, Data: map[string][]byte{"owner.json": raw}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.OffboardKeys(ctx, "alice@acme.com", "scim"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Reactivate(ctx, "bob@acme.com"); err != nil {
+		t.Fatal(err)
+	}
+	if o, err := s.owner(ctx, "alice@acme.com"); err != nil || !o.Offboarded || len(o.Groups) != 0 {
+		t.Fatalf("offboarding did not replace the planted record: %+v %v", o, err)
+	}
+	if o, err := s.owner(ctx, "bob@acme.com"); err != nil || o.Offboarded || len(o.Groups) != 0 {
+		t.Fatalf("reactivation did not replace the planted record: %+v %v", o, err)
 	}
 }

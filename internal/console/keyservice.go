@@ -184,7 +184,8 @@ func (s *KeyService) Create(ctx context.Context, sess Session, name string, scop
 		return "", Key{}, ErrTooMany
 	}
 	signed := time.Unix(sess.SignedIn, 0).UTC()
-	o, _, err := s.changeOwner(ctx, email, false, func(o *Owner, exists bool) (bool, error) { // owner record first
+	// owner record first; a planted (unlabelled) record is overwritten, never trusted
+	o, _, err := s.changeOwner(ctx, email, errOwnerUnlabelled, func(o *Owner, exists bool) (bool, error) {
 		if o.Offboarded {
 			return false, ErrOffboarded
 		}
@@ -300,19 +301,34 @@ func (s *KeyService) owner(ctx context.Context, email string) (Owner, error) {
 	if err := s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: "ambit-key-owner-" + ownerHash(email)}, &sec); err != nil {
 		return Owner{}, err
 	}
+	bad := func(err error) (Owner, error) { // the version is kept so OffboardKeys can overwrite the record
+		return Owner{Email: email, UID: string(sec.UID), ResourceVersion: sec.ResourceVersion}, fmt.Errorf("%w: %w", errBadOwner, err)
+	}
+	// Admission protects only labelled records: an unlabelled one may have been planted by anything that can
+	// create Secrets, so its groups and sign-in time are never trusted.
+	if sec.Labels[ownerRecordLabel] != "true" {
+		return bad(errOwnerUnlabelled)
+	}
 	o, err := OwnerFromSecret(&sec)
-	if err != nil { // the version is kept so OffboardKeys can overwrite the record
-		return Owner{Email: email, UID: string(sec.UID), ResourceVersion: sec.ResourceVersion}, fmt.Errorf("%w: %v", errBadOwner, err)
+	if err != nil {
+		return bad(err)
+	}
+	if o.Email != email {
+		return bad(fmt.Errorf("owner record %s is for another email", sec.Name))
 	}
 	return o, nil
 }
 
-var errBadOwner = errors.New("owner record unreadable")
+var (
+	errBadOwner        = errors.New("owner record unreadable")
+	errOwnerUnlabelled = errors.New("owner record has no owner-record label")
+)
 
 // changeOwner re-reads the owner record, lets rule change it (exists is false when there is none yet) and writes
-// it when rule says so, version-checked, retrying on conflict. With replaceBad, an undecodable record is handed
-// to rule as a fresh record that overwrites it; otherwise it is an error.
-func (s *KeyService) changeOwner(ctx context.Context, email string, replaceBad bool, rule func(o *Owner, exists bool) (bool, error)) (Owner, bool, error) {
+// it when rule says so, version-checked, retrying on conflict. A bad record that matches replace (errBadOwner for
+// any, errOwnerUnlabelled for planted ones, nil for none) is handed to rule as a fresh record that overwrites it;
+// otherwise it is an error.
+func (s *KeyService) changeOwner(ctx context.Context, email string, replace error, rule func(o *Owner, exists bool) (bool, error)) (Owner, bool, error) {
 	var out Owner
 	var wrote bool
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
@@ -320,7 +336,7 @@ func (s *KeyService) changeOwner(ctx context.Context, email string, replaceBad b
 		exists := err == nil
 		if apierrors.IsNotFound(err) {
 			o = Owner{Email: email}
-		} else if replaceBad && errors.Is(err, errBadOwner) {
+		} else if replace != nil && errors.Is(err, replace) {
 			exists = true // o is {email} with the bad record's version
 		} else if err != nil {
 			return err
@@ -347,7 +363,7 @@ func (s *KeyService) changeOwner(ctx context.Context, email string, replaceBad b
 
 // putOwner stores o as the owner record (create or update).
 func (s *KeyService) putOwner(ctx context.Context, o Owner) error {
-	_, _, err := s.changeOwner(ctx, o.Email, false, func(cur *Owner, _ bool) (bool, error) {
+	_, _, err := s.changeOwner(ctx, o.Email, nil, func(cur *Owner, _ bool) (bool, error) {
 		uid, rv := cur.UID, cur.ResourceVersion
 		*cur = o
 		cur.UID, cur.ResourceVersion = uid, rv
@@ -504,7 +520,7 @@ func (s *KeyService) Refresh(ctx context.Context, sess Session) error {
 		return nil
 	}
 	signed := time.Unix(sess.SignedIn, 0).UTC()
-	o, wrote, err := s.changeOwner(ctx, email, false, func(o *Owner, exists bool) (bool, error) {
+	o, wrote, err := s.changeOwner(ctx, email, nil, func(o *Owner, exists bool) (bool, error) {
 		if !exists || o.Offboarded || !signed.After(o.SignedIn) {
 			return false, nil // no keys yet, offboarded, or not newer: nothing to refresh
 		}
@@ -537,7 +553,7 @@ func (s *KeyService) OffboardKeys(ctx context.Context, email, trigger string) (i
 	if !ok {
 		return 0, ErrBadInput
 	}
-	_, wrote, err := s.changeOwner(ctx, email, true, func(o *Owner, exists bool) (bool, error) {
+	_, wrote, err := s.changeOwner(ctx, email, errBadOwner, func(o *Owner, exists bool) (bool, error) {
 		if exists && o.Offboarded {
 			return false, nil
 		}
@@ -582,7 +598,7 @@ func (s *KeyService) Reactivate(ctx context.Context, email string) error {
 	}
 	_, oerr := s.owner(ctx, email)
 	bad := errors.Is(oerr, errBadOwner) // an unreadable record is replaced, or reactivation would fail forever
-	_, wrote, err := s.changeOwner(ctx, email, true, func(o *Owner, exists bool) (bool, error) {
+	_, wrote, err := s.changeOwner(ctx, email, errBadOwner, func(o *Owner, exists bool) (bool, error) {
 		if !exists || !(o.Offboarded || bad) {
 			return false, nil
 		}

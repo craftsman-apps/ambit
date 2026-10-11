@@ -62,7 +62,10 @@ kind-down:
 deps:
 	helm dependency update charts/ambit
 
-lint: deps
+# CI restores charts/ambit/charts/ from its cache (hack/thirdparty-cache.sh) and sets DEPS= to skip the download.
+DEPS ?= deps
+
+lint: $(DEPS)
 	helm lint charts/ambit-crds
 	helm lint charts/ambit -f charts/ambit/values-kind.yaml
 
@@ -82,7 +85,7 @@ image:
 	docker build -t ambit-whoami:dev -f test/whoami/Dockerfile .  # test-only MCP server (step 5)
 	kind load docker-image $(IMAGE) ambit-whoami:dev --name $(KIND_CLUSTER)
 
-install: deps install-crds
+install: $(DEPS) install-crds
 	helm upgrade --install ambit-crds charts/ambit-crds -n $(NS) --create-namespace --wait
 	helm upgrade --install ambit charts/ambit -n $(NS) -f charts/ambit/values-kind.yaml --wait --timeout 5m
 

@@ -4,6 +4,7 @@ import { useMe, useModels, useRequests, useRules, useServers } from "@/api";
 import { Button } from "@/components/ui/button";
 import { KeyBanner } from "@/components/key-banner";
 import { ThemeSwitch } from "@/components/theme-switch";
+import { Mark } from "@/components/wordmark";
 
 function NavLink({ to, children, count }: { to: string; children: ReactNode; count?: number }) {
   return (
@@ -33,7 +34,7 @@ export function Shell({ crumb, children }: { crumb: string; children: ReactNode 
     <div className="grid min-h-screen grid-cols-[212px_1fr] text-[13.5px]">
       <nav className="border-r border-line bg-sunken py-4" aria-label="Console">
         <div className="flex items-center gap-2.5 px-4 pb-3">
-          <img src="/favicon.svg" alt="" className="size-6" />
+          <Mark />
           <span className="font-semibold tracking-tight">Ambit</span>
         </div>
         <Section>Govern</Section>

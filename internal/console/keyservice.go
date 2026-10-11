@@ -17,6 +17,7 @@ import (
 	"github.com/craftsman-apps/ambit/internal/identity"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -101,17 +102,20 @@ func (s *KeyService) StartTerm(lead context.Context) error {
 // Call it holding s.mu.
 func (s *KeyService) recordSettings(ctx context.Context) {
 	cur := fmt.Sprintf("enabled=%t inactivityDays=%d maxDays=%d", s.Settings.Enabled, s.Settings.InactivityDays, s.Settings.MaxDays)
-	ev, err := s.Events(ctx)
+	newest := "" // the newest settings-changed event, found by annotation without reading any event's data
+	err := s.eachEventMeta(ctx, func(m *metav1.PartialObjectMetadata) {
+		if m.Annotations[keyEventActionAnn] == "settings-changed" && m.Name > newest {
+			newest = m.Name
+		}
+	})
+	if err == nil && newest != "" {
+		var cm corev1.ConfigMap
+		if err = s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: newest}, &cm); err == nil && cm.Data["detail"] == cur {
+			return
+		}
+	}
 	if err != nil {
 		slog.Error("key settings: events unreadable; recording the settings again", "err", err)
-	}
-	for _, e := range ev { // newest first
-		if e.Action == "settings-changed" {
-			if e.Detail == cur {
-				return
-			}
-			break
-		}
 	}
 	s.event(ctx, consoleActor, "settings-changed", "", "", cur)
 }
@@ -520,10 +524,12 @@ func (s *KeyService) Refresh(ctx context.Context, sess Session) error {
 		return nil
 	}
 	signed := time.Unix(sess.SignedIn, 0).UTC()
+	changed := false
 	o, wrote, err := s.changeOwner(ctx, email, nil, func(o *Owner, exists bool) (bool, error) {
 		if !exists || o.Offboarded || !signed.After(o.SignedIn) {
 			return false, nil // no keys yet, offboarded, or not newer: nothing to refresh
 		}
+		changed = !slices.Equal(o.Groups, sess.Groups)
 		o.Groups, o.SignedIn = sess.Groups, signed
 		return true, nil
 	})
@@ -535,7 +541,11 @@ func (s *KeyService) Refresh(ctx context.Context, sess Session) error {
 		return err
 	}
 	n, _, err := s.applyOwner(ctx, o, keys, true)
-	s.event(ctx, email, "refresh", "", email, "keys="+strconv.Itoa(n))
+	if changed { // only access changes are kept in the History; every refresh is logged (ruling F-a)
+		s.event(ctx, email, "refresh", "", email, "keys="+strconv.Itoa(n))
+	} else {
+		slog.Info("key event", "action", "refresh", "key", "", "email", email, "actor", email, "detail", "keys="+strconv.Itoa(n)+" groups unchanged")
+	}
 	return err
 }
 

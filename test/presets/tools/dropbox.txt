@@ -10,9 +10,7 @@ get_dropbox_operation
 get_file_content
 get_file_metadata
 get_file_request
-get_markdown
 get_shared_link_metadata
-get_transcript
 get_usage_and_quota
 list_dropbox_operations
 list_file_requests

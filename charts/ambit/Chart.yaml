@@ -4,6 +4,8 @@ description: Enterprise MCP and LLM gateway built on agentgateway.
 type: application
 version: 0.0.1
 appVersion: 0.0.1
+sources:
+  - https://github.com/craftsman-apps/ambit
 dependencies:
   - name: agentgateway
     version: v1.6.0

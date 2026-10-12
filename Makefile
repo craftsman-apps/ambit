@@ -1,7 +1,7 @@
 NS ?= ambit-system
 CONTROLLER_GEN_VERSION ?= v0.22.0
 GATEWAY_API_VERSION ?= v1.6.2
-AGENTGATEWAY_VERSION ?= v1.5.0
+AGENTGATEWAY_VERSION ?= v1.6.0
 TOOLHIVE_VERSION ?= 0.51.4
 ARGOCD_CHART_VERSION ?= 10.9.4
 # API server and etcd binaries for the integration tests (controller-runtime envtest).
@@ -11,7 +11,7 @@ CRDS := charts/ambit-crds
 KIND_CLUSTER ?= ambit
 IMAGE ?= ambit-console:dev
 
-.PHONY: verify-upgrade restore-pins contracts kind-up kind-down deps lint web test-go envtest-assets argocd metrics-server proto image install install-crds test test-ui generate vendor-crds
+.PHONY: preset-live verify-upgrade restore-pins contracts kind-up kind-down deps lint web test-go envtest-assets argocd metrics-server proto image install install-crds test test-ui generate vendor-crds
 
 # Browser tests (Playwright) against the running kind install; needs the LLM test catalog (make test STEPS=3).
 test-ui:
@@ -62,7 +62,10 @@ kind-down:
 deps:
 	helm dependency update charts/ambit
 
-lint: deps
+# CI restores charts/ambit/charts/ from its cache (hack/thirdparty-cache.sh) and sets DEPS= to skip the download.
+DEPS ?= deps
+
+lint: $(DEPS)
 	helm lint charts/ambit-crds
 	helm lint charts/ambit -f charts/ambit/values-kind.yaml
 
@@ -82,11 +85,11 @@ image:
 	docker build -t ambit-whoami:dev -f test/whoami/Dockerfile .  # test-only MCP server (step 5)
 	kind load docker-image $(IMAGE) ambit-whoami:dev --name $(KIND_CLUSTER)
 
-install: deps install-crds
+install: $(DEPS) install-crds
 	helm upgrade --install ambit-crds charts/ambit-crds -n $(NS) --create-namespace --wait
 	helm upgrade --install ambit charts/ambit -n $(NS) -f charts/ambit/values-kind.yaml --wait --timeout 5m
 
-STEPS ?= 0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 8 9 10 12 ext args
+STEPS ?= 0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 8 9 10 12 keys ext args
 # make test            -> every step; make test STEPS=3b -> one step (each sets up what it needs)
 test:
 	@for s in $(STEPS); do ./test/step$$s.sh $(NS) || exit 1; done
@@ -104,3 +107,7 @@ restore-pins: install-crds
 # The specific things Ambit relies on in the components it ships, against what is installed now.
 contracts:
 	test/contracts.sh
+
+# Live checks of every verified preset with the maintainer's test accounts (docs/presets.md).
+preset-live:
+	go run ./cmd/presetcheck live $(APP)

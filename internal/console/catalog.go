@@ -13,9 +13,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/controller"
+	"github.com/craftsman-apps/ambit/internal/presets"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,6 +39,12 @@ type Catalog struct {
 	PublicURL  string
 	Connectors []Connector
 	HTTP       *http.Client // for reaching identity providers; nil uses a 10-second client
+	// Keys serves personal API keys; nil leaves the key routes out. LLMURL and MCPURL are the gateway URLs shown in
+	// the copy-ready snippets. LastUsed overrides the audit lookup of each key's last use (tests).
+	Keys     *KeyService
+	LLMURL   string
+	MCPURL   string
+	LastUsed func(ctx context.Context, ids []string, from time.Time) (map[string]time.Time, error)
 	// Conns serves "My connections" and the connect flow; nil when no grants namespace is configured.
 	Conns *Connections
 	// SCIM receives users from the identity provider and offboards deactivated ones; nil without Conns.
@@ -49,6 +57,10 @@ type Catalog struct {
 	Dependencies *Dependencies
 	// Prices suggests model prices (LiteLLM's list); nil offers no suggestions.
 	Prices *PriceSource
+	// Tools reads per-user servers' tools with one consenting admin's grant; nil without Conns.
+	Tools *ToolReader
+	// Presets is the app preset catalog (presets.All, plus the test presets when enabled).
+	Presets []presets.Preset
 }
 
 // Config tells the console UI how changes are applied.
@@ -157,6 +169,7 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 			h(w, r, s)
 		})
 	}
+	c.registerKeys(mux, read, allow)
 	write := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
 		return allow("only admins can change access rules", h, RoleAdmin)
 	}
@@ -192,13 +205,23 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 		apps := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
 			return allow("only admins can manage apps", h, RoleAdmin)
 		}
-		mux.HandleFunc("GET /api/apps", read(func(w http.ResponseWriter, r *http.Request, s Session) {
-			if s.Role != RoleAdmin {
-				writeErr(w, http.StatusForbidden, "only admins can manage apps")
-				return
-			}
-			c.listApps(w, r, s)
-		}))
+		adminRead := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
+			return read(func(w http.ResponseWriter, r *http.Request, s Session) {
+				if s.Role != RoleAdmin {
+					writeErr(w, http.StatusForbidden, "only admins can manage apps")
+					return
+				}
+				h(w, r, s)
+			})
+		}
+		mux.HandleFunc("GET /api/apps", adminRead(c.listApps))
+		mux.HandleFunc("GET /api/presets", adminRead(c.listPresets))
+		mux.HandleFunc("GET /api/apps/unfinished", adminRead(c.unfinished))
+		mux.HandleFunc("GET /api/servers/{name}/access", adminRead(c.serverAccess))
+		mux.HandleFunc("POST /api/apps/from-preset", apps(c.addFromPreset))
+		mux.HandleFunc("POST /api/apps/unfinished/{op}/finish", apps(c.finishUnfinished))
+		mux.HandleFunc("DELETE /api/apps/unfinished/{op}", apps(c.removeUnfinished))
+		mux.HandleFunc("PUT /api/apps/{name}/bind", apps(c.bindApp))
 		mux.HandleFunc("POST /api/apps", apps(c.createApp))
 		mux.HandleFunc("DELETE /api/apps/{name}", apps(c.deleteApp))
 	}
@@ -210,6 +233,24 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 			}
 			h(w, r, s)
 		})
+	}
+	if c.Tools != nil {
+		mux.HandleFunc("PUT /api/servers/{name}/tool-reader", allow("only admins can choose a tool reader", func(w http.ResponseWriter, r *http.Request, s Session) {
+			if err := c.Tools.SetReader(r.Context(), s.Email, r.PathValue("name")); err != nil {
+				writeConsentErr(w, err)
+				return
+			}
+			slog.Info("tool reader set", "server", r.PathValue("name"), "reader", s.Email)
+			w.WriteHeader(http.StatusNoContent)
+		}, RoleAdmin))
+		mux.HandleFunc("DELETE /api/servers/{name}/tool-reader", allow("only admins can clear a tool reader", func(w http.ResponseWriter, r *http.Request, s Session) {
+			if err := c.Tools.ClearReader(r.Context(), r.PathValue("name")); err != nil {
+				writeConsentErr(w, err)
+				return
+			}
+			slog.Info("tool reader cleared", "server", r.PathValue("name"), "by", s.Email)
+			w.WriteHeader(http.StatusNoContent)
+		}, RoleAdmin))
 	}
 	if c.Audit != nil {
 		c.Audit.register(mux, admin)

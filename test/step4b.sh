@@ -73,7 +73,7 @@ code=$(api PUT /api/access-rules/eng-time '{"groups":["eng"],"allSignedIn":false
 [[ "$code" == 200 ]] || fail "6 rule update: $code $(cat "$W/api")"
 code=$(api GET /api/access-rules/eng-time)
 cel=$(field '[e["cel"] for e in d["effectiveServers"] if e["server"] == "time-b"][0]')
-[[ "$cel" == 'mcp.tool.target == "time-b" && mcp.tool.name == "convert_time" && jwt.groups.exists(g, g in ["eng"])' ]] ||
+[[ "$cel" == 'mcp.tool.target == "time-b" && mcp.tool.name == "convert_time" && (has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in ["eng"])' ]] ||
   fail "6 rule detail shows: $cel"
 for _ in $(seq 1 30); do tools "$(token alice)"; [[ "$TOOLS" == *time-b_convert_time* ]] && break; sleep 1; done
 [[ "$TOOLS" == "time-b_convert_time time_get_current_time" ]] || fail "6 alice sees: $TOOLS"

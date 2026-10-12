@@ -50,13 +50,102 @@ or its default, gets HTTP 400 `virtual_model_no_matching_target`.
   two to four.
 - Only `/v1/chat/completions` is routed. A request for `auto` on `/v1/messages` or `/v1/responses` goes to the
   default.
-- Routes with a `category` need a classifier (types VSR and LLM, a later release). With `None` or `Rules` they
-  are ignored, and the router reports `CategoryNeedsClassifier`.
+- Routes with a `category` need a classifier (type `LLM`). With `None` or
+  `Rules` they are ignored, and the router reports `CategoryNeedsClassifier`.
+
+## Type LLM: a small model picks the category
+
+With `classifier.type: LLM`, a small LLM reads each chat prompt and answers one of the router's categories.
+Routes with a `category` match on that answer; keyword and length routes keep working beside them.
+
+```yaml
+apiVersion: ambitproject.dev/v1alpha1
+kind: ModelRouter
+metadata: { name: auto }
+spec:
+  default: gemma
+  classifier:
+    type: LLM
+    llm: { model: qwen-local }        # a Model with an OpenAI-compatible endpoint
+    timeout: 1500ms                   # default 1500ms, at most 10s
+    maxBytes: 8000                    # text sent to the classifier, default 8000
+    ratePerMinute: 600                # classifier calls per ambit-router replica, default 600
+    categories:
+      - { name: coding, description: "writing, fixing or explaining program code" }
+  routes:
+    - { model: claude-sonnet, category: coding }
+    - { model: gemini-pro, minBytes: 20000 }
+```
+
+- **The classifier Model** needs an OpenAI-compatible endpoint: a `baseURL` (vLLM, Ollama, LiteLLM …), or
+  provider `OpenAI` or `Openrouter`. Otherwise the router reports `ClassifierModelInvalid`.
+- **What it sees**: the last user message (plain text only), cut to `maxBytes` on a character boundary, with a
+  system prompt that lists the categories. It answers one name; anything else is no label.
+- **Large requests**: a request body over 4,000,000 bytes is not sent to the classifier and gets no label
+  (keyword and length lines can still match, otherwise the default answers).
+- **Where the text goes**: to the classifier Model's provider. Use a model in your cluster for sensitive prompts,
+  and in air-gapped clusters.
+- **Cost**: the classifier's tokens are not charged to budgets. They are counted in the metric
+  `ambit_router_classifier_tokens_total{router,model}`; spending is bounded by the router's access rules and
+  `ratePerMinute`.
+- **Steering**: a prompt can try to steer its own label ("answer coding"). It can only choose among models the
+  user may use anyway.
+- **A category name means the same in every router**: two routers that describe `coding` differently get
+  `CategoryConflict`. The name `other` is reserved.
+
+### ambit-router
+
+The classifier is called by `ambit-router`, a small service installed with Ambit (`routing.router.enabled`,
+default true when LLM traffic is on). It runs only while a router of type `LLM` exists: the controller scales it
+to `routing.router.replicas` (default 2) and back to 0, and `kubectl get modelrouters` shows its state
+(`Classifier State`: `Off`, `Starting`, `Ready` or `Unhealthy`). The Dependencies page shows it too.
+
+Every request gets one reason, in the access log and on the Audit page as `auto → model (reason or label)`:
+
+| Reason | Meaning |
+|---|---|
+| `classified` | the classifier answered one of the router's categories (the label is shown instead) |
+| `unknown-category` | it answered something else, or `other` |
+| `timeout` | no answer within `timeout` |
+| `error` | the call failed, or the message is not plain text |
+| `busy` | 16 classifications were already running on that replica |
+| `rate-limited` | the router's `ratePerMinute` is used up on that replica |
+| `denied` | the user may not use the router (no call is made; the gateway answers 400) |
+| `stale` | ambit-router has not loaded the configuration the gateway names yet (usually for about a second after a change) |
+
+**A failure never fails the request**: with no label, keyword and length routes still apply, and otherwise the
+default answers. If no ambit-router pod is reachable, the gateway skips it (no label). Two cases can fail a
+request: ambit-router crashing while it holds that request (500), and, during a rollout or scale-down, a request
+whose body upload takes longer than about 23 seconds.
+
+**Changes take effect without restarts.** A router change reaches the gateway in about 200 ms and ambit-router
+through its watch; in between, requests get `stale` (no label), never a label from the old configuration. A
+removed user can have prompts classified for that moment, like any access change. A rotated classifier key is
+used within about a minute (21 s measured on kind).
+
+**Permissions.** To copy a classifier Model's key into `ambit-router-credentials`, the controller may read any
+Secret in Ambit's namespace (by name, never listing them) and create Secrets there. ambit-router itself may read
+only its own ConfigMap and that one Secret.
+
+**Argo CD.** The chart leaves `ambit-router`'s replicas to the controller. Tell Argo CD to ignore them, or every
+sync would scale it back:
+
+```yaml
+spec:
+  ignoreDifferences:
+    - group: apps
+      kind: Deployment
+      name: ambit-router
+      jsonPointers: [/spec/replicas]
+  syncPolicy:
+    syncOptions: [RespectIgnoreDifferences=true]
+```
 
 ## Budgets and audit
 
 Budgets charge the Model that answered, at its price, including streamed answers whose client did not ask for
-token counts. The Audit page shows routed calls as `auto → claude-sonnet`, and the export carries the same text.
+token counts. The Audit page shows routed calls as `auto → claude-sonnet`, with the label or reason for type
+LLM (`auto → claude-sonnet (coding)`, `auto → gemma (timeout)`), and the export carries the same text.
 
 ## Conditions
 
@@ -71,4 +160,10 @@ token counts. The Audit page shows routed calls as `auto → claude-sonnet`, and
 | `TooManyRoutes` | more than 16 routes or 32 keywords | the router is not served |
 | `UnknownModel` | a route names a Model that does not exist | that route is dropped, the rest is served |
 | `CategoryNeedsClassifier` | a route has a category but the type is None or Rules | that route is ignored, the rest is served |
+| `UnknownCategory` | a route's category is not in `classifier.categories` | that route is dropped, the rest is served |
+| `CategoryConflict` | another router describes a category of the same name differently | the router is not served |
+| `ClassifierModelInvalid` | the classifier Model is missing, has no OpenAI-compatible endpoint, or its Secret has no `Authorization` entry | the router is not served |
+| `ClassifierNotInstalled` | type LLM, but ambit-router is not installed (`routing.router.enabled=false`) | category routes are ignored, the rest is served |
+| `ClassifierUnhealthy` | some ambit-router replicas are not available | served; some requests may get no label |
+| `ClassifierStartFailed` | ambit-router has not become available in 15 minutes | served without labels; see `kubectl describe deployment ambit-router` |
 | `DefaultNotAllowed` | no group may use both the router and its default | served, but its users get 400 when no route they may use matches |

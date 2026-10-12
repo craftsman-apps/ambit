@@ -7,6 +7,7 @@ gateway:
 console:
   url: http://console.localtest.me:8080
   host: console.localtest.me
+  testHooks: true
   image:
     repository: ambit-console
     tag: dev

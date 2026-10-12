@@ -13,6 +13,17 @@ spec:
   {{- with .Values.gateway.resources }}
   resources: {{ toJson . }}
   {{- end }}
+  {{- with .Values.gateway.serviceAccount.annotations }}
+  serviceAccount:
+    metadata:
+      annotations: {{ toJson . }}
+  {{- end }}
+  # agentgateway v1.6.0 converts /v1/messages to Responses for OpenAI's own API (provider OpenAI without a
+  # baseURL), which drops extended-thinking history; this keeps v1.5.0's Chat Completions. Self-hosted Models do
+  # not need it: they list their formats (Model.spec.formats). agentgateway v1.7 removes the setting.
+  env:
+    - name: AGENTGATEWAY_MESSAGES_PREFER_COMPLETIONS
+      value: "true"
   {{- if gt (int .Values.gateway.replicas) 1 }}
   # Voluntary disruptions (node drains, upgrades) leave at least one gateway pod serving.
   podDisruptionBudget:

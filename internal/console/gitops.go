@@ -29,6 +29,9 @@ type PullRequester interface {
 	OpenPullRequest(ctx context.Context, branch, title, body string, f FileChange) (PullRequest, error)
 	OpenPullRequests(ctx context.Context) ([]PullRequest, error)
 	PullRequestState(ctx context.Context, number int) (PullRequestState, error)
+	OpenPullRequestFiles(ctx context.Context, branch, title, body string, files []FileChange) (PullRequest, error)
+	PullRequestByBranch(ctx context.Context, branch string) (PullRequestState, bool, error)
+	DeleteBranch(ctx context.Context, branch string) error
 	// Contains reports whether revision includes commit (revision is commit or a descendant of it).
 	Contains(ctx context.Context, commit, revision string) (bool, error)
 }
@@ -95,6 +98,38 @@ func (g *GitOps) Propose(ctx context.Context, verb, kind, plural, name, by strin
 	b.WriteString("Merging this pull request applies the change; Argo CD syncs it to the cluster. Review it like any other change.\n")
 	branch := fmt.Sprintf("%s%s-%s-%s-%d", branchPrefix, verb, strings.ToLower(kind), name, time.Now().Unix())
 	return g.Repo.OpenPullRequest(ctx, branch, title, b.String(), FileChange{Path: g.ObjectPath(plural, name), Content: manifest})
+}
+
+// ProposedObject is one manifest of a multi-object change.
+type ProposedObject struct {
+	Kind, Plural, Name string
+	Manifest           []byte
+}
+
+// ProposeObjects opens one pull request, one commit, for several objects (e.g. an app and its server).
+// The caller must use a branch unique to one change (Task 13 uses one per operation ID): an existing
+// branch is reused as it is, and its content is not compared with objs.
+func (g *GitOps) ProposeObjects(ctx context.Context, branch, title, by string, objs []ProposedObject) (PullRequest, error) {
+	v, err := validator()
+	if err != nil {
+		return PullRequest{}, err
+	}
+	var files []FileChange
+	var b strings.Builder
+	fmt.Fprintf(&b, "Requested by %s in the Ambit console.\n\n", by)
+	for _, o := range objs {
+		var obj map[string]any
+		if err := yaml.Unmarshal(o.Manifest, &obj); err != nil {
+			return PullRequest{}, err
+		}
+		if problems, err := v.Object(ctx, obj); err != nil || len(problems) > 0 {
+			return PullRequest{}, &InvalidChange{Problems: problems}
+		}
+		files = append(files, FileChange{Path: g.ObjectPath(o.Plural, o.Name), Content: o.Manifest})
+		fmt.Fprintf(&b, "```yaml\n%s```\n\n", o.Manifest)
+	}
+	b.WriteString("Merging this pull request applies the change; Argo CD syncs it to the cluster. Review it like any other change.\n")
+	return g.Repo.OpenPullRequestFiles(ctx, branch, title, b.String(), files)
 }
 
 func humanKind(kind string) string {

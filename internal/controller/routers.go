@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/routerconfig"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/utils/ptr"
@@ -28,10 +29,17 @@ const lastUserText = `llmRequest.messages.filter(m, m.role == "user")[size(llmRe
 
 func routerObjectName(name string) string { return "router-" + name }
 
+// ClassifierInput is what CompileRouters needs to know about the classifier side.
+type ClassifierInput struct {
+	Installed bool            // the ambit-router Deployment exists in this install
+	HasKey    map[string]bool // classifier Model object name -> its credentials Secret has an Authorization entry
+}
+
 // CompileRouters adds one virtual AgentgatewayModel per valid router to res.Objects and returns each router's
-// Ready condition. Call it after RefuseUnpriced: each line repeats its target's final access expression.
-// refused is RefuseUnpriced's result: the groups each unpriced Model is refused to (nil when budgets are off).
-func CompileRouters(routers []v1.ModelRouter, models []v1.Model, res *Result, route RouteRef, refused map[string][]string) map[string]metav1.Condition {
+// Ready condition, plus the configuration ambit-router needs for the routers of type LLM. Call it after
+// RefuseUnpriced: each line repeats its target's final access expression. refused is RefuseUnpriced's result: the
+// groups each unpriced Model is refused to (nil when budgets are off).
+func CompileRouters(routers []v1.ModelRouter, models []v1.Model, res *Result, route RouteRef, refused map[string][]string, ci ClassifierInput) (map[string]metav1.Condition, routerconfig.Config) {
 	conds := map[string]metav1.Condition{}
 	byObject := map[string]v1.Model{}
 	for _, m := range models {
@@ -48,7 +56,19 @@ func CompileRouters(routers []v1.ModelRouter, models []v1.Model, res *Result, ro
 	}
 	sorted := append([]v1.ModelRouter(nil), routers...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
-	wireTaken := map[string]string{} // wire name -> router that holds it
+
+	// Pass 1: validate; collect the configuration of the valid LLM routers. Lines need its hash, so they come after.
+	type compiled struct {
+		r             v1.ModelRouter
+		wire          string
+		kept          []v1.RouterRoute
+		reasons, msgs []string // warnings: the router is served
+		classified    bool     // its category routes have lines
+	}
+	var valid []compiled
+	var cfg routerconfig.Config
+	wireTaken := map[string]string{}  // wire name -> router that holds it
+	categories := map[string]string{} // category name -> description, first declared (by router name)
 	for _, r := range sorted {
 		wire := r.WireName()
 		if msg := nameTaken(r, wire, models, wireTaken, byObject); msg != "" {
@@ -60,63 +80,161 @@ func CompileRouters(routers []v1.ModelRouter, models []v1.Model, res *Result, ro
 			conds[r.Name] = cond(metav1.ConditionFalse, "UnknownDefault", "no Model named "+r.Spec.Default+" for the default")
 			continue
 		}
+		typ := r.Spec.Classifier.Type
 		routes := r.Spec.Routes
-		if r.Spec.Classifier.Type != "Rules" {
+		if typ != "Rules" && typ != "LLM" {
 			routes = nil // type None: always the default
 		}
 		if n := keywordCount(routes); len(routes) > 16 || n > maxKeywords {
 			conds[r.Name] = cond(metav1.ConditionFalse, "TooManyRoutes", fmt.Sprintf("%d routes and %d keywords; at most 16 and %d", len(routes), n, maxKeywords))
 			continue
 		}
-		var missing []string
-		var kept []v1.RouterRoute
+		c := compiled{r: r, wire: wire, classified: typ == "LLM" && ci.Installed}
+		var cfgRouter *routerconfig.Router
+		if c.classified {
+			var msg string
+			cfgRouter, msg = llmConfig(r, wire, byObject, ci, res.Access[r.Name])
+			if msg != "" {
+				conds[r.Name] = cond(metav1.ConditionFalse, "ClassifierModelInvalid", msg)
+				continue
+			}
+			if msg := categoryConflict(r, categories); msg != "" {
+				conds[r.Name] = cond(metav1.ConditionFalse, "CategoryConflict", msg)
+				continue
+			}
+		}
+		declared := map[string]bool{}
+		for _, cat := range r.Spec.Classifier.Categories {
+			declared[cat.Name] = true
+		}
+		var missing, undeclared []string
 		needsClassifier := false
 		for _, rt := range routes {
-			if rt.Category != "" { // no classifier in types None and Rules: the whole route is ignored
-				needsClassifier = true
-				continue
+			if rt.Category != "" {
+				if !c.classified { // no classifier: the whole route is ignored
+					needsClassifier = true
+					continue
+				}
+				if !declared[rt.Category] {
+					undeclared = append(undeclared, rt.Category)
+					continue
+				}
 			}
 			if _, ok := byObject[rt.Model]; !ok {
 				missing = append(missing, rt.Model)
 				continue
 			}
-			kept = append(kept, rt)
+			c.kept = append(c.kept, rt)
 		}
-		if amb := ambiguous(append(targetNames(kept), r.Spec.Default), byObject, models); amb != "" {
+		if amb := ambiguous(append(targetNames(c.kept), r.Spec.Default), byObject, models); amb != "" {
 			conds[r.Name] = cond(metav1.ConditionFalse, "AmbiguousTarget", amb)
 			continue
 		}
-		access := CEL(res.Access[r.Name])
+		if len(missing) > 0 {
+			c.reasons, c.msgs = append(c.reasons, "UnknownModel"), append(c.msgs, "no Model named "+strings.Join(missing, ", ")+"; those routes are dropped, the rest is applied")
+		}
+		if len(undeclared) > 0 {
+			c.reasons, c.msgs = append(c.reasons, "UnknownCategory"), append(c.msgs, "categories not declared in classifier.categories: "+strings.Join(undeclared, ", ")+"; those routes are dropped, the rest is applied")
+		}
+		switch {
+		case typ == "LLM" && !ci.Installed:
+			c.reasons, c.msgs = append(c.reasons, "ClassifierNotInstalled"), append(c.msgs, "ambit-router is not installed (routing.router.enabled=false); routes with a category are ignored, the rest is applied")
+		case needsClassifier:
+			c.reasons, c.msgs = append(c.reasons, "CategoryNeedsClassifier"), append(c.msgs, "routes with a category need a classifier (type LLM); they are ignored, the rest is applied")
+		}
+		if !mayShare(res.Access[r.Name], res.Access[r.Spec.Default], refused[r.Spec.Default]) {
+			c.reasons, c.msgs = append(c.reasons, "DefaultNotAllowed"), append(c.msgs, "no group may use both this router and its default "+r.Spec.Default+"; its users get 400 whenever no route they may use matches")
+		}
+		if cfgRouter != nil {
+			for _, cat := range r.Spec.Classifier.Categories {
+				categories[cat.Name] = cat.Description
+			}
+			cfg.Routers = append(cfg.Routers, *cfgRouter)
+		}
+		valid = append(valid, c)
+	}
+	if len(cfg.Routers) > 0 { // routers are already in name order
+		cfg.Hash = routerconfig.HashOf(cfg.Routers)
+	}
+
+	// Pass 2: lines, in route order, then the default.
+	for _, c := range valid {
+		access := CEL(res.Access[c.r.Name])
 		var lines []any
-		for _, rt := range kept {
+		for _, rt := range c.kept {
 			lines = append(lines, map[string]any{
-				"when":     "(" + access + ") && " + routedPath + " && (" + routeCondition(rt) + ") && (" + final[rt.Model] + ")",
+				"when":     "(" + access + ") && " + routedPath + " && (" + routeCondition(rt, cfg.Hash) + ") && (" + final[rt.Model] + ")",
 				"modelRef": map[string]any{"name": rt.Model},
 			})
 		}
 		lines = append(lines, map[string]any{
-			"when":     "(" + access + ") && (" + final[r.Spec.Default] + ")",
-			"modelRef": map[string]any{"name": r.Spec.Default},
+			"when":     "(" + access + ") && (" + final[c.r.Spec.Default] + ")",
+			"modelRef": map[string]any{"name": c.r.Spec.Default},
 		})
-		res.Objects = append(res.Objects, virtualModel(r, wire, lines, route))
+		res.Objects = append(res.Objects, virtualModel(c.r, c.wire, lines, route))
 		// Warnings: the router is served; the first sets the reason and the message names every one.
-		var reasons, msgs []string
-		if len(missing) > 0 {
-			reasons, msgs = append(reasons, "UnknownModel"), append(msgs, "no Model named "+strings.Join(missing, ", ")+"; those routes are dropped, the rest is applied")
+		cnd := cond(metav1.ConditionTrue, "Compiled", fmt.Sprintf("%d routes and the default, served as %q", len(c.kept), c.wire))
+		if len(c.reasons) > 0 {
+			cnd = cond(metav1.ConditionFalse, c.reasons[0], strings.Join(c.msgs, "; "))
 		}
-		if needsClassifier {
-			reasons, msgs = append(reasons, "CategoryNeedsClassifier"), append(msgs, "routes with a category need a classifier (type VSR or LLM); they are ignored, the rest is applied")
-		}
-		if !mayShare(res.Access[r.Name], res.Access[r.Spec.Default], refused[r.Spec.Default]) {
-			reasons, msgs = append(reasons, "DefaultNotAllowed"), append(msgs, "no group may use both this router and its default "+r.Spec.Default+"; its users get 400 whenever no route they may use matches")
-		}
-		c := cond(metav1.ConditionTrue, "Compiled", fmt.Sprintf("%d routes and the default, served as %q", len(kept), wire))
-		if len(reasons) > 0 {
-			c = cond(metav1.ConditionFalse, reasons[0], strings.Join(msgs, "; "))
-		}
-		conds[r.Name] = c
+		conds[c.r.Name] = cnd
 	}
-	return conds
+	return conds, cfg
+}
+
+// llmConfig is a type-LLM router's entry in ambit-router's configuration, or why its classifier cannot be called.
+func llmConfig(r v1.ModelRouter, wire string, byObject map[string]v1.Model, ci ClassifierInput, a Access) (*routerconfig.Router, string) {
+	cl := r.Spec.Classifier
+	if cl.LLM == nil {
+		return nil, "type LLM needs classifier.llm.model"
+	}
+	m, ok := byObject[cl.LLM.Model]
+	if !ok {
+		return nil, "no Model named " + cl.LLM.Model + " for the classifier"
+	}
+	endpoint, ok := LLMEndpoint(m)
+	if !ok {
+		return nil, "classifier Model " + m.Name + " has no OpenAI-compatible endpoint: set baseURL, or use provider OpenAI or Openrouter"
+	}
+	if len(m.Spec.Formats) > 0 && !slices.Contains(m.Spec.Formats, "Completions") {
+		return nil, "classifier Model " + m.Name + " does not list the Completions format; ambit-router calls /chat/completions"
+	}
+	if !ci.HasKey[m.Name] {
+		if m.Spec.CredentialsRef == nil {
+			return nil, "classifier Model " + m.Name + " has no credentialsRef"
+		}
+		return nil, "the Secret " + m.Spec.CredentialsRef.Name + " of classifier Model " + m.Name + " is missing or has no Authorization entry"
+	}
+	out := &routerconfig.Router{Name: r.Name, Wire: wire, Type: "LLM", Groups: a.Groups, AllSignedIn: a.AllSignedIn,
+		LLM:           &routerconfig.LLM{Endpoint: endpoint, Model: m.Spec.Model, CredentialKey: m.Name},
+		TimeoutMillis: cl.TimeoutOrDefault().Milliseconds(), MaxBytes: cl.MaxBytesOrDefault(), RatePerMinute: cl.RateOrDefault()}
+	for _, c := range cl.Categories {
+		out.Categories = append(out.Categories, routerconfig.Category{Name: c.Name, Description: c.Description})
+	}
+	return out, ""
+}
+
+// categoryConflict: a category name means the same in every router (spec, CategoryConflict).
+func categoryConflict(r v1.ModelRouter, declared map[string]string) string {
+	for _, c := range r.Spec.Classifier.Categories {
+		if d, ok := declared[c.Name]; ok && d != c.Description {
+			return "category " + c.Name + " is declared by another router with a different description; a category name must mean the same everywhere"
+		}
+	}
+	return ""
+}
+
+// LLMEndpoint is the OpenAI-compatible base URL the classifier calls.
+func LLMEndpoint(m v1.Model) (string, bool) {
+	switch {
+	case m.Spec.BaseURL != "":
+		return strings.TrimSuffix(m.Spec.BaseURL, "/"), true
+	case m.Spec.Provider == "OpenAI":
+		return "https://api.openai.com/v1", true
+	case m.Spec.Provider == "Openrouter":
+		return "https://openrouter.ai/api/v1", true
+	}
+	return "", false
 }
 
 func nameTaken(r v1.ModelRouter, wire string, models []v1.Model, taken map[string]string, byObject map[string]v1.Model) string {
@@ -183,8 +301,9 @@ func keywordCount(routes []v1.RouterRoute) int {
 	return n
 }
 
-// routeCondition binds the text once ([text].exists(t, ...)); keywords are lowercased and Go-quoted (valid CEL).
-func routeCondition(rt v1.RouterRoute) string {
+// routeCondition binds the text once ([text].exists(t, ...)); keywords are lowercased and Go-quoted (valid CEL). A
+// category is read from ambit-router's label, and only under the configuration hash these lines were built with.
+func routeCondition(rt v1.RouterRoute, hash string) string {
 	var parts []string
 	if len(rt.Keywords) > 0 {
 		var kw []string
@@ -199,8 +318,21 @@ func routeCondition(rt v1.RouterRoute) string {
 	if rt.MaxBytes != nil {
 		parts = append(parts, fmt.Sprintf("size(t) <= %d", *rt.MaxBytes))
 	}
-	// size() also works on a list, so a multi-part message must not reach the length conditions.
-	return "[" + lastUserText + "].exists(t, type(t) == string && " + strings.Join(parts, " && ") + ")"
+	var out []string
+	if rt.Category != "" {
+		out = append(out, categoryCondition(hash, rt.Category))
+	}
+	if len(parts) > 0 {
+		// size() also works on a list, so a multi-part message must not reach the length conditions.
+		out = append(out, "["+lastUserText+"].exists(t, type(t) == string && "+strings.Join(parts, " && ")+")")
+	}
+	return strings.Join(out, " && ")
+}
+
+// categoryCondition: never has(request.headers[...]) — invalid CEL, which agentgateway accepts and treats as false
+// (spec fact 12). A missing header is an evaluation error, which counts as false.
+func categoryCondition(hash, name string) string {
+	return `request.headers["x-ambit-config"] == ` + strconv.Quote(hash) + ` && request.headers["x-ambit-route"] == ` + strconv.Quote(name)
 }
 
 // mayShare reports whether some signed-in user may use both a and b.

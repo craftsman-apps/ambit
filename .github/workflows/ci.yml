@@ -1,44 +1,154 @@
 name: ci
+# Cost: a pull request runs the full check; a merge to main does not run it again (the merge script merges only a
+# PR that already contains the current main). Draft PRs skip the e2e job; documentation-only changes (docs/, *.md,
+# LICENSE, NOTICE) skip build and e2e, so the PR still gets a green check in seconds.
 on:
-  push: { branches: [main, "step-*"] }
-  pull_request:
+  push: { branches: ["step-*"] }
+  pull_request: { types: [opened, synchronize, reopened, ready_for_review] }
 permissions: { contents: read }
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
+  changes:
     runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.changes.outputs.code }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
+      - name: Does the change touch more than documentation?
+        id: changes
+        env: { BASE: "${{ github.event.pull_request.base.sha }}", HEAD: "${{ github.event.pull_request.head.sha }}" }
+        run: |
+          code=true
+          if [ -n "$BASE" ] && ! git diff --name-only "$BASE...$HEAD" | grep -qvE '^docs/|\.md$|^LICENSE$|^NOTICE$'; then code=false; fi
+          echo "code=$code" | tee -a "$GITHUB_OUTPUT"
+
+  build:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    # The image binaries are static (cgo off). The tests use the same setting, so the image build below reuses
+    # everything they compiled instead of compiling all dependencies again (3.2 of 4.5 min, 2026-10-10).
+    env: { CGO_ENABLED: "0" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version-file: go.mod }
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: 26, cache: npm, cache-dependency-path: web/package-lock.json }
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      # cr.agentgateway.dev failed twice on 2026-10-10. Its chart and images come from this cache (filled on main by
+      # ci-cache.yml, which every PR can read) and reach the e2e clusters through the artifact below.
+      - name: Third-party chart dependencies and agentgateway images (cache)
+        id: thirdparty
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            charts/ambit/charts
+            ${{ runner.temp }}/thirdparty
+          key: thirdparty-${{ hashFiles('charts/ambit/Chart.lock', 'hack/thirdparty-cache.sh') }}
+      - name: Fetch them (cache miss)
+        if: steps.thirdparty.outputs.cache-hit != 'true'
+        run: hack/thirdparty-cache.sh "$RUNNER_TEMP/thirdparty/agentgateway.tar"
       # The console binary embeds web/dist, so the front end must be built before Go compiles.
       - name: Front end type-check and build
         run: cd web && npm ci --no-fund --no-audit && npm run build
       - name: Go vet, unit and integration tests (envtest API server)
         run: go vet ./... && KUBEBUILDER_ASSETS="$(make -s envtest-assets)" go test -count=1 ./...
+      - name: Preset versions bumped
+        if: github.event_name == 'pull_request'
+        run: go run ./cmd/presetcheck lockcheck --base "origin/${{ github.base_ref }}"
       - name: Generated CRDs and deepcopy code are up to date
         run: make generate && git diff --exit-code -- api charts/ambit-crds internal/validate/crds
       - name: Helm lint and deterministic render
         run: |
-          make lint
+          make lint DEPS=
           helm template ambit charts/ambit -n ambit-system -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml > /tmp/r1
           helm template ambit charts/ambit -n ambit-system -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml > /tmp/r2
           cmp /tmp/r1 /tmp/r2
       - name: Alert rules (promtool unit tests)
         run: test/alerts.sh
+      # The image for both e2e parts, built once: Go's cache is warm here (setup-go and the tests above), and web/dist
+      # is already built. Docker builds inside the e2e jobs compiled everything again (6.4 min each, 2026-10-08).
+      # No -trimpath: it would change Go's cache keys and compile everything again; this image is for tests only
+      # (release.yml builds the released one from the Dockerfile).
+      - name: Build the Ambit image for the e2e jobs
+        if: ${{ !github.event.pull_request.draft }}
+        run: |
+          for c in ambit-console ambit-controller ambit ambit-guard ambit-router; do
+            go build -ldflags="-s -w" -o "bin/$c" "./cmd/$c"
+          done
+          docker build --target prebuilt -t ambit-console:dev .
+          docker build -t ambit-whoami:dev -f test/whoami/Dockerfile .  # test-only MCP server (step 5)
+          docker save ambit-console:dev ambit-whoami:dev | gzip > "$RUNNER_TEMP/images.tar.gz"
+          mkdir -p "$RUNNER_TEMP/thirdparty/charts" && cp charts/ambit/charts/*.tgz "$RUNNER_TEMP/thirdparty/charts/"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !github.event.pull_request.draft }}
+        with:
+          name: images
+          path: |
+            ${{ runner.temp }}/images.tar.gz
+            ${{ runner.temp }}/thirdparty
+          retention-days: 1
+      - name: Chart rules (ambit-router shape and RBAC)
+        run: test/chart.sh
 
-  e2e:
-    needs: build
+  # The quick start as the docs give it: deploy/quickstart.yaml on a fresh kind cluster, without the CoreDNS
+  # rewrite or Keycloak the other parts use. Sign-in, a token from Dex, a first call, the audit record.
+  quickstart:
+    needs: build  # skipped with build for documentation-only changes
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 25
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with: { install_only: true }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: images, path: "${{ runner.temp }}" }
+      - name: Quick start
+        run: |
+          gunzip -c "$RUNNER_TEMP/images.tar.gz" | docker load
+          mkdir -p charts/ambit/charts && cp "$RUNNER_TEMP"/thirdparty/charts/*.tgz charts/ambit/charts/
+          QS_KEEP=1 QS_PRELOAD="$RUNNER_TEMP/thirdparty/agentgateway.tar" test/quickstart.sh
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          export KUBECONFIG=$(mktemp); kind get kubeconfig --name ambit-quickstart > "$KUBECONFIG"
+          kubectl get pods -A
+          kubectl -n ambit-system logs deploy/ambit-console --tail=100 || true
+          kubectl -n ambit-system logs deploy/ambit-dex --tail=50 || true
+
+  # Two parallel parts, each on its own kind cluster: every step sets up what it needs. Measured 2026-10-08:
+  # steps 8, 10 and 12 take about 5 min each, all the others 7 together; part a keeps the original order and
+  # the UI tests (which need step 3's catalog), part b the three longest steps. With step 8 in part a, it took
+  # 21.4 min and part b 13.4 (2026-10-10).
+  e2e:
+    name: e2e (${{ matrix.part.name }})
+    needs: build  # skipped with build for documentation-only changes
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        part:
+          - { name: a, steps: "0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 9 ext args", ui: true }
+          - { name: b, steps: "8 10 12 keys", ui: false }
+    steps:
+      # The runner's disk held the kind images, the build cache and Go's caches until "no space left on device"
+      # (2026-10-08). Preinstalled tools this job never uses are removed in the background.
+      - name: Free disk space
+        run: |
+          df -h / | tail -1
+          sudo nohup rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: 26, cache: npm, cache-dependency-path: web/package-lock.json }
@@ -46,21 +156,62 @@ jobs:
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
       - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
         with: { config: kind/cluster.yaml, cluster_name: ambit, wait: 120s }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: images, path: "${{ runner.temp }}" }
+      # Keycloak needs about 100 s to start, and third-party images take time to pull: start both now, while the
+      # Ambit image loads. The agentgateway chart and images come from the build job's cache, not their registry.
+      - name: Start slow test services early
+        run: |
+          mkdir -p charts/ambit/charts && cp "$RUNNER_TEMP"/thirdparty/charts/*.tgz charts/ambit/charts/
+          make install-crds
+          kubectl create namespace ambit-system
+          kubectl -n ambit-system apply -f test/keycloak/keycloak.yaml >/dev/null
+          kind load image-archive "$RUNNER_TEMP/thirdparty/agentgateway.tar" --name ambit
+          nohup test/prepull.sh > "$RUNNER_TEMP/prepull.log" 2>&1 &
       - name: Install Ambit on kind
-        run: make kind-up image install
+        run: |
+          gunzip -c "$RUNNER_TEMP/images.tar.gz" | docker load
+          kind load docker-image ambit-console:dev ambit-whoami:dev --name ambit
+          make kind-up install DEPS=
+          df -h / | tail -1
       - name: OpenRouter key (optional repository secret; free models only)
         env: { OPENROUTER_API_KEY: "${{ secrets.OPENROUTER_API_KEY }}" }
         run: |
           if [ -n "$OPENROUTER_API_KEY" ]; then mkdir -p ~/.config/ambit && printf '%s' "$OPENROUTER_API_KEY" > ~/.config/ambit/openrouter-api-key; fi
-      - name: Acceptance tests (every step)
-        run: make test
+      - name: Acceptance tests (part ${{ matrix.part.name }})
+        run: make test STEPS="${{ matrix.part.steps }}"
+        env:
+          AMBIT_SKIP_ARGO: "1"  # step 12's Argo CD check needs the GitHub App of step 4c, which CI does not have
+          # step 10's soak: 5 samples 10 s apart after 30 s (the growth check needs 4); 300 s locally
+          SOAK_SECONDS: "80"
+          SOAK_SAMPLE: "10"
+          SOAK_WARMUP: "30"
+      - name: Playwright version
+        if: matrix.part.ui
+        id: pw
+        run: echo "version=$(node -p "require('./web/package-lock.json').packages['node_modules/@playwright/test'].version")" >> "$GITHUB_OUTPUT"
+      - name: Playwright browsers (cache)
+        if: matrix.part.ui
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with: { path: ~/.cache/ms-playwright, key: "playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}" }
+      # After the step scripts: they run helm upgrade without --reuse-values, which resets this to false.
+      - name: Show test presets in the console
+        if: matrix.part.ui
+        run: helm upgrade ambit charts/ambit -n ambit-system --reuse-values --set console.testPresets=true --wait --timeout 5m
       - name: UI tests (Playwright)
+        if: matrix.part.ui
         run: |
           cd web && npm ci --no-fund --no-audit && npx playwright install --with-deps chromium
-          cd .. && CI=true make test-ui
+          cd .. && CI=true AMBIT_PRESETS_E2E=1 make test-ui
+      - name: Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: "playwright-traces-${{ matrix.part.name }}", path: web/test-results, retention-days: 7, if-no-files-found: ignore }
       - name: Diagnostics on failure
         if: failure()
         run: |
+          df -h /
           kubectl get pods -A
+          cat "$RUNNER_TEMP/prepull.log" || true
           kubectl -n ambit-system logs deploy/ambit-console --tail=100 || true
           kubectl -n ambit-system logs deploy/ambit-controller --tail=100 || true

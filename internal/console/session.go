@@ -30,6 +30,7 @@ type Session struct {
 	Role      string   `json:"role"`
 	Bootstrap bool     `json:"bootstrap"`
 	Exp       int64    `json:"exp"`
+	SignedIn  int64    `json:"signedIn"` // unix seconds of the last verified sign-in (set at sign-in)
 }
 
 // Codec signs values with HMAC-SHA256. Values are readable by the holder but cannot be changed.

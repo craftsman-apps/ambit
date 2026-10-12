@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"github.com/craftsman-apps/ambit/internal/identity"
 	"strings"
 	"testing"
 
@@ -47,7 +48,7 @@ domain: ambit-llm
 		t.Fatalf("gateway descriptors %v", d)
 	}
 	first := d[0].(map[string]any)["entries"].([]any)[0].(map[string]any)["expression"]
-	if first != `jwt.groups.exists(g, g == "eng") ? "eng" : ""` {
+	if first != identity.PrincipalGroups+`.exists(g, g == "eng") ? "eng" : ""` {
 		t.Fatalf("member expression %v", first)
 	}
 	if fm, _, _ := unstructured.NestedString(p.Object, "spec", "traffic", "rateLimit", "global", "failureMode"); fm != "FailOpen" {
@@ -110,7 +111,7 @@ domain: ambit-llm
 		}
 	}
 	user := ds[1].(map[string]any)["entries"].([]any)
-	if user[0].(map[string]any)["name"] != "spend_group" || user[1].(map[string]any)["name"] != "spend_user" || user[1].(map[string]any)["expression"] != spendUser {
+	if user[0].(map[string]any)["name"] != "spend_group" || user[1].(map[string]any)["name"] != "spend_user" || user[1].(map[string]any)["expression"] != spendUser() {
 		t.Fatalf("user entries %v", user)
 	}
 }
@@ -159,8 +160,11 @@ func TestEffectiveBudgetsFirstByName(t *testing.T) {
 // A token without an email claim is still charged per person (by its subject); a failing expression would
 // make agentgateway skip both the check and the charge.
 func TestSpendUserFallsBackToSubject(t *testing.T) {
-	if spendUser != "has(jwt.email) ? jwt.email : jwt.sub" {
-		t.Fatal(spendUser)
+	old := RequireEmail
+	defer func() { RequireEmail = old }()
+	RequireEmail = false
+	if spendUser() != identity.Principal(false) || !strings.Contains(spendUser(), "jwt.sub") {
+		t.Fatal(spendUser())
 	}
 }
 
@@ -168,8 +172,9 @@ func TestSpendUserFallsBackToSubject(t *testing.T) {
 // members of a group with a dollar limit the gateway turns it back on (the gateway itself does so only
 // when stream_options is absent).
 // The rewrite that turns usage reporting on for dollar-capped groups is a backend policy: agentgateway applies it
-// after a ModelRouter has picked the model. A route-level (traffic) rewrite was undone by the router, which
-// rebuilds the body from its original copy (agentgateway v1.5.0; found 2026-10-06: routed streams cost 0).
+// after a ModelRouter has picked the model. In v1.5.0 a route-level (traffic) rewrite was undone by the router,
+// which rebuilt the body from its original copy (found 2026-10-06: routed streams cost 0; fixed upstream in v1.6.0,
+// #3287); the backend policy works on both.
 func TestDollarBudgetForcesUsageInStreams(t *testing.T) {
 	budgets := []v1.Budget{
 		{ObjectMeta: metav1.ObjectMeta{Name: "ml"}, Spec: v1.BudgetSpec{Group: "ml-research", GroupDollarsPerDay: "50"}},
@@ -194,13 +199,10 @@ func TestDollarBudgetForcesUsageInStreams(t *testing.T) {
 	if !strings.Contains(e, `g in ["ml-research"]`) || strings.Contains(e, `"eng"`) || !strings.Contains(e, `{"include_usage": true}`) {
 		t.Fatalf("expression %s", e)
 	}
-	// Without the explicit list, a backend AI policy drops agentgateway's default API types and every request is
-	// parsed as chat (embeddings were answered as chat, 2026-10-06).
-	routes, _, _ := unstructured.NestedStringMap(u.Object, "spec", "backend", "ai", "routes")
-	for path, typ := range map[string]string{"/v1/chat/completions": "Completions", "/v1/messages": "Messages", "/v1/responses": "Responses", "/v1/embeddings": "Embeddings", "*": "Passthrough"} {
-		if routes[path] != typ {
-			t.Errorf("route type for %s: %q, want %s", path, routes[path], typ)
-		}
+	// No route list: agentgateway v1.6.0 keeps its default API types under a backend AI policy (upstream #3391),
+	// and a copied list would override the defaults of the version that runs (v1.6.0 changed them).
+	if _, found, _ := unstructured.NestedFieldNoCopy(u.Object, "spec", "backend", "ai", "routes"); found {
+		t.Fatal("the usage policy sets its own route types")
 	}
 	// request limits only: nothing to charge, no rewrite
 	if usagePolicy(budgets[1:], "ambit-system", "ambit-llm") != nil {

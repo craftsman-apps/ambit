@@ -2,11 +2,13 @@ package console
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -31,7 +33,11 @@ type Connections struct {
 	HTTP      *http.Client
 	Now       func() time.Time
 
-	mu sync.Mutex // one refresh per grant at a time (single console replica)
+	locksMu sync.Mutex
+	locks   map[string]*sync.Mutex // one per grant: its renewals and revocation never interleave (single console replica)
+
+	stylesMu sync.Mutex
+	styles   map[string]authStyle // client authentication that worked, per (Connection, client ID, secret)
 }
 
 const connCookie = "ambit_connect"
@@ -77,13 +83,6 @@ func (c *Connections) oauthConfig(ctx context.Context, conn *v1.Connection) (*oa
 	return &oauth2.Config{ClientID: conn.Spec.ClientID, ClientSecret: string(sec.Data["clientSecret"]),
 		Endpoint:    oauth2.Endpoint{AuthURL: conn.Spec.AuthorizationURL, TokenURL: conn.Spec.TokenURL},
 		RedirectURL: strings.TrimSuffix(c.PublicURL, "/") + "/connections/callback", Scopes: conn.Spec.Scopes}, nil
-}
-
-func (c *Connections) oauthCtx(ctx context.Context) context.Context {
-	if c.HTTP != nil {
-		return context.WithValue(ctx, oauth2.HTTPClient, c.HTTP)
-	}
-	return ctx
 }
 
 func (c *Connections) register(mux *http.ServeMux, auth *Auth) {
@@ -151,9 +150,39 @@ func (c *Connections) list(w http.ResponseWriter, r *http.Request, s Session) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+var errAppChanged = errors.New("this app changed while you were connecting; connect again")
+
 type connectState struct {
 	State, Verifier, Connection string
 	Exp                         int64
+	// The configuration that started the flow; the callback refuses if any of it changed.
+	ConnUID  string
+	ConnGen  int64
+	SecretRV string
+}
+
+func (c *Connections) secretRV(ctx context.Context, conn *v1.Connection) (string, error) {
+	var sec corev1.Secret
+	if err := c.Store.Client.Get(ctx, client.ObjectKey{Namespace: c.Store.Namespace, Name: conn.Spec.ClientSecretRef.Name}, &sec); err != nil {
+		return "", err
+	}
+	return sec.ResourceVersion, nil
+}
+
+// snapshotMatches returns the Connection only if it is the one that started the flow, unchanged.
+func (c *Connections) snapshotMatches(ctx context.Context, st connectState) (*v1.Connection, error) {
+	conn, err := c.connection(ctx, st.Connection)
+	if err != nil {
+		return nil, err
+	}
+	rv, err := c.secretRV(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	if string(conn.UID) != st.ConnUID || conn.Generation != st.ConnGen || rv != st.SecretRV {
+		return nil, errAppChanged
+	}
+	return conn, nil
 }
 
 // start sends the user to the provider to approve access (authorization code with PKCE).
@@ -169,10 +198,29 @@ func (c *Connections) start(w http.ResponseWriter, r *http.Request, s Session) {
 		http.Error(w, "this connection is not set up completely; ask an admin", http.StatusInternalServerError)
 		return
 	}
-	st := connectState{State: randomString(), Verifier: oauth2.GenerateVerifier(), Connection: conn.Name, Exp: c.now().Add(10 * time.Minute).Unix()}
+	rv, err := c.secretRV(r.Context(), conn)
+	if err != nil {
+		slog.Error("connection secret", "connection", conn.Name, "err", err)
+		http.Error(w, "this connection is not set up completely; ask an admin", http.StatusInternalServerError)
+		return
+	}
+	st := connectState{State: randomString(), Verifier: oauth2.GenerateVerifier(), Connection: conn.Name, Exp: c.now().Add(10 * time.Minute).Unix(),
+		ConnUID: string(conn.UID), ConnGen: conn.Generation, SecretRV: rv}
 	http.SetCookie(w, &http.Cookie{Name: connCookie, Value: c.Codec.Encode(st), Path: "/connections/", HttpOnly: true,
 		Secure: strings.HasPrefix(c.PublicURL, "https://"), SameSite: http.SameSiteLaxMode, MaxAge: 600})
-	http.Redirect(w, r, cfg.AuthCodeURL(st.State, oauth2.AccessTypeOffline, oauth2.S256ChallengeOption(st.Verifier)), http.StatusFound)
+	opts := []oauth2.AuthCodeOption{oauth2.AccessTypeOffline, oauth2.S256ChallengeOption(st.Verifier)}
+	if conn.Spec.Resource != "" {
+		opts = append(opts, oauth2.SetAuthURLParam("resource", conn.Spec.Resource))
+	}
+	keys := make([]string, 0, len(conn.Spec.AuthorizeParams))
+	for k := range conn.Spec.AuthorizeParams {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		opts = append(opts, oauth2.SetAuthURLParam(k, conn.Spec.AuthorizeParams[k]))
+	}
+	http.Redirect(w, r, cfg.AuthCodeURL(st.State, opts...), http.StatusFound)
 }
 
 func (c *Connections) callback(w http.ResponseWriter, r *http.Request, s Session) {
@@ -190,7 +238,11 @@ func (c *Connections) callback(w http.ResponseWriter, r *http.Request, s Session
 		http.Redirect(w, r, "/connections?error="+url.QueryEscape(e), http.StatusFound)
 		return
 	}
-	conn, err := c.connection(r.Context(), st.Connection)
+	conn, err := c.snapshotMatches(r.Context(), st)
+	if errors.Is(err, errAppChanged) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if err != nil {
 		http.Error(w, "the connection was removed", http.StatusNotFound)
 		return
@@ -200,7 +252,8 @@ func (c *Connections) callback(w http.ResponseWriter, r *http.Request, s Session
 		http.Error(w, "this connection is not set up completely; ask an admin", http.StatusInternalServerError)
 		return
 	}
-	tok, err := cfg.Exchange(c.oauthCtx(r.Context()), r.URL.Query().Get("code"), oauth2.VerifierOption(st.Verifier))
+	tok, err := c.tokenRequest(r.Context(), conn, cfg.ClientSecret, url.Values{"grant_type": {"authorization_code"},
+		"code": {r.URL.Query().Get("code")}, "redirect_uri": {cfg.RedirectURL}, "code_verifier": {st.Verifier}})
 	if err != nil {
 		slog.Warn("connect: code exchange failed", "connection", conn.Name, "user", s.Email, "err", err)
 		http.Redirect(w, r, "/connections?error="+url.QueryEscape("the provider refused the approval; try again"), http.StatusFound)
@@ -208,8 +261,12 @@ func (c *Connections) callback(w http.ResponseWriter, r *http.Request, s Session
 	}
 	now := c.now()
 	g := &Grant{Email: s.Email, Connection: conn.Name, AccessToken: tok.AccessToken, RefreshToken: tok.RefreshToken,
-		Expiry: tok.Expiry, State: grantConnectedState, ConnectedAt: now, CheckedAt: now}
-	if err := c.Store.Put(r.Context(), g); err != nil {
+		Expiry: tok.Expiry, State: grantConnectedState, ConnectedAt: now, CheckedAt: now,
+		Resource: conn.Spec.Resource, ServerURL: conn.Spec.ServerURL}
+	unlock := c.lockGrant(g.Email, g.Connection) // a renewal holding the old grant must not save over the new one
+	err = c.Store.Put(r.Context(), g)
+	unlock()
+	if err != nil {
 		serverErr(w, err)
 		return
 	}
@@ -223,8 +280,7 @@ func (c *Connections) callback(w http.ResponseWriter, r *http.Request, s Session
 // It holds the connections lock throughout and re-reads the grant, so a renewal running at the same time
 // cannot be overwritten or leave a newer token unrevoked. Errors never contain the grant's tokens.
 func (c *Connections) Revoke(ctx context.Context, g *Grant) (bool, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	defer c.lockGrant(g.Email, g.Connection)()
 	if cur, err := c.Store.Get(ctx, g.Email, g.Connection); err == nil && cur != nil {
 		g = cur
 	}
@@ -237,8 +293,8 @@ func (c *Connections) Revoke(ctx context.Context, g *Grant) (bool, error) {
 		}
 		// Formats that send the access token need a current one: renew an expired token first. If renewal
 		// fails, the old token is sent and the provider's refusal is reported.
-		if revokesAccessToken(conn.Spec.RevocationURL) && g.RefreshToken != "" && !g.Expiry.IsZero() && !c.now().Before(g.Expiry) {
-			if _, renewed, rerr := c.refresh(ctx, g); rerr == nil && renewed != nil && renewed.State == grantConnectedState {
+		if revokesAccessToken(conn.Spec.RevocationURL) {
+			if _, renewed, rerr := c.renewLocked(ctx, g, false); rerr == nil && renewed != nil && renewed.State == grantConnectedState {
 				g = renewed
 			}
 		}
@@ -289,45 +345,139 @@ func (c *Connections) disconnect(w http.ResponseWriter, r *http.Request, s Sessi
 // Token returns a valid access token for the user, refreshing it when it is close to expiry. A
 // failed refresh marks the grant broken, so the user sees "reconnect" before their agent fails again.
 func (c *Connections) Token(ctx context.Context, email, connName string) (string, *Grant, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	// A removed app hands out nothing, even while a stored token has not expired.
-	if _, err := c.connection(ctx, connName); apierrors.IsNotFound(err) {
-		return "", nil, nil
-	} else if err != nil {
-		return "", nil, err
-	}
+	defer c.lockGrant(email, connName)()
 	g, err := c.Store.Get(ctx, email, connName)
-	if err != nil || g == nil || g.State == grantBrokenState {
+	if err != nil || g == nil {
 		return "", g, err
 	}
-	if g.Expiry.IsZero() || c.now().Add(time.Minute).Before(g.Expiry) {
-		return g.AccessToken, g, nil
-	}
-	return c.refresh(ctx, g)
+	return c.renewLocked(ctx, g, false)
 }
 
-func (c *Connections) refresh(ctx context.Context, g *Grant) (string, *Grant, error) {
-	conn, err := c.connection(ctx, g.Connection)
+// bindGrants runs update (which sets the Connection's serverURL) and gives every grant issued before it,
+// for the same resource, that serverURL: those tokens were issued while the app had that one server. It
+// holds the grants' locks throughout, so no renewal sees the bound Connection with an unbound grant.
+func (c *Connections) bindGrants(ctx context.Context, conn *v1.Connection, serverURL string, update func() error) error {
+	all, err := c.Store.List(ctx, "")
 	if err != nil {
+		return err
+	}
+	var grants []*Grant
+	for _, g := range all {
+		if g.Connection == conn.Name {
+			grants = append(grants, g)
+		}
+	}
+	slices.SortFunc(grants, func(a, b *Grant) int { return strings.Compare(a.Email, b.Email) }) // one lock order for every bind
+	for _, g := range grants {
+		defer c.lockGrant(g.Email, g.Connection)()
+	}
+	if err := update(); err != nil {
+		return err
+	}
+	for _, listed := range grants {
+		g, err := c.Store.Get(ctx, listed.Email, listed.Connection)
+		if err != nil {
+			return err
+		}
+		if g == nil || g.ServerURL != "" || g.Resource != conn.Spec.Resource {
+			continue
+		}
+		g.ServerURL = serverURL
+		if err := c.Store.Put(ctx, g); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// lockGrant locks one grant and returns the unlock function.
+// ponytail: the map keeps one small mutex per grant ever seen; prune it if grants number in the millions.
+func (c *Connections) lockGrant(email, conn string) func() {
+	c.locksMu.Lock()
+	if c.locks == nil {
+		c.locks = map[string]*sync.Mutex{}
+	}
+	k := email + "\x00" + conn
+	m := c.locks[k]
+	if m == nil {
+		m = &sync.Mutex{}
+		c.locks[k] = m
+	}
+	c.locksMu.Unlock()
+	m.Lock()
+	return m.Unlock
+}
+
+// renewLocked returns a usable access token for g, renewing it when needed (or always, with force). The
+// caller holds the grant's lock (lockGrant), so renewal, revocation and consent changes never interleave.
+func (c *Connections) renewLocked(ctx context.Context, g *Grant, force bool) (string, *Grant, error) {
+	conn, err := c.connection(ctx, g.Connection)
+	if apierrors.IsNotFound(err) {
+		return "", nil, nil // a removed app hands out nothing
+	} else if err != nil {
 		return "", g, err
 	}
+	if g.State == grantBrokenState {
+		return "", g, nil
+	}
+	if g.Resource != conn.Spec.Resource || g.ServerURL != conn.Spec.ServerURL {
+		g.State, g.Error = grantBrokenState, "the app's server changed; reconnect"
+		return "", g, c.Store.Put(ctx, g)
+	}
+	valid := g.Expiry.IsZero() || c.now().Add(time.Minute).Before(g.Expiry)
+	if g.RefreshToken == "" {
+		if valid { // nothing to renew with: use it until it expires, even on a forced check
+			return g.AccessToken, g, nil
+		}
+		g.State, g.Error = grantBrokenState, "access expired and the app gave no way to renew it; reconnect"
+		return "", g, c.Store.Put(ctx, g)
+	}
+	if !force && valid {
+		return g.AccessToken, g, nil
+	}
+	return c.refresh(ctx, conn, g)
+}
+
+func (c *Connections) refresh(ctx context.Context, conn *v1.Connection, g *Grant) (string, *Grant, error) {
 	cfg, err := c.oauthConfig(ctx, conn)
 	if err != nil {
 		return "", g, err
 	}
 	g.CheckedAt = c.now()
-	tok, err := cfg.TokenSource(c.oauthCtx(ctx), &oauth2.Token{RefreshToken: g.RefreshToken, Expiry: time.Unix(1, 0)}).Token()
+	tok, err := c.tokenRequest(ctx, conn, cfg.ClientSecret, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {g.RefreshToken}})
+	var te *TokenError
+	if errors.As(err, &te) && te.Transient {
+		slog.Warn("grant renewal failed; will retry", "connection", g.Connection, "user", g.Email, "err", redactTokens(err.Error(), g))
+		if c.now().Before(g.Expiry) { // the stored token still works
+			return g.AccessToken, g, err
+		}
+		return "", g, err
+	}
 	if err != nil {
-		g.State, g.Error = grantBrokenState, "the provider refused to renew access: "+short(err.Error())
-		slog.Warn("grant broken", "connection", g.Connection, "user", g.Email, "err", err)
+		g.State, g.Error = grantBrokenState, "the provider refused to renew access: "+short(redactTokens(err.Error(), g))
+		slog.Warn("grant broken", "connection", g.Connection, "user", g.Email, "err", redactTokens(err.Error(), g))
 		return "", g, c.Store.Put(ctx, g)
 	}
 	g.AccessToken, g.Expiry, g.State, g.Error = tok.AccessToken, tok.Expiry, grantConnectedState, ""
 	if tok.RefreshToken != "" {
 		g.RefreshToken = tok.RefreshToken
 	}
-	return g.AccessToken, g, c.Store.Put(ctx, g)
+	// A rotated refresh token exists only here now: try hard to save it, even if the caller gave up.
+	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	for i := 0; ; i++ {
+		if err = c.Store.Put(saveCtx, g); err == nil || i == 2 {
+			break
+		}
+		select {
+		case <-saveCtx.Done():
+		case <-time.After(time.Duration(i+1) * 100 * time.Millisecond):
+		}
+	}
+	if err != nil {
+		slog.Error("a renewed refresh token could not be saved; the user may need to reconnect", "connection", g.Connection, "user", g.Email)
+	}
+	return g.AccessToken, g, err
 }
 
 func short(s string) string {
@@ -345,22 +495,36 @@ func (c *Connections) CheckAll(ctx context.Context, force bool) (checked, broken
 		slog.Error("grant check", "err", err)
 		return 0, 0
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, g := range grants {
-		if g.State == grantBrokenState {
-			broken++
-			continue
-		}
-		if !force && c.now().Add(CheckInterval+5*time.Minute).Before(g.Expiry) {
-			continue
-		}
-		checked++
-		if _, g2, _ := c.refresh(ctx, g); g2 != nil && g2.State == grantBrokenState {
-			broken++
-		}
+	for _, listed := range grants {
+		c.checkOne(ctx, listed, force, &checked, &broken)
 	}
 	return checked, broken
+}
+
+// checkOne renews one grant under its own lock, so a slow provider delays only that grant.
+func (c *Connections) checkOne(ctx context.Context, listed *Grant, force bool, checked, broken *int) {
+	defer c.lockGrant(listed.Email, listed.Connection)()
+	g, err := c.Store.Get(ctx, listed.Email, listed.Connection) // re-read under the lock: it may be revoked by now
+	if err != nil || g == nil {
+		return
+	}
+	if g.State == grantBrokenState {
+		*broken++
+		return
+	}
+	if !force && c.now().Add(CheckInterval+5*time.Minute).Before(g.Expiry) {
+		return
+	}
+	*checked++
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second) // an HTTP client without a timeout cannot hold the lock for long
+	defer cancel()
+	_, g2, err := c.renewLocked(ctx, g, true)
+	if err != nil {
+		slog.Warn("grant check", "connection", g.Connection, "user", g.Email, "err", redactTokens(err.Error(), g))
+	}
+	if g2 != nil && g2.State == grantBrokenState {
+		*broken++
+	}
 }
 
 // CheckInterval is how often RunChecks renews grants.

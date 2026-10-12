@@ -28,7 +28,7 @@ rules:
   # Dependencies page: whether each component of the chart has a ready pod.
   - apiGroups: [apps]
     resources: [deployments, statefulsets]
-    resourceNames: [ambit, ambit-dex, ambit-ratelimit, ambit-guard, ambit-otel-collector, ambit-clickhouse]
+    resourceNames: [ambit, ambit-dex, ambit-ratelimit, ambit-guard, ambit-otel-collector, ambit-clickhouse, ambit-router]
     verbs: [get]
   # Catalog screens: everyone signed in reads; admins change access rules (Direct mode).
   - apiGroups: [ambitproject.dev]
@@ -55,15 +55,28 @@ rules:
   - apiGroups: [ambitproject.dev]
     resources: [models]
     verbs: [update]
-  # Anyone signed in may request a server; approving one creates the Server. The console never
-  # updates or deletes Servers, and records a decision only in the request's status.
+  # Anyone signed in may request a server; approving one creates the Server, and records a decision
+  # only in the request's status. Adding an app from a preset creates its Server too.
   - apiGroups: [ambitproject.dev]
     resources: [serverrequests, servers]
     verbs: [create]
+  # Removing an unfinished preset addition deletes the Server it created. The console never updates Servers.
+  - apiGroups: [ambitproject.dev]
+    resources: [servers]
+    verbs: [delete]
   {{- end }}
   - apiGroups: [ambitproject.dev]
     resources: [serverrequests/status]
     verbs: [update]
+  # Personal API keys: key Secrets, owner records (Secrets) and key events (ConfigMaps) in this namespace. RBAC
+  # cannot limit by label; the ambit-keys-writer admission policy limits what the console
+  # may change. The Lease elects the one console pod that writes keys; it is never deleted by the console.
+  - apiGroups: [""]
+    resources: [secrets, configmaps]
+    verbs: [get, list, watch, create, update, delete]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, create, update]
   # Approving changed tool definitions (journey A6) writes Server status.
   - apiGroups: [ambitproject.dev]
     resources: [servers/status]

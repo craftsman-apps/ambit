@@ -282,6 +282,27 @@ func TestInactivePOSTWithKeyFailureIs503(t *testing.T) {
 	}
 }
 
+// Right after a console restart the new pod answers before it holds the key Lease (about 15 s). Provisioning
+// a person with nothing to undo writes no key object, so it must not answer 503 in that window.
+func TestProvisionWithoutKeyTermIs201(t *testing.T) {
+	mux, s, _, _ := scimFixture(t)
+	s.Keys.EndTermForTest()
+	provision(t, mux, "carol@acme.test")
+}
+
+// An offboarded person's reactivation needs a key write: without the Lease it is a 503 and the user is not saved.
+func TestReactivationWithoutKeyTermIs503(t *testing.T) {
+	mux, s, _, _ := scimFixture(t)
+	id := provision(t, mux, "bob@acme.test")
+	if r := patchActive(t, mux, id, false); r.Code != 200 {
+		t.Fatalf("%d", r.Code)
+	}
+	s.Keys.EndTermForTest()
+	if r := patchActive(t, mux, id, true); r.Code != 503 || userActive(t, s, id) {
+		t.Fatalf("%d", r.Code)
+	}
+}
+
 func TestSCIMReactivationAllowsNewKeys(t *testing.T) {
 	mux, s, _, c := scimFixture(t)
 	id := provision(t, mux, "bob@acme.test")

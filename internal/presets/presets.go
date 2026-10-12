@@ -63,6 +63,9 @@ type Preset struct {
 	Live               Live              `json:"live"`
 	Contract           struct {
 		Unauthenticated []int `json:"unauthenticated,omitempty"` // HTTP statuses the server may answer without a token; default [401]
+		// AppEndpoints: the authorization and token URLs are those of the vendor's developer portal, on purpose, not
+		// those in the MCP server's own authorization server metadata (which serve dynamic registration only).
+		AppEndpoints bool `json:"appEndpoints,omitempty"`
 	} `json:"contract,omitempty"`
 	Verified   bool   `json:"verified,omitempty"`
 	VerifiedOn string `json:"verifiedOn,omitempty"` // date of the passing live run; excluded from Hash like Verified

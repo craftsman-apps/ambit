@@ -27,7 +27,7 @@
   docs: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app
   live: { tool: get_me }
 - id: linear
-  version: 1
+  version: 2
   verified: true
   verifiedOn: "2026-10-07"
   displayName: Linear
@@ -48,6 +48,7 @@
   clientIDLabel: Client ID
   clientSecretLabel: Client secret
   docs: https://linear.app/developers/oauth-2-0-authentication
+  contract: { appEndpoints: true }
   live: { tool: list_teams }
 - id: asana
   version: 1
@@ -164,7 +165,7 @@
   docs: https://help.dropbox.com/integrations/connect-dropbox-mcp-server
   live: { tool: get_usage_and_quota }
 - id: canva
-  version: 1
+  version: 2
   verified: true
   verifiedOn: "2026-10-07"
   displayName: Canva
@@ -186,6 +187,7 @@
   clientIDLabel: Client ID
   clientSecretLabel: Client secret
   docs: https://www.canva.dev/docs/apps/mcp/access/
+  contract: { appEndpoints: true }
   live: { tool: search-designs, arguments: { query: "design" } }
 - id: slack
   version: 1

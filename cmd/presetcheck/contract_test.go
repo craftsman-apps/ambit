@@ -153,10 +153,77 @@ func TestContractIssuerWithPath(t *testing.T) {
 	if probs := checkContract(t.Context(), srv.Client(), p, nil); len(probs) != 0 {
 		t.Fatal(probs)
 	}
-	srv, p = tenantVendor(t, "https://elsewhere.example.test/tenant")
-	if !strings.Contains(strings.Join(checkContract(t.Context(), srv.Client(), p, nil), "\n"), "issuer") {
-		t.Fatal("wrong issuer not reported")
+}
+
+// Webex publishes issuer "https://webexapis.com" under the authorization server URL
+// "https://mcp.webexapis.com/mcp/webex-messaging" (RFC 8414 section 3.3 asks for equality). A preset holds no
+// issuer, so the mismatch cannot be fixed there: it is printed, and the endpoints are still compared.
+func TestContractIssuerMismatchIsNotAFailureButEndpointsAre(t *testing.T) {
+	srv, p := tenantVendor(t, "https://elsewhere.example.test/tenant")
+	if probs := checkContract(t.Context(), srv.Client(), p, nil); len(probs) != 0 {
+		t.Fatal(probs)
 	}
+	p.TokenURL = srv.URL + "/oauth/token"
+	if !strings.Contains(strings.Join(checkContract(t.Context(), srv.Client(), p, nil), "\n"), "token_endpoint") {
+		t.Fatal("moved token endpoint not reported when the issuer also differs")
+	}
+}
+
+// Linear and Canva publish the endpoints of their MCP server's own registration server; a preset for an app made
+// in the vendor's developer portal uses the portal's endpoints on purpose (the portal's client ids are unknown to
+// the MCP server's). Those are not compared, but the token URL must still answer like a token endpoint.
+func TestContractAppEndpointsAreNotComparedWithMCPRegistrationServer(t *testing.T) {
+	srv, p := vendor(t, func(path string, w http.ResponseWriter) bool {
+		if path == "/portal/token" {
+			w.WriteHeader(400)
+			w.Write([]byte(`{"error":"invalid_client"}`))
+			return true
+		}
+		return false
+	})
+	p.AuthorizationURL, p.TokenURL = srv.URL+"/portal/authorize", srv.URL+"/portal/token"
+	if len(checkContract(t.Context(), srv.Client(), p, nil)) == 0 {
+		t.Fatal("different endpoints accepted without being declared")
+	}
+	p.Contract.AppEndpoints = true
+	if probs := checkContract(t.Context(), srv.Client(), p, nil); len(probs) != 0 {
+		t.Fatal(probs)
+	}
+	p.TokenURL = srv.URL + "/gone" // still probed
+	if !strings.Contains(strings.Join(checkContract(t.Context(), srv.Client(), p, nil), "\n"), "token URL") {
+		t.Fatal("token URL not probed")
+	}
+}
+
+// A preset with placeholders (ServiceNow) cannot be checked without a real tenant. A fixture host that does not
+// exist is reported as skipped, not as a vendor failure; a vendor host that does not exist still fails.
+func TestContractSkipsTenantHostThatDoesNotExist(t *testing.T) {
+	_, p := vendor(t, nil)
+	p.Server.URL = "https://{instance}.invalid/mcp"
+	p.TokenURL = "https://{instance}.invalid/token"
+	vals := map[string]string{"instance": "nobody"}
+	if probs := checkContract(t.Context(), http.DefaultClient, presetWith(p, false), vals); len(probs) == 0 {
+		t.Fatal("unreachable host not reported")
+	}
+	probs, skipped := checkContractOrSkip(t.Context(), http.DefaultClient, presetWith(p, true), vals)
+	if len(probs) != 0 || skipped == "" {
+		t.Fatalf("problems %v skipped %q", probs, skipped)
+	}
+	// without placeholders the host belongs to the vendor: the failure stays
+	if probs, skipped := checkContractOrSkip(t.Context(), http.DefaultClient, presetWith(p, false), vals); len(probs) == 0 || skipped != "" {
+		t.Fatalf("problems %v skipped %q", probs, skipped)
+	}
+}
+
+func presetWith(p presets.Preset, placeholder bool) presets.Preset {
+	if placeholder {
+		p.Placeholders = []presets.Placeholder{{Name: "instance", Label: "x", Pattern: "^[a-z]+$", Example: "example"}}
+	} else {
+		p.Server.URL = strings.ReplaceAll(p.Server.URL, "{instance}", "nobody")
+		p.TokenURL = strings.ReplaceAll(p.TokenURL, "{instance}", "nobody")
+		p.Placeholders = nil
+	}
+	return p
 }
 
 func TestContractRefusesResourceMetadataOnAnotherHost(t *testing.T) {
@@ -208,6 +275,11 @@ func TestContractTokenAnswersByStatus(t *testing.T) {
 		{404, `{"error":"Not Found"}`, true},
 		{404, `<!DOCTYPE html><html>Not Found</html>`, false},
 		{400, `{"error":"invalid_client"}`, true},
+		// Canva and Webex refuse with their own JSON shape, not RFC 6749's "error" member.
+		{400, `{"code":"unauthorized_client","message":"Validating client failed for x"}`, true},
+		{400, `{"message":"client_secret cannot be null or empty","errors":[{"description":"x"}]}`, true},
+		{404, `{"message":"Not found"}`, false}, // a vendor-shaped error must be a client error about the request
+		{200, `{"message":"hello"}`, false},
 	} {
 		srv, p := vendor(t, func(path string, w http.ResponseWriter) bool {
 			if path == "/token" {

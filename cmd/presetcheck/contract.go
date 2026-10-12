@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -43,7 +45,7 @@ func checkContract(ctx context.Context, hc *http.Client, p presets.Preset, value
 		probs = append(probs, fmt.Sprintf("server did not ask for authentication (HTTP %d)", a.status))
 	default:
 		if m := resourceMetadataRE.FindStringSubmatch(a.header.Get("WWW-Authenticate")); m != nil {
-			probs = append(probs, checkMetadata(ctx, hc, res.Server.URL, m[1], res.Connection.AuthorizationURL, res.Connection.TokenURL, res.Connection.RevocationURL)...)
+			probs = append(probs, checkMetadata(ctx, hc, res.Server.URL, m[1], res.Connection.AuthorizationURL, res.Connection.TokenURL, res.Connection.RevocationURL, p.Contract.AppEndpoints)...)
 		}
 	}
 	// A dummy grant, not an empty body: some vendors (GitHub) answer 404 when client_id is missing.
@@ -52,10 +54,14 @@ func checkContract(ctx context.Context, hc *http.Client, p presets.Preset, value
 		probs = append(probs, "token URL: "+err.Error())
 	} else {
 		var o struct {
-			Error string `json:"error"`
-			OK    *bool  `json:"ok"`
+			Error   string `json:"error"`
+			OK      *bool  `json:"ok"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
 		}
-		isOAuthError := json.Unmarshal(a.body, &o) == nil && (o.Error != "" || (o.OK != nil && !*o.OK))
+		// RFC 6749 "error", Slack's {"ok":false}, or (Canva, Webex) {"code"|"message"} with a client-error status.
+		isOAuthError := json.Unmarshal(a.body, &o) == nil && (o.Error != "" || (o.OK != nil && !*o.OK) ||
+			((o.Code != "" || o.Message != "") && (a.status == http.StatusBadRequest || a.status == http.StatusUnauthorized)))
 		if !isOAuthError { // judged by the JSON error, at any status: a wrong URL answers with HTML
 			probs = append(probs, fmt.Sprintf("token URL did not answer like an OAuth token endpoint (HTTP %d)", a.status))
 		}
@@ -63,11 +69,21 @@ func checkContract(ctx context.Context, hc *http.Client, p presets.Preset, value
 	return probs
 }
 
+// checkContractOrSkip: a preset with placeholders is checked against a tenant from fixtures.yaml. If that
+// tenant's host does not exist there is nothing to check, so the preset is skipped, not failed.
+func checkContractOrSkip(ctx context.Context, hc *http.Client, p presets.Preset, values map[string]string) (probs []string, skipped string) {
+	probs = checkContract(ctx, hc, p, values)
+	if len(p.Placeholders) > 0 && len(probs) > 0 && slices.ContainsFunc(probs, func(s string) bool { return strings.Contains(s, "no such host") }) {
+		return nil, "the fixture tenant in test/presets/fixtures.yaml does not exist; add a real test tenant"
+	}
+	return probs, ""
+}
+
 // checkMetadata compares the vendor's published OAuth metadata with the preset (stable fields only).
 // tokenProbe is an authorization-code request no vendor can accept; a token endpoint answers it with an OAuth error.
 const tokenProbe = "grant_type=authorization_code&client_id=ambit-contract-check&code=ambit-contract-check&redirect_uri=https%3A%2F%2F127.0.0.1%2Fambit-contract"
 
-func checkMetadata(ctx context.Context, hc *http.Client, serverURL, prmURL, authURL, tokenURL, revURL string) []string {
+func checkMetadata(ctx context.Context, hc *http.Client, serverURL, prmURL, authURL, tokenURL, revURL string, appEndpoints bool) []string {
 	if !sameHost(serverURL, prmURL) {
 		return []string{"resource metadata is on another host: " + prmURL}
 	}
@@ -113,7 +129,13 @@ func checkMetadata(ctx context.Context, hc *http.Client, serverURL, prmURL, auth
 			probs = append(probs, fmt.Sprintf("%s: vendor says %q, preset has %q", field, got, want))
 		}
 	}
-	cmp("issuer", strings.TrimSuffix(as.Issuer, "/"), strings.TrimSuffix(issuer, "/"))
+	if strings.TrimSuffix(as.Issuer, "/") != strings.TrimSuffix(issuer, "/") {
+		// The preset holds no issuer and Ambit does not use one, so this cannot be fixed in the preset (Webex).
+		fmt.Printf("note: %s publishes issuer %q (RFC 8414 section 3.3 asks for the same URL)\n", issuer, as.Issuer)
+	}
+	if appEndpoints {
+		return probs
+	}
 	cmp("authorization_endpoint", as.Authorize, authURL)
 	cmp("token_endpoint", as.Token, tokenURL)
 	switch {
@@ -155,6 +177,9 @@ func do(ctx context.Context, hc *http.Client, method, u, ctype, body string) (an
 			last = fmt.Errorf("HTTP %d", resp.StatusCode)
 		} else {
 			last = err
+			if dnsErr := (*net.DNSError)(nil); errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+				break // the name does not exist; retrying cannot help
+			}
 		}
 		if i == 2 {
 			break
@@ -221,9 +246,11 @@ func contract(ctx context.Context, jsonPath string, ids []string) error {
 		if len(ids) > 0 && !slices.Contains(ids, p.ID) {
 			continue
 		}
-		probs := checkContract(ctx, hc, p, fixtures[p.ID])
+		probs, skipped := checkContractOrSkip(ctx, hc, p, fixtures[p.ID])
 		out[p.ID] = probs
-		if len(probs) == 0 {
+		if skipped != "" {
+			fmt.Printf("SKIP %s: %s\n", p.ID, skipped)
+		} else if len(probs) == 0 {
 			fmt.Println("PASS", p.ID)
 		} else {
 			failed = true

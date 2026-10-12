@@ -90,8 +90,18 @@ users. The live check reports such vendors when a second test account is configu
 | Level | Where it runs | Needs an account | What it checks |
 |---|---|---|---|
 | 1. Catalog | every CI run (`go test ./internal/presets`) | no | The catalog parses; ids are unique; URLs are valid after placeholders are filled; scopes follow RFC 6749; `setup` contains `{callbackURL}`; reserved `authorizeParams` refused; every verified preset has a `live` block. A pull request that changes a preset without raising its `version` fails. |
-| 2. Contract | nightly, `.github/workflows/presets-contract.yml` | no | The vendor's server answers an unauthenticated request with 401 (or the statuses the preset lists under `contract`); published metadata still matches the preset; the token URL answers a dummy authorization-code request with a JSON OAuth error (any HTTP status; an HTML page fails). A preset that fails two nights in a row opens one issue. |
+| 2. Contract | nightly, `.github/workflows/presets-contract.yml` | no | The vendor's server answers an unauthenticated request with 401 (or the statuses the preset lists under `contract`); published metadata still matches the preset; the token URL answers a dummy authorization-code request with a JSON OAuth error (any HTTP status; an HTML page fails). A JSON body with `code` or `message` also counts, if the status is 400 or 401 (Canva, Webex). A preset that fails two nights in a row opens one issue. |
 | 3. Live | maintainer's laptop, `make preset-live` | yes, a test account per vendor | Sign-in, refresh, `initialize`, `tools/list`, and one read-only tool call. |
+
+The contract check has three exceptions:
+
+- A preset with `contract: { appEndpoints: true }` (Linear, Canva) is not compared with the authorization and token
+  endpoints in the MCP server's published metadata. Those name the server's own registration service. The preset
+  uses the endpoints of an app made in the vendor's developer portal, on purpose. Its token URL is still probed.
+- A preset with placeholders (ServiceNow) is checked with the tenant in `test/presets/fixtures.yaml`. If that
+  tenant's host does not exist, the result is `SKIP`, not a failure. Put a real test tenant there.
+- An issuer in the metadata that differs from the authorization server URL (Webex) is printed as a note. The
+  preset holds no issuer. The endpoints are still compared.
 
 Run one preset at a time: `go run ./cmd/presetcheck contract <id>`, `make preset-live APP=<id>`. `make preset-live`
 checks every verified preset. `APP=<id>` checks only that preset, updates its entry in `results.json` and marks the

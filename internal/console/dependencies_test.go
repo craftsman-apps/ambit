@@ -81,3 +81,41 @@ func TestDependenciesEndpointIsAdminOnly(t *testing.T) {
 		t.Fatalf("admin: %d %s", r.Code, r.Body)
 	}
 }
+
+// ambit-router at 0 replicas is off on purpose (no router of type LLM): healthy. Some replicas missing: requests of
+// LLM routers get no label.
+func TestModelRoutingDependency(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = appsv1.AddToScheme(scheme)
+	router := func(want, ready int32) *appsv1.Deployment {
+		return &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "ambit-router", Namespace: testNS},
+			Spec: appsv1.DeploymentSpec{Replicas: ptr.To(want)}, Status: appsv1.DeploymentStatus{ReadyReplicas: ready}}
+	}
+	row := func(d *Dependencies) (Dependency, bool) {
+		for _, x := range d.Report(t.Context()) {
+			if x.Name == "Model routing classifier" {
+				return x, true
+			}
+		}
+		return Dependency{}, false
+	}
+	for name, tc := range map[string]struct {
+		dep     *appsv1.Deployment
+		healthy bool
+		detail  string
+	}{
+		"off":     {router(0, 0), true, "Off: no router of type LLM"},
+		"ready":   {router(2, 2), true, "2 of 2 pods ready"},
+		"partial": {router(2, 1), false, "1 of 2 pods ready; requests use no label"},
+	} {
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tc.dep).Build()
+		g, ok := row(&Dependencies{Client: c, Namespace: testNS, ModelRouting: true})
+		if !ok || g.Healthy != tc.healthy || g.Detail != tc.detail || g.Mode != "fail-open" {
+			t.Errorf("%s: %+v", name, g)
+		}
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	if _, ok := row(&Dependencies{Client: c, Namespace: testNS}); ok {
+		t.Error("no row when ambit-router is not installed")
+	}
+}

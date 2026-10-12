@@ -1,0 +1,86 @@
+{{- if not (semverCompare ">=1.30.0-0" .Capabilities.KubeVersion.Version) }}
+{{- fail "Ambit needs Kubernetes 1.30 or later (ValidatingAdmissionPolicy, service-account pod names)" }}
+{{- end }}
+{{- if not (has (int .Values.apiKeys.maxDays) (list 30 90 365)) }}{{ fail "apiKeys.maxDays must be 30, 90 or 365" }}{{ end }}
+{{- if or (lt (int .Values.apiKeys.inactivityDays) 1) (gt (int .Values.apiKeys.inactivityDays) 365) }}{{ fail "apiKeys.inactivityDays must be 1-365" }}{{ end }}
+{{- $ns := .Release.Namespace }}
+{{- $console := printf "system:serviceaccount:%s:ambit-console" $ns }}
+{{- $labels := list "ambitproject.dev/key" "ambitproject.dev/key-owner-record" "ambitproject.dev/key-event" }}
+# Personal API keys: key Secrets, owner records (Secrets) and key events (ConfigMaps) carry a label that starts with
+# ambitproject.dev/key. ambit-keys-writer lets only the console's service account (with a pod name) write them, and
+# lets the namespace controller and the garbage collector delete them (so a namespace with keys can always be
+# deleted). Which console pod writes is decided by the key Lease inside the console (leader election, one replica,
+# maxSurge 0, hourly repair). A holder check against the Lease in admission was removed: the API server's parameter
+# cache can go stale for hours, and the check then refused every key write, including offboarding's deletions.
+# Bindings select by object label first, so unrelated Secrets and ConfigMaps are never touched. On UPDATE and DELETE
+# a binding matches when the old or the new object matches, which also catches relabelling into a key.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: ambit-keys-writer
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [secrets, configmaps]
+  variables:
+    - name: console
+      expression: >-
+        request.userInfo.username == {{ $console | quote }} &&
+        has(request.userInfo.extra) &&
+        "authentication.kubernetes.io/pod-name" in request.userInfo.extra
+    - name: cleanup
+      expression: >-
+        request.operation == "DELETE" &&
+        request.userInfo.username in ["system:serviceaccount:kube-system:namespace-controller", "system:serviceaccount:kube-system:generic-garbage-collector"]
+  validations:
+    - expression: "variables.console || variables.cleanup"
+      message: "only the Ambit console may write personal API key objects"
+{{- range $i, $label := $labels }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ambit-keys-writer-{{ $i }}
+spec:
+  policyName: ambit-keys-writer
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ $ns }} } }
+    objectSelector: { matchExpressions: [{ key: {{ $label | quote }}, operator: Exists }] }
+{{- end }}
+---
+# The Lease names the one console pod that may write keys: only the console changes it. CREATE stays open because the
+# console creates it; namespace teardown may delete it.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: ambit-key-lease
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [coordination.k8s.io]
+        apiVersions: [v1]
+        operations: [UPDATE, DELETE]
+        resources: [leases]
+        resourceNames: [ambit-key-writer]
+  validations:
+    - expression: >-
+        request.userInfo.username == {{ $console | quote }} ||
+        (request.operation == "DELETE" &&
+        request.userInfo.username in ["system:serviceaccount:kube-system:namespace-controller", "system:serviceaccount:kube-system:generic-garbage-collector"])
+      message: "only the Ambit console may change the key Lease"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ambit-key-lease
+spec:
+  policyName: ambit-key-lease
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ $ns }} } }

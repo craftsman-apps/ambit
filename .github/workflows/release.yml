@@ -1,13 +1,18 @@
 name: release
 on:
   push: { tags: ["v*"] }
-permissions: { contents: read, packages: write }
+permissions: { contents: write, packages: write }  # contents: the GitHub release and its files
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - name: Preset live results (make preset-live) are fresh and complete
+        run: go run ./cmd/presetcheck gate
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -22,6 +27,18 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/ambit-console:${{ steps.v.outputs.version }}
+          # The source label links the package to this repository on GHCR. The image index (the multi-platform
+          # tag) needs the same keys as annotations; the labels sit in each platform image.
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.version=${{ steps.v.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          annotations: |
+            index:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            index:org.opencontainers.image.licenses=Apache-2.0
+            index:org.opencontainers.image.version=${{ steps.v.outputs.version }}
+            index:org.opencontainers.image.revision=${{ github.sha }}
           # Journey S6: an SBOM and build provenance travel with every image in the registry.
           sbom: true
           provenance: mode=max
@@ -33,3 +50,13 @@ jobs:
             helm package charts/$c --version "${{ steps.v.outputs.version }}" --app-version "${{ steps.v.outputs.version }}" -d /tmp/charts
             helm push /tmp/charts/$c-${{ steps.v.outputs.version }}.tgz oci://ghcr.io/${{ github.repository_owner }}/charts
           done
+      # The quick start downloads these from the release, so it needs no clone of the repository.
+      - name: GitHub release with the quick-start files
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          mkdir -p /tmp/assets
+          cp kind/cluster.yaml /tmp/assets/kind-cluster.yaml
+          cp deploy/quickstart.yaml /tmp/assets/quickstart.yaml
+          # Gateway API, agentgateway and ToolHive CRDs, which neither chart installs.
+          for f in deploy/crds/*.yaml; do cat "$f"; printf '\n---\n'; done > /tmp/assets/crds.yaml
+          gh release create "$GITHUB_REF_NAME" /tmp/assets/* --title "$GITHUB_REF_NAME" --generate-notes

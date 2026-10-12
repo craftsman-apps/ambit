@@ -1,0 +1,13 @@
+- id: whoami-test
+  version: 1
+  displayName: Who am I (test preset)
+  category: Dev
+  server: { url: "http://whoami.ambit-system.svc:8080/mcp", transport: streamable-http }
+  authorizationURL: http://keycloak.localtest.me:8080/realms/saas/protocol/openid-connect/auth
+  tokenURL: http://keycloak.localtest.me:8080/realms/saas/protocol/openid-connect/token
+  revocationURL: http://keycloak.localtest.me:8080/realms/saas/protocol/openid-connect/revoke
+  scopes: [openid]
+  setup: "Test only. Callback {callbackURL}"
+  docs: https://example.test
+  live: { tool: whoami }
+  verified: true

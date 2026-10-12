@@ -1,6 +1,8 @@
 package controller
 
 import (
+	"github.com/craftsman-apps/ambit/internal/identity"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -14,7 +16,7 @@ func model(name, id string) v1.Model {
 	return v1.Model{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ambit-system", UID: types.UID("uid-" + name),
 		Annotations: map[string]string{"argocd.argoproj.io/tracking-id": "ambit-config:ambitproject.dev/Model:ambit-system/" + name},
 		Labels:      map[string]string{"app.kubernetes.io/instance": "ambit-config"}},
-		Spec: v1.ModelSpec{Provider: "Openrouter", Model: id, CredentialsRef: v1.SecretRef{Name: "ambit-llm-openrouter"}}}
+		Spec: v1.ModelSpec{Provider: "Openrouter", Model: id, CredentialsRef: &v1.SecretRef{Name: "ambit-llm-openrouter"}}}
 }
 
 func rule(name string, groups []string, all bool, models ...string) v1.AccessRule {
@@ -65,7 +67,7 @@ func TestRulesMergePerModelSortedAndDeduplicated(t *testing.T) {
 			rule("r3", nil, true, "gemma"),
 		}, route)
 	objs := byName(r.Objects)
-	if got := expr(t, objs["nemotron"]); got != `jwt.groups.exists(g, g in ["finance", "ml-research"])` {
+	if got := expr(t, objs["nemotron"]); got != identity.PrincipalGroups+`.exists(g, g in ["finance", "ml-research"])` {
 		t.Fatalf("nemotron: %s", got)
 	}
 	if got := expr(t, objs["gemma"]); got != "true" {
@@ -88,7 +90,7 @@ func TestUnknownModelMakesRuleDegradedButOthersStillApply(t *testing.T) {
 	if c.Status != metav1.ConditionFalse || c.Reason != "UnknownModel" || !strings.Contains(c.Message, "gemmaa") {
 		t.Fatalf("condition: %+v", c)
 	}
-	if got := expr(t, r.Objects[0]); got != `jwt.groups.exists(g, g in ["eng"])` {
+	if got := expr(t, r.Objects[0]); got != identity.PrincipalGroups+`.exists(g, g in ["eng"])` {
 		t.Fatalf("valid part of the rule should still apply: %s", got)
 	}
 }
@@ -167,6 +169,41 @@ func TestModelBaseURL(t *testing.T) {
 	}
 }
 
+// A self-hosted server is a custom provider that lists the APIs it implements, so agentgateway converts the others
+// (agentgateway v1.6.0 would otherwise send Responses requests a vLLM or Ollama server may not implement). Without
+// spec.formats: Chat Completions and Embeddings, which every OpenAI-compatible server implements.
+func TestSelfHostedModelIsCustomProviderWithItsFormats(t *testing.T) {
+	plain := model("llama", "meta/llama-3-8b")
+	plain.Spec.Provider, plain.Spec.BaseURL = "OpenAI", "http://vllm.models.svc:8000/v1"
+	rich := model("qwen", "qwen/qwen3")
+	rich.Spec.Provider, rich.Spec.BaseURL, rich.Spec.Formats = "OpenAI", "http://litellm:4000/v1", []v1.ModelFormat{"Completions", "Responses", "Messages"}
+	r := Compile([]v1.Model{plain, rich, model("gemma", "google/gemma:free")}, nil, nil, route)
+	for name, want := range map[string][]string{"llama": {"Completions", "Embeddings"}, "qwen": {"Completions", "Responses", "Messages"}} {
+		o := find(t, r.Objects, "AgentgatewayModel", name).Object
+		if p, _, _ := unstructured.NestedString(o, "spec", "provider"); p != "Custom" {
+			t.Errorf("%s provider %q", name, p)
+		}
+		fs, _, _ := unstructured.NestedSlice(o, "spec", "custom", "formats")
+		var got []string
+		for _, f := range fs {
+			got = append(got, f.(map[string]any)["type"].(string))
+		}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Errorf("%s formats %v, want %v", name, got, want)
+		}
+		if b, _, _ := unstructured.NestedString(o, "spec", "baseURL"); b == "" {
+			t.Errorf("%s lost its baseURL", name)
+		}
+	}
+	g := find(t, r.Objects, "AgentgatewayModel", "gemma").Object
+	if p, _, _ := unstructured.NestedString(g, "spec", "provider"); p == "Custom" {
+		t.Errorf("a provider model became %q", p)
+	}
+	if _, found, _ := unstructured.NestedFieldNoCopy(g, "spec", "custom"); found {
+		t.Error("a provider model got custom settings")
+	}
+}
+
 // An AccessRule grants a router like a Model; naming it is not an unknown model.
 func TestRuleNamingRouterIsKnown(t *testing.T) {
 	r := Compile([]v1.Model{model("gemma", "google/gemma")}, nil,
@@ -179,5 +216,94 @@ func TestRuleNamingRouterIsKnown(t *testing.T) {
 	}
 	if _, ok := byName(r.Objects)["auto"]; ok {
 		t.Fatal("an AgentgatewayModel was generated for a router name")
+	}
+}
+
+// Azure and Bedrock: the settings blocks are copied and the auth form follows the provider (spec, Generation).
+func TestCloudProviderModels(t *testing.T) {
+	azure := model("gpt", "gpt-4.1")
+	azure.Spec.Provider, azure.Spec.CredentialsRef = "Azure", &v1.SecretRef{Name: "ambit-llm-azure"}
+	azure.Spec.Azure = &v1.AzureSettings{ResourceName: "acme-openai", ResourceType: "OpenAI"}
+	foundry := model("gpt-foundry", "gpt-4.1")
+	foundry.Spec.Provider, foundry.Spec.CredentialsRef = "Azure", &v1.SecretRef{Name: "ambit-llm-azure"}
+	foundry.Spec.Azure = &v1.AzureSettings{ResourceName: "acme-ai", ResourceType: "Foundry", APIVersion: "2025-04-01-preview", ProjectName: "research"}
+	keyed := model("claude-keys", "us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+	keyed.Spec.Provider, keyed.Spec.CredentialsRef = "Bedrock", &v1.SecretRef{Name: "ambit-llm-aws"}
+	keyed.Spec.Bedrock = &v1.BedrockSettings{Region: "eu-west-1"}
+	role := model("claude-role", "anthropic.claude-sonnet-4-5-20250929-v1:0")
+	role.Spec.Provider, role.Spec.CredentialsRef = "Bedrock", nil
+
+	r := Compile([]v1.Model{azure, foundry, keyed, role}, nil, nil, route)
+	want := map[string]map[string]any{
+		"gpt": {"provider": "Azure", "azure": map[string]any{"resourceName": "acme-openai", "resourceType": "OpenAI"},
+			"auth": map[string]any{"secretRef": map[string]any{"name": "ambit-llm-azure"}, "location": map[string]any{"header": map[string]any{"name": "api-key"}}}},
+		"gpt-foundry": {"provider": "Azure", "azure": map[string]any{"resourceName": "acme-ai", "resourceType": "Foundry", "apiVersion": "2025-04-01-preview", "projectName": "research"},
+			"auth": map[string]any{"secretRef": map[string]any{"name": "ambit-llm-azure"}, "location": map[string]any{"header": map[string]any{"name": "api-key"}}}},
+		"claude-keys": {"provider": "Bedrock", "bedrock": map[string]any{"region": "eu-west-1"},
+			"auth": map[string]any{"aws": map[string]any{"secretRef": map[string]any{"name": "ambit-llm-aws"}}}},
+		"claude-role": {"provider": "Bedrock", "bedrock": map[string]any{}, "auth": nil},
+	}
+	for name, w := range want {
+		spec := find(t, r.Objects, "AgentgatewayModel", name).Object["spec"].(map[string]any)
+		if spec["provider"] != w["provider"] {
+			t.Errorf("%s provider %v", name, spec["provider"])
+		}
+		for _, block := range []string{"azure", "bedrock"} {
+			if !reflect.DeepEqual(spec[block], w[block]) {
+				t.Errorf("%s %s = %#v, want %#v", name, block, spec[block], w[block])
+			}
+		}
+		auth, found, _ := unstructured.NestedFieldNoCopy(spec, "policies", "auth")
+		if w["auth"] == nil && found {
+			t.Errorf("%s has an auth key (%#v); it must be absent", name, auth)
+		}
+		if !reflect.DeepEqual(auth, w["auth"]) {
+			t.Errorf("%s auth = %#v, want %#v", name, auth, w["auth"])
+		}
+		for _, stray := range []string{"baseURL", "custom"} {
+			if _, ok := spec[stray]; ok {
+				t.Errorf("%s has %s", name, stray)
+			}
+		}
+		if _, ok, _ := unstructured.NestedFieldNoCopy(spec, "policies", "authorization"); !ok {
+			t.Errorf("%s lost its authorization", name)
+		}
+	}
+	// Other providers are unchanged: the key in the Authorization header, no settings blocks.
+	g := find(t, Compile([]v1.Model{model("gemma", "google/gemma")}, nil, nil, route).Objects, "AgentgatewayModel", "gemma").Object
+	if a, _, _ := unstructured.NestedMap(g, "spec", "policies", "auth"); !reflect.DeepEqual(a, map[string]any{"secretRef": map[string]any{"name": "ambit-llm-openrouter"}}) {
+		t.Errorf("openrouter auth %#v", a)
+	}
+}
+
+// Vertex AI: the vertexai block is copied; a key file goes in auth.gcp.secretRef, the gateway's identity needs no auth.
+func TestVertexAIModels(t *testing.T) {
+	keyed := model("gemini", "gemini-2.5-pro")
+	keyed.Spec.Provider, keyed.Spec.CredentialsRef = "VertexAI", &v1.SecretRef{Name: "ambit-llm-gcp"}
+	keyed.Spec.VertexAI = &v1.VertexAISettings{ProjectID: "acme-ml", Region: "europe-west4"}
+	ambient := model("claude", "claude-sonnet-4-5@20250929")
+	ambient.Spec.Provider, ambient.Spec.CredentialsRef = "VertexAI", nil
+	ambient.Spec.VertexAI = &v1.VertexAISettings{ProjectID: "acme-ml"}
+	r := Compile([]v1.Model{keyed, ambient}, nil, nil, route)
+	for name, w := range map[string]struct {
+		vertexai map[string]any
+		auth     any
+	}{
+		"gemini": {map[string]any{"projectId": "acme-ml", "region": "europe-west4"}, map[string]any{"gcp": map[string]any{"secretRef": map[string]any{"name": "ambit-llm-gcp"}}}},
+		"claude": {map[string]any{"projectId": "acme-ml"}, nil},
+	} {
+		spec := find(t, r.Objects, "AgentgatewayModel", name).Object["spec"].(map[string]any)
+		if spec["provider"] != "VertexAI" || !reflect.DeepEqual(spec["vertexai"], w.vertexai) {
+			t.Errorf("%s provider %v vertexai %#v", name, spec["provider"], spec["vertexai"])
+		}
+		auth, found, _ := unstructured.NestedFieldNoCopy(spec, "policies", "auth")
+		if (w.auth == nil) == found || (found && !reflect.DeepEqual(auth, w.auth)) {
+			t.Errorf("%s auth = %#v (found %v), want %#v", name, auth, found, w.auth)
+		}
+		for _, stray := range []string{"baseURL", "custom", "azure", "bedrock"} {
+			if _, ok := spec[stray]; ok {
+				t.Errorf("%s has %s", name, stray)
+			}
+		}
 	}
 }

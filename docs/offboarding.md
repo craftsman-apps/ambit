@@ -33,6 +33,9 @@ which needs an account with each. Each provider's endpoint:
 | Microsoft 365 / Entra ID (Graph) | none | **No endpoint.** Only admin actions: `revokeSignInSessions` (all of the user's apps) or deleting the app's consent grant | Stay valid until they expire (about 1 hour) | — |
 | Atlassian (Jira, Confluence Cloud) | none | **No endpoint.** Only the user can remove the app, in their account settings | Stay valid until they expire | — |
 
+Apps added from a preset show the same answer on the "Set up" screen, and the table of presets in
+[presets.md](presets.md) has a "Revokes at vendor" column with one value per preset.
+
 ## What this means today
 
 - Ambit revokes at the provider for **Google and Salesforce**, very likely for **Linear and Zoom** (standard

@@ -1,0 +1,23 @@
+# Values for the quick start on kind (docs: Quick start). The kind cluster maps host port 8080 to NodePort 30080:
+#   kind create cluster --config kind/cluster.yaml
+#   helm install ambit oci://ghcr.io/craftsman-apps/charts/ambit -n ambit-system -f quickstart.yaml
+# *.localtest.me always resolves to 127.0.0.1, so no DNS setup is needed. Not for production: plain HTTP,
+# one gateway replica, and tokens from Ambit's own Dex.
+gateway:
+  replicas: 1
+  service:
+    type: NodePort
+    nodePort: 30080
+console:
+  url: http://console.localtest.me:8080
+  host: console.localtest.me
+llm:
+  enabled: true
+  host: llm.localtest.me
+  jwt: { dex: true }
+mcp:
+  enabled: true
+  host: mcp.localtest.me
+  jwt: { dex: true }
+evidence:
+  enabled: true

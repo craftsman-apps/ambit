@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -14,9 +15,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/craftsman-apps/ambit/internal/identity"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -45,6 +49,7 @@ type SCIM struct {
 	Token     string // bearer token the identity provider presents
 	Conns     *Connections
 	Sessions  *SessionStore
+	Keys      *KeyService // personal API keys; nil when the feature is off
 	Now       func() time.Time
 }
 
@@ -73,7 +78,19 @@ type OffboardingRecord struct {
 	Grants          []GrantResult `json:"grants"`
 	SessionsEnded   int           `json:"sessionsEnded"`
 	GatewayBlocked  bool          `json:"gatewayBlocked"`
+	KeysDeleted     int           `json:"keysDeleted"`
+	KeysError       string        `json:"keysError,omitempty"`
 	CompleteSuccess bool          `json:"completeSuccess"`
+
+	keysUnusable bool // the email cannot own keys; retrying would never help
+}
+
+// mustRetry is true when keys may remain and a later attempt can delete them.
+func (r OffboardingRecord) mustRetry() bool { return r.KeysError != "" && !r.keysUnusable }
+
+func scimRetry(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", "30")
+	scimErr(w, http.StatusServiceUnavailable, "could not finish the change (personal keys or the gateway block); retry")
 }
 
 func (s *SCIM) now() time.Time {
@@ -217,16 +234,25 @@ type scimBody struct {
 func (b scimBody) email() string {
 	for _, e := range b.Emails {
 		if e.Primary {
-			return strings.ToLower(e.Value)
+			return scimEmail(e.Value)
 		}
 	}
 	if len(b.Emails) > 0 {
-		return strings.ToLower(b.Emails[0].Value)
+		return scimEmail(b.Emails[0].Value)
 	}
 	if strings.Contains(b.UserName, "@") {
-		return strings.ToLower(b.UserName)
+		return scimEmail(b.UserName)
 	}
 	return ""
+}
+
+// scimEmail is the canonical email (A-Z lower-cased only, as key owners and the gateway's lowerAscii); an
+// unusable one is kept as sent, trimmed (it can own no keys, and offboarding reports that).
+func scimEmail(v string) string {
+	if c, ok := identity.CanonicalEmail(v); ok {
+		return c
+	}
+	return strings.TrimSpace(v)
 }
 
 func readBody(w http.ResponseWriter, r *http.Request, v any) bool {
@@ -289,15 +315,22 @@ func (s *SCIM) create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	u := &SCIMUser{ID: scimID(), UserName: b.UserName, Email: b.email(), ExternalID: b.ExternalID, Active: b.Active == nil || *b.Active}
+	if !u.Active && s.Offboard(r.Context(), u.Email, "scim POST active=false").mustRetry() {
+		scimRetry(w) // nothing saved: the identity provider's retry runs the offboarding again
+		return
+	}
+	if u.Active { // a person who was deleted (blocked, flagged offboarded) and is hired again
+		if err := s.activate(r.Context(), u.Email); err != nil {
+			scimRetry(w)
+			return
+		}
+	}
 	if err := s.save(r.Context(), u); err != nil {
 		slog.Error("scim: save user", "err", err)
 		scimErr(w, http.StatusInternalServerError, "could not save the user")
 		return
 	}
 	slog.Info("scim: user provisioned", "email", u.Email, "active", u.Active)
-	if !u.Active {
-		s.Offboard(r.Context(), u.Email, "scim POST active=false")
-	}
 	scimJSON(w, http.StatusCreated, s.resource(u))
 }
 
@@ -310,20 +343,52 @@ func (s *SCIM) get(w http.ResponseWriter, r *http.Request) {
 	scimJSON(w, http.StatusOK, s.resource(u))
 }
 
-// setActive applies an activation change; deactivation offboards, reactivation lifts the gateway block.
-func (s *SCIM) setActive(ctx context.Context, u *SCIMUser, active bool, trigger string) {
+// setActive applies an activation change; deactivation offboards, reactivation lifts the gateway block
+// and clears the keys "offboarded" flag. A non-nil error means the change is incomplete: the caller
+// answers 503 and does not save the user, so the identity provider retries (every step is idempotent).
+// prev is the email the user had before this request; when a PUT changes the email and deactivates, both
+// are offboarded so keys under the old email do not survive.
+func (s *SCIM) setActive(ctx context.Context, u *SCIMUser, active bool, trigger, prev string) error {
 	was := u.Active
 	u.Active = active
 	switch {
 	case was && !active:
-		s.Offboard(ctx, u.Email, trigger)
-	case !was && active:
-		if err := s.setBlocked(ctx, u.Email, false); err != nil {
-			slog.Error("scim: unblock", "email", u.Email, "err", err)
+		retry := s.Offboard(ctx, prev, trigger).mustRetry()
+		if u.Email != prev && s.Offboard(ctx, u.Email, trigger).mustRetry() {
+			retry = true
 		}
-		slog.Info("scim: user reactivated", "email", u.Email)
+		if retry {
+			return errScimRetry
+		}
+	case active:
+		// also when the stored user was already active: an offboarding that answered 503 may have left the
+		// person blocked. Both steps are idempotent and write nothing when there is nothing to undo.
+		if err := s.activate(ctx, u.Email); err != nil {
+			return err
+		}
+		if !was {
+			slog.Info("scim: user reactivated", "email", u.Email)
+		}
 	}
+	return nil
 }
+
+// activate lifts the gateway block, then clears the keys "offboarded" flag. Both steps are idempotent.
+func (s *SCIM) activate(ctx context.Context, email string) error {
+	if err := s.setBlocked(ctx, email, false); err != nil {
+		slog.Error("scim: unblock", "email", email, "err", err)
+		return err
+	}
+	if s.Keys != nil {
+		if err := s.Keys.Reactivate(ctx, email); err != nil && !errors.Is(err, ErrBadInput) {
+			slog.Error("scim: reactivate keys", "email", email, "err", err)
+			return err
+		}
+	}
+	return nil
+}
+
+var errScimRetry = errors.New("offboarding left keys behind")
 
 func (s *SCIM) replace(w http.ResponseWriter, r *http.Request) {
 	u, err := s.load(r.Context(), r.PathValue("id"))
@@ -335,6 +400,7 @@ func (s *SCIM) replace(w http.ResponseWriter, r *http.Request) {
 	if !readBody(w, r, &b) {
 		return
 	}
+	prev := u.Email
 	if b.UserName != "" {
 		u.UserName = b.UserName
 	}
@@ -343,7 +409,17 @@ func (s *SCIM) replace(w http.ResponseWriter, r *http.Request) {
 	}
 	u.ExternalID = b.ExternalID
 	if b.Active != nil {
-		s.setActive(r.Context(), u, *b.Active, "scim PUT active=false")
+		if err := s.setActive(r.Context(), u, *b.Active, "scim PUT active=false", prev); err != nil {
+			scimRetry(w)
+			return
+		}
+	}
+	if u.Active && u.Email != prev && s.Keys != nil { // keys follow the identity: new keys go under the new email
+		if _, err := s.Keys.OffboardKeys(r.Context(), prev, "scim PUT email change"); err != nil && !errors.Is(err, ErrBadInput) {
+			slog.Error("scim: delete keys of the previous email", "email", prev, "err", err)
+			scimRetry(w)
+			return
+		}
 	}
 	if err := s.save(r.Context(), u); err != nil {
 		scimErr(w, http.StatusInternalServerError, "could not save the user")
@@ -386,7 +462,10 @@ func (s *SCIM) patch(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if active != nil {
-			s.setActive(r.Context(), u, *active, fmt.Sprintf("scim PATCH active=%t", *active))
+			if err := s.setActive(r.Context(), u, *active, fmt.Sprintf("scim PATCH active=%t", *active), u.Email); err != nil {
+				scimRetry(w)
+				return
+			}
 		}
 	}
 	if err := s.save(r.Context(), u); err != nil {
@@ -424,8 +503,9 @@ func (s *SCIM) remove(w http.ResponseWriter, r *http.Request) {
 		scimErr(w, http.StatusNotFound, "no such user")
 		return
 	}
-	if u.Active {
-		s.Offboard(r.Context(), u.Email, "scim DELETE")
+	if u.Active && s.Offboard(r.Context(), u.Email, "scim DELETE").mustRetry() {
+		scimRetry(w) // the user stays, so the retry finds it and offboards again
+		return
 	}
 	_ = s.Client.Delete(r.Context(), &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: s.store().Namespace, Name: "scim-" + u.ID}})
 	w.WriteHeader(http.StatusNoContent)
@@ -461,6 +541,15 @@ func (s *SCIM) Offboard(ctx context.Context, email, trigger string) OffboardingR
 	} else {
 		rec.GatewayBlocked = true
 	}
+	if s.Keys != nil { // after the block, which alone already stops keys at the gateway
+		n, err := s.Keys.OffboardKeys(ctx, email, trigger)
+		rec.KeysDeleted = n
+		if err != nil {
+			slog.Error("offboarding: keys", "email", email, "err", err)
+			rec.KeysError, rec.CompleteSuccess = err.Error(), false
+			rec.keysUnusable = errors.Is(err, ErrBadInput)
+		}
+	}
 	s.saveRecord(ctx, rec)
 	slog.Info("offboarding: done", "email", email, "trigger", trigger, "grants", len(rec.Grants), "sessionsEnded", rec.SessionsEnded, "complete", rec.CompleteSuccess)
 	return rec
@@ -469,43 +558,102 @@ func (s *SCIM) Offboard(ctx context.Context, email, trigger string) OffboardingR
 // setBlocked adds or removes the email in the ConfigMap the controller turns into a gateway Deny rule,
 // so tokens the identity provider already issued stop working now rather than when they expire.
 func (s *SCIM) setBlocked(ctx context.Context, email string, blocked bool) error {
-	var cm corev1.ConfigMap
-	err := s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: OffboardedConfigMap}, &cm)
-	create := apierrors.IsNotFound(err)
-	if err != nil && !create {
-		return err
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		var cm corev1.ConfigMap
+		err := s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: OffboardedConfigMap}, &cm)
+		create := apierrors.IsNotFound(err)
+		if err != nil && !create {
+			return err
+		}
+		if create {
+			cm = corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: OffboardedConfigMap, Namespace: s.Namespace,
+				Labels: map[string]string{"app.kubernetes.io/managed-by": "ambit-console"}}}
+		}
+		var emails []string
+		_ = json.Unmarshal([]byte(cm.Data["emails"]), &emails)
+		present := false
+		keep := []string{}
+		for _, e := range emails {
+			if scimEmail(e) == scimEmail(email) {
+				present = true
+			} else {
+				keep = append(keep, e)
+			}
+		}
+		if present == blocked {
+			return nil // nothing would change: do not write the shared list
+		}
+		if blocked {
+			keep = append(keep, scimEmail(email))
+		}
+		sort.Strings(keep)
+		b, _ := json.Marshal(keep)
+		cm.Data = map[string]string{"emails": string(b)}
+		if create {
+			if err := s.Client.Create(ctx, &cm); apierrors.IsAlreadyExists(err) {
+				return apierrors.NewConflict(schema.GroupResource{Resource: "configmaps"}, cm.Name, err) // retry as an update
+			} else {
+				return err
+			}
+		}
+		return s.Client.Update(ctx, &cm)
+	})
+}
+
+// carryGrants adds the grants of this person's earlier incomplete attempts (newer than their last complete
+// record) to rec, so a retry's record still shows what the first attempt revoked.
+func (s *SCIM) carryGrants(ctx context.Context, rec *OffboardingRecord) {
+	var l corev1.SecretList
+	if err := s.Client.List(ctx, &l, client.InNamespace(s.store().Namespace), client.MatchingLabels{recordLabel: "true", grantUserLabel: userHash(rec.Email)}); err != nil {
+		slog.Error("offboarding: read earlier records", "email", rec.Email, "err", err)
+		return
 	}
-	if create {
-		cm = corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: OffboardedConfigMap, Namespace: s.Namespace,
-			Labels: map[string]string{"app.kubernetes.io/managed-by": "ambit-console"}}}
+	var prior []OffboardingRecord
+	var lastComplete time.Time
+	for i := range l.Items {
+		plain, err := s.store().open(l.Items[i].Data["record"])
+		var p OffboardingRecord
+		if err != nil || json.Unmarshal(plain, &p) != nil {
+			continue
+		}
+		if p.CompleteSuccess && p.At.After(lastComplete) {
+			lastComplete = p.At
+		}
+		prior = append(prior, p)
 	}
-	var emails []string
-	_ = json.Unmarshal([]byte(cm.Data["emails"]), &emails)
-	keep := emails[:0]
-	for _, e := range emails {
-		if !strings.EqualFold(e, email) {
-			keep = append(keep, e)
+	have := map[string]bool{}
+	for _, g := range rec.Grants {
+		have[g.Connection] = true
+	}
+	for _, p := range prior {
+		if p.CompleteSuccess || !p.At.After(lastComplete) {
+			continue
+		}
+		for _, g := range p.Grants {
+			if !have[g.Connection] {
+				have[g.Connection] = true
+				rec.Grants = append(rec.Grants, g)
+			}
 		}
 	}
-	if blocked {
-		keep = append(keep, strings.ToLower(email))
-	}
-	sort.Strings(keep)
-	b, _ := json.Marshal(keep)
-	cm.Data = map[string]string{"emails": string(b)}
-	if create {
-		return s.Client.Create(ctx, &cm)
-	}
-	return s.Client.Update(ctx, &cm)
 }
 
 func (s *SCIM) saveRecord(ctx context.Context, rec OffboardingRecord) {
+	s.carryGrants(ctx, &rec)
 	plain, _ := json.Marshal(rec)
 	sealed, err := s.store().seal(plain)
 	if err == nil {
 		name := fmt.Sprintf("offboarding-%s-%d", userHash(rec.Email)[:12], rec.At.Unix())
-		err = s.Client.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.store().Namespace,
-			Labels: map[string]string{recordLabel: "true", grantUserLabel: userHash(rec.Email)}}, Data: map[string][]byte{"record": sealed}})
+		sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.store().Namespace,
+			Labels: map[string]string{recordLabel: "true", grantUserLabel: userHash(rec.Email)}}, Data: map[string][]byte{"record": sealed}}
+		err = s.Client.Create(ctx, sec)
+		if apierrors.IsAlreadyExists(err) { // a retry in the same second supersedes the earlier attempt
+			var cur corev1.Secret
+			if err = s.Client.Get(ctx, client.ObjectKeyFromObject(sec), &cur); err == nil {
+				cur.Data = sec.Data
+				err = s.Client.Update(ctx, &cur)
+			}
+		}
 	}
 	if err != nil {
 		slog.Error("offboarding: save record", "email", rec.Email, "err", err)

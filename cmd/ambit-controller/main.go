@@ -3,7 +3,10 @@ package main
 
 import (
 	"flag"
+	appsv1 "k8s.io/api/apps/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"os"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
@@ -20,6 +23,7 @@ import (
 
 func main() {
 	ns := os.Getenv("AMBIT_NAMESPACE")
+	requireEmail := flag.Bool("require-email", true, "gateway JWTs must carry a usable email (llm/mcp.jwt.requireEmail)")
 	route := flag.String("llm-route", "ambit-llm", "HTTPRoute that every model attaches to")
 	rlService := flag.String("ratelimit-service", "", "Service of envoy's ratelimit for Budgets; empty turns budgets off")
 	rlPort := flag.Int64("ratelimit-port", 8081, "gRPC port of the ratelimit service")
@@ -28,7 +32,11 @@ func main() {
 	toolsRefresh := flag.Duration("tools-refresh", 10*time.Minute, "how often each running server's tools are read again (changed tools are hidden until approved)")
 	xdsAddr := flag.String("xds-addr", "", "agentgateway control plane (xDS) host:port; its certificate is nudged when not renewed. Empty turns this off")
 	xdsSecret := flag.String("xds-secret", "kgateway-xds-cert", "agentgateway's Secret for the xDS certificate")
+	consoleTools := flag.String("console-tools-url", "", "console tools listener (e.g. http://ambit-console.ambit-system.svc:8083); per-user servers' tools are read through it. Empty leaves them unlisted")
+	routerDep := flag.String("router-deployment", "", "ambit-router's Deployment (routers of type LLM); empty: not installed")
+	routerReplicas := flag.Int("router-replicas", 2, "ambit-router replicas while a router of type LLM exists")
 	flag.Parse()
+	controller.RequireEmail = *requireEmail
 	ctrl.SetLogger(zap.New())
 	log := ctrl.Log.WithName("setup")
 	if ns == "" {
@@ -44,8 +52,10 @@ func main() {
 	}
 	// Leader election: during a rolling update, or with two replicas, only one controller writes.
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme:                  scheme,
-		Cache:                   cache.Options{DefaultNamespaces: map[string]cache.Config{ns: {}}},
+		Scheme: scheme,
+		Cache: cache.Options{DefaultNamespaces: map[string]cache.Config{ns: {}},
+			// RBAC names ambit-router's Deployment only, so its list and watch must name it too.
+			ByObject: map[client.Object]cache.ByObject{&appsv1.Deployment{}: {Field: fields.OneTermEqualSelector("metadata.name", deploymentOrNone(*routerDep))}}},
 		Metrics:                 metricsserver.Options{BindAddress: ":8080"},
 		HealthProbeBindAddress:  ":8081",
 		LeaderElection:          true,
@@ -56,8 +66,13 @@ func main() {
 		log.Error(err, "create manager")
 		os.Exit(1)
 	}
-	if err := (&controller.Reconciler{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), ListTools: controller.ListTools, Namespace: ns, Route: controller.RouteRef{Name: *route},
-		RateLimit: controller.RateLimit{Service: *rlService, Port: *rlPort, FailureMode: *rlFailure}, ToolsRefresh: *toolsRefresh, ArgumentLimits: *argLimits}).SetupWithManager(mgr); err != nil {
+	listTools := controller.ListTools
+	if *consoleTools != "" {
+		listTools = controller.WithConsoleTools(controller.ListTools, controller.ConsoleTools{URL: *consoleTools})
+	}
+	if err := (&controller.Reconciler{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), ListTools: listTools, Namespace: ns, Route: controller.RouteRef{Name: *route},
+		RateLimit: controller.RateLimit{Service: *rlService, Port: *rlPort, FailureMode: *rlFailure}, ToolsRefresh: *toolsRefresh, ArgumentLimits: *argLimits,
+		Classifier: controller.Classifier{Deployment: *routerDep, Replicas: int32(*routerReplicas)}}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "set up controller")
 		os.Exit(1)
 	}
@@ -74,4 +89,13 @@ func main() {
 		log.Error(err, "manager stopped")
 		os.Exit(1)
 	}
+}
+
+// deploymentOrNone: with no ambit-router, the Deployment cache names an object that cannot exist instead of
+// listing every Deployment.
+func deploymentOrNone(name string) string {
+	if name == "" {
+		return "-"
+	}
+	return name
 }

@@ -26,11 +26,17 @@ type Grant struct {
 	AccessToken  string    `json:"accessToken"`
 	RefreshToken string    `json:"refreshToken,omitempty"`
 	Expiry       time.Time `json:"expiry"`
+	// Resource and ServerURL are what the tokens were issued for; empty for grants from before them.
+	Resource  string `json:"resource,omitempty"`
+	ServerURL string `json:"serverURL,omitempty"`
 	// State is "connected" or "broken" (a refresh failed; the user must reconnect).
 	State       string    `json:"state"`
 	Error       string    `json:"error,omitempty"`
 	ConnectedAt time.Time `json:"connectedAt"`
 	CheckedAt   time.Time `json:"checkedAt"`
+	// ToolReaderFor lists the Servers (by UID) whose tools this user agreed to have read with this grant.
+	// A new grant (reconnect) starts empty, which ends the consent.
+	ToolReaderFor []string `json:"toolReaderFor,omitempty"`
 }
 
 const (

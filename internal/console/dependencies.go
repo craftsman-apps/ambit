@@ -31,6 +31,7 @@ type Dependencies struct {
 	Budgets       *Budgets // nil: limits off
 	RatelimitMode string   // FailOpen or FailClosed, from limits.failureMode
 	Protection    bool     // ambit-guard installed
+	ModelRouting  bool     // ambit-router installed (routers of type LLM)
 	XDSAddr       string   // agentgateway's control plane (xDS), host:port; empty skips the certificate check
 	Now           func() time.Time
 }
@@ -77,6 +78,22 @@ func (d *Dependencies) workload(obj client.Object, name string) func(context.Con
 		}
 		return ready > 0, fmt.Sprintf("%d of %d pods ready", ready, want)
 	}
+}
+
+// router: ambit-router runs only while a router of type LLM exists; at 0 replicas it is off on purpose.
+func (d *Dependencies) router(ctx context.Context) (bool, string) {
+	var dep appsv1.Deployment
+	if err := d.Client.Get(ctx, client.ObjectKey{Namespace: d.Namespace, Name: "ambit-router"}, &dep); err != nil {
+		return false, "cannot read ambit-router: " + err.Error()
+	}
+	want, ready := ptrOr(dep.Spec.Replicas, 1), dep.Status.ReadyReplicas
+	switch {
+	case want == 0:
+		return true, "Off: no router of type LLM"
+	case ready < want:
+		return false, fmt.Sprintf("%d of %d pods ready; requests use no label", ready, want)
+	}
+	return true, fmt.Sprintf("%d of %d pods ready", ready, want)
 }
 
 func ptrOr(p *int32, def int32) int32 {
@@ -127,6 +144,11 @@ func (d *Dependencies) checks() []depCheck {
 		out = append(out, depCheck{Dependency{Name: "ambit-guard", Purpose: "Tool pinning and masking of personal data",
 			Mode: "fail-closed", WhenDown: "MCP tool calls fail rather than run unchecked."},
 			d.workload(&appsv1.Deployment{}, "ambit-guard")})
+	}
+	if d.ModelRouting {
+		out = append(out, depCheck{Dependency{Name: "Model routing classifier", Purpose: "Labels prompts for model routers of type LLM",
+			Mode: "fail-open", WhenDown: "Requests use no label: keyword and length routes still apply, otherwise the router's default answers."},
+			d.router})
 	}
 	if d.Audit != nil {
 		db := d.Audit.DB

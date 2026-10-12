@@ -11,7 +11,7 @@ metadata:
   name: ambit-controller
 rules:
   - apiGroups: [ambitproject.dev]
-    resources: [models, servers, accessrules, budgets, modelrouters]
+    resources: [models, servers, accessrules, budgets, modelrouters, connections]
     verbs: [get, list, watch]
   - apiGroups: [ambitproject.dev]
     resources: [models/status, servers/status, accessrules/status, budgets/status, modelrouters/status]
@@ -29,13 +29,30 @@ rules:
     verbs: [create]
   - apiGroups: [""]
     resources: [configmaps]
-    resourceNames: [ambit-ratelimit-config]
+    resourceNames: [ambit-ratelimit-config, ambit-router-config]
     verbs: [update, patch]
   # agentgateway's xDS certificate: when it was not renewed, an annotation makes agentgateway renew it.
   - apiGroups: [""]
     resources: [secrets]
     resourceNames: [kgateway-xds-cert]
     verbs: [patch]
+{{- if and .Values.llm.enabled .Values.routing.router.enabled }}
+  # Model routing (type LLM): the controller copies each classifier Model's key into ambit-router-credentials.
+  # Classifier Models name their Secrets freely, so get cannot be limited by name; reads go to the API server,
+  # never a cache, and there is no list or watch. create cannot be limited by name in Kubernetes RBAC.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, create]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [ambit-router-credentials]
+    verbs: [update, patch]
+  # ambit-router's replicas: scaled up while a router of type LLM exists, to 0 otherwise.
+  - apiGroups: [apps]
+    resources: [deployments]
+    resourceNames: [ambit-router]
+    verbs: [get, list, watch, patch]
+{{- end }}
   # Leader election: only one controller writes during a rolling update.
   - apiGroups: [coordination.k8s.io]
     resources: [leases]

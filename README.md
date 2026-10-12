@@ -54,6 +54,11 @@ Create the Secrets in the release namespace first, for example
 `kubectl create secret generic ambit-clickhouse-external --from-literal=password=...`.
 `test/stepext.sh` installs Ambit against a separate ClickHouse and Valkey with TLS from a private CA.
 
+## Connections
+
+Add a work app from a tested preset (vendor MCP server, per-user sign-in, tool-by-tool access); see
+[docs/presets.md](docs/presets.md).
+
 ## Budgets
 
 Daily limits per group and per person, in requests and in estimated dollars from each model's price; see

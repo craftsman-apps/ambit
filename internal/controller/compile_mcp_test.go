@@ -1,10 +1,12 @@
 package controller
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/identity"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -15,7 +17,10 @@ const timeImage = "ghcr.io/stacklok/dockyard/uvx/mcp-server-time@sha256:00000000
 func server(name, transport string) v1.Server {
 	return v1.Server{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ambit-system", UID: types.UID("uid-" + name),
 		Annotations: map[string]string{"argocd.argoproj.io/tracking-id": "ambit-config:ambitproject.dev/Server:ambit-system/" + name}},
-		Spec: v1.ServerSpec{Image: timeImage, Transport: transport}}
+		Spec: v1.ServerSpec{Image: timeImage, Transport: transport},
+		// Running in ToolHive: only running image servers are targets of the shared backend.
+		Status: v1.ServerStatus{Conditions: []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Running"},
+			{Type: "Serving", Status: metav1.ConditionTrue, Reason: "Answered"}}}}
 }
 
 func toolRule(name string, groups []string, all bool, servers ...v1.ServerAccess) v1.AccessRule {
@@ -66,9 +71,9 @@ func TestToolRulesCompileToOneExpression(t *testing.T) {
 		toolRule("ml-time", []string{"ml-research"}, false, v1.ServerAccess{Name: "time", Tools: []string{"get_current_time", "convert_time"}}),
 		toolRule("ml-all", []string{"ml-research"}, false, v1.ServerAccess{Name: "everything"}),
 	}, route)
-	want := `mcp.tool.target == "everything" && jwt.groups.exists(g, g in ["ml-research"])` +
-		` || mcp.tool.target == "time" && mcp.tool.name == "convert_time" && jwt.groups.exists(g, g in ["ml-research"])` +
-		` || mcp.tool.target == "time" && mcp.tool.name == "get_current_time" && jwt.groups.exists(g, g in ["eng", "ml-research"])`
+	want := `mcp.tool.target == "everything" && ` + identity.PrincipalGroups + `.exists(g, g in ["ml-research"])` +
+		` || mcp.tool.target == "time" && mcp.tool.name == "convert_time" && ` + identity.PrincipalGroups + `.exists(g, g in ["ml-research"])` +
+		` || mcp.tool.target == "time" && mcp.tool.name == "get_current_time" && ` + identity.PrincipalGroups + `.exists(g, g in ["eng", "ml-research"])`
 	if got := mcpExpr(t, r); got != want {
 		t.Fatalf("got\n%s\nwant\n%s", got, want)
 	}
@@ -128,8 +133,10 @@ func TestGeneratedMCPObjects(t *testing.T) {
 		t.Fatalf("sse target %v", legacy)
 	}
 	st := timeT["static"].(map[string]any)
+	// A DNS host, not a Service backendRef: agentgateway rejects the whole shared backend while any referenced
+	// Service is missing, which ToolHive's proxy Service is around every create and delete (risk 16).
 	if st["protocol"] != "StreamableHTTP" || st["path"] != "/mcp" || st["port"] != int64(8080) ||
-		st["backendRef"].(map[string]any)["name"] != "mcp-time-proxy" {
+		st["host"] != "mcp-time-proxy.ambit-system.svc" || st["backendRef"] != nil {
 		t.Fatalf("stdio target %v", timeT)
 	}
 	// Shared objects belong to every Server, so they are removed with the last one and never before.
@@ -147,7 +154,7 @@ func TestServerCELIsThePartForOneServer(t *testing.T) {
 		toolRule("eng-time", []string{"eng"}, false, v1.ServerAccess{Name: "time", Tools: []string{"get_current_time"}}),
 		toolRule("ml-all", []string{"ml-research"}, false, v1.ServerAccess{Name: "everything"}),
 	}
-	if got := ServerCEL(servers, rules, "time"); got != `mcp.tool.target == "time" && mcp.tool.name == "get_current_time" && jwt.groups.exists(g, g in ["eng"])` {
+	if got := ServerCEL(servers, rules, "time"); got != `mcp.tool.target == "time" && mcp.tool.name == "get_current_time" && `+identity.PrincipalGroups+`.exists(g, g in ["eng"])` {
 		t.Fatalf("time: %s", got)
 	}
 	if got := ServerCEL(servers, nil, "time"); got != "false" {
@@ -184,7 +191,7 @@ func TestRemoteServersAndPerUserTokens(t *testing.T) {
 	}
 	ea, _, _ := unstructured.NestedMap(p.Object, "spec", "backend", "extAuth")
 	h := ea["http"].(map[string]any)
-	if h["path"] != `"/v1/connection/github"` || h["addRequestHeaders"].(map[string]any)["x-ambit-user"] != "jwt.email" ||
+	if h["path"] != `"/v1/connection/github"` || h["addRequestHeaders"].(map[string]any)["x-ambit-user"] != identity.Principal(true) ||
 		ea["failureMode"] != "FailOpen" || ea["backendRef"].(map[string]any)["port"] != int64(BrokerPort) {
 		t.Fatalf("extAuth %v", ea)
 	}
@@ -234,5 +241,114 @@ func TestArgumentLimitsWithoutTheGuardGrantNothing(t *testing.T) {
 	r = Compile(nil, servers, []v1.AccessRule{limited, plain}, route)
 	if e := mcpExpr(t, r); !strings.Contains(e, "convert_time") {
 		t.Fatalf("with the guard: %s", e)
+	}
+}
+
+func TestBoundConnectionGetsDestinationPath(t *testing.T) {
+	servers := []v1.Server{perUser("github", "https://api.githubcopilot.com/mcp/", "gh"), perUser("legacy", "https://x.test/mcp", "old")}
+	conns := []v1.Connection{
+		{ObjectMeta: metav1.ObjectMeta{Name: "gh"}, Spec: v1.ConnectionSpec{ServerURL: "https://api.githubcopilot.com/mcp/"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "old"}},
+	}
+	res := Compile(nil, servers, nil, RouteRef{Name: "ambit-llm"})
+	SetBrokerPaths(res.Objects, servers, conns)
+	paths := map[string]string{}
+	for _, o := range res.Objects {
+		if p, ok, _ := unstructured.NestedString(o.Object, "spec", "backend", "extAuth", "http", "path"); ok {
+			paths[o.GetName()] = p
+		}
+	}
+	want := strconv.Quote("/v1/connection/gh/server/github/" + DestinationHash("https://api.githubcopilot.com/mcp/"))
+	if paths["ambit-conn-github"] != want || paths["ambit-conn-legacy"] != `"/v1/connection/old"` {
+		t.Fatalf("paths %v", paths)
+	}
+}
+
+func TestServerAccessSummary(t *testing.T) {
+	servers := []v1.Server{perUser("crm", "https://mcp.crm.test/mcp", "crm")}
+	rules := []v1.AccessRule{
+		{Spec: v1.AccessRuleSpec{AllSignedIn: true, Servers: []v1.ServerAccess{{Name: "crm", Tools: []string{"get_record"}}}}},
+		{Spec: v1.AccessRuleSpec{Groups: []string{"sales"}, Servers: []v1.ServerAccess{{Name: "crm"}}}},
+	}
+	a := ServerAccess(servers, nil, rules, "crm")
+	if !a.AllTools || !a.AllSignedIn || len(a.Groups) != 1 || a.Groups[0] != "sales" || len(a.Tools["get_record"]) != 0 {
+		t.Fatalf("%+v", a)
+	}
+	if _, ok := a.Tools["get_record"]; !ok {
+		t.Fatalf("tool missing: %+v", a)
+	}
+	if b := ServerAccess(servers, nil, rules, "nope"); b.AllTools || b.AllSignedIn || len(b.Tools) != 0 {
+		t.Fatalf("unknown server: %+v", b)
+	}
+}
+
+func TestServerAccessEmptyWhenReconcilerLeavesServerOut(t *testing.T) {
+	rules := []v1.AccessRule{{Spec: v1.AccessRuleSpec{AllSignedIn: true, Servers: []v1.ServerAccess{{Name: "crm"}}}}}
+	conns := []v1.Connection{{ObjectMeta: metav1.ObjectMeta{Name: "crm"}, Spec: v1.ConnectionSpec{ServerURL: "https://other.test/mcp"}}}
+	refused := []v1.Server{perUser("crm", "https://mcp.crm.test/mcp", "crm")}
+	if a := ServerAccess(refused, conns, rules, "crm"); a.AllTools || a.AllSignedIn {
+		t.Fatalf("bound elsewhere: %+v", a)
+	}
+	bad := []v1.Server{perUser("crm", "https://mcp.crm.test:bad/mcp", "crm")}
+	if a := ServerAccess(bad, nil, rules, "crm"); a.AllTools || a.AllSignedIn {
+		t.Fatalf("bad url: %+v", a)
+	}
+}
+
+func backendTargets(t *testing.T, objs []*unstructured.Unstructured) []string {
+	t.Helper()
+	targets, _, _ := unstructured.NestedSlice(find(t, objs, "AgentgatewayBackend", MCPBackendName).Object, "spec", "mcp", "targets")
+	var names []string
+	for _, x := range targets {
+		names = append(names, x.(map[string]any)["name"].(string))
+	}
+	return names
+}
+
+// Only running image servers are targets: agentgateway opens each session by contacting every target, so a
+// server that is still starting (or still stopping, when recreated at once) slowed every user's new session
+// for 1-5 s (risk 16, measured on kind). Its MCPServer is still generated, so ToolHive starts it.
+func TestOnlyRunningImageServersAreTargets(t *testing.T) {
+	starting := server("everything", "stdio")
+	starting.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionUnknown, Reason: "Pending"}}
+	remote := server("remote", "stdio")
+	remote.Spec.Image, remote.Spec.URL, remote.Status.Conditions = "", "https://mcp.example.com/mcp", nil
+	r := Compile(nil, []v1.Server{server("time", "stdio"), starting, remote}, nil, route)
+	find(t, r.Objects, "MCPServer", "everything")
+	if got := strings.Join(backendTargets(t, r.Objects), ","); got != "remote,time" {
+		t.Fatalf("targets %s, want remote,time (a URL server needs no ToolHive pod)", got)
+	}
+}
+
+// agentgateway refuses an MCP backend without targets: while no server runs yet there is no shared backend. The
+// access policy stays: were it deleted too, the backend could come back before its policy, open to every user.
+func TestNoRunningServerGeneratesNoSharedBackend(t *testing.T) {
+	starting := server("time", "stdio")
+	starting.Status.Conditions = nil
+	r := Compile(nil, []v1.Server{starting}, nil, route)
+	find(t, r.Objects, "MCPServer", "time")
+	find(t, r.Objects, "AgentgatewayPolicy", MCPBackendName+"-access")
+	for _, o := range r.Objects {
+		if o.GetKind() == "AgentgatewayBackend" {
+			t.Fatalf("generated %s %s with no running server", o.GetKind(), o.GetName())
+		}
+	}
+}
+
+// A down or unreachable server fails within 2 s instead of ~10 s when a session opens (agentgateway contacts every
+// target first). Only connection setup is limited: long tool calls and streams are not.
+func TestAccessPolicyLimitsConnectTime(t *testing.T) {
+	r := Compile(nil, []v1.Server{server("time", "stdio")}, nil, route)
+	p := find(t, r.Objects, "AgentgatewayPolicy", MCPBackendName+"-access")
+	if got, _, _ := unstructured.NestedString(p.Object, "spec", "backend", "tcp", "connectTimeout"); got != "2s" {
+		t.Fatalf("connectTimeout %q", got)
+	}
+}
+
+func TestConnectionPolicyNamesTheRequestIdentity(t *testing.T) {
+	o := connectionPolicy(v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "gh", Namespace: "ambit-system"}, Spec: v1.ServerSpec{Connection: "github"}})
+	h, _, _ := unstructured.NestedString(o.Object, "spec", "backend", "extAuth", "http", "addRequestHeaders", "x-ambit-user")
+	if h != identity.Principal(true) {
+		t.Fatalf("x-ambit-user = %s", h)
 	}
 }

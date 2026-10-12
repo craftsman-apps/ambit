@@ -21,7 +21,7 @@ llm() { # llm TOKEN MODEL -> status (retries free-tier 429)
 }
 expr_of() { kubectl -n "$NS" get agentgatewaymodel "$1" -o jsonpath='{.spec.policies.authorization.policy.matchExpressions[0]}'; }
 wait_expr() { for _ in $(seq 1 30); do [[ "$(expr_of "$1")" == "$2" ]] && return 0; sleep 1; done; fail "$1: '$(expr_of "$1")' != '$2'"; }
-ORIG='jwt.groups.exists(g, g in ["ml-research"])'
+ORIG='(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in ["ml-research"])'
 ensure_llm_setup "$NS"
 kubectl -n "$NS" delete "accessrules.$G" eng-nemotron --ignore-not-found >/dev/null
 
@@ -35,7 +35,7 @@ pass "1 alice (viewer) lists models; creating a rule -> 403"
 sign_in keycloak priya priya-test-pass || fail "2 priya sign-in"
 c=$(api POST /api/access-rules '{"name":"eng-nemotron","groups":["eng"],"models":["nemotron-3-super"]}')
 [[ "$c" == 201 ]] || fail "2 create: $c $(cat "$W/api")"
-wait_expr nemotron-3-super 'jwt.groups.exists(g, g in ["eng", "ml-research"])'
+wait_expr nemotron-3-super '(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in ["eng", "ml-research"])'
 [[ $(kubectl -n "$NS" get "accessrules.$G" eng-nemotron -o jsonpath='{.metadata.annotations.ambitproject\.dev/created-by}') == priya@acme.test ]] \
   || fail "2 creator not recorded"
 if [[ -s "$KEYFILE" ]]; then
@@ -47,12 +47,12 @@ fi
 
 # 3 · the console shows the merged policy the gateway enforces
 [[ $(api GET /api/access-rules/eng-nemotron) == 200 ]] || fail "3 detail"
-grep -qF 'jwt.groups.exists(g, g in [\"eng\", \"ml-research\"])' "$W/api" || fail "3 effective policy wrong: $(cat "$W/api")"
+grep -qF '(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in [\"eng\", \"ml-research\"])' "$W/api" || fail "3 effective policy wrong: $(cat "$W/api")"
 pass "3 rule detail shows the merged policy: eng + ml-research"
 
 # 4 · an edit takes effect: eng replaced by finance, alice denied again (no provider call)
 c=$(api PUT /api/access-rules/eng-nemotron '{"groups":["finance"],"models":["nemotron-3-super"]}'); [[ "$c" == 200 ]] || fail "4 update: $c $(cat "$W/api")"
-wait_expr nemotron-3-super 'jwt.groups.exists(g, g in ["finance", "ml-research"])'
+wait_expr nemotron-3-super '(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in ["finance", "ml-research"])'
 [[ $(llm "$(token alice)" "$NEMO") == 403 ]] || fail "4 alice kept access after the edit"
 pass "4 edit to finance -> alice 403 again"
 

@@ -3,3 +3,5 @@ name: ambit-crds
 description: CRDs for Ambit. Install before the ambit chart.
 type: application
 version: 0.0.1
+sources:
+  - https://github.com/craftsman-apps/ambit

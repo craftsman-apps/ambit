@@ -20,6 +20,7 @@ create_item
 create_items
 create_notification
 create_update
+create_updates
 create_view
 create_view_table
 create_widget
@@ -73,6 +74,7 @@ search_meetings_content
 show-assign
 show-battery
 show-chart
+show-monday
 show-table
 stop_workflow_run_once
 submit_bug_or_feature_request

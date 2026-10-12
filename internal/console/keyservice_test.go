@@ -625,6 +625,9 @@ func TestWritableFollowsTheTerm(t *testing.T) {
 	if !s.Writable() {
 		t.Fatal("not writable after StartTerm")
 	}
+	if _, err := s.OffboardKeys(context.Background(), "alice@acme.com", "test"); err != nil { // reactivation must write
+		t.Fatal(err)
+	}
 	s.EndTermForTest()
 	if s.Writable() {
 		t.Fatal("writable after the term ended")

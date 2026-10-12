@@ -9,6 +9,11 @@ gateway:
   resources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { memory: 512Mi }
+  # Annotations on the gateway's ServiceAccount. For Amazon Bedrock through IRSA:
+  #   eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/ambit-bedrock
+  # EKS Pod Identity needs none. See docs/providers.md.
+  serviceAccount:
+    annotations: {}
   # Listener port of the Ambit Gateway. Also the port of the generated Service.
   port: 8080
   service:
@@ -24,6 +29,8 @@ gateway:
     nodePort: null
 
 console:
+  # Must be 1: personal API keys and sessions need a single console (the chart refuses more).
+  replicas: 1
   # Public URL of the console. Dex's issuer is this URL + /dex.
   url: https://console.example.com
   # Hostname matched by the HTTPRoute. Must match the host in console.url.
@@ -39,6 +46,10 @@ console:
   # Hours before a console session expires. Group changes in the IdP reach the console at the next
   # sign-in, so keep this short; sign-out and offboarding end sessions immediately regardless.
   sessionHours: 1
+  # kind tests only: shows test presets
+  testPresets: false
+  # Test-only endpoints (expire a key on demand); never enable in production.
+  testHooks: false
 
 bootstrapAdmin:
   # Local password sign-in (admin@ambit.local) for first setup. Set false once SSO works:
@@ -54,11 +65,35 @@ llm:
   # Serve OpenAI-compatible LLM traffic at <host>/v1. Models and access come from Model and AccessRule objects.
   enabled: false
   host: llm.example.com
-  # Tokens from the customer's identity provider (not Dex). Required when llm.enabled is true.
+  # Tokens the gateway accepts. Either your identity provider's (issuer, audiences, jwksURL), or, with
+  # dex: true, Ambit's own Dex (client ambit-cli; local accounts get tokens with the password grant).
   jwt:
+    dex: false
     issuer: ""
     audiences: []
     jwksURL: ""
+    # Refuse gateway JWTs without a usable email claim. Offboarding, per-person budgets and audit are keyed by email; with false, such tokens are identified by their subject and offboarding cannot block them before they expire.
+    requireEmail: true
+
+apiKeys:
+  # Personal API keys (console: Keys). false: the gateways accept JWTs only; existing keys are kept but refused.
+  enabled: true
+  # A key stops when its owner has not signed in to the console for this many days (1-365).
+  inactivityDays: 30
+  # The longest end date a person may choose: 30, 90 or 365.
+  maxDays: 365
+
+routing:
+  router:
+    # ambit-router labels prompts for ModelRouters of type LLM. Installed but at 0 replicas until such a router
+    # exists; the controller scales it (keep replicas out of Argo CD's diff, docs/routing.md).
+    enabled: true
+    replicas: 2
+    # Pod template annotations; changing one rolls ambit-router (tests use it to check a rollout under load).
+    podAnnotations: {}
+    resources:
+      requests: { cpu: 20m, memory: 32Mi }
+      limits: { memory: 128Mi }
 
 gitops:
   # GitOps mode: the console opens pull requests in your configuration repository instead of changing
@@ -88,11 +123,15 @@ mcp:
   # ToolHive runs each server in a pod that only the gateway can reach.
   enabled: false
   host: mcp.example.com
-  # Tokens from the customer's identity provider (not Dex). Required when mcp.enabled is true.
+  # Tokens the gateway accepts. Either your identity provider's (issuer, audiences, jwksURL), or, with
+  # dex: true, Ambit's own Dex (client ambit-cli; local accounts get tokens with the password grant).
   jwt:
+    dex: false
     issuer: ""
     audiences: []
     jwksURL: ""
+    # Refuse gateway JWTs without a usable email claim. Offboarding, per-person budgets and audit are keyed by email; with false, such tokens are identified by their subject and offboarding cannot block them before they expire.
+    requireEmail: true
 
 evidence:
   # Audit trail: the gateway's access logs through an OpenTelemetry Collector into ClickHouse, searchable
@@ -179,7 +218,7 @@ toolhive-operator:
 
 # Passed to the agentgateway subchart. Set agentgateway.image.registry for a private registry.
 agentgateway:
-  # AgentgatewayModel is experimental and off by default in v1.5.0 (on by default after upstream PR #3492).
+  # AgentgatewayModel is on by default since v1.6.0; kept explicit because Ambit cannot work without it.
   # Ambit needs it: per-model authorization only works on AgentgatewayModel, because route-level
   # authorization runs before the gateway reads the requested model.
   agentgatewayModels:

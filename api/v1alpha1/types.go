@@ -3,30 +3,67 @@ package v1alpha1
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 // ModelSpec is one entry in the model catalog: a model clients may request through the gateway.
+// +kubebuilder:validation:XValidation:rule="!has(self.formats) || (has(self.baseURL) && self.provider == 'OpenAI')",message="formats describe a self-hosted server: they need provider OpenAI and a baseURL"
+// +kubebuilder:validation:XValidation:rule="has(self.azure) == (self.provider == 'Azure')",message="azure settings are required with provider Azure and only there"
+// +kubebuilder:validation:XValidation:rule="!has(self.bedrock) || self.provider == 'Bedrock'",message="bedrock settings are only for provider Bedrock"
+// +kubebuilder:validation:XValidation:rule="has(self.credentialsRef) || self.provider in ['Bedrock', 'VertexAI']",message="credentialsRef is required (only Bedrock and VertexAI may use the gateway's cloud identity)"
+// +kubebuilder:validation:XValidation:rule="!has(self.baseURL) || !(self.provider in ['Azure', 'Bedrock', 'VertexAI'])",message="baseURL is not used with Azure, Bedrock or VertexAI: their settings define the endpoint"
+// +kubebuilder:validation:XValidation:rule="has(self.vertexai) == (self.provider == 'VertexAI')",message="vertexai settings are required with provider VertexAI and only there"
 type ModelSpec struct {
-	// Provider serving the model. Values follow agentgateway's AgentgatewayModel providers.
-	// +kubebuilder:validation:Enum=Anthropic;Azure;Bedrock;Gemini;OpenAI;Openrouter;VertexAI
+	// Provider serving the model. Values follow agentgateway's AgentgatewayModel providers. Azure, Bedrock and VertexAI
+	// also need their settings block (azure, bedrock, vertexai). Ollama and other self-hosted servers: provider OpenAI
+	// with a baseURL.
+	// +kubebuilder:validation:Enum=Anthropic;Azure;Baseten;Bedrock;Cerebras;Cohere;Deepinfra;Deepseek;Fireworks;Gemini;Groq;Huggingface;Meta;Mistral;OpenAI;Openrouter;TogetherAI;VertexAI;XAI
 	Provider string `json:"provider"`
-	// Model is the exact name clients send in the request, e.g. "google/gemma-4-31b-it:free".
+	// Model is the exact name clients send in the request, e.g. "google/gemma-4-31b-it:free". For Azure, the
+	// deployment name; for Bedrock, the model or inference-profile ID, e.g. "us.anthropic.claude-sonnet-4-5-20250929-v1:0";
+	// for VertexAI, the Vertex AI model name, e.g. "gemini-2.5-pro" or "claude-sonnet-4-5@20250929".
 	// +kubebuilder:validation:MinLength=1
 	Model string `json:"model"`
-	// CredentialsRef names a Secret in this namespace with the provider key in its "Authorization" entry.
-	// The key itself never appears in this object, so the object is safe to keep in Git. Only Secrets
-	// named ambit-llm-* may be used, so a Model cannot send another Secret (e.g. console keys) to a provider.
+	// CredentialsRef names a Secret in this namespace with the provider's credentials: an "Authorization" entry
+	// with the API key; for Bedrock "accessKey", "secretKey" and optional "sessionToken"; for VertexAI a Google
+	// service-account key file in "credentials.json". The credentials never appear in this object, so the object is
+	// safe to keep in Git. Only Secrets named ambit-llm-* may be used, so a Model cannot send another Secret (e.g.
+	// console keys) to a provider. Required, except with Bedrock and VertexAI: without it, the gateway uses its own
+	// cloud identity (IRSA or EKS Pod Identity; GKE Workload Identity).
+	// +optional
 	// +kubebuilder:validation:XValidation:rule="self.name.startsWith('ambit-llm-')",message="credentialsRef must name a Secret called ambit-llm-<something>"
-	CredentialsRef SecretRef `json:"credentialsRef"`
+	CredentialsRef *SecretRef `json:"credentialsRef,omitempty"`
 	// DisplayName is shown in the console.
 	// +optional
 	DisplayName string `json:"displayName,omitempty"`
 	// BaseURL of a self-hosted, OpenAI-compatible server (vLLM, Ollama, LiteLLM ...), with provider
-	// OpenAI, e.g. http://vllm.models.svc:8000/v1. Without it, the provider's own endpoint is used.
+	// OpenAI, e.g. http://vllm.models.svc:8000/v1. Include the API path (usually /v1): a URL without a path
+	// sends requests to / (agentgateway v1.6.0). Without it, the provider's own endpoint is used.
 	// +optional
 	// +kubebuilder:validation:Pattern=`^https?://[^/?#\s]+(/[^?#\s]*)?$`
 	BaseURL string `json:"baseURL,omitempty"`
+	// Formats are the APIs the server at baseURL implements (provider OpenAI only); agentgateway converts requests
+	// in other formats to one of these. Default: Completions and Embeddings. Before this field existed, requests
+	// for /v1/responses and /v1/messages were passed to the server unchanged; list Responses or Messages to keep
+	// that when the server implements them natively (for example LiteLLM, or vLLM for Responses). A classifier
+	// Model (ModelRouter type LLM) needs Completions.
+	// +optional
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=8
+	// +listType=set
+	Formats []ModelFormat `json:"formats,omitempty"`
+	// Azure OpenAI or Azure AI Foundry resource. Required with provider Azure, refused otherwise.
+	// +optional
+	Azure *AzureSettings `json:"azure,omitempty"`
+	// Amazon Bedrock settings. Optional with provider Bedrock (the region defaults to us-east-1), refused otherwise.
+	// +optional
+	Bedrock *BedrockSettings `json:"bedrock,omitempty"`
+	// Google Vertex AI project. Required with provider VertexAI, refused otherwise.
+	// +optional
+	VertexAI *VertexAISettings `json:"vertexai,omitempty"`
 	// Price of this model, for cost in Usage. Without it, Usage shows tokens only for this model.
 	// +optional
 	Price *ModelPrice `json:"price,omitempty"`
 }
+
+// +kubebuilder:validation:Enum=Completions;Messages;Responses;Embeddings
+type ModelFormat string
 
 // ModelPrice is what the provider charges, in US dollars per million tokens.
 type ModelPrice struct {
@@ -34,6 +71,52 @@ type ModelPrice struct {
 	InputPerMillionTokens string `json:"inputPerMillionTokens"`
 	// +kubebuilder:validation:Pattern=`^[0-9]{1,6}(\.[0-9]{1,6})?$`
 	OutputPerMillionTokens string `json:"outputPerMillionTokens"`
+}
+
+// AzureSettings name the Azure resource; agentgateway builds the endpoint from them.
+// +kubebuilder:validation:XValidation:rule="has(self.projectName) == (self.resourceType == 'Foundry')",message="projectName is required for Foundry and only there"
+type AzureSettings struct {
+	// ResourceName is the resource's name: <name>.openai.azure.com (OpenAI) or <name>.services.ai.azure.com (Foundry).
+	// +kubebuilder:validation:MinLength=2
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])$`
+	ResourceName string `json:"resourceName"`
+	// +kubebuilder:validation:Enum=OpenAI;Foundry
+	ResourceType string `json:"resourceType"`
+	// APIVersion, e.g. v1 or 2025-04-01-preview. Default (agentgateway): v1.
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9.-]+$`
+	APIVersion string `json:"apiVersion,omitempty"`
+	// ProjectName of the Foundry project (resourceType Foundry only).
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	ProjectName string `json:"projectName,omitempty"`
+}
+
+// BedrockSettings for Amazon Bedrock.
+type BedrockSettings struct {
+	// Region, e.g. eu-west-1. Default (agentgateway): us-east-1.
+	// +optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9-]+$`
+	Region string `json:"region,omitempty"`
+}
+
+// VertexAISettings name the Google Cloud project; agentgateway builds the endpoint from them.
+type VertexAISettings struct {
+	// ProjectID of the Google Cloud project, e.g. acme-ml (or a legacy domain-scoped ID, example.com:acme-ml).
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^([a-z0-9][a-z0-9.-]*[a-z0-9]:)?[a-z][a-z0-9-]{4,28}[a-z0-9]$`
+	ProjectID string `json:"projectId"`
+	// Region (location): global, the multi-regions us and eu, or a region such as europe-west4. Default
+	// (agentgateway): global. Whether a model is offered there shows only at request time.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`
+	Region string `json:"region,omitempty"`
 }
 
 type SecretRef struct {
@@ -215,6 +298,12 @@ type Tool struct {
 	// Fingerprint is sha256 over the name, description and input schema.
 	// +optional
 	Fingerprint string `json:"fingerprint,omitempty"`
+	// ReadOnlyHint and DestructiveHint are the server's own MCP annotations, shown as hints only: a
+	// server's claims about itself are not trusted.
+	// +optional
+	ReadOnlyHint *bool `json:"readOnlyHint,omitempty"`
+	// +optional
+	DestructiveHint *bool `json:"destructiveHint,omitempty"`
 }
 
 type ToolPin struct {
@@ -264,6 +353,25 @@ type ConnectionSpec struct {
 	ClientSecretRef SecretRef `json:"clientSecretRef"`
 	// +optional
 	Scopes []string `json:"scopes,omitempty"`
+	// ServerURL binds the Connection to one MCP server: only a Server whose url equals it may name this
+	// Connection, so a user's token for this app never goes anywhere else. Empty: no binding.
+	// +kubebuilder:validation:Pattern=`^https?://[^/?#]+(/[^?#]*)?$`
+	// +optional
+	ServerURL string `json:"serverURL,omitempty"`
+	// Resource is the RFC 8707 resource indicator sent on authorize, token and refresh requests. Empty: not sent.
+	// +kubebuilder:validation:Pattern=`^https?://[^?#]+$`
+	// +optional
+	Resource string `json:"resource,omitempty"`
+	// AuthorizeParams are extra query parameters for the authorize request, e.g. prompt=consent.
+	// +kubebuilder:validation:MaxProperties=16
+	// +kubebuilder:validation:XValidation:rule="self.all(k, !(k in ['client_id','redirect_uri','state','code_challenge','code_challenge_method','scope','resource','response_type','response_mode','request','request_uri']))",message="these parameters are set by Ambit"
+	// +optional
+	AuthorizeParams map[string]string `json:"authorizeParams,omitempty"`
+	// TokenRequestFormat is how token requests are encoded: Form (RFC 6749) or JSON (e.g. monday.com).
+	// +kubebuilder:validation:Enum=Form;JSON
+	// +kubebuilder:default=Form
+	// +optional
+	TokenRequestFormat string `json:"tokenRequestFormat,omitempty"`
 }
 
 type ConnectionStatus struct {

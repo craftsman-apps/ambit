@@ -1,0 +1,28 @@
+name: ci-cache
+# Fills ci.yml's third-party cache (agentgateway chart and images, hack/thirdparty-cache.sh) on main. A cache saved
+# by a pull request is visible to that pull request only; one saved on main is visible to every pull request.
+# Runs only when what the cache holds changes. The path list and key must stay identical to ci.yml's.
+on:
+  push:
+    branches: [main]
+    paths: [charts/ambit/Chart.lock, hack/thirdparty-cache.sh, .github/workflows/ci-cache.yml]
+  workflow_dispatch:
+permissions: { contents: read }
+
+jobs:
+  thirdparty:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      - name: Third-party chart dependencies and agentgateway images (cache)
+        id: thirdparty
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            charts/ambit/charts
+            ${{ runner.temp }}/thirdparty
+          key: thirdparty-${{ hashFiles('charts/ambit/Chart.lock', 'hack/thirdparty-cache.sh') }}
+      - name: Fetch them (cache miss)
+        if: steps.thirdparty.outputs.cache-hit != 'true'
+        run: hack/thirdparty-cache.sh "$RUNNER_TEMP/thirdparty/agentgateway.tar"

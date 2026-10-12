@@ -1,0 +1,553 @@
+# Presets: vendor MCP servers and their OAuth details. Change a value → bump version (CI checks).
+# verified: true only after a passing `make preset-live` (docs/presets.md).
+- id: github
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
+  displayName: GitHub
+  category: Developer
+  server: { url: "https://api.githubcopilot.com/mcp/", transport: streamable-http }
+  authorizationURL: https://github.com/login/oauth/authorize
+  tokenURL: https://github.com/login/oauth/access_token
+  revocationURL: "https://api.github.com/applications/{clientID}/grant"
+  resource: none
+  scopes: [repo, "read:org", "read:user"]
+  setup: |
+    1. Sign in to GitHub as an owner of the organization (or as the account that will own the app).
+    2. Open Settings, then Developer settings, then OAuth Apps, and click "New OAuth App". For an organization, use the organization's Settings, Developer settings, OAuth Apps.
+    3. Enter an application name and your Ambit address as the homepage URL.
+    4. Under "Redirect URIs", set the first redirect URI to {callbackURL}. Click "Add redirect URI" for any other address you need (an OAuth app accepts up to 10).
+    5. Leave "Enable Device Flow" off, leave "Expire user access tokens" on (Ambit then renews access with a refresh token), and click "Register application".
+    6. Copy the Client ID from the app page.
+    7. Click "Generate a new client secret" and copy the secret at once; GitHub shows it only once.
+    8. If your organization restricts third-party apps, an organization owner must approve this app under Settings, Third-party access.
+    9. These scopes let the agent change data in GitHub: the repo scope gives read and write access to every repository the person can reach. GitHub OAuth Apps have no read-only scope for private repositories.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/creating-an-oauth-app
+  live: { tool: get_me }
+- id: linear
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
+  displayName: Linear
+  category: Projects
+  server: { url: "https://mcp.linear.app/mcp", transport: streamable-http }
+  authorizationURL: https://linear.app/oauth/authorize
+  tokenURL: https://api.linear.app/oauth/token
+  revocationURL: https://api.linear.app/oauth/revoke
+  resource: none
+  scopes: [read]
+  setup: |
+    1. Sign in to Linear as a workspace admin.
+    2. Open Settings, then API (https://linear.app/settings/api), and click "Create new" under OAuth applications.
+    3. Enter an application name, a developer name and a developer URL.
+    4. Add {callbackURL} under "Callback URLs".
+    5. Leave "Public" off, so only your workspace can use the app, and save.
+    6. Copy the Client ID and the Client secret from the application page.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://linear.app/developers/oauth-2-0-authentication
+  live: { tool: list_teams }
+- id: asana
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
+  displayName: Asana
+  category: Projects
+  server: { url: "https://mcp.asana.com/v2/mcp", transport: streamable-http }
+  authorizationURL: https://app.asana.com/-/oauth_authorize
+  tokenURL: https://app.asana.com/-/oauth_token
+  revocationURL: https://app.asana.com/-/oauth_revoke
+  resource: none
+  setup: |
+    1. Sign in to Asana and open the developer console at https://app.asana.com/0/my-apps.
+    2. Click "Create new app", enter an app name, select the app type "MCP app", and click "Create app".
+    3. Open the "OAuth" tab and add {callbackURL} as a redirect URL.
+    4. Open "Manage distribution" and choose "Specific workspaces" (select your workspace) or "Any workspace". Select at least one workspace.
+    5. Copy the Client ID and the Client secret from the OAuth tab.
+    6. An MCP app needs no scopes.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://developers.asana.com/docs/integrating-with-asanas-mcp-server
+  live: { tool: get_me, callback: https }
+- id: monday
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
+  displayName: monday.com
+  category: Projects
+  server: { url: "https://mcp.monday.com/mcp", transport: streamable-http }
+  authorizationURL: https://auth.monday.com/oauth2/authorize
+  tokenURL: https://auth.monday.com/oauth_ms/oauth/token
+  revocationURL: https://auth.monday.com/oauth_ms/oauth/revoke
+  resource: none
+  scopes: ["me:read", "boards:read", "workspaces:read", "users:read", "docs:read", "updates:read"]
+  setup: |
+    1. Sign in to monday.com as an admin and open the Developer Center (profile picture, then Developers).
+    2. Click "Create app" and enter an app name.
+    3. Open "OAuth" (OAuth & Permissions) in the app's left menu. Add {callbackURL} as a redirect URL.
+    4. In the same page, select the scopes: me:read, boards:read, workspaces:read, users:read, docs:read, updates:read.
+    5. Open "General Settings" and scroll to "App Credentials". Copy the Client ID and the Client Secret.
+    6. Make sure the app uses the current OAuth 2.1 flow (not the older flow); see the migration guide in the documentation.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client Secret
+  docs: https://developer.monday.com/api-reference/docs/control-mcp-access-with-oauth-app
+  live: { tool: get_user_context }
+- id: airtable
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
+  displayName: Airtable
+  category: Data
+  server: { url: "https://mcp.airtable.com/mcp", transport: streamable-http }
+  authorizationURL: https://airtable.com/oauth2/v1/authorize
+  tokenURL: https://airtable.com/oauth2/v1/token
+  resource: https://mcp.airtable.com
+  scopes: ["data.records:read", "data.records:write", "schema.bases:read"]
+  setup: |
+    1. Sign in to Airtable and open https://airtable.com/create/oauth.
+    2. Click "Register new OAuth integration".
+    3. Enter a unique integration name and add {callbackURL} as the redirect URL. Airtable accepts plain http only for localhost, so use the https address of your Ambit console. Click "Register integration".
+    4. On the integration page that opens, select the scopes data.records:read, data.records:write and schema.bases:read.
+    5. Add a support email, a privacy policy URL and a terms of service URL; without them only you can authorize the integration. Click "Save changes".
+    6. On the integration page, click "Generate client secret" and copy it at once; it cannot be shown again.
+    7. Copy the Client ID from the same page.
+    8. These scopes let the agent change data in Airtable (records). This preset does not use a read-only set of scopes.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://airtable.com/developers/web/guides/oauth-integrations
+  live: { tool: list_bases }
+- id: box
+  version: 1
+  displayName: Box
+  category: Files
+  server: { url: "https://mcp.box.com", transport: streamable-http }
+  authorizationURL: https://account.box.com/api/oauth2/authorize
+  tokenURL: https://api.box.com/oauth2/token
+  revocationURL: https://api.box.com/oauth2/revoke
+  resource: none
+  scopes: [root_readwrite, ai.readwrite]
+  setup: |
+    1. Sign in to the Box Admin Console as an admin and open Integrations.
+    2. Search for "Box MCP server" and click Configure to create an unlisted MCP server integration.
+    3. Add the integration credentials. Enter {callbackURL} as the Redirect URI.
+    4. Save, then copy the generated Client ID and Client Secret.
+    5. The scopes used are root_readwrite and ai.readwrite.
+    6. These scopes let the agent change data in Box. Box also has a read-only scope, root_readonly; Ambit has not checked whether the Box MCP server accepts it, so this preset does not use it.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client Secret
+  docs: https://developer.box.com/guides/box-mcp/remote/
+  live: { tool: who_am_i }
+- id: dropbox
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
+  displayName: Dropbox
+  category: Files
+  server: { url: "https://mcp.dropbox.com/mcp", transport: streamable-http }
+  authorizationURL: https://www.dropbox.com/oauth2/authorize
+  tokenURL: https://api.dropboxapi.com/oauth2/token
+  resource: none
+  scopes: ["account_info.read", "files.metadata.read", "files.content.read", "files.content.write", "sharing.read", "sharing.write", "file_requests.read", "file_requests.write"]
+  authorizeParams: { token_access_type: offline }
+  setup: |
+    1. Sign in to Dropbox and open the App Console at https://www.dropbox.com/developers/apps.
+    2. Click "Create app". Choose "Scoped access" and then "Full Dropbox" access. Enter a unique app name and click "Create app".
+    3. Open the "Permissions" tab and enable: account_info.read, files.metadata.read, files.content.read, files.content.write, sharing.read, sharing.write, file_requests.read, file_requests.write. Click "Submit".
+    4. Open the "Settings" tab. Under "OAuth 2", add {callbackURL} as a redirect URI.
+    5. On the same tab, copy the App key (the client ID) and the App secret (the client secret).
+    6. Ambit asks for offline access, so Dropbox issues a refresh token. Ambit cannot revoke a Dropbox grant when a person leaves; Dropbox accepts a revoke request only with the user's own access token.
+    7. These scopes let the agent change data in Dropbox (files, shared links and file requests). This preset does not use a read-only set of scopes.
+  clientIDLabel: App key
+  clientSecretLabel: App secret
+  docs: https://help.dropbox.com/integrations/connect-dropbox-mcp-server
+  live: { tool: get_usage_and_quota }
+- id: canva
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
+  displayName: Canva
+  category: Design
+  server: { url: "https://mcp.canva.com/mcp", transport: streamable-http }
+  authorizationURL: https://www.canva.com/api/oauth/authorize
+  tokenURL: https://api.canva.com/rest/v1/oauth/token
+  resource: none
+  scopes: ["profile:read", "design:meta:read", "design:content:read", "folder:read", "asset:read", "comment:read"]
+  requires: Multi-factor authentication turned on for the Canva account that owns the developer app
+  setup: |
+    1. Sign in to Canva and turn on multi-factor authentication (Settings, then "Login & security"). Canva does not let an app use Canva MCP until it is on.
+    2. Open the Developer Portal at https://www.canva.com/developers/apps and click "Create an app". Choose "Public" (Private needs Canva Enterprise); the app works for you without Canva's review.
+    3. Open "Outside Canva", then "Configuration". Turn on "Canva MCP".
+    4. Under the scopes, select read for: profile, design:meta, design:content, folder, asset, comment.
+    5. Open "Redirect URLs" and add {callbackURL}. Canva accepts local redirect URLs only with the numeric address 127.0.0.1, not "localhost".
+    6. In "Configuration", under "Credentials", copy the Client ID, then click "Generate secret" and copy the secret at once.
+    7. Each person who connects needs a Canva account. Some tools need a paid Canva plan.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://www.canva.dev/docs/apps/mcp/access/
+  live: { tool: search-designs, arguments: { query: "design" } }
+- id: slack
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
+  displayName: Slack
+  category: Chat
+  server: { url: "https://mcp.slack.com/mcp", transport: streamable-http }
+  authorizationURL: https://slack.com/oauth/v2_user/authorize
+  tokenURL: https://slack.com/api/oauth.v2.user.access
+  revocationURL: https://slack.com/api/auth.revoke
+  resource: none
+  scopes: ["search:read.public", "search:read.private", "search:read.im", "search:read.mpim", "search:read.users", "search:read.files", "channels:history", "groups:history", "im:history", "mpim:history", "users:read"]
+  setup: |
+    1. Sign in to Slack as a workspace admin and open https://api.slack.com/apps. Click "Create New App" and choose "From scratch". Enter an app name and pick your workspace. Slack allows MCP only for apps that are internal to your workspace or published in the Slack Marketplace.
+    2. Open "OAuth & Permissions". Under "Redirect URLs", add {callbackURL}. Slack accepts only https redirect URLs.
+    3. Under "User Token Scopes", add: search:read.public, search:read.private, search:read.im, search:read.mpim, search:read.users, search:read.files, channels:history, groups:history, im:history, mpim:history, users:read.
+    4. Open "Agents & AI Apps" and turn on "Model Context Protocol". If you leave it off, sign-in works but the tool list is empty.
+    5. Open "Basic Information" and copy the Client ID and the Client Secret.
+    6. Install the app to your workspace ("Install App"), or reinstall it after any scope change.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client Secret
+  docs: https://docs.slack.dev/ai/slack-mcp-server/
+  live: { tool: slack_search_users, arguments: { query: "a" }, callback: https }
+- id: zoom
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
+  displayName: Zoom
+  category: Meetings
+  server: { url: "https://mcp.zoom.us/mcp/zoom/streamable", transport: streamable-http }
+  authorizationURL: https://zoom.us/oauth/authorize
+  tokenURL: https://zoom.us/oauth/token
+  revocationURL: https://zoom.us/oauth/revoke
+  resource: none
+  scopes: ["meeting:read:search", "meeting:read:assets", "cloud_recording:read:list_user_recordings", "cloud_recording:read:content", "docs:read:export", "hub:read:content", "my_notes:read:content", "agentic_search:read:search"]
+  setup: |
+    1. Sign in to the Zoom App Marketplace (https://marketplace.zoom.us) as an account admin or developer.
+    2. Click Develop, then "Build app". Choose "General app" and click "Create".
+    3. Under "Basic Information", set the app to user-managed OAuth. In "OAuth Information", add {callbackURL} as the OAuth Redirect URL and press Tab so Zoom saves it ("Saved" appears). Zoom accepts only https redirect URLs on a public hostname; it refuses localhost and 127.0.0.1.
+    4. Under "Basic Information", then "App Credentials", copy the Client ID and the Client Secret.
+    5. Open "Scopes", click "Add scopes", and add: meeting:read:search, meeting:read:assets, cloud_recording:read:list_user_recordings, cloud_recording:read:content, docs:read:export, hub:read:content, my_notes:read:content, agentic_search:read:search. Click "Done".
+    6. Zoom MCP supports only apps registered by hand (no dynamic registration). Each person needs the Zoom licenses for the products the tools use.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client Secret
+  docs: https://developers.zoom.us/docs/mcp/servers/connect-to-zoom-mcp-servers/
+  live: { tool: search_meetings, arguments: { query: "meeting" }, tunnel: true }
+- id: webex
+  version: 1
+  displayName: Webex
+  category: Meetings
+  server: { url: "https://mcp.webexapis.com/mcp/webex-messaging", transport: streamable-http }
+  authorizationURL: https://webexapis.com/v1/authorize
+  tokenURL: https://webexapis.com/v1/access_token
+  resource: none
+  scopes: ["spark:mcp", "spark:messages_read", "spark:messages_write", "spark:rooms_read", "spark:rooms_write", "spark:memberships_read", "spark:memberships_write", "spark:webhooks_read", "spark:webhooks_write"]
+  requires: A Webex Control Hub admin must enable the Messaging MCP server for the organization
+  setup: |
+    1. Ask a Webex Control Hub admin to enable the Webex Messaging MCP server for your organization (Control Hub, provisioning for MCP servers). The server refuses people until this is done.
+    2. Sign in to the Webex Developer Portal at https://developer.webex.com and open "My Webex Apps".
+    3. Click "Create a New App", then "Create an Integration".
+    4. Enter a name, an icon, a description, and {callbackURL} as the redirect URI.
+    5. Select all nine scopes: spark:mcp, spark:messages_read, spark:messages_write, spark:rooms_read, spark:rooms_write, spark:memberships_read, spark:memberships_write, spark:webhooks_read, spark:webhooks_write.
+    6. Click "Add Integration". Copy the Client ID and the Client Secret; Webex shows the secret only once.
+    7. This preset covers the Messaging server. The meetings tools are a separate Webex MCP server.
+    8. These scopes let the agent change data in Webex (send messages and change rooms, memberships and webhooks). This preset requests all nine scopes listed in step 5.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client Secret
+  docs: https://developer.webex.com/mcp/docs/messaging-mcp-server
+  live: { tool: webex-search-spaces }
+- id: hubspot
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
+  displayName: HubSpot
+  category: CRM
+  server: { url: "https://mcp.hubspot.com", transport: streamable-http }
+  authorizationURL: https://mcp.hubspot.com/oauth/authorize/user
+  tokenURL: https://mcp.hubspot.com/oauth/v3/token
+  revocationURL: https://api.hubapi.com/oauth/v1/refresh-tokens
+  resource: none
+  setup: |
+    1. Sign in to HubSpot as a Super Admin.
+    2. Open Development, then "MCP Connectors" (called "MCP Auth Apps" in some accounts), and click "Create MCP Connector".
+    3. Enter a name and add {callbackURL} as the redirect URL. A description and an icon are optional.
+    4. Create the connector and copy the Client ID and the Client secret.
+    5. The connector needs no scope list. HubSpot decides the scopes from the MCP tools and from each person's own permissions.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://developers.hubspot.com/docs/apps/developer-platform/build-apps/integrate-with-the-remote-hubspot-mcp-server
+  live: { tool: get_user_details }
+- id: salesforce
+  version: 1
+  displayName: Salesforce
+  category: CRM
+  server: { url: "https://api.salesforce.com/platform/mcp/v1/platform/sobject-all", transport: streamable-http }
+  authorizationURL: https://login.salesforce.com/services/oauth2/authorize
+  tokenURL: https://login.salesforce.com/services/oauth2/token
+  revocationURL: https://login.salesforce.com/services/oauth2/revoke
+  resource: none
+  scopes: ["mcp_api", "refresh_token"]
+  requires: Salesforce Enterprise Edition or above, or a Developer Edition org, with the hosted MCP service turned on
+  setup: |
+    1. Sign in to your Salesforce production org as a system administrator. This preset uses login.salesforce.com, so it does not work for sandbox or scratch orgs.
+    2. Open Setup. In Quick Find, search for "MCP Servers" (under API Catalog), open the "Salesforce Servers" tab and activate "sobject-all". If the page shows only "External servers", this org does not include Salesforce's hosted MCP servers. This server can create, change and delete records, limited by each person's own Salesforce permissions. Wait up to 2 minutes.
+    3. In Quick Find, search for "External Client App Manager" and click "New External Client App". Enter a name and a contact email.
+    4. Under "API (Enable OAuth Settings)", turn on "Enable OAuth". Set the callback URL to {callbackURL}.
+    5. Under "Selected OAuth Scopes", add "Access MCP servers" (mcp_api) and "Perform requests at any time" (refresh_token). Do not add the standard "api" scope.
+    6. Under "Flow Enablement", turn on "Enable Authorization Code and Credentials Flow". Turn on "Require Proof Key for Code Exchange (PKCE)" and "Require secret for Web Server Flow". Turn off the other flows.
+    7. Click "Create". Open the app, then Settings, then OAuth Settings, then "Consumer Key and Secret", and copy the Consumer Key (Client ID) and the Consumer Secret (Client secret).
+    8. In the app's policies, set the permitted users to "Admin approved users are pre-authorized" and assign a permission set, or to "All users may self-authorize". Salesforce can take up to 30 minutes to activate a new app.
+  clientIDLabel: Consumer Key
+  clientSecretLabel: Consumer Secret
+  docs: https://developer.salesforce.com/docs/platform/hosted-mcp-servers/guide/sobject-all.html
+  live: { tool: getUserInfo }
+- id: docusign
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
+  displayName: Docusign
+  category: Files
+  server: { url: "https://{mcpHost}.docusign.com/mcp", transport: streamable-http }
+  authorizationURL: "https://{accountHost}.docusign.com/oauth/auth"
+  tokenURL: "https://{accountHost}.docusign.com/oauth/token"
+  resource: none
+  scopes: ["signature", "adm_store_unified_repo_read", "aow_manage"]
+  placeholders:
+    - { name: mcpHost, label: "Docusign MCP environment (mcp for production, mcp-d for the developer demo)", pattern: "^(mcp|mcp-d)$", example: mcp }
+    - { name: accountHost, label: "Docusign account environment (account for production, account-d for the developer demo)", pattern: "^(account|account-d)$", example: account }
+  setup: |
+    1. Choose the environment. A Docusign developer (demo) account uses mcp-d and account-d. A production account uses mcp and account. Use the same environment for both values in Ambit.
+    2. Sign in to Docusign as an administrator. Open Settings, then "Apps and Keys", and click "Add App and Integration Key". Enter an app name.
+    3. Copy the Integration Key; it is the Client ID.
+    4. Under "Authentication", choose "Authorization Code Grant" and answer "Yes" to "Is this client able to keep a secret?". Click "Add Secret Key" and copy the secret at once; Docusign shows it only once. Leave "Require Proof Key for Code Exchange (PKCE)" off: with it on, Docusign refuses to renew tokens (invalid_grant unauthorized_client). Ambit still sends PKCE.
+    5. Under "Additional settings", click "Add URI" and enter {callbackURL} as a redirect URI. Click "Save".
+    6. The tools use these scopes: signature, adm_store_unified_repo_read, aow_manage. Each person must agree to them at first sign-in. The server acts with that person's own Docusign permissions.
+    7. For a production account, Docusign requires the integration key to pass its Go-Live review before it can sign in people outside the developer account.
+    8. These scopes let the agent change data in Docusign (for example, send envelopes for signature). This preset does not use a read-only set of scopes.
+  clientIDLabel: Integration Key
+  clientSecretLabel: Secret Key
+  docs: https://developers.docusign.com/platform/mcp-server/
+  contract: { unauthenticated: [403] }
+  live: { tool: getUserInfo }
+- id: servicenow
+  version: 1
+  displayName: ServiceNow
+  category: Projects
+  server: { url: "https://{instance}.service-now.com/sncapps/mcp-server/mcp/sn_mcp_server_default", transport: streamable-http }
+  authorizationURL: "https://{instance}.service-now.com/oauth_auth.do"
+  tokenURL: "https://{instance}.service-now.com/oauth_token.do"
+  revocationURL: "https://{instance}.service-now.com/oauth_revoke_token.do"
+  resource: none
+  scopes: ["useraccount"]
+  placeholders:
+    - { name: instance, label: "ServiceNow instance name (the part before .service-now.com)", pattern: "^[a-z0-9][a-z0-9-]*$", example: example }
+  requires: ServiceNow MCP Server Console (Zurich Patch 9 or Australia Patch 2 or later), with MCP service access granted by ServiceNow
+  setup: |
+    1. Sign in to your ServiceNow instance as an administrator. Make sure the "Model Context Protocol Server" application (sn_mcp_server) and the MCP Server Console are installed. If MCP access is not enabled for the instance, ask ServiceNow to enable it.
+    2. Open All, then "MCP Server Console", and check that the "Quickstart Server" (id sn_mcp_server_default) is active. This preset connects to that server. To use another server, change the MCP server URL in Ambit to the URL the console shows for it.
+    3. Open All, then "System OAuth", then "Application Registry". Click "New" and choose "Create an OAuth API endpoint for external clients" (in newer releases this is under "Machine Identity Console", then "Inbound integrations", with the grant "OAuth - Authorization code grant").
+    4. Enter a name. Set "Redirect URL" to {callbackURL}. Set "Auth Scope" to useraccount.
+    5. Open "Advanced Options" and set "Token Format" to JWT. The default, Opaque, signs in but returns no tools.
+    6. Click "Submit". Open the record again and copy the Client ID. Click the lock icon next to "Client Secret" and copy the Client secret.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client Secret
+  docs: https://www.servicenow.com/community/developer-advocate-blog/building-an-mcp-server-on-servicenow-and-connecting-claude-to-it/ba-p/3588171
+  live: { tool: incident_summarization }
+- id: databricks
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
+  displayName: Databricks
+  category: Data
+  server: { url: "https://{workspace}/api/2.0/mcp/sql", transport: streamable-http }
+  authorizationURL: "https://{workspace}/oidc/v1/authorize"
+  tokenURL: "https://{workspace}/oidc/v1/token"
+  resource: none
+  scopes: ["sql", "offline_access"]
+  placeholders:
+    - { name: workspace, label: "Databricks workspace host (for example your-workspace.cloud.databricks.com)", pattern: "^[a-z0-9][a-z0-9.-]*\\.(cloud\\.databricks\\.com|azuredatabricks\\.net|gcp\\.databricks\\.com)$", example: example.cloud.databricks.com }
+  requires: A Databricks SQL warehouse, and a Databricks account admin to create the OAuth app connection
+  setup: |
+    1. Sign in to the Databricks account console (https://accounts.cloud.databricks.com, or accounts.azuredatabricks.net, or accounts.gcp.databricks.com) as an account admin.
+    2. Open Settings, then "App connections", and click "Add connection".
+    3. Enter a name. Add {callbackURL} as a redirect URL. Set the client type to confidential.
+    4. Under access scopes, select "SQL". The default scopes (openid, email, profile, offline_access) are added by Databricks. Leave the token lifetimes at their defaults.
+    5. Turn on "Generate a client secret", then click "Add". Copy the Client ID and the Client secret at once; Databricks does not show the secret again.
+    6. Wait up to 30 minutes for the change to apply. Dynamic client registration is not supported, so this registered app is required.
+    7. The server runs SQL as the signed-in person, so it can change data wherever that person's own permissions allow. If your network uses IP access lists, allow the Ambit gateway's outbound addresses.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://docs.databricks.com/aws/en/agents/mcp-tools/connect-clients
+  live: { tool: execute_sql_read_only, arguments: { query: "SELECT 1" } }
+- id: pagerduty
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-07"
+  displayName: PagerDuty
+  category: Developer
+  server: { url: "https://mcp.pagerduty.com/mcp", transport: streamable-http }
+  authorizationURL: https://app.pagerduty.com/global/oauth/authorize
+  tokenURL: https://app.pagerduty.com/global/oauth/token
+  revocationURL: https://app.pagerduty.com/global/oauth/revoke
+  resource: none
+  scopes: ["users.read", "incidents.read", "services.read", "teams.read", "schedules.read", "oncalls.read", "escalation_policies.read"]
+  requires: A PagerDuty account with Advanced Permissions (the US service region; the EU region uses a different MCP address)
+  setup: |
+    1. Sign in to PagerDuty as an account owner or admin.
+    2. Open Integrations, then "App Registration" (also called "Developer Tools", then "My Apps"), and click "Create New App". Enter a name and a description.
+    3. Under "Functionality", turn on "OAuth 2.0" and click "Save". Choose "Scoped OAuth".
+    4. Under "Redirect URLs", add {callbackURL}.
+    5. Under "Permission Scope", select the read scopes: users.read (required), incidents.read, services.read, teams.read, schedules.read, oncalls.read, escalation_policies.read.
+    6. Click "Register App". Copy the Client ID and the Client secret at once; PagerDuty shows the secret only once.
+    7. Each person signs in with their own PagerDuty user, and the server acts with that user's permissions.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://docs.pagerduty.com/developer/mcp-tooling-remote-server
+  live: { tool: browse_users, arguments: { request: { action: list } } }
+- id: gmail
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-08"
+  displayName: Gmail
+  category: Google Workspace
+  server: { url: "https://gmailmcp.googleapis.com/mcp/v1", transport: streamable-http }
+  authorizationURL: https://accounts.google.com/o/oauth2/v2/auth
+  tokenURL: https://oauth2.googleapis.com/token
+  revocationURL: https://oauth2.googleapis.com/revoke
+  resource: none
+  scopes: ["https://www.googleapis.com/auth/gmail.readonly"]
+  authorizeParams: { prompt: consent, access_type: offline }
+  preview: true
+  contract: { unauthenticated: [200] }
+  requires: "Google Workspace Developer Preview Program"
+  setup: |
+    1. Join the Google Workspace Developer Preview Program with the Google Cloud project you will use (https://developers.google.com/workspace/preview). The Gmail MCP server works only for enrolled projects.
+    2. In the Google Cloud console (https://console.cloud.google.com), select or create a project. One project and one OAuth client can serve all five Google Workspace presets (Gmail, Calendar, Drive, Docs, Sheets). If you already made that client for another Google preset, select the same project, do steps 3 and 4 for this product, then skip steps 5 and 6 and enter the same Client ID and Client secret in Ambit.
+    3. Open APIs & Services, then Library, and enable Gmail API and "Gmail MCP API" (gmailmcp.googleapis.com).
+    4. Open Google Auth Platform (or APIs & Services, then OAuth consent screen). Under Audience, select Internal (your Workspace organization only). Add the scopes gmail.readonly under Data Access.
+    5. Open Clients, click "Create client", and select the application type "Web application".
+    6. Under "Authorized redirect URIs", add {callbackURL}. Click "Create".
+    7. Copy the Client ID and the Client secret.
+    8. Ambit asks for offline access so Google returns a refresh token. Ambit requests read-only scopes only, so tools that change data will be refused by Google.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://developers.google.com/workspace/gmail/api/guides/configure-mcp-server
+  live: { tool: list_labels }
+- id: google-calendar
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-08"
+  displayName: Google Calendar
+  category: Google Workspace
+  server: { url: "https://calendarmcp.googleapis.com/mcp/v1", transport: streamable-http }
+  authorizationURL: https://accounts.google.com/o/oauth2/v2/auth
+  tokenURL: https://oauth2.googleapis.com/token
+  revocationURL: https://oauth2.googleapis.com/revoke
+  resource: none
+  scopes: ["https://www.googleapis.com/auth/calendar.calendarlist.readonly", "https://www.googleapis.com/auth/calendar.events.readonly", "https://www.googleapis.com/auth/calendar.events.freebusy"]
+  authorizeParams: { prompt: consent, access_type: offline }
+  preview: true
+  contract: { unauthenticated: [200] }
+  requires: "Google Workspace Developer Preview Program"
+  setup: |
+    1. Join the Google Workspace Developer Preview Program with the Google Cloud project you will use (https://developers.google.com/workspace/preview). The Google Calendar MCP server works only for enrolled projects.
+    2. In the Google Cloud console (https://console.cloud.google.com), select or create a project. One project and one OAuth client can serve all five Google Workspace presets (Gmail, Calendar, Drive, Docs, Sheets). If you already made that client for another Google preset, select the same project, do steps 3 and 4 for this product, then skip steps 5 and 6 and enter the same Client ID and Client secret in Ambit.
+    3. Open APIs & Services, then Library, and enable Google Calendar API and "Google Calendar MCP API" (calendarmcp.googleapis.com).
+    4. Open Google Auth Platform (or APIs & Services, then OAuth consent screen). Under Audience, select Internal (your Workspace organization only). Add the scopes calendar.calendarlist.readonly, calendar.events.readonly and calendar.events.freebusy under Data Access.
+    5. Open Clients, click "Create client", and select the application type "Web application".
+    6. Under "Authorized redirect URIs", add {callbackURL}. Click "Create".
+    7. Copy the Client ID and the Client secret.
+    8. Ambit asks for offline access so Google returns a refresh token. Ambit requests read-only scopes only, so tools that change data will be refused by Google.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://developers.google.com/workspace/calendar/api/guides/configure-mcp-server
+  live: { tool: list_calendars }
+- id: google-drive
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-08"
+  displayName: Google Drive
+  category: Google Workspace
+  server: { url: "https://drivemcp.googleapis.com/mcp/v1", transport: streamable-http }
+  authorizationURL: https://accounts.google.com/o/oauth2/v2/auth
+  tokenURL: https://oauth2.googleapis.com/token
+  revocationURL: https://oauth2.googleapis.com/revoke
+  resource: none
+  scopes: ["https://www.googleapis.com/auth/drive.readonly"]
+  authorizeParams: { prompt: consent, access_type: offline }
+  preview: true
+  contract: { unauthenticated: [200] }
+  requires: "Google Workspace Developer Preview Program"
+  setup: |
+    1. Join the Google Workspace Developer Preview Program with the Google Cloud project you will use (https://developers.google.com/workspace/preview). The Google Drive MCP server works only for enrolled projects.
+    2. In the Google Cloud console (https://console.cloud.google.com), select or create a project. One project and one OAuth client can serve all five Google Workspace presets (Gmail, Calendar, Drive, Docs, Sheets). If you already made that client for another Google preset, select the same project, do steps 3 and 4 for this product, then skip steps 5 and 6 and enter the same Client ID and Client secret in Ambit.
+    3. Open APIs & Services, then Library, and enable Google Drive API and "Google Drive MCP API" (drivemcp.googleapis.com).
+    4. Open Google Auth Platform (or APIs & Services, then OAuth consent screen). Under Audience, select Internal (your Workspace organization only). Add the scopes drive.readonly under Data Access.
+    5. Open Clients, click "Create client", and select the application type "Web application".
+    6. Under "Authorized redirect URIs", add {callbackURL}. Click "Create".
+    7. Copy the Client ID and the Client secret.
+    8. Ambit asks for offline access so Google returns a refresh token. Ambit requests read-only scopes only, so tools that change data will be refused by Google.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://developers.google.com/workspace/drive/api/guides/configure-mcp-server
+  live: { tool: list_recent_files }
+- id: google-docs
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-08"
+  displayName: Google Docs
+  category: Google Workspace
+  server: { url: "https://docsmcp.googleapis.com/mcp/v1", transport: streamable-http }
+  authorizationURL: https://accounts.google.com/o/oauth2/v2/auth
+  tokenURL: https://oauth2.googleapis.com/token
+  revocationURL: https://oauth2.googleapis.com/revoke
+  resource: none
+  scopes: ["https://www.googleapis.com/auth/documents.readonly", "https://www.googleapis.com/auth/drive.readonly"]
+  authorizeParams: { prompt: consent, access_type: offline }
+  preview: true
+  contract: { unauthenticated: [200] }
+  requires: "Google Workspace Developer Preview Program"
+  setup: |
+    1. Join the Google Workspace Developer Preview Program with the Google Cloud project you will use (https://developers.google.com/workspace/preview). The Google Docs MCP server works only for enrolled projects.
+    2. In the Google Cloud console (https://console.cloud.google.com), select or create a project. One project and one OAuth client can serve all five Google Workspace presets (Gmail, Calendar, Drive, Docs, Sheets). If you already made that client for another Google preset, select the same project, do steps 3 and 4 for this product, then skip steps 5 and 6 and enter the same Client ID and Client secret in Ambit.
+    3. Open APIs & Services, then Library, and enable Google Docs API and "Google Docs MCP API" (docsmcp.googleapis.com).
+    4. Open Google Auth Platform (or APIs & Services, then OAuth consent screen). Under Audience, select Internal (your Workspace organization only). Add the scopes documents.readonly and drive.readonly under Data Access.
+    5. Open Clients, click "Create client", and select the application type "Web application".
+    6. Under "Authorized redirect URIs", add {callbackURL}. Click "Create".
+    7. Copy the Client ID and the Client secret.
+    8. Ambit asks for offline access so Google returns a refresh token. Ambit requests read-only scopes only, so tools that change data will be refused by Google.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://developers.google.com/workspace/guides/configure-mcp-servers
+  # The live check reads a test document in the maintainer's Workspace (presetcheck only).
+  live: { tool: read_doc, arguments: { documentId: "1FbGsuTo5o1BCSS-mG3QL5n5LZyH4zB6PuAnQR1qGQRI" } }
+- id: google-sheets
+  version: 1
+  verified: true
+  verifiedOn: "2026-10-08"
+  displayName: Google Sheets
+  category: Google Workspace
+  server: { url: "https://sheetsmcp.googleapis.com/mcp/v1", transport: streamable-http }
+  authorizationURL: https://accounts.google.com/o/oauth2/v2/auth
+  tokenURL: https://oauth2.googleapis.com/token
+  revocationURL: https://oauth2.googleapis.com/revoke
+  resource: none
+  scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly", "https://www.googleapis.com/auth/drive.readonly"]
+  authorizeParams: { prompt: consent, access_type: offline }
+  preview: true
+  contract: { unauthenticated: [200] }
+  requires: "Google Workspace Developer Preview Program"
+  setup: |
+    1. Join the Google Workspace Developer Preview Program with the Google Cloud project you will use (https://developers.google.com/workspace/preview). The Google Sheets MCP server works only for enrolled projects.
+    2. In the Google Cloud console (https://console.cloud.google.com), select or create a project. One project and one OAuth client can serve all five Google Workspace presets (Gmail, Calendar, Drive, Docs, Sheets). If you already made that client for another Google preset, select the same project, do steps 3 and 4 for this product, then skip steps 5 and 6 and enter the same Client ID and Client secret in Ambit.
+    3. Open APIs & Services, then Library, and enable Google Sheets API and "Google Sheets MCP API" (sheetsmcp.googleapis.com).
+    4. Open Google Auth Platform (or APIs & Services, then OAuth consent screen). Under Audience, select Internal (your Workspace organization only). Add the scopes spreadsheets.readonly and drive.readonly under Data Access.
+    5. Open Clients, click "Create client", and select the application type "Web application".
+    6. Under "Authorized redirect URIs", add {callbackURL}. Click "Create".
+    7. Copy the Client ID and the Client secret.
+    8. Ambit asks for offline access so Google returns a refresh token. Ambit requests read-only scopes only, so tools that change data will be refused by Google.
+  clientIDLabel: Client ID
+  clientSecretLabel: Client secret
+  docs: https://developers.google.com/workspace/guides/configure-mcp-servers
+  # The live check reads a test spreadsheet in the maintainer's Workspace (presetcheck only).
+  live: { tool: get_spreadsheet, arguments: { spreadsheetId: "15RDXZb9CYSFsvJSmeodD7Oyb62Xz9D0zuxH5fqOi7xI" } }

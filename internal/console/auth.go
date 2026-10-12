@@ -15,13 +15,18 @@ import (
 )
 
 type AuthConfig struct {
-	Issuer       string // Dex issuer, e.g. http://console.localtest.me:8080/dex
-	ClientID     string
-	ClientSecret string
-	PublicURL    string // console URL; the callback is PublicURL + /auth/callback
-	SessionKey   []byte
-	SessionTTL   time.Duration
-	Sessions     *SessionStore // optional; a new one is created when nil
+	Issuer string // Dex issuer, e.g. http://console.localtest.me:8080/dex
+	// InternalIssuer is Dex's in-cluster URL, e.g. http://ambit-dex:5556/dex. When set, the console reaches
+	// Dex there (discovery, code exchange, keys); the browser and the tokens still use Issuer. The public
+	// URL may not resolve inside the cluster: on kind it is 127.0.0.1, the pod itself.
+	InternalIssuer string
+	ClientID       string
+	ClientSecret   string
+	PublicURL      string // console URL; the callback is PublicURL + /auth/callback
+	SessionKey     []byte
+	SessionTTL     time.Duration
+	Sessions       *SessionStore                        // optional; a new one is created when nil
+	OnSignIn       func(ctx context.Context, s Session) // called after a verified sign-in; errors are its own to log
 }
 
 type Auth struct {
@@ -31,6 +36,7 @@ type Auth struct {
 	codec    Codec
 	ttl      time.Duration
 	secure   bool
+	onSignIn func(ctx context.Context, s Session)
 }
 
 // loginTx is kept in a short-lived signed cookie between /auth/login and /auth/callback.
@@ -40,9 +46,9 @@ type loginTx struct {
 }
 
 func NewAuth(ctx context.Context, c AuthConfig) (*Auth, error) {
-	p, err := oidc.NewProvider(ctx, c.Issuer)
+	p, err := provider(ctx, c.Issuer, c.InternalIssuer)
 	if err != nil {
-		return nil, fmt.Errorf("oidc discovery at %s: %w", c.Issuer, err)
+		return nil, err
 	}
 	store := c.Sessions
 	if store == nil {
@@ -59,7 +65,47 @@ func NewAuth(ctx context.Context, c AuthConfig) (*Auth, error) {
 		codec:    Codec{Key: c.SessionKey},
 		ttl:      c.SessionTTL,
 		secure:   strings.HasPrefix(c.PublicURL, "https://"),
+		onSignIn: c.OnSignIn,
 	}, nil
+}
+
+func provider(ctx context.Context, issuer, internal string) (*oidc.Provider, error) {
+	if internal == "" {
+		p, err := oidc.NewProvider(ctx, issuer)
+		if err != nil {
+			return nil, fmt.Errorf("oidc discovery at %s: %w", issuer, err)
+		}
+		return p, nil
+	}
+	// Discovery comes from the internal URL. InsecureIssuerURLContext turns off go-oidc's issuer check, so
+	// the discovered issuer is compared with the public one here.
+	d, err := oidc.NewProvider(oidc.InsecureIssuerURLContext(ctx, issuer), internal)
+	if err != nil {
+		return nil, fmt.Errorf("oidc discovery at %s (issuer %s): %w", internal, issuer, err)
+	}
+	var m struct {
+		Issuer   string   `json:"issuer"`
+		Auth     string   `json:"authorization_endpoint"`
+		Token    string   `json:"token_endpoint"`
+		Keys     string   `json:"jwks_uri"`
+		UserInfo string   `json:"userinfo_endpoint"`
+		Algs     []string `json:"id_token_signing_alg_values_supported"`
+	}
+	if err := d.Claims(&m); err != nil {
+		return nil, fmt.Errorf("oidc discovery at %s: %w", internal, err)
+	}
+	if m.Issuer != issuer {
+		return nil, fmt.Errorf("oidc discovery at %s names issuer %q, want %q", internal, m.Issuer, issuer)
+	}
+	// Server-to-server endpoints move to the internal URL; the sign-in page stays public for the browser.
+	in := func(u string) string {
+		if rest, ok := strings.CutPrefix(u, issuer); ok {
+			return internal + rest
+		}
+		return u
+	}
+	return (&oidc.ProviderConfig{IssuerURL: issuer, AuthURL: m.Auth, TokenURL: in(m.Token),
+		JWKSURL: in(m.Keys), UserInfoURL: in(m.UserInfo), Algorithms: m.Algs}).NewProvider(ctx), nil
 }
 
 func randomString() string {
@@ -138,10 +184,13 @@ func (a *Auth) Callback(w http.ResponseWriter, r *http.Request) {
 	}
 	boot := cl.Federated.ConnectorID == "local" && cl.Email == BootstrapEmail
 	s := Session{ID: randomString(), Sub: idt.Subject, Email: cl.Email, Name: cl.Name, Groups: cl.Groups, Bootstrap: boot,
-		Role: roleFor(cl.Federated.ConnectorID, cl.Email, cl.Groups), Exp: time.Now().Add(a.ttl).Unix()}
+		Role: roleFor(cl.Federated.ConnectorID, cl.Email, cl.Groups), Exp: time.Now().Add(a.ttl).Unix(), SignedIn: time.Now().Unix()}
 	a.Sessions.Add(s.ID, s.Email, s.Exp)
 	http.SetCookie(w, a.cookie(SessionCookie, a.codec.Encode(s), int(a.ttl.Seconds()), "/"))
 	slog.Info("signed in", "email", s.Email, "role", s.Role, "connector", cl.Federated.ConnectorID)
+	if a.onSignIn != nil { // the hook is called in line; it must not block (the console's hook starts a goroutine)
+		a.onSignIn(context.WithoutCancel(r.Context()), s)
+	}
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 

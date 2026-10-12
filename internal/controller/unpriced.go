@@ -19,7 +19,7 @@ func RefuseUnpriced(res *Result, models []v1.Model, prices map[string]v1.ModelPr
 	for i, g := range dollarGroups {
 		q[i] = strconv.Quote(g)
 	}
-	deny := "!jwt.groups.exists(g, g in [" + strings.Join(q, ", ") + "])"
+	deny := "!" + principalGroups + ".exists(g, g in [" + strings.Join(q, ", ") + "])"
 	unpriced := map[string]bool{}
 	for _, m := range models {
 		if _, ok := prices[m.Spec.Model]; !ok {

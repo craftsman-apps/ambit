@@ -9,13 +9,28 @@ data:
   server.py: |
     import json, http.server, time
     USAGE = {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15}
+    COUNT = {"classify": 0, "auth": ""}  # test hooks for the classifier (step 12)
     class H(http.server.BaseHTTPRequestHandler):
         def log_message(self, *a): pass
+        def do_GET(self):  # classifications answered, and the last classifier Authorization header
+            out = json.dumps(COUNT).encode()
+            self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(out)))
+            self.end_headers(); self.wfile.write(out)
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
             model = body.get("model")
             last = (body.get("messages") or [{}])[-1].get("content", "")
             text = last if isinstance(last, str) else ""  # a multi-part message has a list content
+            system = next((m.get("content") for m in body.get("messages", []) if m.get("role") == "system"), "") or ""
+            if isinstance(system, str) and system.startswith("Classify the user's message"):  # ambit-router's classifier
+                COUNT["classify"] += 1; COUNT["auth"] = self.headers.get("authorization", "")
+                if text == "CLASSIFY-SLOW":
+                    time.sleep(3)
+                label = "Coding, because" if text == "CLASSIFY-EXTRA" else ("coding" if ("code" in text.lower() or "python" in text.lower()) else "other")
+                out = json.dumps({"id": "k1", "object": "chat.completion", "model": model, "usage": {"prompt_tokens": 30, "completion_tokens": 1, "total_tokens": 31},
+                                  "choices": [{"index": 0, "message": {"role": "assistant", "content": label}, "finish_reason": "stop"}]}).encode()
+                self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(out)))
+                self.end_headers(); self.wfile.write(out); return
             if self.path.endswith("/embeddings"):
                 out = json.dumps({"object": "list", "model": model, "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
                                   "usage": {"prompt_tokens": 12, "total_tokens": 12}}).encode()
@@ -33,7 +48,7 @@ data:
                 self.wfile.write(b"data: [DONE]\n\n")
                 return
             usage = None if text == "NO-USAGE" else USAGE
-            content = "pong" + (" x-ambit-user=" + self.headers["x-ambit-user"] if self.headers.get("x-ambit-user") else "") + (" x-ambit-route=" + self.headers["x-ambit-route"] if self.headers.get("x-ambit-route") else "")
+            content = "pong" + (" x-ambit-user=" + self.headers["x-ambit-user"] if self.headers.get("x-ambit-user") else "") + (" x-ambit-route=" + self.headers["x-ambit-route"] if self.headers.get("x-ambit-route") else "") + (" x-ambit-config=" + self.headers["x-ambit-config"] if self.headers.get("x-ambit-config") else "")
             if body.get("user") == "load":  # load runs (test/load): a fixed 50 ms before the first token
                 time.sleep(0.05)
             if body.get("stream"):
@@ -45,7 +60,8 @@ data:
                     self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n")
                 self.wfile.write(b"data: [DONE]\n\n")
                 return
-            out = json.dumps({"id": "c1", "object": "chat.completion", "model": model, **({"usage": usage} if usage else {}),
+            seen = {"headers": sorted(k.lower() for k in self.headers.keys()), "ambit_value": any("ambit_" in v for v in self.headers.values())}  # what reached the model (key tests)
+            out = json.dumps({"id": "c1", "object": "chat.completion", "model": model, **({"usage": usage} if usage else {}), "x_seen": seen,
                               "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}]}).encode()
             self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(out)))
             self.end_headers(); self.wfile.write(out)
@@ -74,6 +90,33 @@ kind: Service
 metadata: { name: mock-llm }
 spec:
   selector: { app: mock-llm }
+  ports: [{ port: 8080 }]
+---
+# The same server as the classifier of ModelRouter smart (step 12), separate so a test can stop the classifier
+# without stopping the models it routes to.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: mock-classifier }
+spec:
+  selector: { matchLabels: { app: mock-classifier } }
+  template:
+    metadata: { labels: { app: mock-classifier } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 65534 }
+      containers:
+        - name: mock
+          image: python@sha256:79e7a9b9ff1cbceff819f856fb374477792a5967759d94df266de7b7b4120e6f  # python:3.13-alpine
+          command: [python, /app/server.py]
+          ports: [{ containerPort: 8080 }]
+          readinessProbe: { tcpSocket: { port: 8080 } }
+          volumeMounts: [{ name: app, mountPath: /app }]
+      volumes: [{ name: app, configMap: { name: mock-llm } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: mock-classifier }
+spec:
+  selector: { app: mock-classifier }
   ports: [{ port: 8080 }]
 ---
 apiVersion: ambitproject.dev/v1alpha1

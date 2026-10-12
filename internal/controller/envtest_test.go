@@ -6,7 +6,9 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/craftsman-apps/ambit/internal/identity"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,16 +17,19 @@ import (
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 var (
@@ -169,7 +174,7 @@ func TestReconcilerAgainstAPIServer(t *testing.T) {
 
 	for _, o := range []client.Object{
 		&v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemma", Namespace: ns},
-			Spec: v1.ModelSpec{Provider: "Openrouter", Model: "google/gemma-4-31b-it:free", CredentialsRef: v1.SecretRef{Name: "ambit-llm-openrouter"}}},
+			Spec: v1.ModelSpec{Provider: "Openrouter", Model: "google/gemma-4-31b-it:free", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-openrouter"}}},
 		&v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "time", Namespace: ns}, Spec: v1.ServerSpec{Image: digestImage}},
 		&v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "eng", Namespace: ns}, Spec: v1.AccessRuleSpec{Groups: []string{"eng"},
 			Models: []string{"gemma"}, Servers: []v1.ServerAccess{{Name: "time", Tools: []string{"get_current_time"}}}}},
@@ -188,6 +193,9 @@ func TestReconcilerAgainstAPIServer(t *testing.T) {
 		}
 		return u, envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, u)
 	}
+	// Play ToolHive: the server runs, so it joins the shared backend (only running image servers do).
+	eventually(t, "MCPServer", func() error { _, err := get("MCPServer", "time"); return err })
+	setMCPServerReady(t, ns, "time", true)
 	eventually(t, "generated objects", func() error {
 		for _, k := range [][2]string{{"AgentgatewayModel", "gemma"}, {"MCPServer", "time"}, {"AgentgatewayBackend", MCPBackendName}, {"AgentgatewayPolicy", MCPBackendName + "-access"}} {
 			if _, err := get(k[0], k[1]); err != nil {
@@ -196,11 +204,18 @@ func TestReconcilerAgainstAPIServer(t *testing.T) {
 		}
 		return nil
 	})
-	p, _ := get("AgentgatewayPolicy", MCPBackendName+"-access")
-	if e, _, _ := unstructured.NestedStringSlice(p.Object, "spec", "backend", "mcp", "authorization", "policy", "matchExpressions"); len(e) != 1 ||
-		e[0] != `mcp.tool.target == "time" && mcp.tool.name == "get_current_time" && jwt.groups.exists(g, g in ["eng"])` {
-		t.Fatalf("policy %v", e)
-	}
+	// The policy can exist before the AccessRule is compiled into it (it then grants nothing: "false").
+	eventually(t, "MCP access policy", func() error {
+		p, err := get("AgentgatewayPolicy", MCPBackendName+"-access")
+		if err != nil {
+			return err
+		}
+		if e, _, _ := unstructured.NestedStringSlice(p.Object, "spec", "backend", "mcp", "authorization", "policy", "matchExpressions"); len(e) != 1 ||
+			e[0] != `mcp.tool.target == "time" && mcp.tool.name == "get_current_time" && `+identity.PrincipalGroups+`.exists(g, g in ["eng"])` {
+			return fmt.Errorf("policy %v", e)
+		}
+		return nil
+	})
 	var m v1.Model
 	eventually(t, "Model Pending before agentgateway answers", func() error {
 		_ = envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "gemma"}, &m)
@@ -261,7 +276,7 @@ func TestReconcilerAgainstAPIServer(t *testing.T) {
 	eventually(t, "per-user token policy", func() error { _, err := get("AgentgatewayPolicy", "ambit-conn-whoami"); return err })
 
 	// Drift: a manual edit that opens every tool is put back.
-	p, _ = get("AgentgatewayPolicy", MCPBackendName+"-access")
+	p, _ := get("AgentgatewayPolicy", MCPBackendName+"-access")
 	_ = unstructured.SetNestedStringSlice(p.Object, []string{"true"}, "spec", "backend", "mcp", "authorization", "policy", "matchExpressions")
 	if err := envClient.Update(ctx, p); err != nil {
 		t.Fatal(err)
@@ -274,4 +289,454 @@ func TestReconcilerAgainstAPIServer(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+func genGet(ctx context.Context, ns, kind, name string) (*unstructured.Unstructured, error) {
+	var u unstructured.Unstructured
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: "agentgateway.dev", Version: "v1alpha1", Kind: kind})
+	err := envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &u)
+	return &u, err
+}
+
+func boundConn(ns string) *v1.Connection {
+	return &v1.Connection{ObjectMeta: metav1.ObjectMeta{Name: "gh", Namespace: ns}, Spec: v1.ConnectionSpec{DisplayName: "GitHub",
+		AuthorizationURL: "https://github.com/login/oauth/authorize", TokenURL: "https://github.com/login/oauth/access_token",
+		ClientID: "x", ClientSecretRef: v1.SecretRef{Name: "ambit-conn-gh"}, ServerURL: "https://api.githubcopilot.com/mcp/"}}
+}
+
+func TestServerURLChangedAfterBindingIsRemoved(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-bind"
+	namespace(t, ns)
+	ctx := t.Context()
+	s := &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "github", Namespace: ns}, Spec: v1.ServerSpec{URL: "https://api.githubcopilot.com/mcp/", Connection: "gh", Transport: "streamable-http"}}
+	for _, o := range []client.Object{boundConn(ns), s} {
+		if err := envClient.Create(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := genGet(ctx, ns, "AgentgatewayPolicy", "ambit-conn-github"); err != nil {
+		t.Fatalf("bound server not compiled: %v", err)
+	}
+	if _, err := genGet(ctx, ns, "AgentgatewayBackend", MCPBackendName); err != nil {
+		t.Fatalf("bound server not compiled: %v", err)
+	}
+	if err := envClient.Get(ctx, client.ObjectKeyFromObject(s), s); err != nil { // status was written
+		t.Fatal(err)
+	}
+	s.Spec.URL = "https://evil.test/mcp"
+	if err := envClient.Update(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	// The only Server is refused: its connection policy and the shared backend and access policy are gone.
+	for _, o := range [][2]string{{"AgentgatewayPolicy", "ambit-conn-github"}, {"AgentgatewayBackend", MCPBackendName}, {"AgentgatewayPolicy", MCPBackendName + "-access"}} {
+		if _, err := genGet(ctx, ns, o[0], o[1]); !apierrors.IsNotFound(err) {
+			t.Fatalf("%s/%s still present: %v", o[0], o[1], err)
+		}
+	}
+	_ = envClient.Get(ctx, client.ObjectKeyFromObject(s), s)
+	if readyOf(s.Status.Conditions) != "ConnectionBound" {
+		t.Fatalf("reason %s", readyOf(s.Status.Conditions))
+	}
+	// Back to the bound URL: the policy and backend are compiled again.
+	s.Spec.URL = "https://api.githubcopilot.com/mcp/"
+	if err := envClient.Update(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range [][2]string{{"AgentgatewayPolicy", "ambit-conn-github"}, {"AgentgatewayBackend", MCPBackendName}} {
+		if _, err := genGet(ctx, ns, o[0], o[1]); err != nil {
+			t.Fatalf("%s/%s not restored: %v", o[0], o[1], err)
+		}
+	}
+}
+
+func TestRefusedServerLeavesKeptServerInBackend(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-bind2"
+	namespace(t, ns)
+	ctx := t.Context()
+	good := &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "github", Namespace: ns}, Spec: v1.ServerSpec{URL: "https://api.githubcopilot.com/mcp/", Connection: "gh", Transport: "streamable-http"}}
+	evil := &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "evil", Namespace: ns}, Spec: v1.ServerSpec{URL: "https://evil.test/mcp", Connection: "gh", Transport: "streamable-http"}}
+	for _, o := range []client.Object{boundConn(ns), good, evil} {
+		if err := envClient.Create(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := genGet(ctx, ns, "AgentgatewayBackend", MCPBackendName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets, _, _ := unstructured.NestedSlice(b.Object, "spec", "mcp", "targets")
+	if len(targets) != 1 || !strings.Contains(fmt.Sprint(targets[0]), "github") || strings.Contains(fmt.Sprint(targets), "evil") {
+		t.Fatalf("targets %v", targets)
+	}
+	if _, err := genGet(ctx, ns, "AgentgatewayPolicy", "ambit-conn-evil"); !apierrors.IsNotFound(err) {
+		t.Fatalf("refused server's policy present: %v", err)
+	}
+	_ = envClient.Get(ctx, client.ObjectKeyFromObject(evil), evil)
+	if readyOf(evil.Status.Conditions) != "ConnectionBound" {
+		t.Fatalf("reason %s", readyOf(evil.Status.Conditions))
+	}
+}
+
+// deleteFails fails every delete of one generated object name.
+type deleteFails struct {
+	client.Client
+	prefix string
+}
+
+func (d deleteFails) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	if strings.HasPrefix(obj.GetName(), d.prefix) {
+		return fmt.Errorf("injected delete failure")
+	}
+	return d.Client.Delete(ctx, obj, opts...)
+}
+
+func TestFailedCleanupOfRefusedServerIsRetried(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-bind3"
+	namespace(t, ns)
+	ctx := t.Context()
+	s := &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "github", Namespace: ns}, Spec: v1.ServerSpec{URL: "https://api.githubcopilot.com/mcp/", Connection: "gh", Transport: "streamable-http"}}
+	for _, o := range []client.Object{boundConn(ns), s} {
+		if err := envClient.Create(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := envClient.Get(ctx, client.ObjectKeyFromObject(s), s); err != nil {
+		t.Fatal(err)
+	}
+	s.Spec.URL = "https://evil.test/mcp"
+	if err := envClient.Update(ctx, s); err != nil {
+		t.Fatal(err)
+	}
+	r.Client = deleteFails{Client: envClient, prefix: "ambit-conn-"}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err == nil {
+		t.Fatal("a failed delete of a refused server's policy was not returned")
+	}
+}
+
+// The CRD's rules hold in the real API server, not only in `ambit validate`.
+func TestAPIServerRefusesVertexAIWithoutSettings(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-vertex-api"
+	namespace(t, ns)
+	err := envClient.Create(t.Context(), &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemini", Namespace: ns},
+		Spec: v1.ModelSpec{Provider: "VertexAI", Model: "gemini-2.5-pro"}})
+	if !apierrors.IsInvalid(err) || !strings.Contains(err.Error(), "vertexai settings are required") {
+		t.Fatalf("want an Invalid error naming the vertexai rule, got %v", err)
+	}
+	if err := envClient.Create(t.Context(), &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemini-ok", Namespace: ns},
+		Spec: v1.ModelSpec{Provider: "VertexAI", Model: "gemini-2.5-pro", VertexAI: &v1.VertexAISettings{ProjectID: "acme-ml"}}}); err != nil {
+		t.Fatalf("valid VertexAI Model refused: %v", err)
+	}
+}
+
+// setMCPServerReady plays ToolHive: it reports the generated MCPServer's readiness.
+func setMCPServerReady(t *testing.T, ns, name string, ready bool) {
+	t.Helper()
+	ms := &unstructured.Unstructured{}
+	ms.SetGroupVersionKind(MCPServerGVK)
+	if err := envClient.Get(t.Context(), client.ObjectKey{Namespace: ns, Name: name}, ms); err != nil {
+		t.Fatal(err)
+	}
+	status, reason := "True", "Running"
+	if !ready {
+		status, reason = "False", "NotRunning"
+	}
+	_ = unstructured.SetNestedSlice(ms.Object, []any{map[string]any{"type": "Ready", "status": status, "reason": reason,
+		"message": "", "lastTransitionTime": metav1.Now().UTC().Format(time.RFC3339)}}, "status", "conditions")
+	if err := envClient.Status().Update(t.Context(), ms); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An image server joins the shared backend once ToolHive runs it and it has answered the controller's MCP
+// introduction (a booting server made every user's new session wait ~10 s), and stays listed through restarts:
+// any change to the target list breaks resuming open sessions on the other gateway replica.
+func TestImageServerJoinsBackendOnceItAnswers(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-admission"
+	namespace(t, ns)
+	ctx := t.Context()
+	if err := envClient.Create(ctx, &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "time", Namespace: ns},
+		Spec: v1.ServerSpec{Image: timeImage, Transport: "stdio"}}); err != nil {
+		t.Fatal(err)
+	}
+	answers := false
+	now := time.Now()
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
+		Now: func() time.Time { return now },
+		ListTools: func(context.Context, v1.Server) ([]v1.Tool, error) {
+			if !answers {
+				return nil, errors.New("connection refused")
+			}
+			return []v1.Tool{{Name: "get_current_time"}}, nil
+		}}
+	rec := func() reconcile.Result {
+		t.Helper()
+		res, err := r.Reconcile(ctx, reconcile.Request{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	listed := func() string {
+		t.Helper()
+		b, err := genGet(ctx, ns, "AgentgatewayBackend", MCPBackendName)
+		if apierrors.IsNotFound(err) {
+			return ""
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(backendTargets(t, []*unstructured.Unstructured{b}), ",")
+	}
+	server := func() v1.Server {
+		t.Helper()
+		var s v1.Server
+		if err := envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "time"}, &s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	rec()
+	if got := listed(); got != "" {
+		t.Fatalf("listed before ToolHive runs it: %q", got)
+	}
+	setMCPServerReady(t, ns, "time", true)
+	if res := rec(); res.RequeueAfter <= 0 || res.RequeueAfter > 5*time.Second {
+		t.Fatalf("a running server that does not answer yet must be retried soon, got requeue %v", res.RequeueAfter)
+	}
+	if got := listed(); got != "" {
+		t.Fatalf("listed before it answers: %q", got)
+	}
+	// Ready means its tools are available: a running server that has not answered yet is still starting.
+	if c := meta.FindStatusCondition(server().Status.Conditions, "Ready"); c == nil || c.Status == metav1.ConditionTrue || c.Reason != "Starting" {
+		t.Fatalf("Ready before it answers: %+v", c)
+	}
+	answers = true
+	now = now.Add(admissionRetry) // asked again after the retry wait
+	rec()
+	if got := listed(); got != "time" {
+		t.Fatalf("not listed once it answers: %q", got)
+	}
+	if c := meta.FindStatusCondition(server().Status.Conditions, "Serving"); c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("Serving condition not saved: %+v", c)
+	}
+	if c := meta.FindStatusCondition(server().Status.Conditions, "Ready"); c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("not Ready once it answers: %+v", c)
+	}
+	setMCPServerReady(t, ns, "time", false) // ToolHive restarts it
+	answers = false
+	rec()
+	if got := listed(); got != "time" {
+		t.Fatalf("a restart removed the server from the list: %q", got)
+	}
+	// The access policy carries the connect timeout and is never deleted while Servers exist.
+	if _, err := genGet(ctx, ns, "AgentgatewayPolicy", MCPBackendName+"-access"); err != nil {
+		t.Fatal(err)
+	}
+	// A pass with no news writes nothing.
+	before := server().ResourceVersion
+	rec()
+	if after := server().ResourceVersion; before != after {
+		t.Fatalf("an idle reconcile rewrote the Server (%s -> %s)", before, after)
+	}
+}
+
+// The Server's saved status follows ToolHive even when its tools are not read (ListTools off).
+func TestRunningServerStatusIsSaved(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-running-status"
+	namespace(t, ns)
+	ctx := t.Context()
+	if err := envClient.Create(ctx, &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "time", Namespace: ns},
+		Spec: v1.ServerSpec{Image: timeImage, Transport: "stdio"}}); err != nil {
+		t.Fatal(err)
+	}
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	setMCPServerReady(t, ns, "time", true)
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	var s v1.Server
+	_ = envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "time"}, &s)
+	if c := meta.FindStatusCondition(s.Status.Conditions, "Ready"); c == nil || c.Reason != "Running" {
+		t.Fatalf("saved Ready condition %+v, want reason Running", c)
+	}
+}
+
+// Admission asks a server at most once per pass and backs off while it does not answer: a broken server must not
+// hold up the controller (access changes) or be asked every 3 s forever.
+func TestAdmissionBacksOff(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-backoff"
+	namespace(t, ns)
+	ctx := t.Context()
+	if err := envClient.Create(ctx, &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "time", Namespace: ns},
+		Spec: v1.ServerSpec{Image: timeImage, Transport: "stdio"}}); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	now := time.Now()
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
+		Now: func() time.Time { return now },
+		ListTools: func(context.Context, v1.Server) ([]v1.Tool, error) {
+			calls++
+			return nil, errors.New("connection refused")
+		}}
+	rec := func() reconcile.Result {
+		t.Helper()
+		res, err := r.Reconcile(ctx, reconcile.Request{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	rec()
+	setMCPServerReady(t, ns, "time", true)
+	first := rec()
+	if calls != 1 {
+		t.Fatalf("asked %d times in one pass, want 1", calls)
+	}
+	rec() // too early: not asked again
+	if calls != 1 {
+		t.Fatalf("asked again before the retry time: %d", calls)
+	}
+	now = now.Add(first.RequeueAfter)
+	second := rec()
+	if calls != 2 || second.RequeueAfter <= first.RequeueAfter {
+		t.Fatalf("calls %d, requeue %v then %v: want a growing wait", calls, first.RequeueAfter, second.RequeueAfter)
+	}
+	for i := 0; i < 10; i++ {
+		now = now.Add(time.Hour)
+		if res := rec(); res.RequeueAfter > time.Minute {
+			t.Fatalf("wait %v grew beyond a minute", res.RequeueAfter)
+		}
+	}
+}
+
+// A server whose tools cannot be read (a down vendor) is not asked again on every pass: each try waited up to 15 s,
+// so every pass was slow and every change, including access revocations, reached the gateway late.
+func TestFailedToolReadIsNotRetriedEveryPass(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-toolread"
+	namespace(t, ns)
+	ctx := t.Context()
+	if err := envClient.Create(ctx, &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "vendor", Namespace: ns},
+		Spec: v1.ServerSpec{URL: "https://mcp.example.com/mcp", Transport: "streamable-http"}}); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	now := time.Now()
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
+		Now: func() time.Time { return now },
+		ListTools: func(context.Context, v1.Server) ([]v1.Tool, error) {
+			calls++
+			return nil, errors.New("i/o timeout")
+		}}
+	for i := 0; i < 3; i++ {
+		if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("a failing server was asked %d times in 3 passes, want 1", calls)
+	}
+	now = now.Add(toolsRetry)
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("not asked again after %v: %d", toolsRetry, calls)
+	}
+}
+
+// A per-user server's tools come through the console, which asks the vendor and waits: a failure there waits
+// toolsRetry too (a down vendor made every pass slow). "No reader chosen" is a setting, so it is asked every pass.
+func TestFailedConsoleToolReadWaits(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-console-wait"
+	namespace(t, ns)
+	ctx := t.Context()
+	if err := envClient.Create(ctx, perUserEnv(ns)); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	var next error = errors.New("console tools: status 502")
+	now := time.Now()
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
+		Now: func() time.Time { return now },
+		ListTools: func(context.Context, v1.Server) ([]v1.Tool, error) {
+			calls++
+			return nil, next
+		}}
+	res := reconcile.Result{}
+	for i := 0; i < 3; i++ {
+		var err error
+		if res, err = r.Reconcile(ctx, reconcile.Request{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("a failing console read was tried %d times in 3 passes, want 1", calls)
+	}
+	if res.RequeueAfter <= 0 || res.RequeueAfter > toolsRetry {
+		t.Fatalf("the retry is not scheduled: requeue %v, want <= %v", res.RequeueAfter, toolsRetry)
+	}
+	next = ErrNoReader
+	now = now.Add(toolsRetry)
+	for i := 0; i < 2; i++ {
+		if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 3 {
+		t.Fatalf("with no reader chosen, want a try every pass: %d calls", calls)
+	}
+}
+
+// A server that answers with no tools is read once per refresh, like any other (it was read on every pass).
+func TestEmptyToolListIsCached(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-empty-tools"
+	namespace(t, ns)
+	ctx := t.Context()
+	if err := envClient.Create(ctx, &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "vendor", Namespace: ns},
+		Spec: v1.ServerSpec{URL: "https://mcp.example.com/mcp", Transport: "streamable-http"}}); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
+		ListTools: func(context.Context, v1.Server) ([]v1.Tool, error) { calls++; return nil, nil }}
+	for i := 0; i < 3; i++ {
+		if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("an empty tool list was read %d times in 3 passes, want 1", calls)
+	}
 }

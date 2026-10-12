@@ -1,7 +1,9 @@
 package console
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -22,6 +24,36 @@ func (r *recordingRepo) PullRequestState(context.Context, int) (PullRequestState
 	return PullRequestState{}, nil
 }
 func (r *recordingRepo) Contains(context.Context, string, string) (bool, error) { return false, nil }
+
+func (r *recordingRepo) OpenPullRequestFiles(_ context.Context, branch, title, _ string, files []FileChange) (PullRequest, error) {
+	r.files = append(r.files, files...)
+	return PullRequest{Number: 1, Title: title, Branch: branch}, nil
+}
+func (r *recordingRepo) PullRequestByBranch(context.Context, string) (PullRequestState, bool, error) {
+	return PullRequestState{}, false, nil
+}
+func (r *recordingRepo) DeleteBranch(context.Context, string) error { return nil }
+
+func TestProposeObjectsOpensOnePullRequestAndValidatesEach(t *testing.T) {
+	repo := &recordingRepo{}
+	g := &GitOps{Repo: repo, Branch: "main", Dir: "ambit"}
+	ok, _ := Manifest("AccessRule", "eng-time", nil, nil, map[string]any{"groups": []string{"eng"}, "models": []string{"gemma"}})
+	ok2, _ := Manifest("AccessRule", "ml-time", nil, nil, map[string]any{"groups": []string{"ml"}, "models": []string{"gemma"}})
+	pr, err := g.ProposeObjects(t.Context(), "ambit/add-x-1", "Ambit: add x", "priya@acme.test", []ProposedObject{
+		{Kind: "AccessRule", Plural: "accessrules", Name: "eng-time", Manifest: ok},
+		{Kind: "AccessRule", Plural: "accessrules", Name: "ml-time", Manifest: ok2},
+	})
+	if err != nil || pr.Branch != "ambit/add-x-1" || len(repo.files) != 2 || repo.files[1].Path != "ambit/accessrules/ml-time.yaml" {
+		t.Fatalf("pr %+v err %v files %v", pr, err, repo.files)
+	}
+	repo.files = nil
+	bad, _ := Manifest("AccessRule", "bad", nil, nil, map[string]any{"nonsense": true})
+	_, err = g.ProposeObjects(t.Context(), "ambit/add-y-1", "t", "p", []ProposedObject{{Kind: "AccessRule", Plural: "accessrules", Name: "eng-time", Manifest: ok}, {Kind: "AccessRule", Plural: "accessrules", Name: "bad", Manifest: bad}})
+	var inv *InvalidChange
+	if !errors.As(err, &inv) || len(repo.files) != 0 {
+		t.Fatalf("want InvalidChange and no pull request, got %v files %v", err, repo.files)
+	}
+}
 
 func gitopsFixture(t *testing.T) (http.Handler, client.Client, *Auth, *recordingRepo) {
 	t.Helper()
@@ -103,5 +135,25 @@ func TestDirectModeReportsItself(t *testing.T) {
 	h, _, a := serversFixture(t)
 	if cfg := decodeAs[Config](t, do(t, h, "GET", "/api/config", user(a, "x@acme.test", RoleViewer), nil).Body.String()); cfg.Mode != "direct" {
 		t.Fatalf("%+v", cfg)
+	}
+}
+
+// A Bedrock Model that uses the gateway's AWS identity has no credentialsRef; writing it to Git must not add one.
+func TestManifestOmitsMissingCredentialsRef(t *testing.T) {
+	spec := v1.ModelSpec{Provider: "Bedrock", Model: "anthropic.claude-sonnet-4-5-20250929-v1:0",
+		Price: &v1.ModelPrice{InputPerMillionTokens: "3", OutputPerMillionTokens: "15"}}
+	b, err := Manifest("Model", "claude", nil, nil, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "credentialsRef") || strings.Contains(string(b), "azure") || strings.Contains(string(b), "bedrock:") {
+		t.Fatalf("manifest has fields the Model does not:\n%s", b)
+	}
+	v, err := validator() // the same check Propose runs before opening a pull request
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, _, err := v.File(t.Context(), bytes.NewReader(b)); err != nil || len(p) != 0 {
+		t.Fatalf("manifest is not valid: %v %v", p, err)
 	}
 }

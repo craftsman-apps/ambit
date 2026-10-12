@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"k8s.io/apimachinery/pkg/api/meta"
 	"net/url"
 	"slices"
 	"sort"
@@ -50,9 +51,13 @@ func compileServers(servers []v1.Server, rules []v1.AccessRule) []*unstructured.
 		if !ok {
 			continue // a URL that does not parse (the console refuses these; kubectl can still write one): left out
 		}
-		targets = append(targets, map[string]any{"name": s.Name, "static": t})
 		if s.Spec.URL == "" {
 			out = append(out, mcpServer(s))
+		}
+		// agentgateway opens each session by contacting every target: an image server joins once it has answered
+		// (Serving, set by the reconciler), so a booting one does not slow every user's new session.
+		if s.Spec.URL != "" || meta.IsStatusConditionTrue(s.Status.Conditions, "Serving") {
+			targets = append(targets, map[string]any{"name": s.Name, "static": t})
 		}
 		if s.Spec.Connection != "" {
 			out = append(out, connectionPolicy(s))
@@ -75,12 +80,23 @@ func compileServers(servers []v1.Server, rules []v1.AccessRule) []*unstructured.
 	})
 	policy := generated("agentgateway.dev/v1alpha1", "AgentgatewayPolicy", MCPBackendName+"-access", sorted[0].Namespace, map[string]any{
 		"targetRefs": []any{map[string]any{"group": "agentgateway.dev", "kind": "AgentgatewayBackend", "name": MCPBackendName}},
-		"backend": map[string]any{"mcp": map[string]any{"authorization": map[string]any{
-			"action": "Allow",
-			"policy": map[string]any{"matchExpressions": []any{expr}},
-		}}},
+		"backend": map[string]any{
+			"mcp": map[string]any{"authorization": map[string]any{
+				"action": "Allow",
+				"policy": map[string]any{"matchExpressions": []any{expr}},
+			}},
+			// A session opens only after every target has answered: a down one must fail fast, not after ~10 s.
+			// Only connection setup (including TLS) is limited; long tool calls and streams are not. 2 s leaves
+			// room for a TLS handshake to a remote server in another region.
+			"tcp": map[string]any{"connectTimeout": "2s"},
+		},
 	})
-	owners = append(owners, backend, policy)
+	// agentgateway refuses an MCP backend without targets: none while no server runs (the reconciler deletes a
+	// previous one). The policy stays, so the backend never comes back before its authorization.
+	owners = append(owners, policy)
+	if len(targets) > 0 {
+		owners = append(owners, backend)
+	}
 	for _, o := range owners {
 		o.SetOwnerReferences(refs) // not controller refs: garbage-collected only when the last Server is gone
 	}
@@ -130,7 +146,12 @@ func target(s v1.Server) (map[string]any, bool) {
 		protocol, path = "SSE", "/sse"
 	}
 	if s.Spec.URL == "" {
-		return map[string]any{"backendRef": map[string]any{"name": "mcp-" + s.Name + "-proxy"}, "port": int64(proxyPort), "path": path, "protocol": protocol}, true
+		// ToolHive's proxy Service by DNS name, not as a backendRef: agentgateway v1.6.0 rejects the whole shared
+		// backend (every user's MCP traffic) while any referenced Service is missing, which this one is for a moment
+		// around every create and delete. A host is resolved per connection, so only this server is affected.
+		// <ns>.svc, not .svc.cluster.local: the pod's DNS search list completes it for any cluster domain.
+		host := "mcp-" + s.Name + "-proxy." + s.Namespace + ".svc"
+		return map[string]any{"host": host, "port": int64(proxyPort), "path": path, "protocol": protocol}, true
 	}
 	// The CRD pattern still lets through a bad port ("host:bad") or escape ("%zz").
 	u, err := url.Parse(s.Spec.URL)
@@ -158,7 +179,7 @@ func target(s v1.Server) (map[string]any, bool) {
 }
 
 // connectionPolicy makes the gateway ask the console's broker (extAuth) for the calling user's own
-// token for the app, naming the user by the validated jwt.email claim, and send it upstream as
+// token for the app, naming the user by the request identity (key or JWT), and send it upstream as
 // Authorization. The user's gateway JWT is never forwarded (the gateway removes it after validation).
 // Without a grant the broker adds no token, so only this server drops out of the user's session.
 // FailOpen: if the broker is down, these servers fail the same way instead of every session failing.
@@ -170,7 +191,7 @@ func connectionPolicy(s v1.Server) *unstructured.Unstructured {
 			"failureMode": "FailOpen",
 			"http": map[string]any{
 				"path":                   strconv.Quote("/v1/connection/" + s.Spec.Connection), // a CEL string literal
-				"addRequestHeaders":      map[string]any{"x-ambit-user": "jwt.email"},
+				"addRequestHeaders":      map[string]any{"x-ambit-user": principal()},
 				"allowedRequestHeaders":  []any{},
 				"allowedResponseHeaders": []any{"authorization"},
 			},
@@ -267,4 +288,47 @@ func generated(apiVersion, kind, name, ns string, spec map[string]any) *unstruct
 	o.SetNamespace(ns)
 	o.SetLabels(map[string]string{"app.kubernetes.io/managed-by": "ambit"})
 	return o
+}
+
+// EffectiveAccess summarises who may use one server, for the console's "pick tools" step.
+type EffectiveAccess struct {
+	AllSignedIn bool                `json:"allSignedIn"`
+	Groups      []string            `json:"groups"`
+	AllTools    bool                `json:"allTools"` // some rule grants every tool, including ones added later
+	Tools       map[string][]string `json:"tools"`    // tool → groups granted it by name
+}
+
+// ServerAccess reads the same merged access the gateway policy is built from (accessByServer), and
+// is empty for a Server the reconciler leaves out: refused by BindServers, or with a URL that does not parse.
+func ServerAccess(servers []v1.Server, conns []v1.Connection, rules []v1.AccessRule, name string) EffectiveAccess {
+	out := EffectiveAccess{Groups: []string{}, Tools: map[string][]string{}}
+	kept, _ := BindServers(servers, conns)
+	i := slices.IndexFunc(kept, func(s v1.Server) bool { return s.Name == name })
+	if i < 0 {
+		return out
+	}
+	if _, ok := target(kept[i]); !ok {
+		return out
+	}
+	a := accessByServer(kept, rules)[name]
+	groups := map[string]bool{}
+	add := func(x Access) {
+		out.AllSignedIn = out.AllSignedIn || x.AllSignedIn
+		for _, g := range x.Groups {
+			groups[g] = true
+		}
+	}
+	if a.all.AllSignedIn || len(a.all.Groups) > 0 {
+		out.AllTools = true
+		add(a.all)
+	}
+	for tool, x := range a.tools {
+		add(x)
+		out.Tools[tool] = append([]string{}, x.Groups...)
+	}
+	for g := range groups {
+		out.Groups = append(out.Groups, g)
+	}
+	sort.Strings(out.Groups)
+	return out
 }

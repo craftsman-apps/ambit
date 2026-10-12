@@ -7,7 +7,10 @@ import { Shell, Status } from "@/components/shell";
 
 // The Model API spells providers as agentgateway does; people read the vendors' own names.
 const providerName: Record<string, string> = {
-  Anthropic: "Anthropic", Azure: "Azure OpenAI", Bedrock: "Amazon Bedrock", Gemini: "Google Gemini", OpenAI: "OpenAI", Openrouter: "OpenRouter", VertexAI: "Vertex AI",
+  Anthropic: "Anthropic", Azure: "Azure OpenAI", Baseten: "Baseten", Bedrock: "Amazon Bedrock", Cerebras: "Cerebras",
+  Cohere: "Cohere", Deepinfra: "DeepInfra", Deepseek: "DeepSeek", Fireworks: "Fireworks AI", Gemini: "Google Gemini",
+  Groq: "Groq", Huggingface: "Hugging Face", Meta: "Meta Llama API", Mistral: "Mistral AI", OpenAI: "OpenAI",
+  Openrouter: "OpenRouter", TogetherAI: "Together AI", VertexAI: "Google Vertex AI", XAI: "xAI",
 };
 const field = "w-28 rounded-md border border-line bg-surface px-2 py-1 font-mono text-[12.5px] outline-none focus:border-accent";
 const priceText = (p: ModelPrice) => `$${p.inputPerMillionTokens} / $${p.outputPerMillionTokens} per million`;

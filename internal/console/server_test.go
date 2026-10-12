@@ -1,6 +1,7 @@
 package console
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -21,15 +22,24 @@ import (
 
 // fakeIssuer is a minimal OIDC provider standing in for Dex.
 type fakeIssuer struct {
-	srv        *httptest.Server
-	key        *rsa.PrivateKey
-	mu         sync.Mutex
-	challenge  string // code_challenge from the last authorize request
-	nonce      string
-	connector  string
-	email      string
-	groups     []string
-	badPKCE    bool // set when the token request's verifier did not match
+	srv       *httptest.Server
+	key       *rsa.PrivateKey
+	mu        sync.Mutex
+	challenge string // code_challenge from the last authorize request
+	nonce     string
+	connector string
+	email     string
+	groups    []string
+	badPKCE   bool   // set when the token request's verifier did not match
+	public    string // issuer the tokens and discovery name; srv.URL unless set (Dex behind a public URL)
+}
+
+// iss is the issuer URL the fake advertises: the public URL when set, else the server's own.
+func (f *fakeIssuer) iss() string {
+	if f.public != "" {
+		return f.public
+	}
+	return f.srv.URL
 }
 
 func newFakeIssuer(t *testing.T) *fakeIssuer {
@@ -43,8 +53,8 @@ func newFakeIssuer(t *testing.T) *fakeIssuer {
 	f.srv = httptest.NewServer(mux)
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
-			"issuer": f.srv.URL, "authorization_endpoint": f.srv.URL + "/auth",
-			"token_endpoint": f.srv.URL + "/token", "jwks_uri": f.srv.URL + "/keys",
+			"issuer": f.iss(), "authorization_endpoint": f.iss() + "/auth",
+			"token_endpoint": f.iss() + "/token", "jwks_uri": f.iss() + "/keys",
 			"id_token_signing_alg_values_supported": []string{"RS256"},
 		})
 	})
@@ -62,7 +72,7 @@ func newFakeIssuer(t *testing.T) *fakeIssuer {
 			return
 		}
 		idt := f.sign(t, map[string]any{
-			"iss": f.srv.URL, "sub": "user-1", "aud": "ambit-console",
+			"iss": f.iss(), "sub": "user-1", "aud": "ambit-console",
 			"exp": time.Now().Add(time.Hour).Unix(), "iat": time.Now().Unix(), "nonce": f.nonce,
 			"email": f.email, "email_verified": true, "name": "Admin", "groups": f.groups,
 			"federated_claims": map[string]string{"connector_id": f.connector, "user_id": "user-1"},
@@ -96,13 +106,17 @@ var testSPA = fstest.MapFS{
 }
 
 func newTestServer(t *testing.T, f *fakeIssuer) (*httptest.Server, *http.Client) {
+	return newTestServerWith(t, f, nil)
+}
+
+func newTestServerWith(t *testing.T, f *fakeIssuer, onSignIn func(context.Context, Session)) (*httptest.Server, *http.Client) {
 	t.Helper()
 	var ts *httptest.Server
 	ts = httptest.NewUnstartedServer(nil)
 	ts.Start()
 	auth, err := NewAuth(t.Context(), AuthConfig{
 		Issuer: f.srv.URL, ClientID: "ambit-console", ClientSecret: "s3cret",
-		PublicURL: ts.URL, SessionKey: []byte("0123456789abcdef0123456789abcdef"), SessionTTL: 8 * time.Hour,
+		PublicURL: ts.URL, SessionKey: []byte("0123456789abcdef0123456789abcdef"), SessionTTL: 8 * time.Hour, OnSignIn: onSignIn,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +151,7 @@ func signIn(t *testing.T, ts *httptest.Server, c *http.Client, f *fakeIssuer, ta
 	}
 	loc, _ := url.Parse(resp.Header.Get("Location"))
 	q := loc.Query()
-	if !strings.HasPrefix(loc.String(), f.srv.URL+"/auth") || q.Get("connector_id") != "local" ||
+	if !strings.HasPrefix(loc.String(), f.iss()+"/auth") || q.Get("connector_id") != "local" ||
 		q.Get("code_challenge_method") != "S256" || q.Get("state") == "" || q.Get("nonce") == "" {
 		t.Fatalf("bad authorize redirect: %s", loc)
 	}
@@ -207,6 +221,43 @@ func TestSignInSetsSecureSessionAndMe(t *testing.T) {
 	}
 	if r := get(t, c, ts.URL+"/"); r.StatusCode != http.StatusOK {
 		t.Errorf("GET / after sign-in: got %d", r.StatusCode)
+	}
+}
+
+// On kind the public Dex URL (console.localtest.me) resolves to the pod itself. The console must reach Dex
+// at its in-cluster address for discovery, the code exchange and the keys, and still send the browser to
+// the public sign-in page and accept tokens that name the public issuer.
+func TestSignInThroughInternalDexURL(t *testing.T) {
+	f := newFakeIssuer(t)
+	f.public = "http://console.invalid/dex" // never resolves: any request to it fails
+	ts := httptest.NewServer(nil)
+	defer ts.Close()
+	auth, err := NewAuth(t.Context(), AuthConfig{
+		Issuer: f.public, InternalIssuer: f.srv.URL, ClientID: "ambit-console", ClientSecret: "s3cret",
+		PublicURL: ts.URL, SessionKey: []byte("0123456789abcdef0123456789abcdef"), SessionTTL: time.Hour,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts.Config.Handler = NewServer(auth, testSPA, LoginOptions{Bootstrap: true}, nil)
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	if r := signIn(t, ts, c, f, false); r.StatusCode != http.StatusFound || r.Header.Get("Location") != "/" {
+		t.Fatalf("callback: got %d %q (badPKCE=%v)", r.StatusCode, r.Header.Get("Location"), f.badPKCE)
+	}
+	if r := get(t, c, ts.URL+"/api/me"); r.StatusCode != http.StatusOK {
+		t.Fatalf("/api/me after sign-in: %d", r.StatusCode)
+	}
+}
+
+func TestInternalDexURLMustBeOnlyAPrefixSwap(t *testing.T) {
+	f := newFakeIssuer(t)
+	f.public = "http://console.invalid/dex"
+	_, err := NewAuth(t.Context(), AuthConfig{Issuer: "http://other.invalid/dex", InternalIssuer: f.srv.URL,
+		ClientID: "ambit-console", ClientSecret: "s", PublicURL: "http://console.invalid",
+		SessionKey: []byte("0123456789abcdef0123456789abcdef"), SessionTTL: time.Hour})
+	if err == nil {
+		t.Fatal("NewAuth accepted a Dex whose issuer differs from the configured public issuer")
 	}
 }
 
@@ -320,5 +371,17 @@ func TestParseConnectors(t *testing.T) {
 	}
 	if _, err := ParseConnectors(`{not json`); err == nil {
 		t.Fatal("bad JSON accepted")
+	}
+}
+
+func TestSignInRecordsTimeAndCallsHook(t *testing.T) {
+	f := newFakeIssuer(t)
+	var got Session
+	ts, c := newTestServerWith(t, f, func(ctx context.Context, s Session) { got = s })
+	if r := signIn(t, ts, c, f, false); r.StatusCode != http.StatusFound {
+		t.Fatal(r.StatusCode)
+	}
+	if got.Email != BootstrapEmail || got.SignedIn == 0 || time.Since(time.Unix(got.SignedIn, 0)) > time.Minute {
+		t.Fatalf("hook got %+v", got)
 	}
 }

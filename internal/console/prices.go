@@ -54,9 +54,15 @@ var litellmProvider = map[string]struct {
 	providers []string
 }{
 	"OpenAI": {"openai", []string{"openai"}}, "Anthropic": {"anthropic", []string{"anthropic"}},
-	"Gemini": {"gemini", []string{"gemini"}}, "VertexAI": {"vertex_ai", []string{"vertex_ai"}},
 	"Azure": {"azure", []string{"azure"}}, "Bedrock": {"bedrock", []string{"bedrock", "bedrock_converse"}},
-	"Openrouter": {"openrouter", []string{"openrouter"}},
+	"Gemini": {"gemini", []string{"gemini"}}, "Openrouter": {"openrouter", []string{"openrouter"}},
+	"Mistral": {"mistral", []string{"mistral"}}, "Cohere": {"cohere", []string{"cohere", "cohere_chat"}},
+	"XAI": {"xai", []string{"xai"}}, "Deepseek": {"deepseek", []string{"deepseek"}}, "Meta": {"meta", []string{"meta"}},
+	"Groq": {"groq", []string{"groq"}}, "Cerebras": {"cerebras", []string{"cerebras"}},
+	"TogetherAI": {"together_ai", []string{"together_ai"}}, "Fireworks": {"fireworks_ai", []string{"fireworks_ai"}},
+	"Deepinfra": {"deepinfra", []string{"deepinfra"}}, "Baseten": {"baseten", []string{"baseten"}},
+	"VertexAI": {"vertex_ai", []string{"vertex_ai", "vertex_ai-language-models", "vertex_ai-anthropic_models"}},
+	// Huggingface: LiteLLM's list has no Hugging Face prices, so no suggestion.
 }
 
 // ParseLiteLLM reads LiteLLM's file (or the trimmed built-in copy). Every entry it keeps must have a
@@ -135,7 +141,7 @@ func (l *PriceList) Suggest(m v1.Model) (Suggestion, bool) {
 			continue
 		}
 		for _, p := range lp.providers {
-			if e.Provider == p || (p == "vertex_ai" && strings.HasPrefix(e.Provider, "vertex_ai-")) {
+			if e.Provider == p {
 				return Suggestion{Input: perMillion(e.In), Output: perMillion(e.Out), Key: key, Source: l.Source, Commit: l.Commit, Date: l.Date}, true
 			}
 		}

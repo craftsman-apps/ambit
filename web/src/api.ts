@@ -60,10 +60,10 @@ export type RuleDetail = RuleView & {
 };
 export type RuleInput = { name?: string; groups: string[]; allSignedIn: boolean; models: string[]; servers: ServerAccess[] };
 
-export type Tool = { name: string; description?: string };
+export type Tool = { name: string; description?: string; readOnlyHint?: boolean; destructiveHint?: boolean };
 export type ServerView = {
   name: string; displayName: string; image: string; url: string; connection: string; transport: string; ready: string; message: string;
-  tools: Tool[]; requestedBy: string; approvedBy: string; gitManaged: boolean; rules: string[]; changedTools: string[];
+  tools: Tool[]; reader?: string; toolsReadAt?: string; toolsRead?: string; toolsReadMessage?: string; requestedBy: string; approvedBy: string; gitManaged: boolean; rules: string[]; changedTools: string[];
 };
 export type RequestView = {
   name: string; serverName: string; displayName: string; image: string; url: string; connection: string; transport: string; reason: string;
@@ -115,3 +115,13 @@ export type ConnectionView = {
   connectedAt?: string; checkedAt?: string; revocable: boolean; connectURL: string; servers: string[];
 };
 export const useConnections = () => useQuery({ queryKey: ["connections"], queryFn: () => getJSON<ConnectionView[]>("/api/connections") });
+
+export type Placeholder = { name: string; label: string; pattern: string; example: string };
+export type PresetView = { id: string; version: number; displayName: string; category: string; serverHost: string; serverURL: string;
+  scopes: string[]; setup: string; placeholders: Placeholder[]; clientIDLabel: string; clientSecretLabel: string;
+  requires?: string; preview: boolean; revokes: boolean; testedOn?: string; docs: string };
+export type PresetOverrides = { serverURL?: string; scopes?: string[] };
+export type PresetAddInput = { operation: string; preset: string; version: number; name: string; displayName: string;
+  clientID: string; clientSecret: string; values: Record<string, string>; overrides?: PresetOverrides };
+export type Unfinished = { operation: string; app: string; missing: string[]; pullRequest?: PullRequest };
+export type EffectiveAccess = { allSignedIn: boolean; groups: string[]; allTools: boolean; tools: Record<string, string[]> };

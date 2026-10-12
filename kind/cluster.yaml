@@ -2,6 +2,13 @@
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: ambit
+# The kubelet refreshes mounted ConfigMaps on its sync cycle (default 1 minute): a Budget change reached envoy
+# ratelimit after 68-80 s, with 10 s after 11-13 s (measured 2026-10-08). Test cluster only; on a real cluster a
+# budget change takes up to about a minute (docs/budgets.md).
+kubeadmConfigPatches:
+  - |
+    kind: KubeletConfiguration
+    syncFrequency: 10s
 nodes:
   - role: control-plane
     extraPortMappings:

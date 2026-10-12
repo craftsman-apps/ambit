@@ -1,7 +1,7 @@
 {
-  "date": "2026-10-08T04:43:08.378787Z",
-  "commit": "d7ccab350efa8c64360b20a6a6f34e8dbd6c28f7",
-  "catalogHash": "5c039e7d153ce70c058e440df88147befb3babe2c3605477f2634399b673d573",
+  "date": "2026-10-12T16:08:34.612961Z",
+  "commit": "a4ce1e0f5019ba204cbecb551bbf7bf4324699d3",
+  "catalogHash": "e065077b701d2762dd407e7ddb35d96f7257ba9d969399197fc0407479fde3db",
   "presets": [
     {
       "preset": "github",
@@ -58,7 +58,7 @@
     },
     {
       "preset": "linear",
-      "version": 1,
+      "version": 2,
       "pass": true,
       "tools": [
         "create_attachment",
@@ -193,6 +193,7 @@
         "create_items",
         "create_notification",
         "create_update",
+        "create_updates",
         "create_view",
         "create_view_table",
         "create_widget",
@@ -246,6 +247,7 @@
         "show-assign",
         "show-battery",
         "show-chart",
+        "show-monday",
         "show-table",
         "stop_workflow_run_once",
         "submit_bug_or_feature_request",
@@ -341,9 +343,7 @@
         "get_file_content",
         "get_file_metadata",
         "get_file_request",
-        "get_markdown",
         "get_shared_link_metadata",
-        "get_transcript",
         "get_usage_and_quota",
         "list_dropbox_operations",
         "list_file_requests",
@@ -362,7 +362,7 @@
     },
     {
       "preset": "canva",
-      "version": 1,
+      "version": 2,
       "pass": true,
       "tools": [
         "cancel-editing-transaction",

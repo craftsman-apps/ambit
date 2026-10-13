@@ -5,7 +5,7 @@ description: Install Ambit on a laptop with kind, add a free model through OpenR
 
 # Quick start
 
-In this guide you install Ambit release v0.1.0 on a laptop, add a free model, allow people to use it, and make a first call through the gateway. It takes about 20 minutes. Most of that time is spent pulling images.
+In this guide you install Ambit release v0.1.0 on a laptop, add a free model, allow people to use it, and make a first call through the gateway. The install takes from 2 to 20 minutes, depending on your network, because Ambit pulls about 1 GB of images.
 
 This install is for testing only: plain HTTP, one gateway replica, and sign-in tokens from Ambit's own Dex. To install on a real cluster, see [Install on your cluster](install.md).
 

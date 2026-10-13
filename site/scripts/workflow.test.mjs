@@ -18,3 +18,7 @@ test('deploy never runs for fork pull requests', () => {
 test('ci.yml treats site/ and the site workflow as documentation-only', () => {
   assert.ok(ci.includes('^site/') && ci.includes('site\\.yml'));
 });
+test('README address check has no allow-list left', () => {
+  const pkg = readFileSync(new URL('../package.json', import.meta.url), 'utf8');
+  assert.ok(!/check-readme-urls\.mjs \.\.\/README\.md build \S/.test(pkg));
+});

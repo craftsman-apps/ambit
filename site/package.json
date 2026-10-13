@@ -14,7 +14,7 @@
     "write-heading-ids": "docusaurus write-heading-ids",
     "typecheck": "tsc",
     "test": "node --test scripts/",
-    "check-readme-urls": "node scripts/check-readme-urls.mjs ../README.md build /docs/quick-start,/docs/concepts,/docs/install"
+    "check-readme-urls": "node scripts/check-readme-urls.mjs ../README.md build"
   },
   "dependencies": {
     "@docusaurus/core": "3.10.2",

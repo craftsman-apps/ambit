@@ -3,6 +3,9 @@ const sidebars: SidebarsConfig = {
   docs: [
     'index',
     {type: 'category', label: 'Getting started', collapsed: false, items: ['quick-start', 'concepts', 'install']},
+    {type: 'category', label: 'Guides', collapsed: false, items: [
+      'guides/coding-tools', 'guides/models-per-team', 'guides/mcp-apps', 'guides/spending-limits', 'guides/someone-leaves',
+    ]},
     {type: 'category', label: 'Reference', collapsed: false, items: [
       'providers', 'api-keys', 'presets', 'budgets', 'routing', 'offboarding', 'alerts', 'upgrading',
     ]},

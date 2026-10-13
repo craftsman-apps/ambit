@@ -1,0 +1,34 @@
+.page { max-width: 1120px; margin: 0 auto; padding: 0 16px 72px; display: grid; gap: 56px; }
+.page section { display: grid; gap: 16px; min-width: 0; }
+.page h2 { font-size: 1.5rem; margin: 0; }
+.hero { padding: 56px 0 8px; }
+.hero > * { min-width: 0; }
+.hero h1 { font-size: 44px; line-height: 1.15; font-weight: 600; letter-spacing: -0.01em; margin: 10px 0 14px; }
+.eyebrow { font-family: var(--ifm-font-family-monospace); font-size: 12.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ifm-color-emphasis-600); margin: 0; }
+.lead { font-size: 18px; line-height: 1.6; color: var(--ifm-color-emphasis-600); margin: 0; max-width: 60ch; }
+.buttons { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 22px; }
+.primary, .secondary { font-size: 15.5px; font-weight: 500; padding: 10px 18px; border-radius: var(--ifm-global-radius); text-decoration: none; }
+.primary { background: var(--ifm-color-primary); color: #fff; }
+.primary:hover { background: var(--ifm-color-primary-dark); color: #fff; text-decoration: none; }
+/* white on the dark-mode blue is 3.2:1; dark ink on it is above 4.5:1 */
+[data-theme='dark'] .primary, [data-theme='dark'] .primary:hover { background: var(--ifm-color-primary); color: #0D1114; }
+.secondary { border: 1px solid var(--ifm-toc-border-color); color: var(--ifm-font-color-base); }
+.secondary:hover { color: var(--ifm-font-color-base); background: var(--ifm-background-surface-color); text-decoration: none; }
+.shot { width: 100%; height: auto; border: 1px solid var(--ifm-toc-border-color); border-radius: var(--ifm-global-radius); }
+.diagram { width: 100%; height: auto; }
+.key { color: var(--ifm-color-emphasis-600); margin: 0; }
+.tableWrap { overflow-x: auto; }
+.tableWrap table { display: table; width: 100%; margin: 0; }
+.cards { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.card { display: block; height: 100%; padding: 16px; border: 1px solid var(--ifm-toc-border-color); border-radius: var(--ifm-global-radius); background: var(--ifm-background-surface-color); color: var(--ifm-font-color-base); text-decoration: none; }
+.card:hover { border-color: var(--ifm-color-primary); color: var(--ifm-font-color-base); text-decoration: none; }
+.card h3 { font-size: 1.05rem; margin: 0 0 6px; }
+.card p { margin: 0; font-size: 15px; color: var(--ifm-color-emphasis-600); }
+@media (min-width: 1200px) { .cards { grid-template-columns: repeat(5, 1fr); } }
+@media (max-width: 600px) { .cards { grid-template-columns: 1fr; } }
+.figure { margin: 0; }
+.figure figcaption { margin-top: 10px; font-size: 15px; color: var(--ifm-color-emphasis-600); }
+@media (max-width: 900px) {
+  .hero { padding-top: 32px; }
+  .hero h1 { font-size: 34px; }
+}

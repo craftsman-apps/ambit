@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 490" role="img" aria-label="Request path: clients call one Ambit gateway, built on agentgateway, which checks the caller and their access, asks the budget service, guard, token broker and router as needed, then forwards to AI models or MCP servers and sends audit records through the OpenTelemetry Collector to ClickHouse. Setup: your identity provider signs people in through Dex and reports leavers to the console by SCIM; admins use the console, which stores Ambit objects; ambit-controller turns them into gateway configuration.">
+  <title>Ambit architecture: requests pass one gateway to AI models and MCP servers; admins and your identity provider set it up through the console.</title>
+  <style>
+text{font-family:'IBM Plex Sans, -apple-system, Segoe UI, Helvetica, Arial, sans-serif';fill:#1F2328}
+.t{font-size:14px;font-weight:600}
+.s{font-size:12px;fill:#59636E}
+.m{font-family:'IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace';font-size:11px;letter-spacing:.06em;fill:#59636E}
+.l{font-size:11px;fill:#59636E;font-style:italic}
+.box{fill:#F6F8FA;stroke:#D1D9E0;stroke-width:1}
+.gw{fill:none;stroke:#1F2328;stroke-width:1.25}
+.lane{fill:none;stroke:#D1D9E0;stroke-width:1;stroke-dasharray:3 4}
+.req{fill:none;stroke:#2563EB;stroke-width:2}
+.cfg{fill:none;stroke:#59636E;stroke-width:1.25}
+</style>
+  <defs>
+    <marker id="AB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#2563EB"/></marker>
+    <marker id="AG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#59636E"/></marker>
+  </defs>
+
+  <!-- lane labels -->
+  <text class="m" x="16" y="22">REQUEST PATH</text>
+  
+
+  <!-- clients -->
+  <rect class="box" x="16" y="58" width="160" height="62" rx="4"/>
+  <text class="t" x="30" y="83">Clients</text>
+  <text class="s" x="30" y="103">Claude Code, Cursor, SDKs</text>
+
+  <!-- gateway -->
+  <rect class="gw" x="216" y="36" width="392" height="238" rx="4"/>
+  <text class="t" x="232" y="62">Ambit gateway</text>
+  <text class="s" x="338" y="62">agentgateway · /v1 models · /mcp</text>
+  <text class="s" x="232" y="88">Checks who is calling (token or personal API key)</text>
+  <text class="s" x="232" y="106">and what they may use (access rules)</text>
+  <text class="m" x="232" y="134">ASKS ON EACH REQUEST</text>
+  <rect class="box" x="232" y="144" width="180" height="52" rx="4"/>
+  <text class="t" x="244" y="166">Budgets</text><text class="s" x="244" y="184">ratelimit service + Valkey</text>
+  <rect class="box" x="420" y="144" width="172" height="52" rx="4"/>
+  <text class="t" x="432" y="166">Guard</text><text class="s" x="432" y="184">MCP tool checks, masking</text>
+  <rect class="box" x="232" y="204" width="180" height="52" rx="4"/>
+  <text class="t" x="244" y="226">Token broker</text><text class="s" x="244" y="244">each person's app tokens</text>
+  <rect class="box" x="420" y="204" width="172" height="52" rx="4"/>
+  <text class="t" x="432" y="226">Router</text><text class="s" x="432" y="244">optional automatic model</text>
+
+  <!-- destinations -->
+  <rect class="box" x="664" y="36" width="280" height="62" rx="4"/>
+  <text class="t" x="678" y="61">AI models</text>
+  <text class="s" x="678" y="81">OpenAI-compatible, Azure, Bedrock, Vertex AI</text>
+  <rect class="box" x="664" y="112" width="280" height="62" rx="4"/>
+  <text class="t" x="678" y="137">MCP servers</text>
+  <text class="s" x="678" y="157">run by ToolHive, or hosted by the vendor</text>
+  <rect class="box" x="664" y="212" width="132" height="62" rx="4"/>
+  <text class="t" x="676" y="237">OTel Collector</text>
+  <text class="s" x="676" y="257">audit pipeline</text>
+  <rect class="box" x="812" y="212" width="132" height="62" rx="4"/>
+  <text class="t" x="824" y="237">ClickHouse</text>
+  <text class="s" x="824" y="257">audit and usage</text>
+
+  <!-- request arrows -->
+  <path class="req" d="M176 89H214" marker-end="url(#AB)"/>
+  <path class="req" d="M608 67H662" marker-end="url(#AB)"/>
+  <path class="req" d="M608 143H662" marker-end="url(#AB)"/>
+  <path class="cfg" d="M608 243H662" marker-end="url(#AG)"/>
+  <path class="cfg" d="M796 243H810" marker-end="url(#AG)"/>
+  <text class="l" x="616" y="236">records</text>
+
+  <g transform="translate(0,20)">
+  <path class="lane" d="M16 300H944"/>
+  <text class="m" x="16" y="324">SETUP</text>
+  <!-- setup lane -->
+  <rect class="box" x="16" y="344" width="160" height="62" rx="4"/>
+  <text class="t" x="30" y="369">Identity provider</text>
+  <text class="s" x="30" y="389">OIDC, SAML or LDAP</text>
+  <rect class="box" x="216" y="344" width="132" height="62" rx="4"/>
+  <text class="t" x="230" y="369">Dex</text>
+  <text class="s" x="230" y="389">sign-in, tokens</text>
+  <rect class="box" x="388" y="344" width="160" height="62" rx="4"/>
+  <text class="t" x="402" y="369">Ambit console</text>
+  <text class="s" x="402" y="389">admin UI, API, SCIM</text>
+  <rect class="box" x="588" y="344" width="172" height="62" rx="4"/>
+  <text class="t" x="602" y="369">Ambit objects</text>
+  <text class="s" x="602" y="389">Model, AccessRule, Server,</text>
+  <text class="s" x="602" y="403">Budget (Kubernetes)</text>
+  <rect class="box" x="800" y="344" width="144" height="62" rx="4"/>
+  <text class="t" x="814" y="369">ambit-controller</text>
+  <text class="s" x="814" y="389">builds gateway config</text>
+
+  <path class="cfg" d="M176 368H214" marker-end="url(#AG)"/>
+  <text class="l" x="180" y="360">sign-in</text>
+  <path class="cfg" d="M96 406V440H468V408" marker-end="url(#AG)"/>
+  <text class="l" x="232" y="456">SCIM: someone left, remove their access</text>
+  <path class="cfg" d="M348 375H386" marker-end="url(#AG)"/>
+  <path class="cfg" d="M548 375H586" marker-end="url(#AG)"/>
+  <text class="l" x="552" y="367">writes</text>
+  <path class="cfg" d="M760 375H798" marker-end="url(#AG)"/>
+  <text class="l" x="764" y="367">reads</text>
+  
+  
+  </g>
+  <path class="cfg" d="M872 364V300H520V276" marker-end="url(#AG)"/>
+  <text class="l" x="700" y="290">configures the gateway</text>
+</svg>

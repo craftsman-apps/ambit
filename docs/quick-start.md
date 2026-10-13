@@ -188,3 +188,6 @@ kind delete cluster --name ambit
 - [Concepts](concepts.md): what each object does, and how Ambit checks a request.
 - [Install on your cluster](install.md): company sign-in, HTTPS, your own ClickHouse and Valkey.
 - [Models and providers](providers.md) and [Personal API keys](api-keys.md): other providers, and keys for Claude Code and Cursor.
+
+The quick start installs Ambit without budgets. To use a `Budget` (daily request and spending limits), install with
+`limits.enabled: true`. [Different models for different teams](guides/models-per-team.md) shows the upgrade command.

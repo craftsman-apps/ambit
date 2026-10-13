@@ -76,6 +76,14 @@ c=$(command curl -s -o "$W/llm" -w '%{http_code}' --max-time 60 -H "Authorizatio
   -d "{\"model\":\"$GEMMA\",\"max_tokens\":4,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" http://llm.localtest.me:8080/v1/messages)
 [[ "$c" == 429 ]] && grep -q '"type":"error"' "$W/llm" && grep -q '"type":"rate_limit_error"' "$W/llm" || fail "2b /v1/messages refusal: $c $(cat "$W/llm")"
 pass "2b /v1/messages refusal: 429 with an Anthropic-format error body"
+# 2c · the transformation keeps the status and Retry-After on the other LLM endpoints too
+for ep in responses embeddings; do
+  c=$(command curl -s -D "$W/h" -o "$W/llm" -w '%{http_code}' --max-time 60 -H "Authorization: Bearer $A" -H 'Content-Type: application/json' \
+    -d "{\"model\":\"$GEMMA\",\"input\":\"hi\"}" "http://llm.localtest.me:8080/v1/$ep")
+  [[ "$c" == 429 ]] && grep -qi '^retry-after: [0-9]' "$W/h" && grep -q '"code":"budget_exceeded"' "$W/llm" && ! grep -qi '^x-ratelimit-' "$W/h" ||
+    fail "2c /v1/$ep refusal: $c $(tr -d '\r' <"$W/h" | tr '\n' ' ') $(cat "$W/llm")"
+done
+pass "2c /v1/responses and /v1/embeddings refusals: 429, Retry-After and the OpenAI-format error body"
 
 # 3 · S4, FailOpen (default): with the ratelimit service down, requests pass uncounted; back up, the count holds
 kubectl -n "$NS" scale deploy/ambit-ratelimit --replicas=0 >/dev/null

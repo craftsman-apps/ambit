@@ -58,11 +58,13 @@ spec:
       # headers in the ratelimit service's numbers (dollars in units of $0.00001; requests one less than the Budget).
       # Give it an error body in the API's format, and remove those headers from every response: a wrong number is
       # worse than none. Retry-After (seconds to midnight UTC) stays. Response policies of the Gateway's PreRouting
-      # phase run on every response, refusals included. Every expression must evaluate: a failed body expression
-      # turns the response into a 500.
+      # phase run on every response, refusals included. Only the LLM endpoints get a body (never /v1/models or another
+      # path). Every expression must evaluate: a failed body expression turns the response into a 500. The request
+      # path is read last, only for such a 429, which always has the request (agentgateway snapshots it for policy
+      # refusals and before calling a model).
       response:
         metadata:
-          ambitBudgetRefusal: 'response.code == 429 && !("content-type" in response.headers) && "retry-after" in response.headers && "x-ratelimit-remaining" in response.headers && response.headers["x-ratelimit-remaining"] == "0"'
+          ambitBudgetRefusal: 'response.code == 429 && !("content-type" in response.headers) && "retry-after" in response.headers && "x-ratelimit-remaining" in response.headers && response.headers["x-ratelimit-remaining"] == "0" && request.path in ["/v1/chat/completions", "/v1/completions", "/v1/responses", "/v1/embeddings", "/v1/messages"]'
         set:
           content-type: 'metadata.ambitBudgetRefusal ? "application/json" : ("content-type" in response.headers ? response.headers["content-type"] : null)'
         remove: [x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset]

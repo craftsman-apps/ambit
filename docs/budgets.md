@@ -61,8 +61,8 @@ Requests that run at the same time can go over a request limit by the number of 
 checked before the others were counted. Dollar limits behave the same.
 
 A refused request gets HTTP 429 and a `Retry-After` header with the seconds until midnight UTC. The body is an
-error in the API's format: OpenAI's for `/v1/chat/completions`, `/v1/responses` and `/v1/embeddings`
-(`"type": "insufficient_quota"`, `"code": "budget_exceeded"`), Anthropic's for `/v1/messages`
+error in the API's format: OpenAI's for `/v1/chat/completions`, `/v1/completions`, `/v1/responses` and
+`/v1/embeddings` (`"type": "insufficient_quota"`, `"code": "budget_exceeded"`), Anthropic's for `/v1/messages`
 (`"type": "rate_limit_error"`). The message says that a request limit or a spending limit was reached; it does not
 say which one, because the gateway (agentgateway v1.6.0) does not pass that on. The gateway removes
 `x-ratelimit-*` headers from every response, because their numbers are the rate limit service's internal ones,

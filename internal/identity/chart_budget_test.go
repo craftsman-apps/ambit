@@ -78,15 +78,18 @@ func TestBudgetRefusalHasAnErrorBody(t *testing.T) {
 		{"MCP stream", 200, map[string]any{"content-type": "text/event-stream"}, false},
 	}
 	for _, c := range cases {
-		for _, path := range []string{"/v1/chat/completions", "/v1/messages", "/mcp"} {
+		// Only the LLM endpoints get an error body; never /v1/models or any other path (the MCP host included).
+		llm := map[string]bool{"/v1/chat/completions": true, "/v1/completions": true, "/v1/responses": true, "/v1/embeddings": true, "/v1/messages": true}
+		for _, path := range []string{"/v1/chat/completions", "/v1/completions", "/v1/responses", "/v1/embeddings", "/v1/messages", "/v1/models", "/v2/unknown", "/mcp"} {
+			want := c.want && llm[path]
 			in := map[string]any{"request": map[string]any{"path": path}, "response": map[string]any{"code": c.code, "headers": c.headers}}
 			flag := eval(flagExpr, in)
-			if flag != c.want {
-				t.Fatalf("%s %s: flag %v, want %v", c.name, path, flag, c.want)
+			if flag != want {
+				t.Fatalf("%s %s: flag %v, want %v", c.name, path, flag, want)
 			}
 			in["metadata"] = map[string]any{"ambitBudgetRefusal": flag}
 			ct, body := eval(ctExpr, in), eval(bodyExpr, in)
-			if !c.want {
+			if !want {
 				if body != nil || ct != c.headers["content-type"] && !(ct == nil && c.headers["content-type"] == nil) {
 					t.Fatalf("%s %s: changed: content-type %v, body %v", c.name, path, ct, body)
 				}

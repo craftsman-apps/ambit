@@ -44,6 +44,14 @@ exceeded: every request that started while the total was not yet above the cap f
 (for example several requests sent at the same moment), and a charge reaches the counter a moment after its
 answer. Once the total is above the cap, new requests are refused.
 
+A refused request gets HTTP 429 and a `Retry-After` header with the seconds until midnight UTC. The body is an
+error in the API's format: OpenAI's for `/v1/chat/completions`, `/v1/responses` and `/v1/embeddings`
+(`"type": "insufficient_quota"`, `"code": "budget_exceeded"`), Anthropic's for `/v1/messages`
+(`"type": "rate_limit_error"`). The message says that a request limit or a spending limit was reached; it does not
+say which one, because the gateway (agentgateway v1.6.0) does not pass that on. The gateway removes
+`x-ratelimit-*` headers from every response, because their numbers are the rate limit service's internal ones,
+not the Budget's.
+
 A change to a Budget takes up to about a minute to apply: the rate limit service reads budgets from a mounted
 ConfigMap, which Kubernetes refreshes on the kubelet's sync cycle (1 minute by default).
 

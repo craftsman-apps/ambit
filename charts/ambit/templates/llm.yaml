@@ -53,4 +53,19 @@ spec:
     transformation:
       request:
         remove: [x-ambit-route, x-ambit-route-reason, x-ambit-config]
+      {{- if .Values.limits.enabled }}
+      # A Budget refusal from agentgateway v1.6.0 is a 429 with an empty body, no content type, and x-ratelimit-*
+      # headers in the ratelimit service's numbers (dollars in units of $0.00001; requests one less than the Budget).
+      # Give it an error body in the API's format, and remove those headers from every response: a wrong number is
+      # worse than none. Retry-After (seconds to midnight UTC) stays. Response policies of the Gateway's PreRouting
+      # phase run on every response, refusals included. Every expression must evaluate: a failed body expression
+      # turns the response into a 500.
+      response:
+        metadata:
+          ambitBudgetRefusal: 'response.code == 429 && !("content-type" in response.headers) && "retry-after" in response.headers && "x-ratelimit-remaining" in response.headers && response.headers["x-ratelimit-remaining"] == "0"'
+        set:
+          content-type: 'metadata.ambitBudgetRefusal ? "application/json" : ("content-type" in response.headers ? response.headers["content-type"] : null)'
+        remove: [x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset]
+        body: 'metadata.ambitBudgetRefusal ? (request.path == "/v1/messages" ? {"type": "error", "error": {"type": "rate_limit_error", "message": "A daily Budget limit was reached: the request limit or the spending limit, for you or for your group. Requests are refused until midnight UTC (see the Retry-After header)."}} : {"error": {"message": "A daily Budget limit was reached: the request limit or the spending limit, for you or for your group. Requests are refused until midnight UTC (see the Retry-After header).", "type": "insufficient_quota", "code": "budget_exceeded"}}) : null'
+      {{- end }}
 {{- end }}

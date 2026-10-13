@@ -22,7 +22,7 @@ gw_pods() { kubectl -n "$NS" get pods -l gateway.networking.k8s.io/gateway-name=
 outcome() { # blocked (the gateway refused on budget) or passed:<code>
   local code; code=$(command curl -s -D "$W/h" -o "$W/llm" -w '%{http_code}' --max-time 60 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
     -d '{"model":"google/gemma-4-31b-it:free","max_tokens":4,"messages":[{"role":"user","content":"hi"}]}' "$LLM")
-  if [[ "$code" == 429 ]] && grep -qi '^x-ratelimit-remaining: 0' "$W/h" && ! grep -q 'Provider returned error' "$W/llm"; then echo blocked; else echo "passed:$code"; fi
+  if [[ "$code" == 429 ]] && grep -q '"code":"budget_exceeded"' "$W/llm" && ! grep -q 'Provider returned error' "$W/llm"; then echo blocked; else echo "passed:$code"; fi
 }
 mem() { # mem: "name=MiB ..." for Ambit's own pods (metrics-server). New pods have no metrics for a
   # minute, and kubectl top then fails for the whole list, so retry.

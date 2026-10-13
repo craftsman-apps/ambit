@@ -13,7 +13,7 @@ field() { uv run --no-project python -c "import json;d=json.load(open('$W/api'))
 outcome() { # blocked (the gateway refused on budget) or passed:<code>
   local code; code=$(command curl -s -D "$W/h" -o "$W/llm" -w '%{http_code}' --max-time 60 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
     -d '{"model":"google/gemma-4-31b-it:free","max_tokens":4,"messages":[{"role":"user","content":"hi"}]}' "$LLM")
-  if [[ "$code" == 429 ]] && grep -qi '^x-ratelimit-remaining: 0' "$W/h" && ! grep -q 'Provider returned error' "$W/llm"; then echo blocked; else echo "passed:$code"; fi
+  if [[ "$code" == 429 ]] && grep -q '"code":"budget_exceeded"' "$W/llm" && ! grep -q 'Provider returned error' "$W/llm"; then echo blocked; else echo "passed:$code"; fi
 }
 # Passwords stay inside the containers (their own environment), never in kubectl's arguments.
 ch() { kubectl -n "$EXT" exec deploy/clickhouse -- sh -c 'clickhouse-client --user ambit_ext --password "$CLICKHOUSE_PASSWORD" -q "$0"' "$1"; }

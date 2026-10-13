@@ -1,5 +1,104 @@
 Ambit
 Copyright 2026 The Ambit Authors
 
-This product includes software developed by third parties; see each component's own licence:
-agentgateway (Apache-2.0), Dex (Apache-2.0), Gateway API CRDs (Apache-2.0).
+This product includes software developed by third parties. Each component keeps its own licence.
+Where a component ships a NOTICE file, its text is copied below the component, unchanged.
+
+agentgateway - Apache-2.0
+  https://github.com/agentgateway/agentgateway
+
+ToolHive - Apache-2.0
+  https://github.com/stacklok/toolhive
+
+Dex - Apache-2.0
+  https://github.com/dexidp/dex
+
+Gateway API - Apache-2.0
+  https://github.com/kubernetes-sigs/gateway-api
+
+ClickHouse - Apache-2.0
+  https://github.com/ClickHouse/ClickHouse
+
+OpenTelemetry Collector - Apache-2.0
+  https://github.com/open-telemetry/opentelemetry-collector-contrib
+  Its NOTICE file, unchanged:
+
+    receiver/hostmetricsreceiver/internal/scraper/processscraper/process.go contains code originating from gopsutil under internal/common/common.go.
+
+    Copyright (c) 2014, WAKAYAMA Shirou
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without modification,
+    are permitted provided that the following conditions are met:
+
+     * Redistributions of source code must retain the above copyright notice, this
+       list of conditions and the following disclaimer.
+     * Redistributions in binary form must reproduce the above copyright notice,
+       this list of conditions and the following disclaimer in the documentation
+       and/or other materials provided with the distribution.
+     * Neither the name of the gopsutil authors nor the names of its contributors
+       may be used to endorse or promote products derived from this software without
+       specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+    ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+    WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+    DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR
+    ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+    (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+    LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+    ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+    SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+    internal/grpcutil contains code derived from gRPC-Go
+
+    Copyright 2014 gRPC authors.
+
+    Licensed under the Apache License, Version 2.0 (the "License");
+    you may not use this file except in compliance with the License.
+    You may obtain a copy of the License at
+
+        http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software
+    distributed under the License is distributed on an "AS IS" BASIS,
+    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and
+    limitations under the License.
+
+Valkey - BSD-3-Clause
+  https://github.com/valkey-io/valkey
+
+envoyproxy/ratelimit - Apache-2.0
+  https://github.com/envoyproxy/ratelimit
+
+MCP Go SDK - Apache-2.0 (older code MIT)
+  https://github.com/modelcontextprotocol/go-sdk
+
+Kubernetes client libraries, controller-runtime, CEL-go - Apache-2.0
+  https://github.com/kubernetes/client-go
+  https://github.com/kubernetes-sigs/controller-runtime
+  https://github.com/google/cel-go
+
+React, TanStack, Tailwind CSS, Radix UI - MIT
+  https://github.com/facebook/react
+  https://github.com/TanStack
+  https://github.com/tailwindlabs/tailwindcss
+  https://github.com/radix-ui/primitives
+
+IBM Plex (Fontsource) - SIL OFL 1.1
+  https://github.com/IBM/plex
+  https://github.com/fontsource/font-files
+
+Also compiled into the Ambit binaries:
+
+go-oidc - Apache-2.0
+  https://github.com/coreos/go-oidc
+  Its NOTICE file, unchanged:
+
+    CoreOS Project
+    Copyright 2014 CoreOS, Inc
+    
+    This product includes software developed at CoreOS, Inc.
+    (http://www.coreos.com/).

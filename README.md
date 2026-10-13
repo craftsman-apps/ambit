@@ -9,7 +9,7 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/github/license/craftsman-apps/ambit"></a>
-  <a href="https://github.com/craftsman-apps/ambit/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/craftsman-apps/ambit/ci.yml?branch=main&label=CI"></a>
+  <a href="https://github.com/craftsman-apps/ambit/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/craftsman-apps/ambit/ci.yml?label=CI"></a>
   <a href="https://github.com/craftsman-apps/ambit/releases"><img alt="Release" src="https://img.shields.io/github/v/release/craftsman-apps/ambit"></a>
 </p>
 

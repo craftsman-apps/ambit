@@ -44,12 +44,16 @@ metadata: { name: eng }
 spec: { group: eng, userRequestsPerDay: 2, groupRequestsPerDay: 100 }
 YAML
 kubectl -n "$NS" wait "budgets.$G" eng --for=condition=Ready --timeout=60s >/dev/null || fail "0 budget not enforced: $(kubectl -n "$NS" get "budgets.$G" eng -o yaml)"
-# The ConfigMap reaches the ratelimit pod on the kubelet's next sync (up to about two minutes).
-wait_rl "$NS" "ambit-llm.group_eng.user: unit=DAY requests_per_unit=2,"
+# The ConfigMap reaches the ratelimit pod on the kubelet's next sync (up to about two minutes). The loaded number
+# is the Budget's minus one: the check before a request refuses only above it, and the answer adds 1 afterwards.
+wait_rl "$NS" "ambit-llm.group_eng.user: unit=DAY requests_per_unit=1,"
 A=$(token alice); M=$(token mira)
+day=$(( $(date -u +%s) / 86400 * 86400 ))
+# wait_used N: alice's request counter reaches N (an answer is counted a moment after it arrives)
+wait_used() { local v; for _ in $(seq 1 30); do v=$(kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "ambit-llm_group_eng_user_alice@acme.test_$day" 2>/dev/null | tr -d '\r'); [[ "$v" == "$1" ]] && return 0; sleep 1; done; fail "$2: alice's count $v, want $1"; }
 
 # 1 · A3: alice's third request of the day is refused by the gateway; mira (not in eng) is not counted
-r1=$(outcome "$A"); r2=$(outcome "$A"); r3=$(outcome "$A")
+r1=$(outcome "$A"); wait_used 1 "1 first answer"; r2=$(outcome "$A"); wait_used 2 "1 second answer"; r3=$(outcome "$A")
 [[ "$r1" == passed* && "$r2" == passed* && "$r3" == blocked ]] || fail "1 alice: $r1, $r2, $r3 (want passed, passed, blocked)"
 # The refusal says why in the API's error format, has Retry-After, and no x-ratelimit-* numbers (they are the
 # ratelimit service's numbers, not the Budget's).
@@ -64,8 +68,8 @@ pass "1 alice: $r1, $r2, then blocked with 429 (limit 2/day), an error body, Ret
 sign_in keycloak priya priya-test-pass
 [[ $(api GET /api/budgets) == 200 ]] || fail "2 budgets api: $(cat "$W/api")"
 used=$(field '[(b["groupUsed"], [(u["email"], u["used"]) for u in b["users"]]) for b in d if b["group"]=="eng"][0]')
-[[ "$used" == "(3, [('alice@acme.test', 3)])" ]] || fail "2 budget view: $used"
-pass "2 console Budgets: eng used 3 today; alice 3 (over her 2)"
+[[ "$used" == "(2, [('alice@acme.test', 2)])" ]] || fail "2 budget view: $used"
+pass "2 console Budgets: eng used 2 today; alice 2 (the refused third request is not counted)"
 
 # 2b · a refusal on the Anthropic API (/v1/messages) has Anthropic's error format
 c=$(command curl -s -o "$W/llm" -w '%{http_code}' --max-time 60 -H "Authorization: Bearer $A" -H 'Content-Type: application/json' \
@@ -189,10 +193,20 @@ p3=$(ask "$M" mock/echo)
 pass "8 per-person cap \$0.00005: mira's third request refused (her spend 6 units)"
 
 # 9 · request and dollar limits together: whichever runs out first. 1 request a day per person, high dollar cap.
-set_ml '{ group: ml-research, groupDollarsPerDay: "100", userRequestsPerDay: 1 }' 'group_ml-research.user: unit=DAY requests_per_unit=1,'
-r1=$(ask "$M" mock/echo); r2=$(ask "$M" mock/echo)
+set_ml '{ group: ml-research, groupDollarsPerDay: "100", userRequestsPerDay: 1 }' 'group_ml-research.user: unit=DAY requests_per_unit=0,'
+r1=$(ask "$M" mock/echo); wait_spent 3 "9 first answer"; r2=$(ask "$M" mock/echo)
 [[ "$r1" == 200 && "$r2" == 429 ]] || fail "9 request limit with a dollar cap: $r1 $r2 (want 200 429)"
 pass "9 request and dollar limits in one Budget: the request limit (1/day) stops mira first"
+
+# 9b · the smallest request limit, alone: a Budget of 1 request a day lets the first request through and refuses the
+#      second (the limit loaded is 0: the check refuses above it, and the answer adds 1)
+set_ml '{ group: ml-research, userRequestsPerDay: 1 }' 'group_ml-research.user: unit=DAY requests_per_unit=0,'
+used_mira() { vget "ambit-llm_group_ml-research_user_mira@acme.test_$day"; }
+q1=$(ask "$M" mock/echo)
+for _ in $(seq 1 30); do [[ "$(used_mira)" == 1 ]] && break; sleep 1; done
+q2=$(ask "$M" mock/echo)
+[[ "$q1" == 200 && "$q2" == 429 && "$(used_mira)" == 1 ]] || fail "9b Budget of 1 request: $q1 $q2, count $(used_mira) (want 200 429, count 1)"
+pass "9b Budget of 1 request a day: the first request passes, the second is refused and not counted"
 
 # 10 · models: unpriced refused to the capped group, allowed to others; a model priced 0 is allowed and costs 0
 set_ml '{ group: ml-research, groupDollarsPerDay: "1" }' 'spend_group_ml-research: unit=DAY requests_per_unit=100000,'

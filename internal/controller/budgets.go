@@ -14,8 +14,8 @@ import (
 
 // Budgets become one shared rate limit on the LLM route: the gateway sends each request's group
 // and user to envoy's ratelimit service, which counts in Valkey, so every replica sees the same count.
-// Requests and estimated dollars. Dollars use `unit: Tokens` descriptors whose cost is computed after the
-// answer (agentgateway v1.5.0), counted in units of $0.00001 (pricing.UnitsPerDollar).
+// Requests and estimated dollars both use `unit: Tokens` descriptors whose cost is added after the
+// answer (agentgateway v1.5.0): 1 per request, and dollars in units of $0.00001 (pricing.UnitsPerDollar).
 
 const (
 	RateLimitDomain    = "ambit-llm"
@@ -143,16 +143,20 @@ func compileBudgets(budgets []v1.Budget, prices map[string]v1.ModelPrice, ns str
 	cost := costCEL(prices)
 	for _, b := range EffectiveBudgets(budgets) {
 		g := b.Spec.Group
+		// Request limits are counted like dollars (unit Tokens, cost 1): checked after the model's authorization and
+		// charged after the answer, so refused requests do not count. A "Requests" descriptor would be checked and
+		// counted with the route policies, before the model's authorization (found 2026-10-13). The check adds
+		// nothing and refuses only above the configured number, so that number is the Budget's minus one.
 		if b.Spec.GroupRequestsPerDay != nil || b.Spec.UserRequestsPerDay != nil {
 			d := map[string]any{"key": "group", "value": g}
 			if n := b.Spec.GroupRequestsPerDay; n != nil {
-				d["rate_limit"] = map[string]any{"unit": "day", "requests_per_unit": *n}
-				gwDescriptors = append(gwDescriptors, map[string]any{"unit": "Requests",
+				d["rate_limit"] = map[string]any{"unit": "day", "requests_per_unit": *n - 1}
+				gwDescriptors = append(gwDescriptors, map[string]any{"unit": "Tokens", "cost": "1",
 					"entries": []any{map[string]any{"name": "group", "expression": member(g)}}})
 			}
 			if n := b.Spec.UserRequestsPerDay; n != nil {
-				d["descriptors"] = []any{map[string]any{"key": "user", "rate_limit": map[string]any{"unit": "day", "requests_per_unit": *n}}}
-				gwDescriptors = append(gwDescriptors, map[string]any{"unit": "Requests", "entries": []any{
+				d["descriptors"] = []any{map[string]any{"key": "user", "rate_limit": map[string]any{"unit": "day", "requests_per_unit": *n - 1}}}
+				gwDescriptors = append(gwDescriptors, map[string]any{"unit": "Tokens", "cost": "1", "entries": []any{
 					map[string]any{"name": "group", "expression": member(g)},
 					map[string]any{"name": "user", "expression": principal()}}})
 			}

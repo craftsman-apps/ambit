@@ -108,6 +108,6 @@ restore-pins: install-crds
 contracts:
 	test/contracts.sh
 
-# Live checks of every verified preset with the maintainer's test accounts (docs/presets.md).
+# Live checks of every verified preset with the maintainer's test accounts (docs/maintainers/preset-testing.md).
 preset-live:
 	go run ./cmd/presetcheck live $(APP)

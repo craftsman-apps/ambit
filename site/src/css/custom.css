@@ -1,0 +1,32 @@
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-sans/600.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+:root {
+  --ifm-font-family-base: 'IBM Plex Sans', -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --ifm-font-family-monospace: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --ifm-color-primary: #2563EB; --ifm-color-primary-dark: #1D4ED8; --ifm-color-primary-darker: #1E40AF;
+  --ifm-color-primary-darkest: #1E3A8A; --ifm-color-primary-light: #3B82F6; --ifm-color-primary-lighter: #60A5FA;
+  --ifm-color-primary-lightest: #93C5FD;
+  --ifm-font-color-base: #16191D; --ifm-background-color: #F4F6F7; --ifm-background-surface-color: #FFFFFF;
+  --ifm-color-emphasis-600: #606A74; --ifm-toc-border-color: #DCE1E5; --ifm-hr-border-color: #DCE1E5;
+  --ifm-global-radius: 4px; --ifm-global-shadow-lw: none; --ifm-global-shadow-md: none; --ifm-global-shadow-tl: none;
+  --ifm-font-size-base: 17px;          /* owner: larger type (docs body 17 px) */
+  --ifm-line-height-base: 1.7;
+  --ifm-code-font-size: 82%;           /* about 14 px */
+  --ifm-h1-font-size: 1.8rem;
+}
+.menu { font-size: 15px; }             /* sidebar 15 px */
+.table-of-contents { font-size: 13.5px; }
+[data-theme='dark'] {
+  --ifm-color-primary: #5B8DEF; --ifm-color-primary-dark: #4579E6; --ifm-color-primary-darker: #3A6FDE;
+  --ifm-color-primary-darkest: #2E5CC0; --ifm-color-primary-light: #74A0F2; --ifm-color-primary-lighter: #8AAFF4;
+  --ifm-color-primary-lightest: #A8C3F7;
+  --ifm-font-color-base: #E4E9EE; --ifm-background-color: #0D1114; --ifm-background-surface-color: #151A1E;
+  --ifm-toc-border-color: #2A3239; --ifm-hr-border-color: #2A3239;
+  --ifm-color-emphasis-600: #93A0AC; --ifm-code-background: #151A1E;
+}
+.navbar, .footer { box-shadow: none; border-bottom: 1px solid var(--ifm-toc-border-color); }
+/* GitHub-style themed images in docs pages (same files render correctly on GitHub) */
+[data-theme='light'] img[src$='#gh-dark-mode-only'],
+[data-theme='dark'] img[src$='#gh-light-mode-only'] { display: none; }

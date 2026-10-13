@@ -7,3 +7,7 @@ bin/
 .sbom/
 upgrade-report-*.txt
 .worktrees/
+site/node_modules/
+site/build/
+site/.docusaurus/
+.vercel/

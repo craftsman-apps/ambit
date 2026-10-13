@@ -19,7 +19,7 @@ var watched = []string{"api/v1alpha1", "internal/console", "internal/presets", "
 
 // required: the 18 initial presets. PayPal waits for dynamic client registration (phase 2): its MCP server accepts only
 // self-registered clients. Salesforce, Box, Webex and ServiceNow wait for phase 2: each needs an admin or developer
-// account the maintainer does not have yet (see docs/presets.md).
+// account the maintainer does not have yet (see docs/maintainers/preset-testing.md).
 var required = []string{"github", "linear", "asana", "monday", "airtable", "dropbox", "canva", "gmail", "google-calendar",
 	"google-drive", "google-docs", "google-sheets", "slack", "zoom", "hubspot", "docusign", "databricks", "pagerduty"}
 

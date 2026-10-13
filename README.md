@@ -26,9 +26,11 @@ Ambit is a self-hosted gateway, built on agentgateway, ToolHive and other open-s
 
 [agentgateway](https://agentgateway.dev) handles the traffic and [ToolHive](https://github.com/stacklok/toolhive) runs the MCP servers. Ambit adds identity-provider access rules, a console, per-person app sign-in, budgets, audit and offboarding, in one Helm chart.
 
+## Why Ambit
+
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/ambit-flow-dark.svg">
-  <img alt="Alice's request passes Ambit's access rule, spending limit and audit record, then reaches AI models and work apps; Bob, who left the company, is refused at the access check." src="docs/assets/brand/ambit-flow.svg" width="100%">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/ambit-why-dark.svg">
+  <img alt="Without Ambit: Alice, Dan and Bob share one team API key and call models directly, an AI agent reaches work apps through a shared service account, Bob's key still works after he left, there is no record and the cost appears on next month's bill. With Ambit: everyone passes the Ambit gateway, which checks who they are, what they may use and their daily limit, records every call, and refuses Bob." src="docs/assets/brand/ambit-why.svg" width="100%">
 </picture>
 
 ## Architecture

@@ -197,6 +197,16 @@ q2=$(ask "$M" mock/echo)
 [[ "$q1" == 200 && "$q2" == 429 && "$(used_mira)" == 1 ]] || fail "9b Budget of 1 request: $q1 $q2, count $(used_mira) (want 200 429, count 1)"
 pass "9b Budget of 1 request a day: the first request passes, the second is refused and not counted"
 
+# 9c · embeddings count against a request limit when they arrive, and are refused at it (a refused one counts too:
+#      agentgateway v1.6.0 has no step after an embeddings answer, docs/budgets.md)
+set_ml '{ group: ml-research, userRequestsPerDay: 2 }' 'group_ml-research.user: unit=DAY requests_per_unit=1,'
+e1=$(ask "$M" mock/echo hi false /embeddings); n1=$(used_mira)
+e2=$(ask "$M" mock/echo hi false /embeddings); n2=$(used_mira)
+e3=$(ask "$M" mock/echo hi false /embeddings); n3=$(used_mira)
+c3=$(ask "$M" mock/echo)
+[[ "$e1/$n1 $e2/$n2 $e3/$n3 $c3" == "200/1 200/2 429/3 429" ]] || fail "9c embeddings against 2 requests a day: $e1/$n1 $e2/$n2 $e3/$n3, then chat $c3 (want 200/1 200/2 429/3 429)"
+pass "9c embeddings: two pass (count 1, 2), the third is refused (count 3: refused embeddings count), then chat is refused too"
+
 # 10 · models: unpriced refused to the capped group, allowed to others; a model priced 0 is allowed and costs 0
 set_ml '{ group: ml-research, groupDollarsPerDay: "1" }' 'spend_group_ml-research: unit=DAY requests_per_unit=100000,'
 u_m=$(ask "$M" mock/unpriced); u_a=$(ask "$A" mock/unpriced); f=$(ask "$M" mock/free)

@@ -1,5 +1,5 @@
 # Presets: vendor MCP servers and their OAuth details. Change a value → bump version (CI checks).
-# verified: true only after a passing `make preset-live` (docs/presets.md).
+# verified: true only after a passing `make preset-live` (docs/maintainers/preset-testing.md).
 - id: github
   version: 1
   verified: true

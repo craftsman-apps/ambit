@@ -23,7 +23,7 @@ jobs:
         env: { BASE: "${{ github.event.pull_request.base.sha }}", HEAD: "${{ github.event.pull_request.head.sha }}" }
         run: |
           code=true
-          if [ -n "$BASE" ] && ! git diff --name-only "$BASE...$HEAD" | grep -qvE '^docs/|\.md$|^LICENSE$|^NOTICE$'; then code=false; fi
+          if [ -n "$BASE" ] && ! git diff --name-only "$BASE...$HEAD" | grep -qvE '^docs/|^site/|\.md$|^LICENSE$|^NOTICE$|^\.github/workflows/site\.yml$'; then code=false; fi
           echo "code=$code" | tee -a "$GITHUB_OUTPUT"
 
   build:

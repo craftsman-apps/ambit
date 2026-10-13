@@ -1,5 +1,5 @@
 // presetcheck tests the app preset catalog: lockcheck (CI), contract (nightly), live (maintainer's laptop),
-// gate (release). See docs/presets.md.
+// gate (release). See docs/maintainers/preset-testing.md.
 package main
 
 import (

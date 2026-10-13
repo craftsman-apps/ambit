@@ -188,9 +188,13 @@ metadata: { name: keys-mira }
 spec: { group: ml-research, userRequestsPerDay: 1 }
 EOF
 kubectl -n "$NS" wait "budgets.$G" keys-mira --for=condition=Ready --timeout=60s >/dev/null || fail "9 budget not Ready"
-wait_rl "$NS" "group_ml-research.user: unit=DAY requests_per_unit=1,"
+wait_rl "$NS" "group_ml-research.user: unit=DAY requests_per_unit=0,"   # the Budget's 1, minus one (budgets.go)
 flush
-b1=$(code -H "x-api-key: $ML"); b2=$(code -H "x-api-key: $ML"); b3=$(code -H "Authorization: Bearer $(token mira)")
+day=$(( $(date -u +%s) / 86400 * 86400 ))
+b1=$(code -H "x-api-key: $ML")
+# the answer is counted a moment after it arrives
+for _ in $(seq 1 30); do [[ $(kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "ambit-llm_group_ml-research_user_mira@acme.test_$day" 2>/dev/null | tr -d '\r') == 1 ]] && break; sleep 1; done
+b2=$(code -H "x-api-key: $ML"); b3=$(code -H "Authorization: Bearer $(token mira)")
 [[ "$b1" == 200 && "$b2" == 429 && "$b3" == 429 ]] || fail "9 mira's key then key then JWT: $b1 $b2 $b3 (want 200 429 429): $(cat "$W/llm")"
 kubectl -n "$NS" delete "budgets.$G" keys-mira >/dev/null
 flush

@@ -2,10 +2,15 @@ package controller
 
 import (
 	"github.com/craftsman-apps/ambit/internal/identity"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/types/ref"
+	"github.com/google/cel-go/ext"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/utils/ptr"
@@ -26,16 +31,16 @@ func TestBudgetsCompileToSharedLimits(t *testing.T) {
 - descriptors:
   - key: user
     rate_limit:
-      requests_per_unit: 50
+      requests_per_unit: 49
       unit: day
   key: group
   rate_limit:
-    requests_per_unit: 500
+    requests_per_unit: 499
     unit: day
   value: eng
 - key: group
   rate_limit:
-    requests_per_unit: 1000
+    requests_per_unit: 999
     unit: day
   value: ml-research
 domain: ambit-llm
@@ -44,15 +49,41 @@ domain: ambit-llm
 		t.Fatalf("ratelimit config:\n%s\nwant\n%s", cfg, want)
 	}
 	d, _, _ := unstructured.NestedSlice(p.Object, "spec", "traffic", "rateLimit", "global", "descriptors")
-	if len(d) != 3 {
+	if len(d) != 6 { // per limit: one counted after the answer, one for embeddings
 		t.Fatalf("gateway descriptors %v", d)
 	}
-	first := d[0].(map[string]any)["entries"].([]any)[0].(map[string]any)["expression"]
+	first := d[1].(map[string]any)["entries"].([]any)[0].(map[string]any)["expression"]
 	if first != identity.PrincipalGroups+`.exists(g, g == "eng") ? "eng" : ""` {
 		t.Fatalf("member expression %v", first)
 	}
 	if fm, _, _ := unstructured.NestedString(p.Object, "spec", "traffic", "rateLimit", "global", "failureMode"); fm != "FailOpen" {
 		t.Fatalf("failureMode %s", fm)
+	}
+}
+
+// Only requests the gateway let through count against a request limit. agentgateway checks a "Requests"
+// descriptor (and adds 1) with the route policies, before the model's own authorization, so a request refused
+// with 403 counted too (found 2026-10-13: 3 answers and 1 refusal showed "used 4"). A "Tokens" descriptor is
+// checked after the model is chosen and authorized, and charged its cost (here 1) after the answer.
+func TestRequestLimitsCountOnlyAnsweredRequests(t *testing.T) {
+	cfg, p := compileBudgets([]v1.Budget{budget("eng", "eng", ptr.To[int64](5), ptr.To[int64](3))}, nil, "ambit-system", rl, "ambit-llm")
+	ds, _, _ := unstructured.NestedSlice(p.Object, "spec", "traffic", "rateLimit", "global", "descriptors")
+	if len(ds) != 4 {
+		t.Fatalf("descriptors %v", ds)
+	}
+	for i, d := range ds {
+		m := d.(map[string]any)
+		if i%2 == 0 && (m["unit"] != "Tokens" || m["cost"] != "1") {
+			t.Fatalf("descriptor %v: want unit Tokens, cost 1", m)
+		}
+		if i%2 == 1 && (m["unit"] != "Requests" || !strings.HasPrefix(m["limitOverride"].(string), embeddingsPath)) {
+			t.Fatalf("descriptor %v: want the embeddings descriptor", m)
+		}
+	}
+	// The check before a request adds nothing and refuses only when the count is above the configured number,
+	// so the configured number is one less than the Budget's: 5 a day allows answers 1 to 5 and refuses the 6th.
+	if !strings.Contains(cfg, "requests_per_unit: 4\n") || !strings.Contains(cfg, "requests_per_unit: 2\n") {
+		t.Fatalf("config:\n%s", cfg)
 	}
 }
 
@@ -127,7 +158,7 @@ func TestRequestAndDollarLimitsInOneBudget(t *testing.T) {
 	for _, d := range ds {
 		units = append(units, d.(map[string]any)["unit"].(string))
 	}
-	if strings.Join(units, ",") != "Requests,Tokens" {
+	if strings.Join(units, ",") != "Tokens,Requests,Tokens" {
 		t.Fatalf("units %v", units)
 	}
 }
@@ -207,5 +238,141 @@ func TestDollarBudgetForcesUsageInStreams(t *testing.T) {
 	// request limits only: nothing to charge, no rewrite
 	if usagePolicy(budgets[1:], "ambit-system", "ambit-llm") != nil {
 		t.Fatal("a request-only budget rewrites requests")
+	}
+}
+
+// A Budget of N admits exactly N answers a day, the smallest Budget (1) included: the first request passes, the
+// second is refused. envoy ratelimit (base_limiter.go) refuses when count + hits > limit; the check before a request
+// sends 0 hits, and each answer adds 1 afterwards.
+func TestRequestLimitAdmitsExactlyTheBudget(t *testing.T) {
+	for _, n := range []int64{1, 2, 5} {
+		cfg, _ := compileBudgets([]v1.Budget{budget("eng", "eng", nil, ptr.To(n))}, nil, "ambit-system", rl, "ambit-llm")
+		var limit int64 = -1
+		for _, line := range strings.Split(cfg, "\n") {
+			if v, ok := strings.CutPrefix(strings.TrimSpace(line), "requests_per_unit: "); ok {
+				limit, _ = strconv.ParseInt(v, 10, 64)
+			}
+		}
+		if limit < 0 {
+			t.Fatalf("Budget %d: no limit in config:\n%s", n, cfg)
+		}
+		count, answered := int64(0), int64(0)
+		for range n + 3 {
+			if count+0 > limit { // the check before the request
+				continue
+			}
+			answered++
+			count++ // the charge after the answer
+		}
+		if answered != n {
+			t.Fatalf("Budget %d (configured %d): %d answers, want %d", n, limit, answered, n)
+		}
+	}
+}
+
+// Embeddings count against request limits when they arrive (owner decision 2026-10-13): agentgateway v1.6.0 has
+// no step after an embeddings answer that could add the count. A "Requests" descriptor for /v1/embeddings shares the
+// counter with the after-answer ones, with the Budget's own number as its limit (limitOverride), and the
+// after-answer descriptors skip embeddings. A refused embeddings request also counts (documented).
+func TestEmbeddingsCountWhenTheyArrive(t *testing.T) {
+	const n = 3
+	_, p := compileBudgets([]v1.Budget{budget("eng", "eng", nil, ptr.To[int64](n))}, nil, "ambit-system", rl, "ambit-llm")
+	ds, _, _ := unstructured.NestedSlice(p.Object, "spec", "traffic", "rateLimit", "global", "descriptors")
+	env, err := cel.NewEnv(ext.Strings(), cel.Variable("request", cel.DynType), cel.Variable("jwt", cel.DynType), cel.Variable("apiKey", cel.DynType))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eval := func(expr, path string, groups []any) (ref.Val, error) {
+		t.Helper()
+		ast, iss := env.Parse(expr) // agentgateway's CEL does not type-check
+		if iss.Err() != nil {
+			t.Fatalf("does not parse: %v\n%s", iss.Err(), expr)
+		}
+		prg, err := env.Program(ast)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, _, err := prg.Eval(map[string]any{"request": map[string]any{"path": path},
+			"jwt": map[string]any{"sub": "s1", "email": "alice@acme.test", "groups": groups}, "apiKey": map[string]any{}})
+		return v, err
+	}
+	// descriptorApplies: every entry evaluates and the limit override (if any) evaluates to a limit; agentgateway
+	// skips the descriptor otherwise. It returns the limit override's number, or -1 without one.
+	descriptorApplies := func(d map[string]any, path string, groups []any) (bool, int64) {
+		for _, e := range d["entries"].([]any) {
+			if _, err := eval(e.(map[string]any)["expression"].(string), path, groups); err != nil {
+				return false, 0
+			}
+		}
+		lo, ok := d["limitOverride"].(string)
+		if !ok {
+			return true, -1
+		}
+		v, err := eval(lo, path, groups)
+		if err != nil {
+			return false, 0
+		}
+		m, err := v.ConvertToNative(reflect.TypeOf(map[string]any{}))
+		if err != nil {
+			return false, 0
+		}
+		lim, ok := m.(map[string]any)["requestsPerUnit"].(int64)
+		if !ok || m.(map[string]any)["unit"] != "day" {
+			t.Fatalf("limit override %v", m)
+		}
+		return true, lim
+	}
+	var requests, tokens []map[string]any
+	for _, d := range ds {
+		m := d.(map[string]any)
+		if m["unit"] == "Requests" {
+			requests = append(requests, m)
+		} else {
+			tokens = append(tokens, m)
+		}
+	}
+	if len(requests) != 1 || len(tokens) != 1 {
+		t.Fatalf("want one Requests (embeddings) and one Tokens descriptor: %v", ds)
+	}
+	member, other := []any{"eng"}, []any{"sales"}
+	if ok, lim := descriptorApplies(requests[0], "/v1/embeddings", member); !ok || lim != n {
+		t.Fatalf("embeddings by a member: applies %v, limit %d (want the Budget's %d)", ok, lim, n)
+	}
+	for _, c := range []struct {
+		path   string
+		groups []any
+	}{{"/v1/chat/completions", member}, {"/v1/embeddings", other}, {"/v1/chat/completions", other}} {
+		// A limit override applies whatever the entries' values, so it must not apply to anyone else.
+		if ok, _ := descriptorApplies(requests[0], c.path, c.groups); ok {
+			t.Fatalf("the embeddings descriptor applies to %s for %v", c.path, c.groups)
+		}
+	}
+	if ok, _ := descriptorApplies(tokens[0], "/v1/embeddings", member); ok {
+		t.Fatal("the after-answer descriptor applies to embeddings: it would see the count already raised")
+	}
+	if ok, _ := descriptorApplies(tokens[0], "/v1/chat/completions", member); !ok {
+		t.Fatal("the after-answer descriptor does not apply to chat")
+	}
+	// A day of chat and embeddings: exactly n are let through, and every embeddings request counts.
+	cfgLimit := int64(n - 1)
+	for _, seq := range [][]string{{"e", "e", "e", "e"}, {"c", "e", "c", "e", "c"}, {"e", "c", "c", "c", "e"}} {
+		count, through := int64(0), 0
+		for _, k := range seq {
+			if k == "e" {
+				count++ // ratelimit adds the hit, then compares
+				if count <= n {
+					through++
+				}
+				continue
+			}
+			if count > cfgLimit { // after-answer descriptor: check with 0 hits
+				continue
+			}
+			through++
+			count++
+		}
+		if through != n {
+			t.Fatalf("%v: %d let through, want %d", seq, through, n)
+		}
 	}
 }

@@ -26,6 +26,11 @@ Ambit is a self-hosted gateway, built on agentgateway, ToolHive and other open-s
 
 [agentgateway](https://agentgateway.dev) handles the traffic and [ToolHive](https://github.com/stacklok/toolhive) runs the MCP servers. Ambit adds identity-provider access rules, a console, per-person app sign-in, budgets, audit and offboarding, in one Helm chart.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/ambit-flow-dark.svg">
+  <img alt="Alice's request passes Ambit's access rule, spending limit and audit record, then reaches AI models and work apps; Bob, who left the company, is refused at the access check." src="docs/assets/brand/ambit-flow.svg" width="100%">
+</picture>
+
 ## Architecture
 
 ```mermaid

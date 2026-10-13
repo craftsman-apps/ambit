@@ -5,6 +5,9 @@ export default defineConfig({
   testDir: "e2e",
   timeout: 60_000,
   retries: process.env.CI ? 1 : 0,
+  // One worker: every test signs in as the same bootstrap admin, and each sign-in refreshes that person's keys
+  // (until is computed again). A sign-in in a second worker undid keys.spec.ts's expire hook (CI run 38355910311).
+  workers: 1,
   reporter: process.env.CI ? [["github"], ["list"]] : "list",
   use: {
     baseURL: process.env.AMBIT_URL ?? "http://console.localtest.me:8080",

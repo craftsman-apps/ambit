@@ -19,6 +19,19 @@ spec:
 Admins can set the same fields on the console's Budgets page, which shows today's spend. Per-person dollar
 limits count by the token's email, or by its subject (`sub`) when it has no email.
 
+## How requests are counted
+
+A request counts against a request limit when the gateway has let it through to the model: the count goes up by
+one after the answer, whatever the model answered (an error from the provider counts too). Requests the gateway
+refuses are not counted: no `AccessRule` allows the model (403), a model without a price for a group with a dollar
+limit (403), or a Budget limit already reached (429).
+
+| Request | Counted? |
+|---|---|
+| `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, streamed or not | Yes |
+| `/v1/embeddings` | **No** (agentgateway v1.6.0 does not run the counting step for embeddings). Embeddings are still refused once the limit is reached |
+| A refused request (403 or 429) | No |
+
 ## How spending is counted
 
 Each answer costs `input tokens × input price + output tokens × output price`, from the model's price
@@ -39,8 +52,8 @@ charged at the price from when it started.
 
 ## When a cap is passed
 
-The gateway checks the total before each request and adds the cost after the answer. So a cap can be
-exceeded: every request that started while the total was not yet above the cap finishes and is charged
+The gateway checks the total before each request and adds the cost (or the one request) after the answer. So a
+cap can be exceeded: every request that started while the total was not yet above the cap finishes and is charged
 (for example several requests sent at the same moment), and a charge reaches the counter a moment after its
 answer. Once the total is above the cap, new requests are refused.
 

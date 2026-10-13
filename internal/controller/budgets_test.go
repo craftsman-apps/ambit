@@ -26,16 +26,16 @@ func TestBudgetsCompileToSharedLimits(t *testing.T) {
 - descriptors:
   - key: user
     rate_limit:
-      requests_per_unit: 50
+      requests_per_unit: 49
       unit: day
   key: group
   rate_limit:
-    requests_per_unit: 500
+    requests_per_unit: 499
     unit: day
   value: eng
 - key: group
   rate_limit:
-    requests_per_unit: 1000
+    requests_per_unit: 999
     unit: day
   value: ml-research
 domain: ambit-llm
@@ -53,6 +53,28 @@ domain: ambit-llm
 	}
 	if fm, _, _ := unstructured.NestedString(p.Object, "spec", "traffic", "rateLimit", "global", "failureMode"); fm != "FailOpen" {
 		t.Fatalf("failureMode %s", fm)
+	}
+}
+
+// Only requests the gateway let through count against a request limit. agentgateway checks a "Requests"
+// descriptor (and adds 1) with the route policies, before the model's own authorization, so a request refused
+// with 403 counted too (found 2026-10-13: 3 answers and 1 refusal showed "used 4"). A "Tokens" descriptor is
+// checked after the model is chosen and authorized, and charged its cost (here 1) after the answer.
+func TestRequestLimitsCountOnlyAnsweredRequests(t *testing.T) {
+	cfg, p := compileBudgets([]v1.Budget{budget("eng", "eng", ptr.To[int64](5), ptr.To[int64](3))}, nil, "ambit-system", rl, "ambit-llm")
+	ds, _, _ := unstructured.NestedSlice(p.Object, "spec", "traffic", "rateLimit", "global", "descriptors")
+	if len(ds) != 2 {
+		t.Fatalf("descriptors %v", ds)
+	}
+	for _, d := range ds {
+		if m := d.(map[string]any); m["unit"] != "Tokens" || m["cost"] != "1" {
+			t.Fatalf("descriptor %v: want unit Tokens, cost 1", m)
+		}
+	}
+	// The check before a request adds nothing and refuses only when the count is above the configured number,
+	// so the configured number is one less than the Budget's: 5 a day allows answers 1 to 5 and refuses the 6th.
+	if !strings.Contains(cfg, "requests_per_unit: 4\n") || !strings.Contains(cfg, "requests_per_unit: 2\n") {
+		t.Fatalf("config:\n%s", cfg)
 	}
 }
 
@@ -127,7 +149,7 @@ func TestRequestAndDollarLimitsInOneBudget(t *testing.T) {
 	for _, d := range ds {
 		units = append(units, d.(map[string]any)["unit"].(string))
 	}
-	if strings.Join(units, ",") != "Requests,Tokens" {
+	if strings.Join(units, ",") != "Tokens,Tokens" {
 		t.Fatalf("units %v", units)
 	}
 }

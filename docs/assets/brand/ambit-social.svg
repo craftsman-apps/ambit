@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-label="Ambit. The AI access layer for enterprises.">
+  <title>Ambit. The AI access layer for enterprises.</title>
+  <rect width="1280" height="640" fill="#F4F6F7"/>
+  <g transform="translate(95 79) scale(3.8)">
+    <path d="M25.53 21.50A11 11 0 1 1 25.53 10.50" fill="none" stroke="#16191D" stroke-width="3" stroke-linecap="round"/>
+    <path d="M16 16H30" fill="none" stroke="#2563EB" stroke-width="3" stroke-linecap="round"/>
+    <circle cx="16" cy="16" r="3.5" fill="#2563EB"/>
+  </g>
+  <text x="1184" y="101" text-anchor="end" font-family="'IBM Plex Mono', ui-monospace, Menlo, monospace" font-size="20" fill="#606A74">github.com/craftsman-apps/ambit</text>
+  <text x="93" y="435" font-family="'IBM Plex Sans', -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="102" font-weight="600" letter-spacing="-1" fill="#16191D">Ambit</text>
+  <text x="96" y="501" font-family="'IBM Plex Sans', -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="36" fill="#3A424A">The AI access layer for enterprises.</text>
+  <text x="96" y="548" font-family="'IBM Plex Mono', ui-monospace, Menlo, monospace" font-size="20" letter-spacing="2.4" fill="#606A74">LLM + MCP GATEWAY · KUBERNETES · APACHE-2.0</text>
+  <rect y="632" width="1280" height="8" fill="#16191D"/>
+</svg>

@@ -59,7 +59,7 @@ Blue is the path every request takes; grey is how admins and your identity provi
 - **Budgets.** Daily limits per group and per person, in requests and in estimated dollars.
 - **Offboarding.** When the identity provider deactivates someone, Ambit revokes their sessions, API keys and stored app grants.
 
-Every call is kept in an audit log, denied calls included, and shown in the console.
+Every call is kept in an audit log, refusals included, and shown in the console. Model refusals do not yet show who made them (an agentgateway bug; see [Known limitations](https://ambitproject.dev/docs/#known-limitations)).
 
 ## Quick start
 

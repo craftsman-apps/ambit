@@ -132,4 +132,11 @@ warn='JWTs without an email are accepted; offboarding cannot block them before t
 for g in llm mcp; do
   grep -qF "$warn" <<<"$(notes --set $g.jwt.requireEmail=false)" || { echo "FAIL chart: NOTES must warn when $g.jwt.requireEmail=false"; exit 1; }
 done
+# The collector is ready only when its pipelines run: the exporter created otel_logs and the OTLP receiver
+# listens. Without a probe, helm --wait passed while it still started, and the first calls' records were lost.
+check_qs 'd=one("Deployment","ambit-otel-collector")["spec"]["template"]["spec"]["containers"][0]
+assert d["readinessProbe"]["httpGet"]["port"]=="health" and {"name":"health","containerPort":13133} in d["ports"], d
+c=yaml.safe_load(one("ConfigMap","ambit-otel-collector")["data"]["config.yaml"])
+assert c["extensions"]["health_check"]["endpoint"]=="0.0.0.0:13133", c.get("extensions")
+assert "health_check" in c["service"]["extensions"], c["service"]' "collector is ready only when its pipelines run"
 echo "PASS chart"

@@ -30,7 +30,9 @@ spec:
           env:
             - name: CLICKHOUSE_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ include "ambit.clickhouse.passwordSecret" . }}, key: password } }
-          ports: [{ name: otlp, containerPort: 4317 }, { name: metrics, containerPort: 8888 }]
+          ports: [{ name: otlp, containerPort: 4317 }, { name: metrics, containerPort: 8888 }, { name: health, containerPort: 13133 }]
+          # Not ready until the pipelines run; until then the gateway's records would be lost (helm --wait waits for this).
+          readinessProbe: { httpGet: { path: /, port: health }, periodSeconds: 2 }
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
           resources: {{ toJson .Values.evidence.collector.resources }}
           volumeMounts:

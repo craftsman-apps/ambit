@@ -72,6 +72,14 @@ ALICE=$(token alice)
 [[ $(mcp_code "$ALICE") == 200 && $(saas_sessions alice) -ge 1 ]] || fail "0 setup: alice MCP $(mcp_code "$ALICE"), provider sessions $(saas_sessions alice)"
 pass "0 alice and mira connected; alice's gateway token works; the provider holds $(saas_sessions alice) session(s) for alice"
 
+# ensure_llm_setup may have restarted the console. The new pod refuses key writes (SCIM answers 503) until it holds
+# the key Lease, about 15 s (docs/api-keys.md). Offboarding in check 2 deletes keys, so wait for the Lease first.
+key_writer_live() {
+  local h; h=$(kubectl -n "$NS" get lease ambit-key-writer -o jsonpath='{.spec.holderIdentity}')
+  [[ -n "$h" && $(kubectl -n "$NS" get pod "$h" -o jsonpath='{.status.phase}{.metadata.deletionTimestamp}') == Running ]]
+}
+wait_for 60 key_writer_live || fail "the console did not take the key Lease within 60 s"
+
 # 1 · the SCIM endpoint needs its token; the identity provider provisions alice
 [[ $(command curl -s -o /dev/null -w '%{http_code}' "$BASE/scim/v2/Users") == 401 ]] || fail "1 SCIM without token"
 [[ $(scim POST /Users '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"alice@acme.test","active":true,"emails":[{"value":"alice@acme.test","primary":true}]}') == 201 ]] ||

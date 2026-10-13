@@ -27,6 +27,18 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ghcr.io/${{ github.repository_owner }}/ambit-console:${{ steps.v.outputs.version }}
+          # The source label links the package to this repository on GHCR. The image index (the multi-platform
+          # tag) needs the same keys as annotations; the labels sit in each platform image.
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.version=${{ steps.v.outputs.version }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          annotations: |
+            index:org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            index:org.opencontainers.image.licenses=Apache-2.0
+            index:org.opencontainers.image.version=${{ steps.v.outputs.version }}
+            index:org.opencontainers.image.revision=${{ github.sha }}
           # Journey S6: an SBOM and build provenance travel with every image in the registry.
           sbom: true
           provenance: mode=max

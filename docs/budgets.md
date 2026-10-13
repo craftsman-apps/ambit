@@ -24,13 +24,13 @@ limits count by the token's email, or by its subject (`sub`) when it has no emai
 A request counts against a request limit when the gateway has let it through to the model: the count goes up by
 one after the answer, whatever the model answered (an error from the provider counts too). Requests the gateway
 refuses are not counted: no `AccessRule` allows the model (403), a model without a price for a group with a dollar
-limit (403), or a Budget limit already reached (429).
+limit (403), or a Budget limit already reached (429). Embeddings are the exception (see the table).
 
 | Request | Counted? |
 |---|---|
 | `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, streamed or not | Yes |
-| `/v1/embeddings` | **No** (agentgateway v1.6.0 does not run the counting step for embeddings). Embeddings are still refused once the limit is reached |
-| A refused request (403 or 429) | No |
+| `/v1/embeddings` | Yes, when it arrives, so a refused embeddings request (403 or 429) counts too: agentgateway v1.6.0 has no counting step after an embeddings answer |
+| Any other refused request (403 or 429) | No |
 
 ## How spending is counted
 

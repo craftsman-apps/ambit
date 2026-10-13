@@ -42,6 +42,30 @@ func member(group string) string {
 // skip both the check and the charge.
 func spendUser() string { return principal() }
 
+// skip is a CEL expression that always fails: agentgateway skips a descriptor when an entry or its limit override fails.
+const skip = `{}["skip"]`
+
+const embeddingsPath = `request.path == "/v1/embeddings"`
+
+// afterAnswer is a request-limit descriptor counted after the answer. It skips embeddings: the embeddings descriptor
+// has already counted them, and a check here would see that count.
+func afterAnswer(entries []any) map[string]any {
+	first := entries[0].(map[string]any)
+	out := append([]any{map[string]any{"name": first["name"], "expression": embeddingsPath + " ? " + skip + " : " + first["expression"].(string)}}, entries[1:]...)
+	return map[string]any{"unit": "Tokens", "cost": "1", "entries": out}
+}
+
+// embeddingsDescriptor counts an embeddings request when it arrives: agentgateway v1.6.0 has no step after an
+// embeddings answer that could add the count (owner decision 2026-10-13: count them anyway; a refused embeddings
+// request counts too). It shares the counter of the after-answer descriptor (same entries). It is checked as it
+// counts (count + 1 > limit), so its limit is the Budget's own number, set by limitOverride. A limit override applies
+// whatever the entries' values, so it must fail (and the descriptor be skipped) for any other path and non-members.
+func embeddingsDescriptor(entries []any, group string, n int64) map[string]any {
+	q := strconv.Quote(group)
+	return map[string]any{"unit": "Requests", "entries": entries, "limitOverride": embeddingsPath + " && " +
+		principalGroups + ".exists(g, g == " + q + `) ? {"unit": "day", "requestsPerUnit": ` + strconv.FormatInt(n, 10) + "} : " + skip}
+}
+
 // EffectiveBudgets returns the Budget that governs each group: the first by name. The reconciler reports
 // the others as DuplicateGroup.
 func EffectiveBudgets(budgets []v1.Budget) []v1.Budget {
@@ -147,18 +171,18 @@ func compileBudgets(budgets []v1.Budget, prices map[string]v1.ModelPrice, ns str
 		// charged after the answer, so refused requests do not count. A "Requests" descriptor would be checked and
 		// counted with the route policies, before the model's authorization (found 2026-10-13). The check adds
 		// nothing and refuses only above the configured number, so that number is the Budget's minus one.
+		// Embeddings are the exception (embeddingsDescriptor).
 		if b.Spec.GroupRequestsPerDay != nil || b.Spec.UserRequestsPerDay != nil {
 			d := map[string]any{"key": "group", "value": g}
 			if n := b.Spec.GroupRequestsPerDay; n != nil {
 				d["rate_limit"] = map[string]any{"unit": "day", "requests_per_unit": *n - 1}
-				gwDescriptors = append(gwDescriptors, map[string]any{"unit": "Tokens", "cost": "1",
-					"entries": []any{map[string]any{"name": "group", "expression": member(g)}}})
+				entries := []any{map[string]any{"name": "group", "expression": member(g)}}
+				gwDescriptors = append(gwDescriptors, afterAnswer(entries), embeddingsDescriptor(entries, g, *n))
 			}
 			if n := b.Spec.UserRequestsPerDay; n != nil {
 				d["descriptors"] = []any{map[string]any{"key": "user", "rate_limit": map[string]any{"unit": "day", "requests_per_unit": *n - 1}}}
-				gwDescriptors = append(gwDescriptors, map[string]any{"unit": "Tokens", "cost": "1", "entries": []any{
-					map[string]any{"name": "group", "expression": member(g)},
-					map[string]any{"name": "user", "expression": principal()}}})
+				entries := []any{map[string]any{"name": "group", "expression": member(g)}, map[string]any{"name": "user", "expression": principal()}}
+				gwDescriptors = append(gwDescriptors, afterAnswer(entries), embeddingsDescriptor(entries, g, *n))
 			}
 			cfgDescriptors = append(cfgDescriptors, d)
 		}

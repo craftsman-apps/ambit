@@ -42,6 +42,7 @@ const config: Config = {
       logo: {alt: 'Ambit', src: 'brand/ambit-logo.svg', srcDark: 'brand/ambit-logo-dark.svg'},
       items: [
         {type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Docs'},
+        {to: '/docs/quick-start', label: 'Quick start', position: 'left'},
         {href: 'https://github.com/craftsman-apps/ambit', label: 'GitHub', position: 'right'},
       ],
     },

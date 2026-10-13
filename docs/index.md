@@ -54,5 +54,5 @@ Ambit is pre-1.0. The API is `ambitproject.dev/v1alpha1` and can change between 
 - [Quick start](quick-start.md): install Ambit on a laptop with kind, add a free model and make a first call.
 - [Concepts](concepts.md): the Ambit objects and how a request is checked.
 - [Install on your cluster](install.md): single sign-on, TLS, your own ClickHouse and Valkey, Argo CD and a production checklist.
-- Guides: coding tools, models per team, MCP servers with per-person sign-in, spending limits, and offboarding.
+- Guides: [coding tools](guides/coding-tools.md), [models per team](guides/models-per-team.md), [MCP servers with per-person sign-in](guides/mcp-apps.md), [spending limits](guides/spending-limits.md), and [offboarding](guides/someone-leaves.md).
 - Reference: [Models and providers](providers.md), [Personal API keys](api-keys.md), [MCP servers and apps](presets.md), [Budgets](budgets.md), [Model routing](routing.md), [Offboarding](offboarding.md), [Alerts](alerts.md) and [Upgrading](upgrading.md).

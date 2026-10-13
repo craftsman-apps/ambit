@@ -13,7 +13,7 @@ const WHY = [
   ['Anyone who has the key can use any model.', 'Access rules based on your identity provider\'s groups decide which models and MCP servers each team may use.'],
   ['AI agents connect to work apps on their own, often through one shared service account.', 'Every MCP call passes one gateway. People connect their own app accounts, tools are checked, and personal data in results is masked.'],
   ['The cost shows up on next month\'s bill.', 'Daily limits per group and per person, in requests or in dollars.'],
-  ['Nobody can say who sent what to which model.', 'Every call is recorded, denied calls included.'],
+  ['Nobody can say who sent what to which model.', 'Every call is recorded, refusals included. Model refusals do not yet show who made them (an agentgateway bug; see Known limitations).'],
   ['Someone leaves, and their keys work until someone remembers to rotate them.', 'The identity provider disables them, and their keys, sessions and app sign-ins stop at once.'],
 ];
 
@@ -58,12 +58,16 @@ export default function Home(): ReactNode {
               <Link className={styles.secondary} href={REPO}>GitHub</Link>
             </div>
           </div>
-          <ThemedImage
-            className={styles.shot}
-            alt="The Ambit console, Audit page: every model call one person made, with time, model, outcome and tokens."
-            sources={{light: useBaseUrl('/img/console-light.png'), dark: useBaseUrl('/img/console-dark.png')}}
-          />
         </header>
+
+        <figure className={styles.figure}>
+            <ThemedImage
+              className={styles.shot}
+              alt="The Ambit console, Audit page: every model call one person made, with time, model, outcome and tokens."
+              sources={{light: useBaseUrl('/img/console-light.png'), dark: useBaseUrl('/img/console-dark.png')}}
+            />
+          <figcaption>The audit page of the Ambit console: every call one person made, with time, model, outcome and tokens.</figcaption>
+        </figure>
 
         <section>
           <h2>Why Ambit</h2>

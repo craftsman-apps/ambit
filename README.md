@@ -33,20 +33,12 @@ Ambit is a self-hosted gateway, built on agentgateway, ToolHive and other open-s
 
 ## Architecture
 
-```mermaid
-flowchart LR
-  client["Clients<br/>Claude Code, Cursor, SDKs"] -->|"LLM requests"| llm["Ambit LLM gateway<br/>(agentgateway)"]
-  client -->|"MCP requests"| mcp["Ambit MCP gateway<br/>(agentgateway)"]
-  llm --> models["Model providers<br/>OpenAI-compatible, Azure, Bedrock, Vertex AI"]
-  mcp --> servers["MCP servers<br/>run by ToolHive, or vendor-hosted"]
-  idp["Your identity provider<br/>OIDC, SAML, LDAP (via Dex)"] -.->|"who the caller is"| llm
-  idp -.-> mcp
-  console["Ambit console and controller<br/>models, access rules, budgets"] -.->|"configures"| llm
-  console -.->|"configures"| mcp
-  llm -.->|"audit records"| ch[("ClickHouse")]
-  mcp -.-> ch
-  llm -.->|"budget counters"| vk[("Valkey")]
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/brand/ambit-architecture-dark.svg">
+  <img alt="Request path: clients call one Ambit gateway, built on agentgateway, which checks the caller and their access, asks the budget service, guard, token broker and router as needed, then forwards to AI models or MCP servers and sends audit records through the OpenTelemetry Collector to ClickHouse. Setup: your identity provider signs people in through Dex and reports leavers to the console by SCIM; admins use the console, which stores Ambit objects; ambit-controller turns them into gateway configuration." src="docs/assets/brand/ambit-architecture.svg" width="100%">
+</picture>
+
+Blue is the path every request takes; grey is how admins and your identity provider set things up.
 
 ## Features
 

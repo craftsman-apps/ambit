@@ -88,13 +88,7 @@ ask() { # ask KEY MODEL
 for i in 1 2 3 4; do ask "$ALICE_KEY" nvidia/nemotron-3-super-120b-a12b:free | cut -c1-200; done
 ```
 
-The first three calls end with `HTTP 200`. The fourth is refused:
-
-```text
- HTTP 429
-```
-
-The refusal has no body.
+The first three calls end with `HTTP 200`. The fourth is refused with `HTTP 429` and an error body in the format of the API you called (here OpenAI's; Anthropic's for `/v1/messages`). The body says that a request limit or a spending limit was reached, but not which one. The last step below shows a full refusal.
 
 **Per group.** Dan has made no call yet, so his own count is 0. He calls three times:
 
@@ -102,7 +96,7 @@ The refusal has no body.
 for i in 1 2 3; do ask "$DAN_KEY" nvidia/nemotron-3-super-120b-a12b:free | cut -c1-200; done
 ```
 
-His first call ends with `HTTP 200`. The second and third are refused with `HTTP 429`. The group limit of 5 is used up, because the whole group shares it. Refused requests count against a request limit too, so Alice's refused call used one of the five.
+His first two calls end with `HTTP 200`. The third is refused with `HTTP 429`. The group limit of 5 is used up, because the whole group shares it: Alice's three answers and Dan's two. Refused requests do not count, so Alice's fourth call used none of the five.
 
 **Dollars.** Bob calls the sales model three times:
 
@@ -112,22 +106,24 @@ for i in 1 2 3; do ask "$BOB_KEY" nvidia/nemotron-3.5-lightning:free | cut -c1-2
 
 The first call ends with `HTTP 200`. It costs more than the limit of $0.001 for one person, so the second and third calls are refused with `HTTP 429`. Ambit checks the total before a request and adds the cost after the answer. A call that starts while the person is under the limit finishes and is charged in full.
 
-A refused request has no body, but its headers tell the client how long to wait. `retry-after` is the number of seconds until midnight UTC:
+The headers of a refused request tell the client how long to wait. `retry-after` is the number of seconds until midnight UTC:
 
 ```sh
 curl -s -i http://llm.localtest.me:8080/v1/chat/completions -H "Authorization: Bearer $BOB_KEY" -H 'Content-Type: application/json' \
-  -d '{"model":"nvidia/nemotron-3.5-lightning:free","messages":[{"role":"user","content":"hi"}]}' | head -5
+  -d '{"model":"nvidia/nemotron-3.5-lightning:free","messages":[{"role":"user","content":"hi"}]}'
 ```
+
+The answer looks like this (the header order and the number of seconds differ):
 
 ```text
 HTTP/1.1 429 Too Many Requests
-x-ratelimit-limit: 100
-x-ratelimit-remaining: 0
-x-ratelimit-reset: 56493
 retry-after: 56493
+content-type: application/json
+
+{"error":{"code":"budget_exceeded","message":"A daily Budget limit was reached: the request limit or the spending limit, for you or for your group. Requests are refused until midnight UTC (see the Retry-After header).","type":"insufficient_quota"}}
 ```
 
-Use `retry-after` to know when the limit ends. The `x-ratelimit-*` numbers come from the rate limit service and are not the numbers of your `Budget`.
+Use `retry-after` to know when the limit ends. The gateway sends no `x-ratelimit-*` headers.
 
 ## See the use in the console
 

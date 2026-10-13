@@ -14,7 +14,7 @@ field() { uv run --no-project python -c "import json;d=json.load(open('$W/api'))
 outcome() {
   local code; code=$(command curl -s -D "$W/h" -o "$W/llm" -w '%{http_code}' --max-time 120 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
     -d "{\"model\":\"$GEMMA\",\"max_tokens\":4,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" "$LLM")
-  if [[ "$code" == 429 ]] && grep -qi '^x-ratelimit-remaining: 0' "$W/h" && ! grep -q 'Provider returned error' "$W/llm"; then echo blocked; else echo "passed:$code"; fi
+  if [[ "$code" == 429 ]] && grep -q '"code":"budget_exceeded"' "$W/llm" && ! grep -q 'Provider returned error' "$W/llm"; then echo blocked; else echo "passed:$code"; fi
 }
 # idp down|up: the identity provider becomes unreachable (its Service selects no pod) or reachable.
 # Keycloak is not stopped: in dev mode a restart creates new signing keys, which a real IdP does not
@@ -55,9 +55,14 @@ wait_used() { local v; for _ in $(seq 1 30); do v=$(kubectl -n "$NS" exec deploy
 # 1 · A3: alice's third request of the day is refused by the gateway; mira (not in eng) is not counted
 r1=$(outcome "$A"); wait_used 1 "1 first answer"; r2=$(outcome "$A"); wait_used 2 "1 second answer"; r3=$(outcome "$A")
 [[ "$r1" == passed* && "$r2" == passed* && "$r3" == blocked ]] || fail "1 alice: $r1, $r2, $r3 (want passed, passed, blocked)"
+# The refusal says why in the API's error format, has Retry-After, and no x-ratelimit-* numbers (they are the
+# ratelimit service's numbers, not the Budget's).
+grep -qi '^retry-after: [0-9]' "$W/h" && grep -qi '^content-type: application/json' "$W/h" && ! grep -qi '^x-ratelimit-' "$W/h" ||
+  fail "1 refusal headers: $(tr -d '\r' <"$W/h" | tr '\n' ' ')"
+grep -q '"type":"insufficient_quota"' "$W/llm" && grep -q 'request limit or the spending limit' "$W/llm" || fail "1 refusal body: $(cat "$W/llm")"
 m=$(outcome "$M")
 [[ "$m" == passed* ]] || fail "1 mira was counted against eng: $m"
-pass "1 alice: $r1, $r2, then blocked with 429 (limit 2/day); mira unaffected ($m)"
+pass "1 alice: $r1, $r2, then blocked with 429 (limit 2/day), an error body, Retry-After and no x-ratelimit-*; mira unaffected ($m)"
 
 # 2 · the console shows today's use
 sign_in keycloak priya priya-test-pass
@@ -65,6 +70,20 @@ sign_in keycloak priya priya-test-pass
 used=$(field '[(b["groupUsed"], [(u["email"], u["used"]) for u in b["users"]]) for b in d if b["group"]=="eng"][0]')
 [[ "$used" == "(2, [('alice@acme.test', 2)])" ]] || fail "2 budget view: $used"
 pass "2 console Budgets: eng used 2 today; alice 2 (the refused third request is not counted)"
+
+# 2b · a refusal on the Anthropic API (/v1/messages) has Anthropic's error format
+c=$(command curl -s -o "$W/llm" -w '%{http_code}' --max-time 60 -H "Authorization: Bearer $A" -H 'Content-Type: application/json' \
+  -d "{\"model\":\"$GEMMA\",\"max_tokens\":4,\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" http://llm.localtest.me:8080/v1/messages)
+[[ "$c" == 429 ]] && grep -q '"type":"error"' "$W/llm" && grep -q '"type":"rate_limit_error"' "$W/llm" || fail "2b /v1/messages refusal: $c $(cat "$W/llm")"
+pass "2b /v1/messages refusal: 429 with an Anthropic-format error body"
+# 2c · the transformation keeps the status and Retry-After on the other LLM endpoints too
+for ep in responses embeddings; do
+  c=$(command curl -s -D "$W/h" -o "$W/llm" -w '%{http_code}' --max-time 60 -H "Authorization: Bearer $A" -H 'Content-Type: application/json' \
+    -d "{\"model\":\"$GEMMA\",\"input\":\"hi\"}" "http://llm.localtest.me:8080/v1/$ep")
+  [[ "$c" == 429 ]] && grep -qi '^retry-after: [0-9]' "$W/h" && grep -q '"code":"budget_exceeded"' "$W/llm" && ! grep -qi '^x-ratelimit-' "$W/h" ||
+    fail "2c /v1/$ep refusal: $c $(tr -d '\r' <"$W/h" | tr '\n' ' ') $(cat "$W/llm")"
+done
+pass "2c /v1/responses and /v1/embeddings refusals: 429, Retry-After and the OpenAI-format error body"
 
 # 3 · S4, FailOpen (default): with the ratelimit service down, requests pass uncounted; back up, the count holds
 kubectl -n "$NS" scale deploy/ambit-ratelimit --replicas=0 >/dev/null

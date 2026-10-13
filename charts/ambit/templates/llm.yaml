@@ -65,8 +65,10 @@ spec:
       response:
         metadata:
           ambitBudgetRefusal: 'response.code == 429 && !("content-type" in response.headers) && "retry-after" in response.headers && "x-ratelimit-remaining" in response.headers && response.headers["x-ratelimit-remaining"] == "0" && request.path in ["/v1/chat/completions", "/v1/completions", "/v1/responses", "/v1/embeddings", "/v1/messages"]'
+        # The CRD takes a list of {name, value} here (agentgateway's standalone config takes a map).
         set:
-          content-type: 'metadata.ambitBudgetRefusal ? "application/json" : ("content-type" in response.headers ? response.headers["content-type"] : null)'
+          - name: content-type
+            value: 'metadata.ambitBudgetRefusal ? "application/json" : ("content-type" in response.headers ? response.headers["content-type"] : null)'
         remove: [x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset]
         body: 'metadata.ambitBudgetRefusal ? (request.path == "/v1/messages" ? {"type": "error", "error": {"type": "rate_limit_error", "message": "A daily Budget limit was reached: the request limit or the spending limit, for you or for your group. Requests are refused until midnight UTC (see the Retry-After header)."}} : {"error": {"message": "A daily Budget limit was reached: the request limit or the spending limit, for you or for your group. Requests are refused until midnight UTC (see the Retry-After header).", "type": "insufficient_quota", "code": "budget_exceeded"}}) : null'
       {{- end }}

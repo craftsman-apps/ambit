@@ -32,7 +32,15 @@ func TestBudgetRefusalHasAnErrorBody(t *testing.T) {
 		t.Fatalf("metadata %v", meta)
 	}
 	flagExpr := meta["ambitBudgetRefusal"].(string)
-	ctExpr := get(t, r, "set", "content-type").(string)
+	var ctExpr string
+	for _, h := range get(t, r, "set").([]any) {
+		if get(t, h, "name") == "content-type" {
+			ctExpr = get(t, h, "value").(string)
+		}
+	}
+	if ctExpr == "" {
+		t.Fatalf("set has no content-type: %v", r["set"])
+	}
 	bodyExpr := get(t, r, "body").(string)
 
 	env, err := cel.NewEnv(ext.Strings(), cel.Variable("request", cel.DynType), cel.Variable("response", cel.DynType), cel.Variable("metadata", cel.DynType))

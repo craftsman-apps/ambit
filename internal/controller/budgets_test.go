@@ -2,6 +2,7 @@ package controller
 
 import (
 	"github.com/craftsman-apps/ambit/internal/identity"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -229,5 +230,34 @@ func TestDollarBudgetForcesUsageInStreams(t *testing.T) {
 	// request limits only: nothing to charge, no rewrite
 	if usagePolicy(budgets[1:], "ambit-system", "ambit-llm") != nil {
 		t.Fatal("a request-only budget rewrites requests")
+	}
+}
+
+// A Budget of N admits exactly N answers a day, the smallest Budget (1) included: the first request passes, the
+// second is refused. envoy ratelimit (base_limiter.go) refuses when count + hits > limit; the check before a request
+// sends 0 hits, and each answer adds 1 afterwards.
+func TestRequestLimitAdmitsExactlyTheBudget(t *testing.T) {
+	for _, n := range []int64{1, 2, 5} {
+		cfg, _ := compileBudgets([]v1.Budget{budget("eng", "eng", nil, ptr.To(n))}, nil, "ambit-system", rl, "ambit-llm")
+		var limit int64 = -1
+		for _, line := range strings.Split(cfg, "\n") {
+			if v, ok := strings.CutPrefix(strings.TrimSpace(line), "requests_per_unit: "); ok {
+				limit, _ = strconv.ParseInt(v, 10, 64)
+			}
+		}
+		if limit < 0 {
+			t.Fatalf("Budget %d: no limit in config:\n%s", n, cfg)
+		}
+		count, answered := int64(0), int64(0)
+		for range n + 3 {
+			if count+0 > limit { // the check before the request
+				continue
+			}
+			answered++
+			count++ // the charge after the answer
+		}
+		if answered != n {
+			t.Fatalf("Budget %d (configured %d): %d answers, want %d", n, limit, answered, n)
+		}
 	}
 }

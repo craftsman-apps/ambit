@@ -187,6 +187,16 @@ r1=$(ask "$M" mock/echo); wait_spent 3 "9 first answer"; r2=$(ask "$M" mock/echo
 [[ "$r1" == 200 && "$r2" == 429 ]] || fail "9 request limit with a dollar cap: $r1 $r2 (want 200 429)"
 pass "9 request and dollar limits in one Budget: the request limit (1/day) stops mira first"
 
+# 9b · the smallest request limit, alone: a Budget of 1 request a day lets the first request through and refuses the
+#      second (the limit loaded is 0: the check refuses above it, and the answer adds 1)
+set_ml '{ group: ml-research, userRequestsPerDay: 1 }' 'group_ml-research.user: unit=DAY requests_per_unit=0,'
+used_mira() { vget "ambit-llm_group_ml-research_user_mira@acme.test_$day"; }
+q1=$(ask "$M" mock/echo)
+for _ in $(seq 1 30); do [[ "$(used_mira)" == 1 ]] && break; sleep 1; done
+q2=$(ask "$M" mock/echo)
+[[ "$q1" == 200 && "$q2" == 429 && "$(used_mira)" == 1 ]] || fail "9b Budget of 1 request: $q1 $q2, count $(used_mira) (want 200 429, count 1)"
+pass "9b Budget of 1 request a day: the first request passes, the second is refused and not counted"
+
 # 10 · models: unpriced refused to the capped group, allowed to others; a model priced 0 is allowed and costs 0
 set_ml '{ group: ml-research, groupDollarsPerDay: "1" }' 'spend_group_ml-research: unit=DAY requests_per_unit=100000,'
 u_m=$(ask "$M" mock/unpriced); u_a=$(ask "$A" mock/unpriced); f=$(ask "$M" mock/free)

@@ -57,6 +57,9 @@ cap can be exceeded: every request that started while the total was not yet abov
 (for example several requests sent at the same moment), and a charge reaches the counter a moment after its
 answer. Once the total is above the cap, new requests are refused.
 
+Requests that run at the same time can go over a request limit by the number of requests in flight: each one was
+checked before the others were counted. Dollar limits behave the same.
+
 A change to a Budget takes up to about a minute to apply: the rate limit service reads budgets from a mounted
 ConfigMap, which Kubernetes refreshes on the kubelet's sync cycle (1 minute by default).
 

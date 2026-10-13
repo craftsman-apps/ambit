@@ -25,11 +25,15 @@ exporters:
     # this queue grew until the collector was killed at its memory limit (24-hour soak, 2026-10-01).
     sending_queue: { enabled: true, sizer: bytes, queue_size: 67108864 }
     retry_on_failure: { enabled: true }
+extensions:
+  # Answers 200 only after every pipeline started: the exporter created otel_logs and the receiver listens.
+  health_check: { endpoint: 0.0.0.0:13133 }
 processors:
   # Refuses new logs (the gateway sees the export fail) before the container's memory limit is reached.
   memory_limiter: { check_interval: 1s, limit_percentage: 75, spike_limit_percentage: 20 }
   batch: { timeout: 2s }
 service:
+  extensions: [health_check]
   # The collector's own metrics (records sent, failed, refused) for Prometheus; alerts.enabled scrapes them.
   telemetry:
     metrics:

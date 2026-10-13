@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 410" role="img" aria-label="Without Ambit: Alice, Dan and Bob share one team API key and call models directly, an AI agent reaches work apps through a shared service account, Bob's key still works after he left, there is no record and the cost appears on next month's bill. With Ambit: everyone passes the Ambit gateway, which checks who they are, what they may use and their daily limit, records every call, and refuses Bob.">
+  <title>Why Ambit: without it, people share one key and nobody can say who did what; with it, every call is checked, limited and recorded.</title>
+  <style>
+text{font-family:'IBM Plex Sans, -apple-system, Segoe UI, Helvetica, Arial, sans-serif';fill:#1F2328}
+.t{font-size:14px;font-weight:600}
+.s{font-size:12px;fill:#59636E}
+.m{font-family:'IBM Plex Mono, ui-monospace, SFMono-Regular, Menlo, monospace';font-size:11px;letter-spacing:.06em;fill:#59636E}
+.l{font-size:11px;fill:#59636E;font-style:italic}
+.lx{font-size:11px;fill:#B42318;font-style:italic}
+.box{fill:#F6F8FA;stroke:#D1D9E0;stroke-width:1}
+.gw{fill:none;stroke:#1F2328;stroke-width:1.25}
+.key{fill:none;stroke:#59636E;stroke-width:1;stroke-dasharray:3 3}
+.raw{fill:none;stroke:#59636E;stroke-width:1.25}
+.req{fill:none;stroke:#2563EB;stroke-width:2}
+.bad{fill:none;stroke:#B42318;stroke-width:1.5}
+.div{stroke:#D1D9E0;stroke-width:1}
+</style>
+  <defs>
+    <marker id="MB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#2563EB"/></marker>
+    <marker id="MG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#59636E"/></marker>
+    <marker id="MR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#B42318"/></marker>
+  </defs>
+
+  <!-- ========== WITHOUT ========== -->
+  <text class="m" x="16" y="22">WITHOUT AMBIT</text>
+
+  <rect class="box" x="16" y="44" width="132" height="44" rx="4"/><text class="t" x="28" y="64">Alice</text><text class="s" x="28" y="80">engineering</text>
+  <rect class="box" x="16" y="104" width="132" height="44" rx="4"/><text class="t" x="28" y="124">Dan</text><text class="s" x="28" y="140">sales</text>
+  <rect class="box" x="16" y="164" width="132" height="44" rx="4"/><text class="t" x="28" y="184">Bob</text><text class="s" x="28" y="200">left last month</text>
+  <rect class="box" x="16" y="244" width="132" height="44" rx="4"/><text class="t" x="28" y="264">AI agent</text><text class="s" x="28" y="280">in a team script</text>
+
+  <!-- shared key -->
+  <rect class="key" x="188" y="98" width="120" height="56" rx="4"/>
+  <text class="t" x="200" y="120">Team API key</text>
+  <text class="s" x="200" y="138">one, shared</text>
+  <path class="raw" d="M148 66H248V96" marker-end="url(#MG)"/>
+  <path class="raw" d="M148 126H186" marker-end="url(#MG)"/>
+  <path class="bad" d="M148 186H248V156" marker-end="url(#MR)"/>
+  <text class="lx" x="256" y="182">still works</text>
+
+  <!-- destinations -->
+  <rect class="box" x="332" y="98" width="128" height="56" rx="4"/><text class="t" x="344" y="120">AI models</text><text class="s" x="344" y="138">any model</text>
+  <rect class="box" x="332" y="238" width="128" height="56" rx="4"/><text class="t" x="344" y="260">Work apps</text><text class="s" x="344" y="278">GitHub, Slack</text>
+  <path class="raw" d="M308 126H330" marker-end="url(#MG)"/>
+  <path class="raw" d="M148 266H330" marker-end="url(#MG)"/>
+  <text class="l" x="168" y="258">shared service account</text>
+
+  <!-- consequences -->
+  <path class="div" d="M16 322H460"/>
+  <text class="s" x="16" y="346">✕  Nobody can say who sent what to which model</text>
+  <text class="s" x="16" y="368">✕  The cost shows up on next month's bill</text>
+  <text class="s" x="16" y="390">✕  Bob's access ends only when someone rotates the key</text>
+
+  <!-- divider between halves -->
+  <path class="div" d="M480 16V400"/>
+
+  <!-- ========== WITH ========== -->
+  <text class="m" x="500" y="22">WITH AMBIT</text>
+
+  <rect class="box" x="500" y="44" width="132" height="44" rx="4"/><text class="t" x="512" y="64">Alice</text><text class="s" x="512" y="80">engineering</text>
+  <rect class="box" x="500" y="104" width="132" height="44" rx="4"/><text class="t" x="512" y="124">Dan</text><text class="s" x="512" y="140">sales</text>
+  <rect class="box" x="500" y="164" width="132" height="44" rx="4"/><text class="t" x="512" y="184">Bob</text><text class="s" x="512" y="200">left last month</text>
+  <rect class="box" x="500" y="244" width="132" height="44" rx="4"/><text class="t" x="512" y="264">AI agent</text><text class="s" x="512" y="280">Alice's personal key</text>
+
+  <!-- gateway with the three checks, in order -->
+  <rect class="gw" x="658" y="36" width="160" height="266" rx="4"/>
+  <text class="m" x="670" y="56">AMBIT</text>
+  <rect class="box" x="668" y="66" width="140" height="56" rx="4"/>
+  <text class="t" x="679" y="88">Who may use what</text>
+  <text class="s" x="679" y="108">engineering → Sonnet</text>
+  <rect class="box" x="668" y="148" width="140" height="56" rx="4"/>
+  <text class="t" x="679" y="170">Spending limit</text>
+  <text class="s" x="679" y="190">$12.40 of $50 today</text>
+  <rect class="box" x="668" y="230" width="140" height="56" rx="4"/>
+  <text class="t" x="679" y="252">Audit record</text>
+  <text class="s" x="679" y="272">who, what, when, cost</text>
+  <path class="req" d="M738 122V146" marker-end="url(#MB)"/>
+  <path class="req" d="M738 204V228" marker-end="url(#MB)"/>
+
+  <!-- callers join one line, then one arrow into the first check -->
+  <path class="req" d="M632 66H650"/>
+  <path class="req" d="M632 126H650"/>
+  <path class="req" d="M632 266H650"/>
+  <path class="req" d="M650 66V266"/>
+  <path class="req" d="M650 94H666" marker-end="url(#MB)"/>
+  <path class="bad" d="M632 186H634"/>
+  <path class="bad" d="M635 181l9 10M644 181l-9 10"/>
+  <text class="lx" x="512" y="222">refused at</text>
+  <text class="lx" x="512" y="236">the first check</text>
+
+  <!-- one line out of the audit record, split to both destinations -->
+  <rect class="box" x="862" y="98" width="88" height="56" rx="4"/><text class="t" x="870" y="120">AI models</text><text class="s" x="870" y="138">per team</text>
+  <rect class="box" x="862" y="230" width="88" height="56" rx="4"/><text class="t" x="870" y="252">Work apps</text><text class="s" x="870" y="270">own account</text>
+  <path class="req" d="M808 258H860" marker-end="url(#MB)"/>
+  <path class="req" d="M836 258V126H860" marker-end="url(#MB)"/>
+
+  <path class="div" d="M500 322H944"/>
+  <text class="s" x="500" y="346">✓  Every call is recorded, denied calls included</text>
+  <text class="s" x="500" y="368">✓  Daily limits per team and per person</text>
+  <text class="s" x="500" y="390">✓  Bob was refused the moment he was disabled</text>
+</svg>

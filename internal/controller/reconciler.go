@@ -75,6 +75,7 @@ type Reconciler struct {
 
 	stalled   *stalledStep  // the step a change stopped at (single worker, no lock)
 	gateRetry time.Duration // the last wait before trying a stopped change again
+	accessLog *logState     // the mode and rules version ambit-access-log was last written with
 }
 
 // How often the tools of a running server are read again by default: servers may add or change tools.
@@ -248,6 +249,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		return reconcile.Result{}, err
 	}
 	changing := r.Activation.Timeout > 0 && (published.Data["mode"] != mode || published.Data["rulesVersion"] != version)
+	if r.accessLog == nil && published.Data["mode"] != "" { // after a restart: the values in force
+		r.accessLog = &logState{published.Data["mode"], published.Data["rulesVersion"]}
+	}
 	stall, ran, err := r.runSteps(ctx, steps, changing, pending{Mode: mode, RulesVersion: version})
 	if err != nil {
 		return reconcile.Result{}, err

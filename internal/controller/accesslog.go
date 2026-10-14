@@ -102,11 +102,16 @@ func (r *Reconciler) writeAccessLog(ctx context.Context, mode, rulesVersion stri
 	if err := r.Patch(ctx, p, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
 		return nil, err
 	}
+	r.accessLog = &logState{mode, rulesVersion}
 	return []gated{{kind: p.GetKind(), name: p.GetName(), generation: p.GetGeneration(), changed: p.GetGeneration() != current.GetGeneration()}}, nil
 }
 
+// logState is what ambit-access-log was last written with.
+type logState struct{ mode, rulesVersion string }
+
 // urgent applies what a change waiting for agentgateway must never hold back: the offboarding policy, from
-// ambit-offboarded as it is now. It runs before the steps of a change and on every poll of the gate.
+// ambit-offboarded as it is now, and ambit-access-log when it was deleted (with the values it was last written
+// with). It runs before the steps of a change and on every poll of the gate.
 func (r *Reconciler) urgent(ctx context.Context) error {
 	p, err := r.offboarding(ctx)
 	if err != nil {
@@ -117,7 +122,16 @@ func (r *Reconciler) urgent(ctx context.Context) error {
 			return err
 		}
 	}
-	return nil
+	if r.accessLog == nil { // not written yet in this process: the pass (or the start) writes it
+		return nil
+	}
+	current := &unstructured.Unstructured{}
+	current.SetGroupVersionKind(AgentgatewayPolicyGVK)
+	err = r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: AccessLogPolicy}, current)
+	if apierrors.IsNotFound(err) {
+		_, err = r.writeAccessLog(ctx, r.accessLog.mode, r.accessLog.rulesVersion)
+	}
+	return err
 }
 
 // publishMode writes ambit-access-mode: the mode and the rules version in force, each with the time it last

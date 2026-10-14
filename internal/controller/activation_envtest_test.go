@@ -283,9 +283,10 @@ func offboardedExpr(ctx context.Context, ns string) string {
 	return strings.Join(e, " ")
 }
 
-// A change that waits for agentgateway never holds back offboarding. Audit order: the access log is the first step, authorization
+// A change that waits for agentgateway never holds back what must apply at once: offboarding, deletions, and the
+// access-log policy written again after a delete. Audit order: the access log is the first step, authorization
 // (where offboarding lives) waits behind it.
-func TestWaitingChangeStillOffboards(t *testing.T) {
+func TestWaitingChangeStillOffboardsAndKeepsTheAccessLog(t *testing.T) {
 	needEnv(t)
 	ns := "ambit-gate-urgent"
 	gateFixture(t, ns)
@@ -294,13 +295,24 @@ func TestWaitingChangeStillOffboards(t *testing.T) {
 		Activation: Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond}}
 	done := reconcileAsync(r)
 	eventually(t, "access log written", func() error { _, err := accessLogOf(ctx, ns); return err })
-	// While the access-log step waits, a leaver is offboarded.
+	// While the access-log step waits: a leaver is offboarded, and someone deletes the access-log policy.
 	offboard(t, ns, `["leaver@example.com"]`)
 	eventually(t, "offboarding applied while the change waits", func() error {
 		if e := offboardedExpr(ctx, ns); !strings.Contains(e, `"leaver@example.com"`) {
 			return fmt.Errorf("offboarding policy %q", e)
 		}
 		return nil
+	})
+	if err := envClient.Delete(ctx, &unstructured.Unstructured{Object: map[string]any{"apiVersion": "agentgateway.dev/v1alpha1",
+		"kind": "AgentgatewayPolicy", "metadata": map[string]any{"name": AccessLogPolicy, "namespace": ns}}}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "access log written again while the change waits", func() error {
+		p, err := accessLogOf(ctx, ns)
+		if err == nil && p.GetDeletionTimestamp() != nil {
+			return fmt.Errorf("still being deleted")
+		}
+		return err
 	})
 	if _, err := genGet(ctx, ns, "AgentgatewayModel", "gemma"); !apierrors.IsNotFound(err) {
 		t.Fatalf("authorization written before the access log was active: %v", err)
@@ -354,5 +366,57 @@ func TestStalledAuditChangeStillOffboardsAndDeletes(t *testing.T) {
 	}
 	if e := offboardedExpr(ctx, ns); !strings.Contains(e, `"second@example.com"`) {
 		t.Errorf("offboarding policy %q", e)
+	}
+}
+
+// Enforce order, the authorization step stalled: the access-log policy deleted meanwhile is written again with the
+// published (in force) mode and rules version.
+func TestStalledEnforceChangeWritesTheDeletedAccessLogAgain(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-gate-stalled-enforce"
+	gateFixture(t, ns)
+	ctx := t.Context()
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
+		Activation: Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond}}
+	done := reconcileAsync(r)
+	eventually(t, "authorization written", func() error { _, err := genGet(ctx, ns, "AgentgatewayModel", "gemma"); return err })
+	playAgentgateway(t, ns, "AgentgatewayModel", "gemma")
+	eventually(t, "access log written", func() error { _, err := accessLogOf(ctx, ns); return err })
+	playAgentgateway(t, ns, "AgentgatewayPolicy", AccessLogPolicy)
+	wait(t, done)
+	first, _ := accessMode(ctx, ns)
+
+	r.Activation.Timeout = 300 * time.Millisecond
+	var ar v1.AccessRule
+	_ = envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "eng"}, &ar)
+	ar.Spec.Groups = []string{"eng", "ops"}
+	if err := envClient.Update(ctx, &ar); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if c := ruleReady(t, ns, "eng"); c.Reason != "RulesNotActive" {
+		t.Fatalf("rule condition %+v, want the change stalled", c)
+	}
+	p, _ := accessLogOf(ctx, ns)
+	if err := envClient.Delete(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "access log deleted", func() error {
+		if _, err := accessLogOf(ctx, ns); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("still there: %v", err)
+		}
+		return nil
+	})
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := accessLogOf(ctx, ns)
+	if err != nil {
+		t.Fatalf("the access log was not written again during the stall: %v", err)
+	}
+	if a := attributes(p); a["ambit.rulesVersion"] != `"`+first["rulesVersion"]+`"` || a["ambit.accessMode"] != `"enforce"` {
+		t.Errorf("attributes %v, want the published version %s", a, first["rulesVersion"])
 	}
 }

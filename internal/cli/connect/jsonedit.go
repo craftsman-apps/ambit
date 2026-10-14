@@ -278,6 +278,9 @@ func (d *Doc) Remove(entries []Entry) (left []string, err error) {
 			return left, err
 		}
 		if depth != len(path)-1 || !memberFound(hv.Value.(*hujson.Object), path[len(path)-1]) {
+			if !e.CreatedContainer && d.hiddenByDuplicate(path) {
+				left = append(left, e.Pointer) // an earlier object of the same name still holds it
+			}
 			continue // the member is gone already
 		}
 		holder := hv.Value.(*hujson.Object)
@@ -296,6 +299,31 @@ func (d *Doc) Remove(entries []Entry) (left []string, err error) {
 		d.removeMember(hv, idx, e.Inserted)
 	}
 	return left, nil
+}
+
+// hiddenByDuplicate reports whether path exists in some object when an object of the same name comes after it:
+// find reads the last one, so the entry would look gone.
+func (d *Doc) hiddenByDuplicate(path []string) bool {
+	_, root, err := d.root()
+	if err != nil {
+		return false
+	}
+	var has func(o *hujson.Object, path []string) bool
+	has = func(o *hujson.Object, path []string) bool {
+		for _, m := range o.Members {
+			if memberName(m) != path[0] {
+				continue
+			}
+			if len(path) == 1 {
+				return true
+			}
+			if sub, ok := m.Value.Value.(*hujson.Object); ok && has(sub, path[1:]) {
+				return true
+			}
+		}
+		return false
+	}
+	return has(root, path)
 }
 
 func (d *Doc) removeMember(hv hujson.Value, i int, inserted string) {

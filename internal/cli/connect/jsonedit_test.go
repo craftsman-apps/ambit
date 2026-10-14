@@ -306,3 +306,29 @@ func stripForValid(t *testing.T, b []byte) []byte {
 	}
 	return s
 }
+
+// A second "env" object added after connect hides Ambit's entries from the name lookup (the last one wins, as in
+// every JSON parser). Remove must say the entries are still there instead of treating them as gone.
+func TestJSONRemoveReportsEntriesHiddenByADuplicateObject(t *testing.T) {
+	d, _ := ParseJSON([]byte("{\n  \"theme\": \"dark\"\n}\n"))
+	entries, err := d.Apply(testSets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := strings.Replace(string(d.Bytes()), "\n}\n", ",\n  \"env\": {\"B\": \"2\"}\n}\n", 1)
+	d2, err := ParseJSON([]byte(later))
+	if err != nil {
+		t.Fatal(err)
+	}
+	left, err := d2.Remove(entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "/env/ANTHROPIC_MODEL,/env/ANTHROPIC_BASE_URL" // last entry first, as Remove goes
+	if got := strings.Join(left, ","); got != want {
+		t.Fatalf("left = %s, want %s\n%s", got, want, d2.Bytes())
+	}
+	if strings.Contains(string(d2.Bytes()), "apiKeyHelper") {
+		t.Fatalf("the visible entry must still be removed:\n%s", d2.Bytes())
+	}
+}

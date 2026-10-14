@@ -31,7 +31,17 @@ You need the cluster from the [Quick start](../quick-start.md), the model, a rul
 
 Codex speaks only the OpenAI Responses format. Ambit serves `/v1/responses`.
 
-Add this to `~/.codex/config.toml`:
+**With the Ambit CLI.** After you created a key, run:
+
+```sh
+ambit connect codex --url http://llm.localtest.me:8080 --model nvidia/nemotron-3-super-120b-a12b:free
+```
+
+It asks for the key (hidden), stores it in the keychain of your computer, and writes two blocks into `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`). Each block starts with a line `# >>> ambit: written by ...` and ends with `# <<< ambit <<<`. The first block, before the first `[table]`, holds `model` and `model_provider`. The second, at the end of the file, holds the `[model_providers.ambit]` table. The key is not in the file: the table has `[model_providers.ambit.auth]` with `command` and `args`, and Codex runs `ambit key print --url <llm>` to read the key. This differs from the by-hand setup below, which uses `env_key`: Codex does not allow both. The `auth` command was tested with a local test server and Codex 0.159.3, not with a live Ambit and Codex together. The command ends with a test call to `/v1/responses`.
+
+If your file already sets `model` or `model_provider` to another value, or has a `[model_providers.ambit]` table, the command stops. With `--force`, it keeps your old lines as comments inside a block (`# ambit-replaced: ...`), and `ambit disconnect codex` puts them back. `ambit disconnect codex` removes every Ambit block and keeps the rest of the file as it was.
+
+**By hand.** Add this to `~/.codex/config.toml`:
 
 ```toml
 model = "nvidia/nemotron-3-super-120b-a12b:free"
@@ -69,7 +79,19 @@ bearer_token_env_var = "AMBIT_API_KEY"
 
 ## opencode
 
-opencode needs a custom provider that uses the OpenAI-compatible package. Put this in `opencode.json` in your project, or in `~/.config/opencode/opencode.json`:
+**With the Ambit CLI.** After you created a key, run:
+
+```sh
+ambit connect opencode --url http://llm.localtest.me:8080 --model nvidia/nemotron-3-super-120b-a12b:free
+```
+
+It asks for the key (hidden), stores it in the keychain of your computer, and adds the provider `ambit` and the `model` to `~/.config/opencode/opencode.json` (or `opencode.jsonc`, or the folder in `XDG_CONFIG_HOME`). It reads the key from the variable `AMBIT_API_KEY`, as the by-hand setup below does. opencode has no setting that runs a command to read a key. So the command also adds a function named `opencode` to your shell profile (`~/.zshrc`, `~/.bashrc` or `~/.bash_profile`, a file in `~/.config/fish/functions`, or your PowerShell profile). The function runs `ambit key print`, puts the key into `AMBIT_API_KEY` for that one opencode process only, and starts opencode. It is in a block between `# >>> ambit` and `# <<< ambit <<<` lines. The shell is detected; choose another with `--shell bash|zsh|fish|powershell`, or `--shell none` to print the function and write nothing.
+
+Open a new terminal after the command. **The function works only when opencode is started from a shell that has it.** An editor or a launcher that starts opencode by itself does not see it, and opencode then has no key. If your file uses the opencode v2 format (a top-level `providers`, or a provider with `package` or `settings`), the command stops and changes nothing: this version of ambit writes the v1 format that was tested. Add the provider by hand then.
+
+`ambit disconnect opencode` removes the provider, the model and the function.
+
+**By hand.** opencode needs a custom provider that uses the OpenAI-compatible package. Put this in `opencode.json` in your project, or in `~/.config/opencode/opencode.json`:
 
 ```json
 {

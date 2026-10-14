@@ -3,7 +3,8 @@
 # Step 0 · the access-log policy ambit-access-log moves from the chart to the controller, under the same name:
 #   install the previous release (evidence on), upgrade to this chart and measure the gap without an access-log
 #   policy; the new controller is not ready before it wrote the policy. Roll back with the documented commands
-#   (scale the controller to 0, delete the policy, helm rollback); without the delete, helm rollback fails.
+#   (scale the controller to 0, wait until its pods are gone, delete the policy, helm rollback); without the
+#   delete, helm rollback fails. After the rollback the controller is back to the old chart's replica count.
 #   Upgrade again. Records reach ClickHouse after each move.
 # Reinstalls Ambit: run under the shared kind lock. Needs this checkout's image in the cluster (make image).
 #   AMBIT_PREVIOUS_VERSION  the release to upgrade from (default 0.1.0)
@@ -17,7 +18,7 @@ PREV=${AMBIT_PREVIOUS_VERSION:-0.1.0}
 LLM=${AMBIT_LLM_URL:-http://llm.localtest.me:8080}
 NEW=(-f charts/ambit/values-kind.yaml --set evidence.enabled=true)
 watcher=""
-trap 'rc=$?; [[ -n "$watcher" ]] && kill "$watcher" 2>/dev/null; on_exit $rc' EXIT
+trap 'rc=$?; [[ -n "$watcher" ]] && pkill -P "$watcher" 2>/dev/null; on_exit $rc' EXIT
 
 ch() { kubectl -n "$NS" exec ambit-clickhouse-0 -- sh -c 'clickhouse-client --user ambit --password "$CLICKHOUSE_PASSWORD" -q "$0"' "$1"; }
 utc() { date -u +"%Y-%m-%d %H:%M:%S"; }
@@ -59,15 +60,16 @@ prev_rev=$(command helm history ambit -n "$NS" -o json | uv run --no-project pyt
 
 # 0b · upgrade (plain helm upgrade, no --wait) while watching the policy: the gap between Helm's delete and the
 #      controller's create.
-kubectl -n "$NS" get agentgatewaypolicy -w --output-watch-events --field-selector metadata.name=ambit-access-log \
+# In a subshell: stopping it stops both commands (the watch alone never ends while the policy stays the same).
+(kubectl -n "$NS" get agentgatewaypolicy -w --output-watch-events --field-selector metadata.name=ambit-access-log \
   -o jsonpath='{.type} {.object.metadata.labels.app\.kubernetes\.io/managed-by}{"\n"}' 2>/dev/null |
-  perl -MTime::HiRes=time -ne '$|=1; printf "%.3f %s", time, $_' > "$W/watch" &
+  perl -MTime::HiRes=time -ne '$|=1; printf "%.3f %s", time, $_' > "$W/watch") &
 watcher=$!
 sleep 2
 helm upgrade ambit charts/ambit -n "$NS" "${NEW[@]}" >/dev/null || fail "0b helm upgrade to this chart"
 kubectl -n "$NS" rollout status deploy/ambit-controller --timeout=300s >/dev/null || fail "0b controller rollout"
 wait_controller_policy "0b"
-sleep 3; { kill "$watcher"; wait "$watcher"; } 2>/dev/null || true; watcher=""
+sleep 3; { pkill -P "$watcher"; wait "$watcher"; } 2>/dev/null || true; watcher=""
 ready=$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=ambit-controller -o json | uv run --no-project python -c 'import sys,json
 pods=[p for p in json.load(sys.stdin)["items"] if not p["metadata"].get("deletionTimestamp")]
 print(max(c["lastTransitionTime"] for p in pods for c in p["status"]["conditions"] if c["type"]=="Ready" and c["status"]=="True"))')
@@ -99,11 +101,23 @@ records_reach_clickhouse "0b this chart"
 if err=$(command helm rollback ambit "$prev_rev" -n "$NS" 2>&1); then fail "0c helm rollback without deleting ambit-access-log succeeded"; fi
 grep -q -e "invalid ownership metadata" -e 'conflicts with "ambit-controller"' <<<"$err" || fail "0c helm rollback failed, but not on ambit-access-log: $err"
 pass "0c helm rollback without the delete fails on ambit-access-log ($(grep -o -m1 -e 'invalid ownership metadata' -e 'conflicts with "ambit-controller"' <<<"$err"))"
+# The documented steps, with the wait between the scale-down and the delete: a controller pod that is still stopping
+# writes the policy again within a second of the delete, and the rollback then fails as above (seen in a run).
 kubectl -n "$NS" scale deployment ambit-controller --replicas=0 >/dev/null
+kubectl -n "$NS" wait --for=delete pod -l app.kubernetes.io/name=ambit-controller --timeout=120s >/dev/null
 kubectl -n "$NS" delete agentgatewaypolicy ambit-access-log >/dev/null
 command helm rollback ambit "$prev_rev" -n "$NS" --wait --timeout 6m >/dev/null || fail "0c helm rollback with the documented steps"
 [[ $(owner_of_policy) == *" ambit" ]] || fail "0c after the rollback, ambit-access-log is not Helm's ($(owner_of_policy))"
 pass "0c rollback with the documented steps: ambit-access-log is Helm's again"
+# The rollback must also undo the scale-down: helm rollback --wait counts a Deployment with 0 replicas as ready, and
+# the gateway writes records without a controller, so neither check above would notice a missing controller.
+want=$(git show "v$PREV:charts/ambit/templates/controller/deployment.yaml" | awk '$1=="replicas:"{print $2; exit}')
+got=$(kubectl -n "$NS" get deploy ambit-controller -o jsonpath='{.spec.replicas}')
+[[ "$got" == "$want" ]] || fail "0c after the rollback, ambit-controller has $got replicas, want $want (release $PREV's chart)"
+kubectl -n "$NS" rollout status deploy/ambit-controller --timeout=180s >/dev/null || fail "0c after the rollback, ambit-controller is not ready"
+ready=$(kubectl -n "$NS" get deploy ambit-controller -o jsonpath='{.status.readyReplicas}')
+[[ "$ready" == "$want" ]] || fail "0c after the rollback, $ready of $want ambit-controller pods are ready"
+pass "0c rollback with the documented steps: ambit-controller is back to $want replica(s), $ready ready"
 records_reach_clickhouse "0c rolled back to $PREV"
 
 # 0d · upgrade again, for the steps that follow.

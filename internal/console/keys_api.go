@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -201,7 +200,7 @@ func (c *Catalog) createKey(w http.ResponseWriter, r *http.Request, s Session) {
 	}
 	w.Header().Set("Cache-Control", "no-store") // the answer holds the key, shown once
 	writeJSON(w, http.StatusCreated, map[string]any{"key": plain, "view": c.views(r.Context(), []Key{k}, false, false)[0],
-		"snippets": snippets(c.LLMURL, c.MCPURL, plain, k.Scope)})
+		"urls": map[string]string{"llm": c.LLMURL, "mcp": c.MCPURL}})
 }
 
 func (c *Catalog) revokeKey(w http.ResponseWriter, r *http.Request, s Session, admin bool) {
@@ -230,19 +229,4 @@ func (c *Catalog) expireKey(w http.ResponseWriter, r *http.Request, _ Session) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// snippets are copy-ready settings for each client, holding the new key. The LLM ones need llm scope, MCP needs mcp.
-func snippets(llm, mcp, key string, scope Scope) map[string]string {
-	m := map[string]string{}
-	if scope != ScopeMCP {
-		m["claudeCode"] = fmt.Sprintf(`{"env":{"ANTHROPIC_BASE_URL":%q,"ANTHROPIC_AUTH_TOKEN":%q}}`, llm, key)
-		m["cursor"] = "OpenAI API Key: " + key + "\nOverride OpenAI Base URL: " + llm + "/v1"
-		m["openai"] = "export OPENAI_BASE_URL=" + llm + "/v1\nexport OPENAI_API_KEY=" + key
-		m["anthropic"] = "export ANTHROPIC_BASE_URL=" + llm + "\nexport ANTHROPIC_API_KEY=" + key
-	}
-	if scope != ScopeLLM {
-		m["mcp"] = "claude mcp add --transport http ambit " + mcp + ` --header "Authorization: Bearer ` + key + `"`
-	}
-	return m
 }

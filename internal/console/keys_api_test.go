@@ -47,9 +47,9 @@ func (f *keysFixture) call(t *testing.T, method, path string, ck *http.Cookie, b
 }
 
 type createdKey struct {
-	Key      string            `json:"key"`
-	View     map[string]any    `json:"view"`
-	Snippets map[string]string `json:"snippets"`
+	Key  string            `json:"key"`
+	View map[string]any    `json:"view"`
+	URLs map[string]string `json:"urls"`
 }
 
 func (f *keysFixture) create(t *testing.T, ck *http.Cookie, scope string, days int) createdKey {
@@ -75,13 +75,9 @@ func TestKeysAPI(t *testing.T) {
 	if !strings.HasPrefix(created.Key, "ambit_") || created.View["prefix"] != created.Key[:10] || created.View["scope"] != "both" {
 		t.Fatalf("%+v", created)
 	}
-	for _, s := range []string{"claudeCode", "cursor", "openai", "anthropic", "mcp"} {
-		if !strings.Contains(created.Snippets[s], created.Key) {
-			t.Errorf("snippet %s lacks the key", s)
-		}
-	}
-	if !strings.Contains(created.Snippets["openai"], "http://llm.localtest.me:8080/v1") || !strings.Contains(created.Snippets["mcp"], "http://mcp.localtest.me:8080/mcp") {
-		t.Errorf("snippets lack the URLs: %v", created.Snippets)
+	// The console builds the per-tool setup text from these addresses, so the key never travels in a second place.
+	if created.URLs["llm"] != "http://llm.localtest.me:8080" || created.URLs["mcp"] != "http://mcp.localtest.me:8080/mcp" {
+		t.Errorf("urls: %v", created.URLs)
 	}
 	body := f.call(t, "GET", "/api/keys", ck, nil).Body.String()
 	if strings.Contains(body, created.Key) || strings.Contains(body, "sha256:") || !strings.Contains(body, created.View["id"].(string)) {
@@ -134,24 +130,6 @@ func TestKeyErrorMapping(t *testing.T) {
 		if w.Code != c.code {
 			t.Errorf("%v: %d, want %d", c.err, w.Code, c.code)
 		}
-	}
-}
-
-func TestSnippetsFollowTheScope(t *testing.T) {
-	keys := func(m map[string]string) (n []string) {
-		for k := range m {
-			n = append(n, k)
-		}
-		return
-	}
-	if m := snippets("http://l", "http://m/mcp", "ambit_k", ScopeLLM); m["mcp"] != "" || len(keys(m)) != 4 {
-		t.Fatal(m)
-	}
-	if m := snippets("http://l", "http://m/mcp", "ambit_k", ScopeMCP); len(keys(m)) != 1 || m["mcp"] == "" {
-		t.Fatal(m)
-	}
-	if m := snippets("http://l", "http://m/mcp", "ambit_k", ScopeBoth); len(keys(m)) != 5 {
-		t.Fatal(m)
 	}
 }
 

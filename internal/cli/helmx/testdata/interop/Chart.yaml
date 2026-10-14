@@ -1,0 +1,5 @@
+apiVersion: v2
+name: interop
+description: Test chart for the Helm 3 interoperability gate of the ambit CLI.
+type: application
+version: 0.1.0

@@ -1,0 +1,2 @@
+# The CLI embeds YAML and shell files and its tests split them on "\n"; a Windows checkout must keep LF.
+* text=auto eol=lf

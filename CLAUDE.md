@@ -32,8 +32,8 @@ A second session's command waits until the first one finishes. Unit tests and en
 
 The e2e job takes about 50 minutes of the organization's Actions minutes. To spend them only once per change:
 
-- Open pull requests as drafts (`gh pr create --draft`). Draft PRs run the build job only; push fixes freely.
-- Mark the PR ready (`gh pr ready <n>`) when the change is complete: that runs the e2e job once.
+- Open pull requests as drafts (`gh pr create --draft`). Draft PRs run the build, cli-unit, cli-helm-interop, cli-local, cli-partial and cli-snapshot jobs (not quickstart or e2e); push fixes freely.
+- Mark the PR ready (`gh pr ready <n>`) when the change is complete: that also runs the quickstart and e2e jobs once.
 - Merge only a PR whose head contains the current `main` (`gh pr update-branch <n>` first if `main` moved), with
   CI green on that head. A merge to `main` does not run CI again.
 - Changes to documentation only (`docs/`, `*.md`, `LICENSE`, `NOTICE`) skip the build and e2e jobs; CI is green in

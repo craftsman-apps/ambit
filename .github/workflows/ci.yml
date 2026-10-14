@@ -24,6 +24,8 @@ jobs:
         run: |
           code=true
           if [ -n "$BASE" ] && ! git diff --name-only "$BASE...$HEAD" | grep -qvE '^docs/|^site/|\.md$|^LICENSE$|^NOTICE$|^\.github/workflows/site\.yml$'; then code=false; fi
+          # The install scripts served from site/static are code: their tests run in cli-unit.
+          if [ -n "$BASE" ] && git diff --name-only "$BASE...$HEAD" | grep -qE '^site/static/install\.(sh|ps1)$'; then code=true; fi
           echo "code=$code" | tee -a "$GITHUB_OUTPUT"
 
   build:
@@ -58,6 +60,8 @@ jobs:
       # The console binary embeds web/dist, so the front end must be built before Go compiles.
       - name: Front end type-check and build
         run: cd web && npm ci --no-fund --no-audit && npm run build
+      - name: npm packaging and Homebrew formula scripts (node:test)
+        run: node --test scripts/npm/ scripts/homebrew/
       - name: Go vet, unit and integration tests (envtest API server)
         run: go vet ./... && KUBEBUILDER_ASSETS="$(make -s envtest-assets)" go test -count=1 ./...
       - name: Preset versions bumped
@@ -77,8 +81,7 @@ jobs:
       # is already built. Docker builds inside the e2e jobs compiled everything again (6.4 min each, 2026-10-08).
       # No -trimpath: it would change Go's cache keys and compile everything again; this image is for tests only
       # (release.yml builds the released one from the Dockerfile).
-      - name: Build the Ambit image for the e2e jobs
-        if: ${{ !github.event.pull_request.draft }}
+      - name: Build the Ambit image for the e2e and cli jobs
         run: |
           for c in ambit-console ambit-controller ambit ambit-guard ambit-router; do
             go build -ldflags="-s -w" -o "bin/$c" "./cmd/$c"
@@ -88,7 +91,6 @@ jobs:
           docker save ambit-console:dev ambit-whoami:dev | gzip > "$RUNNER_TEMP/images.tar.gz"
           mkdir -p "$RUNNER_TEMP/thirdparty/charts" && cp charts/ambit/charts/*.tgz "$RUNNER_TEMP/thirdparty/charts/"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ !github.event.pull_request.draft }}
         with:
           name: images
           path: |
@@ -97,6 +99,24 @@ jobs:
           retention-days: 1
       - name: Chart rules (ambit-router shape and RBAC)
         run: test/chart.sh
+
+  # Spec 9.2a: the CLI's Helm SDK must write releases that Helm 3 can list, read, roll back and upgrade, and the
+  # SDK must upgrade again over Helm 3's revision. This job decided the SDK version (Helm v4) and stays as a guard.
+  cli-helm-interop:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with: { version: v3.22.0 }   # Helm 3 on purpose: the version most users run
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with: { cluster_name: ambit-interop, wait: 120s }
+      - name: Helm 3 reads, rolls back and upgrades releases written by the CLI's SDK
+        run: go test -tags interop -count=1 -run TestHelm3Interop -v ./internal/cli/helmx
 
   # The quick start as the docs give it: deploy/quickstart.yaml on a fresh kind cluster, without the CoreDNS
   # rewrite or Keycloak the other parts use. Sign-in, a token from Dex, a first call, the audit record.
@@ -215,3 +235,124 @@ jobs:
           cat "$RUNNER_TEMP/prepull.log" || true
           kubectl -n ambit-system logs deploy/ambit-console --tail=100 || true
           kubectl -n ambit-system logs deploy/ambit-controller --tail=100 || true
+
+  # Spec 9.2: the CLI is built and unit-tested on all three systems, so Windows-only code (paths, the PowerShell
+  # example, the install script) is compiled and tested on Windows. arm64 builds ship untested (docs say so).
+  cli-unit:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix: { os: [ubuntu-latest, macos-latest, windows-latest] }
+    runs-on: ${{ matrix.os }}
+    env: { CGO_ENABLED: "0" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - name: Build the CLI
+        shell: bash
+        run: go build -o bin/ambit ./cmd/ambit
+      - name: CLI unit tests
+        shell: bash
+        run: go test -count=1 ./cmd/ambit/... ./internal/cli/... ./internal/validate/... ./internal/installscript/... ./deploy/... ./kind/...
+      - name: The development flags exist only in the dev build (ruling S9)
+        shell: bash
+        run: go test -count=1 -tags dev ./internal/cli/
+
+  # Spec 9.2 cli-local and the redaction and restricted-permission gates of 9.2a, on the branch image.
+  # Unlike e2e, this job also runs on draft PRs: it is the proof for changes to the CLI.
+  cli-local:
+    needs: build  # skipped with build for documentation-only changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with: { install_only: true }   # kind and kubectl for the assertions; the CLI itself needs neither
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: images, path: "${{ runner.temp }}" }
+      - name: The CLI (dev build), the branch images and the chart dependencies
+        run: |
+          go build -tags dev -o bin/ambit ./cmd/ambit
+          gunzip -c "$RUNNER_TEMP/images.tar.gz" > "$RUNNER_TEMP/images.tar"
+          mkdir -p charts/ambit/charts && cp "$RUNNER_TEMP"/thirdparty/charts/*.tgz charts/ambit/charts/
+      - name: ambit local up, check, repair, terminal password, restricted permissions, redaction, local down
+        env:
+          CLI_NAME: ambit
+          CLI_PORT: "8080"
+          CLI_HTTPS_PORT: "8443"
+          CLI_ARCHIVES: "${{ runner.temp }}/images.tar ${{ runner.temp }}/thirdparty/agentgateway.tar"
+        run: test/cli-local.sh
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl --context kind-ambit get pods -A || true
+          kubectl --context kind-ambit -n ambit-system logs deploy/ambit-console --tail=100 || true
+
+  # Spec 9.2a: an interrupted local up is repaired, and a cluster ambit did not create is refused.
+  # Also runs on draft PRs (see cli-local).
+  cli-partial:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with: { install_only: true }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: images, path: "${{ runner.temp }}" }
+      - name: The CLI (dev build), the branch images and the chart dependencies
+        run: |
+          go build -tags dev -o bin/ambit ./cmd/ambit
+          gunzip -c "$RUNNER_TEMP/images.tar.gz" > "$RUNNER_TEMP/images.tar"
+          mkdir -p charts/ambit/charts && cp "$RUNNER_TEMP"/thirdparty/charts/*.tgz charts/ambit/charts/
+      - name: Partial creation, repair, and a foreign cluster
+        env:
+          CLI_NAME: ambit
+          CLI_PORT: "8080"
+          CLI_HTTPS_PORT: "8443"
+          CLI_ARCHIVES: "${{ runner.temp }}/images.tar ${{ runner.temp }}/thirdparty/agentgateway.tar"
+        run: test/cli-partial.sh
+
+  # The release configuration still builds: GoReleaser checks .goreleaser.yaml and builds every archive without
+  # publishing; it writes no Homebrew file (the formula comes from scripts/homebrew, Task 17); the linux amd64
+  # binary runs and reports the snapshot version.
+  cli-snapshot:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with: { distribution: goreleaser, version: v2.18.3, args: check }
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with: { distribution: goreleaser, version: v2.18.3, args: release --snapshot --clean }
+      - name: Six archives, checksums, no Homebrew file from GoReleaser, a binary that runs
+        run: |
+          ls dist/ambit_{darwin,linux}_{amd64,arm64}.tar.gz dist/ambit_windows_{amd64,arm64}.zip dist/checksums.txt
+          [ -z "$(find dist -name '*.rb')" ]
+          tar -xzf dist/ambit_linux_amd64.tar.gz -C "$RUNNER_TEMP" ambit
+          "$RUNNER_TEMP/ambit" version --kubeconfig /dev/null | grep -E '^ambit [0-9]+\.[0-9]+\.[0-9]+'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 26 }
+      - name: npm packages from the snapshot archives; the launcher runs the linux x64 binary
+        run: |
+          node scripts/npm/publish.mjs --dir dist --version 0.0.0-snapshot --out "$RUNNER_TEMP/npm" --allow-prerelease
+          m="$RUNNER_TEMP/try/node_modules/@craftsman-apps"
+          mkdir -p "$m"
+          cp -r "$RUNNER_TEMP/npm/ambit" "$m/ambit"
+          cp -r "$RUNNER_TEMP/npm/ambit-linux-x64" "$m/ambit-linux-x64"
+          node "$m/ambit/bin/ambit.js" version --kubeconfig /dev/null | grep -E '^ambit [0-9]'
+      - name: The Homebrew formula from the snapshot's checksums.txt is valid Ruby and pins four archives
+        run: |
+          node scripts/homebrew/formula.mjs --checksums dist/checksums.txt --version "$(jq -r .version dist/metadata.json)" --out "$RUNNER_TEMP/ambit.rb" --allow-prerelease
+          ruby -c "$RUNNER_TEMP/ambit.rb"
+          [ "$(grep -cE '^ +sha256 "[0-9a-f]{64}"$' "$RUNNER_TEMP/ambit.rb")" = 4 ]

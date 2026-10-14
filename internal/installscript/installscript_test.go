@@ -276,3 +276,51 @@ func TestInstallPs1NoReleaseYet(t *testing.T) {
 		t.Fatal("a binary was installed")
 	}
 }
+
+const noAnswer = "GitHub did not answer; try again"
+
+// githubDown plays GitHub when it fails: /latest answers with status, or never answers when status is 0.
+func githubDown(t *testing.T, status int) string {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if status == 0 {
+			<-r.Context().Done()
+			return
+		}
+		w.WriteHeader(status)
+	}))
+	t.Cleanup(s.Close)
+	return s.URL
+}
+
+func TestInstallShGitHubServerError(t *testing.T) {
+	for _, status := range []int{500, 502, 503, 429} {
+		out, dir, err := runSh(t, githubDown(t, status))
+		if err == nil || !strings.Contains(out, noAnswer) || strings.Contains(out, "No Ambit CLI release") {
+			t.Fatalf("HTTP %d: err %v, output:\n%s", status, err, out)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "ambit")); err == nil {
+			t.Fatal("a binary was installed")
+		}
+	}
+}
+
+func TestInstallShGitHubTimeout(t *testing.T) {
+	out, _, err := runSh(t, githubDown(t, 0), "AMBIT_LATEST_TIMEOUT=1")
+	if err == nil || !strings.Contains(out, noAnswer) || strings.Contains(out, "No Ambit CLI release") {
+		t.Fatalf("err %v, output:\n%s", err, out)
+	}
+}
+
+func TestInstallPs1GitHubServerError(t *testing.T) {
+	out, _, err := runPS(t, githubDown(t, 503))
+	if err == nil || !strings.Contains(out, noAnswer) || strings.Contains(out, "No Ambit CLI release") {
+		t.Fatalf("err %v, output:\n%s", err, out)
+	}
+}
+
+func TestInstallPs1GitHubTimeout(t *testing.T) {
+	out, _, err := runPS(t, githubDown(t, 0), "AMBIT_LATEST_TIMEOUT=1")
+	if err == nil || !strings.Contains(out, noAnswer) || strings.Contains(out, "No Ambit CLI release") {
+		t.Fatalf("err %v, output:\n%s", err, out)
+	}
+}

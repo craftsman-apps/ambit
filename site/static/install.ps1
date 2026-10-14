@@ -3,7 +3,8 @@
 # $env:AMBIT_VERSION pins a version (default: the latest release). $env:AMBIT_INSTALL_DIR sets the directory
 # (default: %LOCALAPPDATA%\ambit\bin). $env:AMBIT_DOWNLOAD_BASE replaces
 # https://github.com/craftsman-apps/ambit/releases (for a mirror; $env:AMBIT_DOWNLOAD_BASE/latest must redirect to
-# $env:AMBIT_DOWNLOAD_BASE/tag/<tag>, as GitHub does).
+# $env:AMBIT_DOWNLOAD_BASE/tag/<tag>, as GitHub does). $env:AMBIT_LATEST_TIMEOUT sets the seconds to wait for that answer
+# (default: 30).
 # Output is ASCII only: Windows PowerShell 5.1 can show other characters wrongly when the script comes through iex.
 
 function Install-Ambit {
@@ -26,13 +27,18 @@ function Install-Ambit {
     $handler = New-Object System.Net.Http.HttpClientHandler
     $handler.AllowAutoRedirect = $false
     $client = New-Object System.Net.Http.HttpClient($handler)
+    # One limit for connecting and answering: HttpClient.Timeout. Windows PowerShell 5.1 has no separate connect timeout.
+    $client.Timeout = [TimeSpan]::FromSeconds($(if ($env:AMBIT_LATEST_TIMEOUT) { [int]$env:AMBIT_LATEST_TIMEOUT } else { 30 }))
     try {
       $reply = $client.GetAsync("$base/latest").GetAwaiter().GetResult()
     } catch {
+      # A timeout is a TaskCanceledException; a refused or failed connection is an HttpRequestException.
+      if ($_.Exception -is [System.Threading.Tasks.TaskCanceledException]) { throw 'GitHub did not answer; try again' }
       throw "cannot reach $base/latest"
     } finally {
       $client.Dispose()
     }
+    if ([int]$reply.StatusCode -ge 500 -or [int]$reply.StatusCode -eq 429) { throw 'GitHub did not answer; try again' }
     $location = if ($reply.Headers.Location) { $reply.Headers.Location.ToString() } else { '' }
     if ($location -match '/tag/([^/]+)$') {
       $tag = $Matches[1]

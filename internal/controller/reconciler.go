@@ -199,7 +199,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		return reconcile.Result{}, err
 	}
 	// After RefuseUnpriced: each router line repeats its target's final access expression.
-	routerConds, routerCfg := CompileRouters(routers.Items, models.Items, &res, r.Route, refused, ClassifierInput{Installed: dep != nil, HasKey: hasKeys(keys)})
+	ci := ClassifierInput{Installed: dep != nil, HasKey: hasKeys(keys)}
+	routerConds, routerCfg := CompileRouters(routers.Items, models.Items, &res, r.Route, refused, ci)
+	// The rules version comes from the enforce expressions: the same rules have the same version in both modes.
+	mode, version := r.accessMode(), RulesVersion(res.Objects)
+	if mode == "audit" {
+		res.Objects = RelaxForAudit(res, refused, func(a *Result) { CompileRouters(routers.Items, models.Items, a, r.Route, refused, ci) })
+	}
 	classify := dep != nil && len(routerCfg.Routers) > 0
 	if dep != nil {
 		res.Objects = append(res.Objects, configMapObject(r.Namespace, routerCfg))
@@ -233,7 +239,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	// Ready condition per Ambit object that controls a generated object, keyed "Kind/name".
 	conds := map[string]metav1.Condition{}
 	applyFailed := false
-	mode, version := r.accessMode(), RulesVersion(res.Objects)
 	var published corev1.ConfigMap // the mode and rules version in force; empty before the first change is active
 	if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: AccessModeConfigMap}, &published); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, err
@@ -500,6 +505,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	return result, r.writeRuleStatuses(ctx, rules.Items, res.RuleConditions, stalled)
 }
 
+const auditSuffix = "audit-only mode: recorded, not enforced"
+
 // writeRuleStatuses sets each AccessRule's Ready condition; a change that is not active in the gateway replaces
 // it on every rule.
 func (r *Reconciler) writeRuleStatuses(ctx context.Context, rules []v1.AccessRule, compiled map[string]metav1.Condition, stalled *metav1.Condition) error {
@@ -510,6 +517,8 @@ func (r *Reconciler) writeRuleStatuses(ctx context.Context, rules []v1.AccessRul
 		if stalled != nil {
 			c = *stalled
 			c.ObservedGeneration = ar.Generation
+		} else if r.accessMode() == "audit" { // the reason stays, so GitOps health checks stay green
+			c.Message += "; " + auditSuffix
 		}
 		meta.SetStatusCondition(&next.Status.Conditions, c)
 		if err := r.updateStatus(ctx, ar.Status, next.Status, next); err != nil {

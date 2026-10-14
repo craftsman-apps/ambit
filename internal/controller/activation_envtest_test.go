@@ -471,3 +471,35 @@ func (c refusingModels) Patch(ctx context.Context, obj client.Object, patch clie
 	}
 	return c.Client.Patch(ctx, obj, patch, opts...)
 }
+
+// Audit mode end to end in the controller: the Model's and the MCP policy's authorization is `true`, every
+// AccessRule says the rules are recorded, not enforced (reason still Compiled), and enforce mode has no suffix.
+func TestAuditModeWritesTrueAndTheRuleSuffix(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-audit-true"
+	gateFixture(t, ns)
+	ctx := t.Context()
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if c := ruleReady(t, ns, "eng"); c.Reason != "Compiled" || c.Message != "applied to every listed model and server" {
+		t.Fatalf("enforce mode rule condition %+v", c)
+	}
+	m, _ := genGet(ctx, ns, "AgentgatewayModel", "gemma")
+	if e, _, _ := unstructured.NestedStringSlice(m.Object, "spec", "policies", "authorization", "policy", "matchExpressions"); len(e) != 1 || e[0] == "true" {
+		t.Fatalf("enforce mode expression %q", e)
+	}
+	r.AccessMode = "audit"
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	m, _ = genGet(ctx, ns, "AgentgatewayModel", "gemma")
+	if e, _, _ := unstructured.NestedStringSlice(m.Object, "spec", "policies", "authorization", "policy", "matchExpressions"); len(e) != 1 || e[0] != "true" {
+		t.Errorf("audit mode expression %q, want [true]", e)
+	}
+	c := ruleReady(t, ns, "eng")
+	if c.Status != metav1.ConditionTrue || c.Reason != "Compiled" || c.Message != "applied to every listed model and server; audit-only mode: recorded, not enforced" {
+		t.Errorf("audit mode rule condition %+v", c)
+	}
+}

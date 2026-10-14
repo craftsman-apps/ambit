@@ -162,15 +162,17 @@ func CompileRouters(routers []v1.ModelRouter, models []v1.Model, res *Result, ro
 		access := CEL(res.Access[c.r.Name])
 		var lines []any
 		for _, rt := range c.kept {
-			lines = append(lines, map[string]any{
-				"when":     "(" + access + ") && " + routedPath + " && (" + routeCondition(rt, cfg.Hash) + ") && (" + final[rt.Model] + ")",
-				"modelRef": map[string]any{"name": rt.Model},
-			})
+			when := "(" + access + ") && " + routedPath + " && (" + routeCondition(rt, cfg.Hash) + ") && (" + final[rt.Model] + ")"
+			if res.Audit { // no router access; the target's unpriced refusal (its relaxed expression) stays
+				when = routedPath + " && (" + routeCondition(rt, cfg.Hash) + ")" + andUnlessTrue(final[rt.Model])
+			}
+			lines = append(lines, map[string]any{"when": when, "modelRef": map[string]any{"name": rt.Model}})
 		}
-		lines = append(lines, map[string]any{
-			"when":     "(" + access + ") && (" + final[c.r.Spec.Default] + ")",
-			"modelRef": map[string]any{"name": c.r.Spec.Default},
-		})
+		when := "(" + access + ") && (" + final[c.r.Spec.Default] + ")"
+		if res.Audit {
+			when = final[c.r.Spec.Default]
+		}
+		lines = append(lines, map[string]any{"when": when, "modelRef": map[string]any{"name": c.r.Spec.Default}})
 		res.Objects = append(res.Objects, virtualModel(c.r, c.wire, lines, route))
 		// Warnings: the router is served; the first sets the reason and the message names every one.
 		cnd := cond(metav1.ConditionTrue, "Compiled", fmt.Sprintf("%d routes and the default, served as %q", len(c.kept), c.wire))
@@ -180,6 +182,40 @@ func CompileRouters(routers []v1.ModelRouter, models []v1.Model, res *Result, ro
 		conds[c.r.Name] = cnd
 	}
 	return conds, cfg
+}
+
+func andUnlessTrue(expr string) string {
+	if expr == "true" {
+		return ""
+	}
+	return " && (" + expr + ")"
+}
+
+// RelaxForAudit returns the objects of audit mode (#81) from the enforce compile: every AccessRule decision allows.
+// Each Model's authorization is `true`, keeping RefuseUnpriced's refusal (it guards a Budget, which audit mode still
+// enforces); the MCP access policy is `true`; the virtual models of routers are compiled again by compileRouters
+// (CompileRouters with the enforce inputs) from the relaxed Models. res is not changed.
+func RelaxForAudit(res Result, refused map[string][]string, compileRouters func(*Result)) []*unstructured.Unstructured {
+	a := Result{Access: res.Access, RuleConditions: res.RuleConditions, Audit: true}
+	for _, o := range res.Objects {
+		if o.GetKind() == "AgentgatewayModel" && o.GetLabels()[RouterLabel] != "" {
+			continue // compiled again below
+		}
+		o = o.DeepCopy()
+		switch {
+		case o.GetKind() == "AgentgatewayModel":
+			expr := "true"
+			if gs := refused[o.GetName()]; len(gs) > 0 {
+				expr = "(true) && " + unpricedDeny(gs)
+			}
+			_ = unstructured.SetNestedSlice(o.Object, []any{expr}, "spec", "policies", "authorization", "policy", "matchExpressions")
+		case o.GetKind() == "AgentgatewayPolicy" && o.GetName() == MCPBackendName+"-access":
+			_ = unstructured.SetNestedSlice(o.Object, []any{"true"}, "spec", "backend", "mcp", "authorization", "policy", "matchExpressions")
+		}
+		a.Objects = append(a.Objects, o)
+	}
+	compileRouters(&a)
+	return a.Objects
 }
 
 // llmConfig is a type-LLM router's entry in ambit-router's configuration, or why its classifier cannot be called.

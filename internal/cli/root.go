@@ -11,6 +11,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/craftsman-apps/ambit/internal/cli/helmx"
+	"github.com/craftsman-apps/ambit/internal/cli/local"
 	"github.com/craftsman-apps/ambit/internal/cli/out"
 )
 
@@ -33,6 +34,8 @@ type app struct {
 	tty     bool
 	p       *out.Printer
 	newHelm func(helmx.Options) (helmx.Client, error)
+	// testLocalEnv replaces the Docker- and kind-backed environment of the local commands in tests.
+	testLocalEnv *local.Env
 }
 
 // exitCode ends a command with a code after it printed its own result (e.g. check with a failed check).
@@ -128,6 +131,6 @@ func (a *app) root() *cobra.Command {
 	f.StringVar(&a.g.output, "output", "text", "output format: text or json (check and version only)")
 	f.BoolVar(&a.g.noColor, "no-color", false, "no colour in the output")
 	f.BoolVar(&a.g.verbose, "verbose", false, "print library logs (secrets are redacted)")
-	root.AddCommand(a.validateCmd(), a.versionCmd())
+	root.AddCommand(a.validateCmd(), a.versionCmd(), a.localCmd())
 	return root
 }

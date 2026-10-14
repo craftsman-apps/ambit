@@ -75,6 +75,19 @@ type ProviderError struct {
 
 func (e *ProviderError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.Status, e.Body) }
 
+// NoAnswerError means the settling window ended without an HTTP 200. LastStatus is the last HTTP status (0: no answer
+// at all). local up treats a last status of 404 as a failed model: a removed provider model and the gateway's own
+// settling 404 look the same.
+type NoAnswerError struct {
+	Limit      time.Duration
+	LastStatus int
+	Last       string
+}
+
+func (e *NoAnswerError) Error() string {
+	return fmt.Sprintf("no answer within %s; the last answer was %s", e.Limit, e.Last)
+}
+
 // settling are the answers of a gateway that does not have the new Model or AccessRule yet: 404 until it has the
 // model, then 403 until it has the rule (docs/quick-start.md), and 502/503 while its pods start.
 var settling = map[int]bool{404: true, 403: true, 502: true, 503: true}
@@ -89,7 +102,7 @@ func TestCall(ctx context.Context, c *http.Client, llmURL, token, model string, 
 	parent := ctx
 	ctx, cancel := context.WithDeadline(ctx, deadline) // a request that hangs must not outlast limit
 	defer cancel()
-	last := ""
+	last, lastStatus := "", 0
 	for {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, llmURL+"/v1/chat/completions", bytes.NewReader(body))
 		if err != nil {
@@ -112,7 +125,7 @@ func TestCall(ctx context.Context, c *http.Client, llmURL, token, model string, 
 				first, _, _ := strings.Cut(strings.TrimSpace(r.Choices[0].Message.Content), "\n")
 				return first, nil
 			case settling[resp.StatusCode]:
-				last = fmt.Sprintf("HTTP %d: %.200s", resp.StatusCode, strings.TrimSpace(string(b)))
+				last, lastStatus = fmt.Sprintf("HTTP %d: %.200s", resp.StatusCode, strings.TrimSpace(string(b))), resp.StatusCode
 			case resp.StatusCode == http.StatusUnauthorized:
 				return "", fmt.Errorf("the test call was refused: HTTP %d — the token or access rule is wrong: %.200s", resp.StatusCode, strings.TrimSpace(string(b)))
 			case resp.StatusCode == http.StatusBadRequest:
@@ -121,17 +134,17 @@ func TestCall(ctx context.Context, c *http.Client, llmURL, token, model string, 
 				return "", &ProviderError{Status: resp.StatusCode, Body: fmt.Sprintf("%.300s", strings.TrimSpace(string(b)))}
 			}
 		} else {
-			last = err.Error()
+			last, lastStatus = err.Error(), 0
 		}
 		if time.Now().After(deadline) {
-			return "", fmt.Errorf("no answer within %s; the last answer was %s", limit, last)
+			return "", &NoAnswerError{Limit: limit, LastStatus: lastStatus, Last: last}
 		}
 		select {
 		case <-ctx.Done():
 			if parent.Err() != nil {
 				return "", parent.Err()
 			}
-			return "", fmt.Errorf("no answer within %s; the last answer was %s", limit, last)
+			return "", &NoAnswerError{Limit: limit, LastStatus: lastStatus, Last: last}
 		case <-time.After(every):
 		}
 	}

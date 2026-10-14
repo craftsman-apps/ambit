@@ -9,7 +9,7 @@ description: Send the model calls of Claude Desktop through Ambit (third-party i
 
 **Tested by hand in Claude Desktop: pending.** The HTTP calls that Anthropic's documentation says Claude Desktop makes in gateway mode were reproduced with `curl` against a real Ambit install on 2026-10-15, with a personal key and an OpenRouter free model (see "What was tested"). A run in Claude Desktop itself has not been done. Claude Desktop 2.37337.1 is installed on the test computer; its settings were not changed. Every statement below about what Claude Desktop does comes from Anthropic's pages, which are linked, and not from a run.
 
-This page is about models. For the tools that Ambit gives you (MCP), see [Claude Desktop with MCP tools](claude-desktop-mcp.md). Both pages can be used together, with two keys or one key that has the scope **LLM and MCP**.
+This page is about models. For the tools that Ambit gives you (MCP), see [Claude Desktop with MCP tools](claude-desktop-mcp.md). Both pages can be used together, with two keys or one key that has the scope **LLM and MCP**. When your Claude Desktop is managed as on this page, the MCP page describes a managed option (`managedMcpServers` with `headersHelper`) that can use the same key helper.
 
 ## How it works, and the limits
 
@@ -25,7 +25,7 @@ Anthropic's page [Deploy Claude Desktop on 3P with an LLM gateway](https://claud
 What to know before you start:
 
 - **Models are the provider's names.** Claude Desktop must send the model name that your `Model` object has in `spec.model`, for example `nvidia/nemotron-3-super-120b-a12b:free`. A request for `claude-sonnet-5` gets `404 model_not_found` unless a `Model` object has that name. Ambit has no alias from a Claude name to another model. See "Models".
-- **The base address has no `/v1`.** Use `http://llm.localtest.me:8080` (your LLM address). Anthropic's page shows an address without `/v1` in the console table and an address with `/v1` in its Linux file example, and does not say what Claude Desktop appends. Ambit answers `403 authorization failed` for `/v1/v1/messages`, so a wrong choice looks like a key error. Check the first request in **Audit**.
+- **The base address should have no `/v1`. Not tested in Claude Desktop.** Use `http://llm.localtest.me:8080` (your LLM address). Anthropic's page shows an address without `/v1` in the console table and an address with `/v1` in its Linux file example, and does not say what Claude Desktop appends. Ambit answers `403 authorization failed` for `/v1/v1/messages`, so a wrong choice looks like a key error. After the first request, look at the first row in **Audit**: its route must be `/v1/messages`.
 - **Claude Desktop must reach the gateway.** The address must work from the computer that runs Claude Desktop. The quick-start address `localtest.me` works only on the same computer.
 - **Token counts are estimates.** Ambit does not serve `/v1/messages/count_tokens` and answers 403. Claude Code goes on with estimates ([Connect Claude Code and Cursor](coding-tools.md)). Whether Claude Desktop does the same was not checked.
 - **A model that is not a Claude model can act differently.** Tool use, thinking fields and long contexts depend on the model. Test the model you choose with the work you plan to do.
@@ -245,7 +245,7 @@ Date: 2026-10-15. Ambit built from this branch on a local kind cluster, a person
 
 ## Related
 
-- [Claude Desktop with MCP tools](claude-desktop-mcp.md): the tools of Ambit in Claude Desktop, with the `mcp-remote` bridge.
+- [Claude Desktop with MCP tools](claude-desktop-mcp.md): the tools of Ambit in Claude Desktop, with the `mcp-remote` bridge, or the managed option for a managed Claude Desktop.
 - [Connect Claude Code and Cursor](coding-tools.md): personal keys, and the same key in other tools.
 - [Different models for different teams](models-per-team.md): which group may use which model.
 - [Personal API keys](../api-keys.md): scope, end dates, revoking, and how the gateway checks a key or a token.

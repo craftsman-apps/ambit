@@ -7,11 +7,13 @@ description: Use the tools that Ambit gives you from Claude Desktop, with the mc
 
 **What you get:** Claude Desktop can call the MCP tools that an Ambit access rule gives you, through the Ambit gateway. Each call is checked and recorded under your name, as for any other client.
 
+**Managed Claude Desktop (gateway mode): use the managed option instead.** When your organization manages Claude Desktop as in [Claude Desktop with Ambit's models](claude-desktop.md), Anthropic's configuration reference has the key `managedMcpServers` (added in Claude Desktop 1.2581.0). An entry can name a remote server (`transport` `http` or `sse`, and an `https` `url`) and a `headersHelper`: a script that prints the header as a JSON object, for example `{"Authorization": "Bearer ambit_..."}`. Claude Desktop runs it before requests and reuses the result for `headersHelperTtlSec` seconds (default 300) ([configuration reference](https://claude.com/docs/third-party/claude-desktop/configuration#managedmcpservers)). The helper can read the key from the keychain, as the helper for models does in [The key](claude-desktop.md#the-key). This needs no Node.js and no `mcp-remote`. **Not tested with Ambit.** The `url` must be `https`, so the quick-start address `http://mcp.localtest.me:8080/mcp` cannot be used with it. The rest of this page is for people whose Claude Desktop is not managed. They still need `mcp-remote`.
+
 **Tested by hand in Claude Desktop: pending.** The header and key handling of the bridge was tested on 2026-10-15 against a local stand-in MCP server (see "What was tested"). A run in Claude Desktop against a real Ambit install has not been done yet. Claude Desktop 2.37337.1 is installed on the test computer; its settings were not changed.
 
 ## How it works, and the limits
 
-Claude Desktop starts local programs as MCP servers. It does not yet send a personal key to a remote MCP address. [`mcp-remote`](https://github.com/punkpeye/mcp-remote) is a small local program that Claude Desktop starts. It forwards everything to the Ambit gateway and adds a header `Authorization: Bearer <your key>` to each request.
+In the local file `claude_desktop_config.json`, Claude Desktop starts local programs as MCP servers and has no field for a personal key to a remote MCP address. [`mcp-remote`](https://github.com/punkpeye/mcp-remote) is a small local program that Claude Desktop starts. It forwards everything to the Ambit gateway and adds a header `Authorization: Bearer <your key>` to each request.
 
 - **Claude Desktop only.** This works in the Claude Desktop app on macOS and Windows. It does not work in claude.ai in a browser or in the Claude mobile apps. They reach a remote connector from Anthropic's servers, with OAuth sign-in, and Ambit's MCP gateway does not offer OAuth yet. That is the issue [#97](https://github.com/craftsman-apps/ambit/issues/97). When it is done, the connector route will replace this page.
 - **Your computer must reach the gateway.** The address must work from the computer that runs Claude Desktop.
@@ -57,7 +59,7 @@ In Claude Desktop, open **Settings**, then **Developer**, then **Edit Config**. 
 | macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 | Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
 
-Add an entry to `mcpServers`. If the file already has other servers, keep them and add this one next to them. Do not replace the file. Use the full path of the header file, not a relative path ([MCP: Debugging](https://modelcontextprotocol.io/docs/tools/debugging)).
+Add an entry to `mcpServers`. If the file already has other servers, keep them and add this one next to them. Do not replace the file. Use the full path of the header file, not a relative path ([MCP: Connect to local MCP servers](https://modelcontextprotocol.io/quickstart/user)).
 
 **macOS:**
 
@@ -105,7 +107,7 @@ Replace `<you>` with your user name. Two details:
 - `-y` lets `npx` download the bridge without asking, because Claude Desktop cannot answer a question. The MCP documentation uses it in the same way.
 - The first part of the name, `ambit`, is the label that Claude Desktop shows. Tool names that the gateway returns start with the name of the Ambit server, for example `time_get_current_time`.
 
-Save the file. Quit Claude Desktop completely and start it again. Closing the window is not enough ([MCP: Debugging](https://modelcontextprotocol.io/docs/tools/debugging)).
+Save the file. Quit Claude Desktop completely and start it again. Closing the window is not enough ([MCP: Connect to local MCP servers](https://modelcontextprotocol.io/quickstart/user)).
 
 ### Other form: the key in an environment variable
 
@@ -136,7 +138,7 @@ Use the header file when you can. The two forms are the same for the gateway.
 
 ## Check it works
 
-1. Start Claude Desktop again. Click the "Add files, connectors, and more" plus icon in the chat input, then point to **Connectors**. The entry `ambit` is listed with its tools ([MCP: Debugging](https://modelcontextprotocol.io/docs/tools/debugging)). With the quick-start rule you see `time_get_current_time`. A person without a rule sees no tools.
+1. Start Claude Desktop again. Click the "Add files, connectors, and more" plus icon in the chat input, point to **Connectors**, and choose **Manage connectors**. The entry `ambit` is listed with its tools ([MCP: Connect to local MCP servers](https://modelcontextprotocol.io/quickstart/user)). With the quick-start rule you see `time_get_current_time`. A person without a rule sees no tools.
 2. Ask Claude: "What time is it in London?" Claude asks your permission to use the tool. Allow it. The answer holds the time.
 3. In the Ambit console, open **Audit** and search for your email address. The call appears with the server `time` and the tool `get_current_time`.
 

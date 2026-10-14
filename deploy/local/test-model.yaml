@@ -63,7 +63,7 @@ data:
             self.send_json(200, {"id": "local-1", "object": "chat.completion", "model": model, "usage": usage,
                                  "choices": [{"index": 0, "message": {"role": "assistant", "content": answer}, "finish_reason": "stop"}]})
 
-    http.server.ThreadingHTTPServer(("", int(os.environ.get("PORT", "8080"))), H).serve_forever()
+    http.server.ThreadingHTTPServer((os.environ.get("HOST", ""), int(os.environ.get("PORT", "8080"))), H).serve_forever()
 ---
 apiVersion: apps/v1
 kind: Deployment

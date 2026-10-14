@@ -118,7 +118,7 @@ func TestTestModelServer(t *testing.T) {
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
 	cmd := exec.Command(py, script)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("PORT=%d", port))
+	cmd.Env = append(os.Environ(), fmt.Sprintf("PORT=%d", port), "HOST=127.0.0.1") // loopback only: macOS asks before it opens a listener on every interface
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestTestModelServer(t *testing.T) {
 	post := func(body string) *http.Response {
 		deadline := time.Now().Add(10 * time.Second)
 		for {
-			r, err := http.Post(url, "application/json", strings.NewReader(body))
+			r, err := (&http.Client{Timeout: 3 * time.Second}).Post(url, "application/json", strings.NewReader(body))
 			if err == nil {
 				return r
 			}

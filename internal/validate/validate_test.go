@@ -314,12 +314,12 @@ func TestIntegerFieldsAreAcceptedLikeTheAPIServer(t *testing.T) {
 
 func TestIntegerFieldsStillRefuseBadValues(t *testing.T) {
 	for _, tc := range []struct{ name, route, want string }{
-		{"no condition", "description: none", "a route needs"},
+		{"no condition", "", "a route needs a category, keywords, minBytes or maxBytes"},
 		{"fraction", "minBytes: 1.5", "minBytes"},
 		{"below minimum", "minBytes: 0", "minBytes"},
 	} {
 		p := check(t, routerWith(tc.route))
-		if len(p) == 0 || !strings.Contains(p[0].Message+fmt.Sprint(p), tc.want) {
+		if len(p) == 0 || !strings.Contains(fmt.Sprint(p), tc.want) {
 			t.Errorf("%s: want a problem mentioning %q, got %v", tc.name, tc.want, p)
 		}
 	}
@@ -335,5 +335,22 @@ func TestDecodeGivesInt64ForWholeNumbers(t *testing.T) {
 	}
 	if _, ok := obj["b"].(float64); !ok {
 		t.Errorf("b: want float64, got %T", obj["b"])
+	}
+}
+
+func TestIntegerFieldOfAnotherKind(t *testing.T) {
+	p := check(t, `apiVersion: ambitproject.dev/v1alpha1
+kind: Budget
+metadata: { name: eng }
+spec: { group: eng, groupRequestsPerDay: 100, userRequestsPerDay: 20 }`)
+	if len(p) != 0 {
+		t.Errorf("want no problems, got %v", p)
+	}
+}
+
+func TestRouteWithoutConditionOnlyBreaksTheCELRule(t *testing.T) {
+	p := check(t, routerWith(""))
+	if len(p) != 1 || !strings.Contains(p[0].Message, "a route needs a category, keywords, minBytes or maxBytes") {
+		t.Errorf("want exactly the CEL rule message, got %v", p)
 	}
 }

@@ -66,6 +66,8 @@ The controls below are in Annex A of ISO/IEC 27001:2022. Their titles and number
 
 Regulation (EU) 2024/1689 sets record-keeping duties for **high-risk** AI systems. Ambit records the calls that pass through it. It does not decide whether your system is high-risk, and it does not make a system compliant by itself.
 
+The duties for high-risk systems apply from 2 December 2027 for systems listed in Annex III and from 2 August 2028 for systems that are safety components of products under Annex I. Regulation (EU) 2026/1744 (the Digital Omnibus on AI, in force since 27 July 2026) moved them from the earlier date of 2 August 2026. These dates come from secondary sources that cite the regulation, and I could not read the Official Journal text. Confirm the dates and the article texts below on EUR-Lex before you rely on them.
+
 | Provision | What it says | What Ambit provides |
 |---|---|---|
 | **Article 12** Record-keeping | A high-risk AI system must technically allow the automatic recording of events (logs) over its lifetime. | Ambit records each call to a model or MCP server with time, caller, model or tool, status and token counts. Whether these events are the ones Article 12 requires for your system is for you and your provider to decide. |
@@ -115,4 +117,5 @@ The full texts of the SOC 2 criteria and the ISO controls are not free to read. 
 - AICPA, *2017 Trust Services Criteria for Security, Availability, Processing Integrity, Confidentiality, and Privacy (With Revised Points of Focus — 2022)*, TSP Section 100: criteria CC6.1, CC6.2, CC6.3, CC6.6, CC6.7, CC7.2, CC7.3 and CC8.1. <https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022>
 - ISO/IEC 27001:2022, Annex A, and ISO/IEC 27002:2022 (controls 5.15, 5.16, 5.17, 5.18, 8.2, 8.12, 8.15, 8.16). <https://www.iso.org/standard/75652.html>
 - Regulation (EU) 2024/1689 (Artificial Intelligence Act), Articles 12, 19 and 26(6). <https://eur-lex.europa.eu/eli/reg/2024/1689/oj>
+- Regulation (EU) 2026/1744 (Digital Omnibus on AI), which amends Article 113 and sets the application dates above. EUR-Lex: <https://eur-lex.europa.eu/eli/reg/2026/1744/oj>. Summary with the amended text: <https://artificialintelligenceact.eu/ai-act-explorer/digital-omnibus/>
 - Ambit: [Concepts](concepts.md), [Install on your cluster](install.md), [Personal API keys](api-keys.md), [Offboarding](offboarding.md), [Budgets](budgets.md), [Alerts](alerts.md), and `.github/workflows/release.yml`.

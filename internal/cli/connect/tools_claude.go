@@ -90,6 +90,12 @@ func PlanClaudeCode(in Input) (*Plan, error) {
 	}
 	p.After = d.Bytes()
 	p.Record = FileRecord{Path: in.Path, Entries: entries, Seed: seed, RemovedSecrets: removed, Created: !in.Exists}
+	if in.Prev != nil { // a disconnect restores the very first state, so what the first connect did stays recorded
+		p.Record.Created = in.Prev.Created
+		p.Record.Dirs = in.Prev.Dirs
+		p.Record.Seed = in.Prev.Seed
+		p.Record.RemovedSecrets = append(append([]string{}, in.Prev.RemovedSecrets...), removed...)
+	}
 	if in.Getenv != nil {
 		for _, v := range claudeSecretVars {
 			if in.Getenv(v) != "" {

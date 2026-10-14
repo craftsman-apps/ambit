@@ -140,3 +140,27 @@ func TestClaudeCodeFileGoneAtDisconnect(t *testing.T) {
 		t.Fatalf("%v %+v", err, d)
 	}
 }
+
+// A second connect (another --url) keeps what the first one recorded, so a disconnect restores the first state.
+func TestClaudeCodeReconnectKeepsTheFirstRecord(t *testing.T) {
+	in := claudeInput(goldenCase{}, goldenStep{URL: "https://a.example.com", Model: "m", Force: true},
+		[]byte(`{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-ant-x"}}`+"\n"), true, nil)
+	first, err := PlanClaudeCode(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Record.Dirs = []string{"/home/a/.claude"}
+	in2 := claudeInput(goldenCase{}, goldenStep{URL: "https://b.example.com", Model: "m"}, first.After, true, &first.Record)
+	second, err := PlanClaudeCode(in2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := second.Record; len(r.RemovedSecrets) != 1 || r.Dirs[0] != "/home/a/.claude" {
+		t.Fatalf("record = %+v", r)
+	}
+	second.Record.Backup = "/home/a/.claude/settings.json.ambit.bak"
+	d, err := UnplanJSON(second.Record, second.After, true)
+	if err != nil || len(d.Notes) != 1 || !strings.Contains(d.Notes[0], "env.ANTHROPIC_AUTH_TOKEN was removed at connect") {
+		t.Fatalf("%v %q", err, d.Notes)
+	}
+}

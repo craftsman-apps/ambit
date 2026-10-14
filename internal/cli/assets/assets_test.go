@@ -118,7 +118,7 @@ func TestTestModelServer(t *testing.T) {
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
 	cmd := exec.Command(py, script)
-	cmd.Env = append(os.Environ(), fmt.Sprintf("PORT=%d", port), "HOST=127.0.0.1") // loopback only: macOS asks before it opens a listener on every interface
+	cmd.Env = append(os.Environ(), fmt.Sprintf("PORT=%d", port))
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}

@@ -84,7 +84,7 @@ Steps: read and parse the files (a file that does not parse stops the command, n
 | `--key-store keychain\|file` | Force a store. Default: the keychain, and a `0600` file only on Linux or BSD without a Secret Service (with a warning). |
 | `--shell bash\|zsh\|fish\|powershell\|none` | opencode only: the shell that gets the function. Default: detected. `none` prints the function and writes nothing. |
 | `--dry-run` | Print the diff of every file and the key action. Write nothing, store nothing, delete nothing, ask for no key and make no test call. Exit 1 when the real run would stop (a conflict, a file that does not parse, an opencode v2 file), else 0. |
-| `--force` | Replace a conflicting entry that Ambit did not write. The old value is saved for `ambit disconnect`, except a value that may be a secret: that one stays only in the backup file. |
+| `--force` | Replace a conflicting entry that Ambit did not write. The old value is saved for `ambit disconnect`, except these, which stay only in the backup file and are not put back: `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY` and an old `provider.ambit` of opencode. |
 | `--no-test` | Skip the test call. |
 
 The key is checked for the format `ambit_` and 43 letters and digits. If the same command ran before and nothing changed, it prints `✓ <tool> is already connected to <url>` and makes only the test call. If the test call fails, the config stays; the output says what failed and ends with `to undo: ambit disconnect <tool>`.
@@ -96,7 +96,7 @@ ambit disconnect <claude-code|codex|opencode|cursor> [flags]
 ambit disconnect --all [flags]
 ```
 
-Removes exactly what `ambit connect` added, and keeps every other byte of the file when nothing changed in between. An entry that you changed after connect stays, with a `!` line. A tool that is not recorded in the state file prints `✓ <tool> is not connected (nothing recorded)`; for Codex and opencode, a marked block that is found is still removed. When no other tool uses the key, the stored key is deleted. That does not revoke it: the last line says to revoke it in the console.
+Removes exactly what `ambit connect` added, and keeps every other byte of the file when nothing changed in between. For Codex and opencode this needs the state file `connect.json`: without it, the blank line that connect added before a block stays. An entry that you changed after connect stays, with a `!` line. A tool that is not recorded in the state file prints `✓ <tool> is not connected (nothing recorded)`; for Codex and opencode, a marked block that is found is still removed. When no other tool uses the key, the stored key is deleted. That does not revoke it: the last line says to revoke it in the console.
 
 | Flag | Meaning |
 |---|---|

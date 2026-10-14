@@ -287,7 +287,8 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 			}
 		}
 		objs, err := s.write()
-		if err != nil {
+		var notWritten *stalledError
+		if err != nil && !errors.As(err, &notWritten) {
 			return nil, ran, err
 		}
 		ran[s.name] = true
@@ -326,7 +327,12 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 		if err := r.setPending(ctx, &target); err != nil {
 			return nil, ran, err
 		}
-		if err := r.gate(ctx, wait, seen, timeout); err != nil {
+		if notWritten != nil { // a write the API server refused stops the change like a gate that does not pass
+			err = notWritten
+		} else {
+			err = r.gate(ctx, wait, seen, timeout)
+		}
+		if err != nil {
 			var st *stalledError
 			if !errors.As(err, &st) {
 				return nil, ran, err

@@ -420,3 +420,54 @@ func TestStalledEnforceChangeWritesTheDeletedAccessLogAgain(t *testing.T) {
 		t.Errorf("attributes %v, want the published version %s", a, first["rulesVersion"])
 	}
 }
+
+// A rules change where one generated object is refused by the API server (e.g. a CEL above the CRD's limit) is not
+// active: the change stops at that step, the old rules version stays published, and the access log keeps it.
+func TestRulesChangeWithAFailedApplyIsNotPublished(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-gate-applyfailed"
+	gateFixture(t, ns)
+	ctx := t.Context()
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
+		Activation: Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond}}
+	done := reconcileAsync(r)
+	eventually(t, "authorization written", func() error { _, err := genGet(ctx, ns, "AgentgatewayModel", "gemma"); return err })
+	playAgentgateway(t, ns, "AgentgatewayModel", "gemma")
+	eventually(t, "access log written", func() error { _, err := accessLogOf(ctx, ns); return err })
+	playAgentgateway(t, ns, "AgentgatewayPolicy", AccessLogPolicy)
+	wait(t, done)
+	first, _ := accessMode(ctx, ns)
+
+	r.Client = refusingModels{envClient}
+	var ar v1.AccessRule
+	_ = envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "eng"}, &ar)
+	ar.Spec.Groups = []string{"eng", "ops"}
+	if err := envClient.Update(ctx, &ar); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := accessMode(ctx, ns); d["rulesVersion"] != first["rulesVersion"] {
+		t.Errorf("published %v although the model was not applied; want the old %s", d, first["rulesVersion"])
+	}
+	if p := pendingOf(t, ns); p["step"] != "authorization" || !strings.Contains(p["error"], "Model/gemma was not applied: spec.policies.authorization: Too long") {
+		t.Errorf("pending %v", p)
+	}
+	if c := ruleReady(t, ns, "eng"); c.Status != metav1.ConditionFalse || c.Reason != "RulesNotActive" {
+		t.Errorf("rule condition %+v", c)
+	}
+	if p, _ := accessLogOf(ctx, ns); attributes(p)["ambit.rulesVersion"] != `"`+first["rulesVersion"]+`"` {
+		t.Errorf("the access log has the new version: %v", attributes(p))
+	}
+}
+
+// refusingModels is the API server refusing every AgentgatewayModel write.
+type refusingModels struct{ client.Client }
+
+func (c refusingModels) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if obj.GetObjectKind().GroupVersionKind().Kind == "AgentgatewayModel" {
+		return fmt.Errorf("spec.policies.authorization: Too long: may not be more than 16384 bytes")
+	}
+	return c.Client.Patch(ctx, obj, patch, opts...)
+}

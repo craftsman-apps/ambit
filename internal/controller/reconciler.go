@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -233,9 +234,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	conds := map[string]metav1.Condition{}
 	applyFailed := false
 	mode, version := r.accessMode(), RulesVersion(res.Objects)
+	var published corev1.ConfigMap // the mode and rules version in force; empty before the first change is active
+	if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: AccessModeConfigMap}, &published); client.IgnoreNotFound(err) != nil {
+		return reconcile.Result{}, err
+	}
+	changing := r.Activation.Timeout > 0 && (published.Data["mode"] != mode || published.Data["rulesVersion"] != version)
 	steps := []step{
 		{"authorization", func() (w []gated, err error) {
 			applyFailed, w, err = r.applyAll(ctx, res.Objects, conds)
+			if err == nil && applyFailed && changing { // the new rules are not all written: not active
+				return w, &stalledError{notApplied(conds)}
+			}
 			return w, err
 		}},
 		// After authorization: its rules version names the rules now written.
@@ -244,11 +253,6 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	if mode == "audit" { // the access log first: a request allowed in audit mode always finds its fields
 		steps[0], steps[1] = steps[1], steps[0]
 	}
-	var published corev1.ConfigMap // the mode and rules version in force; empty before the first change is active
-	if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: AccessModeConfigMap}, &published); client.IgnoreNotFound(err) != nil {
-		return reconcile.Result{}, err
-	}
-	changing := r.Activation.Timeout > 0 && (published.Data["mode"] != mode || published.Data["rulesVersion"] != version)
 	if r.accessLog == nil && published.Data["mode"] != "" { // after a restart: the values in force
 		r.accessLog = &logState{published.Data["mode"], published.Data["rulesVersion"]}
 	}
@@ -513,6 +517,16 @@ func (r *Reconciler) writeRuleStatuses(ctx context.Context, rules []v1.AccessRul
 		}
 	}
 	return nil
+}
+
+// notApplied names the first object (by owner) the API server refused in this pass.
+func notApplied(conds map[string]metav1.Condition) string {
+	for _, k := range slices.Sorted(maps.Keys(conds)) {
+		if c := conds[k]; c.Reason == "ApplyFailed" {
+			return k + " was not applied: " + c.Message
+		}
+	}
+	return ""
 }
 
 // offboarding is the policy that refuses deactivated users, from ambit-offboarded as it is now; nil without it.

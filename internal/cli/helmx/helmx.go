@@ -57,6 +57,7 @@ type sdk struct {
 func New(o Options) (Client, error) {
 	s := cli.New()
 	s.KubeConfig, s.KubeContext = o.Kubeconfig, o.Context
+	s.SetNamespace(o.Namespace) // the kube client puts objects without a namespace here, not in the kubeconfig default
 	if o.RegistryConfig != "" {
 		s.RegistryConfig = o.RegistryConfig
 	}

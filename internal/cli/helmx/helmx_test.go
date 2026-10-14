@@ -3,6 +3,8 @@ package helmx
 import (
 	"context"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"helm.sh/helm/v4/pkg/action"
@@ -73,5 +75,29 @@ func TestValuesUserSuppliedVersusAll(t *testing.T) {
 	}
 	if all["greeting"] != "hello" || all["extra"] != "x" {
 		t.Fatalf("all values = %v", all)
+	}
+}
+
+// The kube client puts objects that name no namespace into the namespace of the REST client getter. New must set
+// it from Options, or the chart's resources land in the kubeconfig's default namespace (found by the Helm 3 gate).
+func TestNewUsesNamespaceForResources(t *testing.T) {
+	kc := filepath.Join(t.TempDir(), "kubeconfig")
+	const cfg = `apiVersion: v1
+kind: Config
+clusters: [{name: c, cluster: {server: "https://127.0.0.1:1"}}]
+users: [{name: u, user: {token: t}}]
+contexts: [{name: x, context: {cluster: c, user: u, namespace: kubeconfig-default}}]
+current-context: x
+`
+	if err := os.WriteFile(kc, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := New(Options{Kubeconfig: kc, Namespace: "ambit-system"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns, _, err := c.(*sdk).settings.RESTClientGetter().ToRawKubeConfigLoader().Namespace()
+	if err != nil || ns != "ambit-system" {
+		t.Fatalf("namespace of the REST client getter = %q, %v; want ambit-system", ns, err)
 	}
 }

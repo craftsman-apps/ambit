@@ -58,7 +58,7 @@ func TestGatePassesWhenAgentgatewayAcceptedAndAttachedTheGeneration(t *testing.T
 	p := gatedPolicy(4, ancestor(agentgatewayController, agwCond("Accepted", "True", "Valid", 4), agwCond("Attached", "True", "Attached", 5)),
 		ancestor("other.example/controller", agwCond("Accepted", "False", "Invalid", 4))) // another controller's view does not count
 	r, clock := gateReconciler(p)
-	if err := r.gate(t.Context(), []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 4}}, gateStart); err != nil {
+	if err := r.gate(t.Context(), []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 4}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := clock.Sub(gateStart); got != 3*time.Second {
@@ -69,7 +69,7 @@ func TestGatePassesWhenAgentgatewayAcceptedAndAttachedTheGeneration(t *testing.T
 func TestGateWaitsForTheNewGenerationThenTimesOut(t *testing.T) {
 	p := gatedPolicy(5, ancestor(agentgatewayController, agwCond("Accepted", "True", "Valid", 4), agwCond("Attached", "True", "Attached", 4)))
 	r, clock := gateReconciler(p)
-	err := r.gate(t.Context(), []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 5}}, gateStart)
+	err := r.gate(t.Context(), []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 5}}, nil)
 	if err == nil {
 		t.Fatal("passed on an older generation")
 	}
@@ -84,7 +84,7 @@ func TestGateWaitsForTheNewGenerationThenTimesOut(t *testing.T) {
 
 func TestGateWaitsForAnyStatus(t *testing.T) {
 	r, _ := gateReconciler(gatedPolicy(1))
-	err := r.gate(t.Context(), []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 1}}, gateStart)
+	err := r.gate(t.Context(), []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 1}}, nil)
 	if err == nil || !strings.HasSuffix(err.Error(), "generation 1: Accepted is missing") {
 		t.Fatalf("error %v", err)
 	}
@@ -93,7 +93,7 @@ func TestGateWaitsForAnyStatus(t *testing.T) {
 func TestGateFailsAtOnceOnInvalid(t *testing.T) {
 	p := gatedPolicy(2, ancestor(agentgatewayController, agwCond("Accepted", "False", "Invalid", 2), agwCond("Attached", "False", "Pending", 2)))
 	r, clock := gateReconciler(p)
-	err := r.gate(t.Context(), []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 2}}, gateStart)
+	err := r.gate(t.Context(), []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 2}}, nil)
 	if err == nil || err.Error() != "waiting for agentgateway to apply AgentgatewayPolicy/ambit-access-log generation 2: Accepted is False (Invalid: m-Invalid)" {
 		t.Fatalf("error %v", err)
 	}
@@ -103,7 +103,7 @@ func TestGateFailsAtOnceOnInvalid(t *testing.T) {
 	// An Invalid verdict on an older generation is not about this write: wait for the new one.
 	old := gatedPolicy(3, ancestor(agentgatewayController, agwCond("Accepted", "False", "Invalid", 2)))
 	r, clock = gateReconciler(old)
-	_ = r.gate(t.Context(), []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 3}}, gateStart)
+	_ = r.gate(t.Context(), []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 3}}, nil)
 	if clock.Sub(gateStart) < 120*time.Second {
 		t.Errorf("failed at once on an older generation's verdict")
 	}
@@ -111,27 +111,50 @@ func TestGateFailsAtOnceOnInvalid(t *testing.T) {
 
 func TestGateFailsAtOnceOnANackAfterTheWrite(t *testing.T) {
 	ok := gatedPolicy(1, ancestor(agentgatewayController, agwCond("Accepted", "True", "Valid", 1), agwCond("Attached", "True", "Attached", 1)))
+	objs := []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 1}}
 	r, _ := gateReconciler(ok, nack(gateStart.Add(-time.Minute))) // before the write: an earlier change's
-	if err := r.gate(t.Context(), []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 1}}, gateStart); err != nil {
+	seen, err := r.nacksSeen(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.gate(t.Context(), objs, seen); err != nil {
 		t.Fatalf("an older NACK failed the gate: %v", err)
 	}
-	r, clock := gateReconciler(ok, nack(gateStart.Add(time.Second)))
-	err := r.gate(t.Context(), []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 1}}, gateStart)
+	// The recorder stores whole seconds: a NACK 300 ms after a write at 10:00:00.400 says 10:00:00. Clocks are
+	// not compared; an Event that was not there before the write counts.
+	r, clock := gateReconciler(ok)
+	seen, _ = r.nacksSeen(t.Context())
+	if err := r.Create(t.Context(), nack(gateStart.Truncate(time.Second))); err != nil {
+		t.Fatal(err)
+	}
+	err = r.gate(t.Context(), objs, seen)
 	if err == nil || err.Error() != "a gateway pod rejected the update (AgentGatewayNackError): proxy rejected the update: bad CEL" {
 		t.Fatalf("error %v", err)
 	}
 	if clock.Sub(gateStart) > 0 {
 		t.Errorf("waited %v before failing", clock.Sub(gateStart))
 	}
+	// The recorder folds a repeated NACK into the same Event and raises its count.
+	old := nack(gateStart.Add(-time.Minute))
+	old.Count = 2
+	r, _ = gateReconciler(ok, old)
+	seen, _ = r.nacksSeen(t.Context())
+	old.Count = 3
+	if err := r.Update(t.Context(), old); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.gate(t.Context(), objs, seen); err == nil {
+		t.Fatal("a NACK repeated after the write (count 2 -> 3) did not fail the gate")
+	}
 }
 
 func TestGateOnAModelNeedsAcceptedOnEveryParent(t *testing.T) {
 	r, _ := gateReconciler(gatedModel(2, agwCond("Accepted", "True", "Accepted", 2)))
-	if err := r.gate(t.Context(), []gated{{kind: "AgentgatewayModel", name: "gpt", generation: 2}}, gateStart); err != nil {
+	if err := r.gate(t.Context(), []gated{{kind: "AgentgatewayModel", name: "gpt", generation: 2}}, nil); err != nil {
 		t.Fatal(err)
 	}
 	r, _ = gateReconciler(gatedModel(3, agwCond("Accepted", "True", "Accepted", 2)))
-	if err := r.gate(t.Context(), []gated{{kind: "AgentgatewayModel", name: "gpt", generation: 3}}, gateStart); err == nil ||
+	if err := r.gate(t.Context(), []gated{{kind: "AgentgatewayModel", name: "gpt", generation: 3}}, nil); err == nil ||
 		!strings.HasPrefix(err.Error(), "waiting for agentgateway to apply AgentgatewayModel/gpt generation 3: Accepted is True") {
 		t.Fatalf("error %v", err)
 	}
@@ -139,7 +162,7 @@ func TestGateOnAModelNeedsAcceptedOnEveryParent(t *testing.T) {
 
 func TestGateWithNothingWrittenDoesNotWait(t *testing.T) {
 	r, clock := gateReconciler()
-	if err := r.gate(t.Context(), nil, gateStart); err != nil || clock.Sub(gateStart) != 0 {
+	if err := r.gate(t.Context(), nil, nil); err != nil || clock.Sub(gateStart) != 0 {
 		t.Fatalf("err %v, waited %v", err, clock.Sub(gateStart))
 	}
 }

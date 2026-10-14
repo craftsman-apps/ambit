@@ -60,8 +60,46 @@ func (r *Reconciler) sleep(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// gate waits until every object is active, polling, for up to Activation.Timeout; then the settle time.
-func (r *Reconciler) gate(ctx context.Context, objs []gated, since time.Time) error {
+// nackSeen is the NACK Events on the Gateway before a write, by name, with their count.
+type nackSeen map[string]int32
+
+// nacksSeen lists the NACK Events on the Gateway now; a gate after the write fails on any other one, or on a higher
+// count (the recorder folds a repeated NACK into the same Event). Clocks are not compared: the recorder stores whole
+// seconds, and a NACK in the same second as the write would look older than it.
+// Best effort: the recorder's spam filter (per object, 25 at once, then one per 5 minutes) can drop a NACK Event.
+func (r *Reconciler) nacksSeen(ctx context.Context) (nackSeen, error) {
+	nacks, err := r.nacks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	seen := nackSeen{}
+	for _, e := range nacks {
+		seen[e.Name] = e.Count
+	}
+	return seen, nil
+}
+
+func (r *Reconciler) nacks(ctx context.Context) ([]corev1.Event, error) {
+	var events corev1.EventList
+	if err := r.Live.List(ctx, &events, client.InNamespace(r.Namespace)); err != nil {
+		return nil, err
+	}
+	gw := r.Activation.Gateway
+	if gw == "" {
+		gw = "ambit"
+	}
+	var out []corev1.Event
+	for _, e := range events.Items {
+		if e.Type == corev1.EventTypeWarning && e.Reason == nackReason && e.InvolvedObject.Kind == "Gateway" && e.InvolvedObject.Name == gw {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+// gate waits until every object is active, polling, for up to Activation.Timeout; then the settle time. seen is
+// the NACK Events before the write.
+func (r *Reconciler) gate(ctx context.Context, objs []gated, seen nackSeen) error {
 	if len(objs) == 0 {
 		return nil
 	}
@@ -71,7 +109,7 @@ func (r *Reconciler) gate(ctx context.Context, objs []gated, since time.Time) er
 	}
 	deadline := r.now().Add(r.Activation.Timeout)
 	for {
-		waiting, err := r.activated(ctx, objs, since)
+		waiting, err := r.activated(ctx, objs, seen)
 		if err != nil {
 			return err
 		}
@@ -89,17 +127,13 @@ func (r *Reconciler) gate(ctx context.Context, objs []gated, since time.Time) er
 
 // activated returns "" when every object is active, or what it waits for. A NACK or an Invalid verdict on the
 // written generation is a *stalledError at once.
-func (r *Reconciler) activated(ctx context.Context, objs []gated, since time.Time) (string, error) {
-	var events corev1.EventList
-	if err := r.Live.List(ctx, &events, client.InNamespace(r.Namespace)); err != nil {
+func (r *Reconciler) activated(ctx context.Context, objs []gated, seen nackSeen) (string, error) {
+	nacks, err := r.nacks(ctx)
+	if err != nil {
 		return "", err
 	}
-	gw := r.Activation.Gateway
-	if gw == "" {
-		gw = "ambit"
-	}
-	for _, e := range events.Items {
-		if e.Type == corev1.EventTypeWarning && e.Reason == nackReason && e.InvolvedObject.Kind == "Gateway" && e.InvolvedObject.Name == gw && eventTime(e).After(since) {
+	for _, e := range nacks {
+		if n, ok := seen[e.Name]; !ok || e.Count > n {
 			return "", &stalledError{fmt.Sprintf("a gateway pod rejected the update (%s): %s", nackReason, e.Message)}
 		}
 	}
@@ -210,17 +244,6 @@ func observed(c map[string]any) int64 {
 	return 0
 }
 
-func eventTime(e corev1.Event) time.Time {
-	t := e.LastTimestamp.Time
-	if e.EventTime.After(t) {
-		t = e.EventTime.Time
-	}
-	if e.Series != nil && e.Series.LastObservedTime.After(t) {
-		t = e.Series.LastObservedTime.Time
-	}
-	return t
-}
-
 // step is one write of a mode switch or rules change.
 type step struct {
 	name  string
@@ -229,9 +252,9 @@ type step struct {
 
 // stalledStep remembers what a stopped step wrote, so the retry waits for it although it writes nothing new.
 type stalledStep struct {
-	step  string
-	since time.Time
-	objs  []gated
+	step string
+	seen nackSeen
+	objs []gated
 }
 
 // pending is what ambit-access-mode shows while a change is not active yet.
@@ -248,7 +271,12 @@ type pending struct {
 func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, target pending) (stall *stalledError, ran map[string]bool, err error) {
 	ran = map[string]bool{}
 	for _, s := range steps {
-		since := r.now()
+		var seen nackSeen
+		if changing {
+			if seen, err = r.nacksSeen(ctx); err != nil {
+				return nil, ran, err
+			}
+		}
 		objs, err := s.write()
 		if err != nil {
 			return nil, ran, err
@@ -280,18 +308,18 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 			wait = append(wait, g)
 		}
 		if !anyChanged && r.stalled != nil && r.stalled.step == s.name {
-			since = r.stalled.since // a NACK seen for the stopped write still counts
+			seen = r.stalled.seen // a NACK seen for the stopped write still counts
 		}
 		target.Step, target.Error = s.name, ""
 		if err := r.setPending(ctx, &target); err != nil {
 			return nil, ran, err
 		}
-		if err := r.gate(ctx, wait, since); err != nil {
+		if err := r.gate(ctx, wait, seen); err != nil {
 			var st *stalledError
 			if !errors.As(err, &st) {
 				return nil, ran, err
 			}
-			r.stalled = &stalledStep{step: s.name, since: since, objs: wait}
+			r.stalled = &stalledStep{step: s.name, seen: seen, objs: wait}
 			target.Error = st.msg
 			if err := r.setPending(ctx, &target); err != nil {
 				return nil, ran, err

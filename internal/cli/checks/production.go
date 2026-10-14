@@ -334,6 +334,9 @@ func p9Console(ctx context.Context, e *Env) Result {
 		return res(Fail, "values, Deployment", "console.replicas is %d; it must be 1", r)
 	}
 	d, err := e.Kube.AppsV1().Deployments(e.Namespace).Get(ctx, "ambit-console", metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return res(Fail, "values, Deployment", "there is no ambit-console Deployment in namespace %s", e.Namespace).next(installDocs)
+	}
 	if err != nil {
 		return unknownFor(err, "get", "deployments", e.Namespace, "values, Deployment")
 	}

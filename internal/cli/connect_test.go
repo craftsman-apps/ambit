@@ -27,6 +27,11 @@ func (m memStore) Get(u string) (string, error) {
 func (m memStore) Set(u, k string) error { m[u] = k; return nil }
 func (m memStore) Delete(u string) error { delete(m, u); return nil }
 
+// failingDelete is a store whose Delete fails, like a locked keyring.
+type failingDelete struct{ memStore }
+
+func (failingDelete) Delete(string) error { return errors.New("keyring is locked") }
+
 type connectRig struct {
 	t         *testing.T
 	kc, file  memStore
@@ -38,6 +43,7 @@ type connectRig struct {
 	stderr    bytes.Buffer
 	tty       bool
 	stdin     string
+	lockedKC  bool // deleting from the keychain fails
 }
 
 func newRig(t *testing.T) *connectRig {
@@ -54,7 +60,11 @@ func (r *connectRig) run(args ...string) int {
 	r.stderr.Reset()
 	// The flow tests are the same on every system: they run as on Linux (quoting, shell, store names). The Windows
 	// cases are unit tests of the connect package.
-	d := &connectDeps{Keychain: r.kc, File: r.file, StatePath: r.statePath, GOOS: "linux", Home: r.home,
+	var keychain connect.Store = r.kc
+	if r.lockedKC {
+		keychain = failingDelete{r.kc}
+	}
+	d := &connectDeps{Keychain: keychain, File: r.file, StatePath: r.statePath, GOOS: "linux", Home: r.home,
 		Getenv:  func(k string) string { return r.env[k] },
 		Bin:     connect.BinEnv{Executable: func() (string, error) { return fakeAmbit, nil }, LookPath: func(string) (string, error) { return "", errors.New("not on PATH") }, GOOS: "linux"},
 		Profile: func() (string, error) { return "", errors.New("no PowerShell here") },

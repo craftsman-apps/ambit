@@ -587,3 +587,60 @@ func TestConnectKeepsTheRecordOfFilesThatAnotherConnectDoesNotUse(t *testing.T) 
 		t.Fatalf("not restored:\nzsh %q\nbash %q\noc %q", r.readFile(zsh), r.readFile(bash), r.readFile(oc))
 	}
 }
+
+// The key, the files and the state file agree after a failure in between.
+func TestConnectWriteFailureStoresNoKeyAndSavesNoState(t *testing.T) {
+	g, r := newGateway(t), newRig(t)
+	settings := r.write(".claude/settings.json", seedClaude)
+	if err := os.Chmod(settings, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if code := r.run("connect", "claude-code", "--url", g.URL, "--model", "m", "--key-file", r.keyFile(), "--yes"); code != 1 {
+		t.Fatalf("code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
+	}
+	if len(r.kc) != 0 || len(r.file) != 0 {
+		t.Errorf("a key is stored for a tool that was not written: %v %v", r.kc, r.file)
+	}
+	if st, _ := connect.LoadState(r.statePath); len(st.Keys) != 0 || len(st.Tools) != 0 {
+		t.Errorf("the state file records what was not written: %+v", st)
+	}
+}
+
+func TestConnectWriteFailureKeepsAKeyThatWasStoredBefore(t *testing.T) {
+	g, r := newGateway(t), newRig(t)
+	kf := r.keyFile()
+	r.run("connect", "codex", "--url", g.URL, "--model", "m", "--key-file", kf, "--yes")
+	settings := r.write(".claude/settings.json", seedClaude)
+	os.Chmod(settings, 0o444)
+	if code := r.run("connect", "claude-code", "--url", g.URL, "--model", "m", "--yes"); code != 1 {
+		t.Fatalf("code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
+	}
+	if r.kc[g.URL] != testAmbitKey {
+		t.Errorf("the key that codex uses was deleted: %v", r.kc)
+	}
+}
+
+func TestDisconnectKeyDeletionFailureLeavesAConsistentState(t *testing.T) {
+	g, r := newGateway(t), newRig(t)
+	settings := r.write(".claude/settings.json", seedClaude)
+	r.run("connect", "claude-code", "--url", g.URL, "--model", "m", "--key-file", r.keyFile(), "--yes")
+	r.lockedKC = true
+	if code := r.run("disconnect", "claude-code", "--yes"); code != 1 {
+		t.Fatalf("code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
+	}
+	if r.readFile(settings) != seedClaude || !strings.Contains(r.stdout.String(), "restored") {
+		t.Errorf("the file was not restored and reported:\n%s\n%s", r.stdout.String(), r.readFile(settings))
+	}
+	st, _ := connect.LoadState(r.statePath)
+	if len(st.Tools) != 0 || st.Keys[g.URL].Store != connect.StoreKeychain || r.kc[g.URL] == "" {
+		t.Fatalf("the state and the stored key disagree: %+v, keys %v", st, r.kc)
+	}
+	// Once the keychain works, --all deletes the key that no tool uses any more.
+	r.lockedKC = false
+	if code := r.run("disconnect", "--all", "--yes"); code != 0 || len(r.kc) != 0 || !strings.Contains(r.stdout.String(), "key for "+g.URL+" deleted") {
+		t.Fatalf("code %d, keys %v\n%s%s", code, r.kc, r.stdout.String(), r.stderr.String())
+	}
+	if st, _ := connect.LoadState(r.statePath); len(st.Keys) != 0 {
+		t.Fatalf("state: %+v", st)
+	}
+}

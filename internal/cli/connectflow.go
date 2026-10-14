@@ -323,7 +323,9 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 		return err
 	}
 
-	// 7: store the key, write the files, write the state file.
+	// 7: store the key, write the files, then write the state file once. A failed write takes a key stored in this
+	// run out again, so the key, the files and the state file agree after a failure.
+	newStore := ""
 	if !reused {
 		store, warning, err := connect.Put(d.Keychain, d.File, d.GOOS, f.keyStore, url, key)
 		if err != nil {
@@ -333,17 +335,13 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 			p.Line("%s %s", p.Mark("warn"), warning)
 		}
 		kr := st.Keys[url]
-		kr.Store = store
+		kr.Store, newStore = store, store
 		st.SetKey(url, kr)
-		p.Line("%s key stored in %s", p.Mark("ok"), storeName(d.GOOS, store, d.File, url))
 	}
 	if f.consoleURL != "" {
 		kr := st.Keys[url]
 		kr.ConsoleURL = strings.TrimRight(f.consoleURL, "/")
 		st.SetKey(url, kr)
-	}
-	if err := st.Save(d.StatePath); err != nil {
-		return err
 	}
 	var changes []connect.FileChange
 	var written []*job
@@ -354,7 +352,17 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	}
 	results, err := connect.WriteAll(changes)
 	if err != nil {
+		if newStore != "" {
+			if s, ok := d.store(st, url); ok {
+				if derr := s.Delete(url); derr != nil {
+					err = fmt.Errorf("%w; the key stored in this run could not be deleted again (%v)", err, derr)
+				}
+			}
+		}
 		return err
+	}
+	if newStore != "" {
+		p.Line("%s key stored in %s", p.Mark("ok"), storeName(d.GOOS, newStore, d.File, url))
 	}
 	for i, j := range written {
 		r := results[i]
@@ -653,6 +661,15 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 	if showCursor {
 		st.CursorShown = false
 	}
+	if f.all { // a key that no tool uses any more, left by a failed deletion or an earlier update
+		for u := range st.Keys {
+			urls[u] = true
+		}
+	}
+	// The state file goes first: if deleting a key fails, it lists the key that is still stored and no tool.
+	if err := st.Save(d.StatePath); err != nil {
+		return err
+	}
 	var keyLines []string
 	var urlList []string
 	for u := range urls {
@@ -670,6 +687,9 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 			}
 		}
 		delete(st.Keys, u)
+		if err := st.Save(d.StatePath); err != nil {
+			return err
+		}
 		keyLines = append(keyLines, fmt.Sprintf("%s key for %s deleted from %s", p.Mark("ok"), u, storeName(d.GOOS, kr.Store, d.File, u)))
 		console := strings.TrimRight(f.consoleURL, "/")
 		if console == "" {
@@ -680,9 +700,6 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 		} else {
 			keyLines = append(keyLines, "  next: revoke the key in the console (Settings > Keys); deleting it here does not revoke it")
 		}
-	}
-	if err := st.Save(d.StatePath); err != nil {
-		return err
 	}
 	for _, l := range keyLines {
 		p.Line("%s", l)

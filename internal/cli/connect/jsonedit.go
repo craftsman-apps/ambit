@@ -344,6 +344,11 @@ func (d *Doc) removeMember(hv hujson.Value, i int, inserted string) {
 	case len(o.Members) > 1: // from its name to the name of the next member
 		d.splice(m.Name.StartOffset, o.Members[1].Name.StartOffset, nil)
 	default:
+		rest := bytes.Replace(d.src[hv.StartOffset+1:hv.EndOffset-1], d.src[m.Name.StartOffset:m.Value.EndOffset], nil, 1)
+		if len(bytes.Trim(rest, " \t\r\n,")) == 0 { // only white space and a comma are left: the object is {}
+			d.splice(hv.StartOffset+1, hv.EndOffset-1, nil)
+			return
+		}
 		end := m.Value.EndOffset
 		if m.Value.AfterExtra != nil { // a trailing comma follows
 			end += len(m.Value.AfterExtra) + 1

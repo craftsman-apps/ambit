@@ -332,3 +332,17 @@ func TestJSONRemoveReportsEntriesHiddenByADuplicateObject(t *testing.T) {
 		t.Fatalf("the visible entry must still be removed:\n%s", d2.Bytes())
 	}
 }
+
+// Deleting the only member of an object leaves {} and not a line of white space.
+func TestJSONDeleteOnlyMemberLeavesAnEmptyObject(t *testing.T) {
+	for in, want := range map[string]string{
+		"{\n  \"env\": {\n    \"A\": \"1\"\n  },\n  \"x\": 1\n}\n":      "{\n  \"env\": {},\n  \"x\": 1\n}\n",
+		"{\"env\": { \"A\": \"1\", }}":                                  "{\"env\": {}}",
+		"{\n  \"env\": {\n    // keep this\n    \"A\": \"1\"\n  }\n}\n": "{\n  \"env\": {\n    // keep this\n    \n  }\n}\n",
+	} {
+		d, err := ParseJSON([]byte(in))
+		if err != nil || !d.Delete("env", "A") || string(d.Bytes()) != want {
+			t.Errorf("Delete(%q)\n got  %q\n want %q (%v)", in, d.Bytes(), want, err)
+		}
+	}
+}

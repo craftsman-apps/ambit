@@ -5,13 +5,13 @@ import (
 	"io"
 	"testing"
 
-	"helm.sh/helm/v4/pkg/action"
-	"helm.sh/helm/v4/pkg/chart/common"
-	"helm.sh/helm/v4/pkg/cli"
-	kubefake "helm.sh/helm/v4/pkg/kube/fake"
-	"helm.sh/helm/v4/pkg/registry"
-	"helm.sh/helm/v4/pkg/storage"
-	"helm.sh/helm/v4/pkg/storage/driver"
+	"helm.sh/helm/v3/pkg/action"
+	"helm.sh/helm/v3/pkg/chartutil"
+	"helm.sh/helm/v3/pkg/cli"
+	kubefake "helm.sh/helm/v3/pkg/kube/fake"
+	"helm.sh/helm/v3/pkg/registry"
+	"helm.sh/helm/v3/pkg/storage"
+	"helm.sh/helm/v3/pkg/storage/driver"
 )
 
 // memClient is a Client on Helm's in-memory release store and a fake Kubernetes client.
@@ -21,10 +21,11 @@ func memClient(t *testing.T) Client {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := action.NewConfiguration()
+	cfg := new(action.Configuration)
+	cfg.Log = func(string, ...any) {}
 	cfg.Releases = storage.Init(driver.NewMemory())
 	cfg.KubeClient = &kubefake.PrintingKubeClient{Out: io.Discard}
-	cfg.Capabilities = common.DefaultCapabilities
+	cfg.Capabilities = chartutil.DefaultCapabilities
 	cfg.RegistryClient = rc
 	return &sdk{cfg: cfg, settings: cli.New(), ns: "ambit-system"}
 }

@@ -99,7 +99,7 @@ jobs:
         run: test/chart.sh
 
   # Spec 9.2a: the CLI's Helm SDK must write releases that Helm 3 can list, read, roll back and upgrade, and the
-  # SDK must upgrade again over Helm 3's revision. This job decided the SDK version (Helm v4) and stays as a guard.
+  # SDK must upgrade again over Helm 3's revision. This job decided the SDK version (Helm v4 failed it, so the CLI uses the Helm v3 SDK) and stays as a guard.
   cli-helm-interop:
     needs: changes
     if: needs.changes.outputs.code == 'true'

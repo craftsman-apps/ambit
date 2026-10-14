@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { PullRequestNotice } from "@/components/pull-request";
 import { Shell } from "@/components/shell";
 
-const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 font-mono text-[13px] outline-none focus:border-accent";
+const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 font-mono text-body outline-none focus:border-accent";
 async function get<T>(url: string): Promise<T> {
   const r = await fetch(url, { credentials: "same-origin" });
   if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `${url} returned ${r.status}`);
@@ -19,7 +19,7 @@ function CopyLine({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <div className="flex items-center gap-2">
-      <code id="callback-url" className="min-w-0 flex-1 break-all rounded-md border border-line bg-sunken px-2.5 py-1.5 font-mono text-[12.5px]">{text}</code>
+      <code id="callback-url" className="min-w-0 flex-1 break-all rounded-md border border-line bg-sunken px-2.5 py-1.5 font-mono text-small">{text}</code>
       <Button variant="outline" className="w-auto" onClick={() => navigator.clipboard.writeText(text).then(() => setCopied(true), () => {
         const r = document.createRange(); r.selectNodeContents(document.getElementById("callback-url")!); getSelection()?.removeAllRanges(); getSelection()?.addRange(r);
       })}>{copied ? "Copied" : "Copy"}</Button>
@@ -85,7 +85,7 @@ function SetupForm({ p, onAdded }: { p: PresetView; onAdded: (app: string) => vo
           {p.revokes ? `When someone leaves, Ambit asks ${p.displayName} to revoke their access. If ${p.displayName} does not confirm it, the Offboarding page shows the error.`
             : `${p.displayName} offers no way to revoke a user's access. Ambit deletes its copy; access ends when the token expires.`}
         </p>
-        <p className="text-[12px] text-muted">The secret goes straight into a Kubernetes Secret. It is never shown again and never goes to Git.</p>
+        <p className="text-small text-muted">The secret goes straight into a Kubernetes Secret. It is never shown again and never goes to Git.</p>
         {add.isError && <p className="text-bad" role="alert">{add.error.message}</p>}
         <Button type="submit" className="w-auto" disabled={add.isPending}>Add {p.displayName}</Button>
       </section>
@@ -129,13 +129,13 @@ function PickTools({ app }: { app: string }) {
       {read.isError && <p className="text-bad" role="alert">{read.error.message}</p>}
       {waitedTooLong && <p className="text-muted">Still reading; come back to this page later.</p>}
       {!!srv?.tools.length && (
-        <table className="w-full text-[13px]"><tbody>
+        <table className="w-full text-body"><tbody>
           {srv.tools.map((t) => (
             <tr key={t.name} className="border-b border-line-soft">
               <td className="px-2 py-1.5"><input type="checkbox" aria-label={t.name} checked={!!checked[t.name]} onChange={(e) => setChecked({ ...checked, [t.name]: e.target.checked })} /></td>
               <td className="px-2 py-1.5 font-mono">{t.name}</td>
               <td className="px-2 py-1.5">{t.description}</td>
-              <td className="px-2 py-1.5 text-[12px]">
+              <td className="px-2 py-1.5 text-small">
                 {t.destructiveHint && <span className="text-bad">the server says: can delete or change data</span>}
                 {t.readOnlyHint && !t.destructiveHint && <span className="text-muted">the server says: read-only</span>}
               </td>
@@ -165,7 +165,7 @@ export function AppPresetPage() {
   return (
     <Shell crumb={`Settings / Apps / ${p?.displayName ?? id}`}>
       <section className="max-w-4xl space-y-4 p-5">
-        <h1 className="text-xl font-semibold tracking-tight">{p?.displayName ?? id}</h1>
+        <h1 className="text-h1 font-semibold tracking-tight">{p?.displayName ?? id}</h1>
         {p && <p className="text-muted">Preset {p.id}, version {p.version}{p.testedOn ? ` · tested ${p.testedOn}` : ""}{p.preview ? " · preview" : ""}
           {p.requires ? ` · needs: ${p.requires}` : ""} · <a className="underline" href={p.docs} target="_blank" rel="noreferrer">vendor guide</a></p>}
         {q.isError && <p className="text-bad" role="alert">{q.error.message}</p>}

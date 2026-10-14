@@ -17,8 +17,8 @@ async function get<T>(url: string): Promise<T> {
   if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `${url} returned ${r.status}`);
   return r.json();
 }
-const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 font-mono text-[13px] outline-none focus:border-accent";
-const th = "px-3 py-2.5 text-left font-mono text-[10.5px] font-medium uppercase tracking-[.1em] text-muted";
+const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 font-mono text-body outline-none focus:border-accent";
+const th = "px-3 py-2.5 text-left font-mono text-label font-medium uppercase tracking-[.1em] text-muted";
 
 function AppForm({ callbackURL, onDone }: { callbackURL: string; onDone: () => void }) {
   const qc = useQueryClient();
@@ -39,7 +39,7 @@ function AppForm({ callbackURL, onDone }: { callbackURL: string; onDone: () => v
   return (
     <form className="space-y-3 rounded-md border border-line p-4" onSubmit={(e) => { e.preventDefault(); save.mutate(); }} aria-label="Add an app">
       <h2 className="font-semibold">Add an app</h2>
-      <p className="text-[12.5px] text-muted">
+      <p className="text-small text-muted">
         First register an OAuth app with the provider (for example GitHub, Atlassian or Salesforce) and give it this callback URL:{" "}
         <span className="break-all font-mono text-ink">{callbackURL}</span>
       </p>
@@ -55,7 +55,7 @@ function AppForm({ callbackURL, onDone }: { callbackURL: string; onDone: () => v
         {input("clientSecret", "Client secret", "", { type: "password" })}
       </div>
       {input("scopes", "Scopes, separated by spaces", "repo read:org", { required: false })}
-      <p className="text-[12px] text-muted">The client secret goes straight into a Kubernetes Secret in the grants namespace. It is not shown again, not written to logs, and never goes to Git.</p>
+      <p className="text-small text-muted">The client secret goes straight into a Kubernetes Secret in the grants namespace. It is not shown again, not written to logs, and never goes to Git.</p>
       {save.isError && <p className="text-bad" role="alert">{save.error.message}</p>}
       <div className="flex gap-2">
         <Button type="submit" className="w-auto" disabled={save.isPending}>Add app</Button>
@@ -96,8 +96,8 @@ function PresetGrid({ onCustom }: { onCustom: () => void }) {
         {shown.map((p) => (
           <Link key={p.id} to="/settings/apps/add/$id" params={{ id: p.id }} className="block rounded-md border border-line p-3 hover:bg-sunken">
             <span className="block font-medium">{p.displayName}</span>
-            <span className="block font-mono text-[12px] text-muted">{p.serverHost}</span>
-            <span className="mt-1 flex flex-wrap gap-x-2 text-[12px] text-muted">
+            <span className="block font-mono text-small text-muted">{p.serverHost}</span>
+            <span className="mt-1 flex flex-wrap gap-x-2 text-small text-muted">
               {p.testedOn && <span>tested {p.testedOn}</span>}
               {p.preview && <span className="text-warn">preview</span>}
               {p.requires && <span>needs: {p.requires}</span>}
@@ -121,7 +121,7 @@ function UnfinishedAdditions() {
   return (
     <div className="space-y-2 rounded-md border border-line p-4">
       <h2 className="font-semibold">Unfinished additions</h2>
-      <p className="text-[12.5px] text-muted">These apps were only partly added. Finish them, or remove what was created.</p>
+      <p className="text-small text-muted">These apps were only partly added. Finish them, or remove what was created.</p>
       {(finish.isError || remove.isError) && <p className="text-bad" role="alert">{(finish.error ?? remove.error)?.message}</p>}
       {q.data.map((u) => (
         <div key={u.operation} className="flex flex-wrap items-center gap-3" data-testid={`unfinished-${u.operation}`}>
@@ -166,7 +166,7 @@ export function AppsPage() {
       <section className="max-w-5xl space-y-4 p-5">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">Apps</h1>
+            <h1 className="text-h1 font-semibold tracking-tight">Apps</h1>
             <p className="text-muted">SaaS apps people connect with their own accounts. The agent then acts as that person, never with a shared account.</p>
           </div>
           {!adding && <Button className="w-auto shrink-0" onClick={() => setAdding(true)}>Add an app</Button>}
@@ -180,26 +180,26 @@ export function AppsPage() {
         {q.isError && <p className="text-bad" role="alert">{q.error.message}</p>}
         {remove.isError && <p className="text-bad" role="alert">{remove.error.message}</p>}
         {q.data && (
-          <table className="w-full border-collapse text-[13px]">
+          <table className="w-full border-collapse text-body">
             <thead><tr className="border-b border-line"><th className={th}>App</th><th className={th}>Token URL</th><th className={th}>Scopes</th><th className={th}>Revokes on offboarding</th><th className={th}>Status</th><th className={th} /></tr></thead>
             <tbody>
               {q.data.apps.map((a) => (
                 <tr key={a.name} className="border-b border-line-soft align-top" data-testid={`app-${a.name}`}>
-                  <td className="px-3 py-2.5"><span className="font-medium">{a.displayName}</span><span className="block font-mono text-[12px] text-muted">{a.name}</span>
-                    {a.preset && <span className="block text-[12px] text-muted">preset {a.preset}</span>}
-                    {a.newerPreset && <span className="block text-[12px] text-warn">A newer preset exists (version {a.newerPreset.version}): {a.newerPreset.changes.join("; ")}</span>}
-                    {!a.bound && a.bindTo && <span className="block text-[12px]">Not bound to a server <Button variant="outline" className="ml-1 w-auto" disabled={bind.isPending} onClick={() => bind.mutate(a.name)}>Bind to its server</Button>
+                  <td className="px-3 py-2.5"><span className="font-medium">{a.displayName}</span><span className="block font-mono text-small text-muted">{a.name}</span>
+                    {a.preset && <span className="block text-small text-muted">preset {a.preset}</span>}
+                    {a.newerPreset && <span className="block text-small text-warn">A newer preset exists (version {a.newerPreset.version}): {a.newerPreset.changes.join("; ")}</span>}
+                    {!a.bound && a.bindTo && <span className="block text-small">Not bound to a server <Button variant="outline" className="ml-1 w-auto" disabled={bind.isPending} onClick={() => bind.mutate(a.name)}>Bind to its server</Button>
                       <span className="mt-1 block break-all font-mono text-muted">{a.bindTo}</span>
                       {gitops && <span className="mt-1 block text-muted">After the change is merged, people who already connected this app must connect it again once.</span>}</span>}</td>
-                  <td className="break-all px-3 py-2.5 font-mono text-[12px]">{a.tokenURL}</td>
-                  <td className="px-3 py-2.5 font-mono text-[12px]">{a.scopes.join(" ") || <span className="font-sans text-muted">none</span>}</td>
+                  <td className="break-all px-3 py-2.5 font-mono text-small">{a.tokenURL}</td>
+                  <td className="px-3 py-2.5 font-mono text-small">{a.scopes.join(" ") || <span className="font-sans text-muted">none</span>}</td>
                   <td className="px-3 py-2.5"><Revokes url={a.revocationURL} /></td>
-                  <td className="px-3 py-2.5"><Status ready={a.ready} text={a.ready === "Unknown" ? "Added" : undefined} />{a.message && <span className="block text-[12px] text-muted">{a.message}</span>}</td>
+                  <td className="px-3 py-2.5"><Status ready={a.ready} text={a.ready === "Unknown" ? "Added" : undefined} />{a.message && <span className="block text-small text-muted">{a.message}</span>}</td>
                   <td className="px-3 py-2.5 text-right">
-                    {a.gitManaged && !gitops ? <span className="text-[12px] text-muted">Managed in Git</span>
+                    {a.gitManaged && !gitops ? <span className="text-small text-muted">Managed in Git</span>
                       : confirm === a.name
                         ? <span className="inline-flex flex-wrap justify-end gap-2" role="alert">
-                            <span className="text-[12.5px]">Users can no longer use {a.displayName}.</span>
+                            <span className="text-small">Users can no longer use {a.displayName}.</span>
                             <Button className="w-auto" disabled={remove.isPending} onClick={() => remove.mutate(a.name)}>Remove app</Button>
                             <Button variant="outline" className="w-auto" onClick={() => setConfirm(null)}>Keep it</Button>
                           </span>

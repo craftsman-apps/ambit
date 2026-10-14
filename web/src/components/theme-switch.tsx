@@ -28,7 +28,7 @@ export function ThemeSwitch() {
     else document.documentElement.dataset.theme = c;
   };
   return (
-    <div role="group" aria-label="Color mode" className="inline-flex rounded-md border border-line p-0.5 text-xs">
+    <div role="group" aria-label="Color mode" className="inline-flex rounded-md border border-line p-0.5 text-small">
       {(["system", "light", "dark"] as const).map((c) => (
         <button
           key={c}

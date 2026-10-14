@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build"
+    "build": "tsc -b && vite build",
+    "test": "node --test scripts/"
   },
   "dependencies": {
     "@fontsource/ibm-plex-mono": "^5.3.0",

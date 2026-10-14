@@ -33,11 +33,11 @@ export function AccessRulesPage() {
   const columns = useMemo(() => col.columns([
     col.accessor("name", { header: "Rule", cell: (c) => (
       <><span className="whitespace-nowrap font-mono">{c.getValue()}</span>
-        {c.row.original.ready === "False" && <span className="block text-[12px] text-muted">{c.row.original.message}</span>}</>) }),
+        {c.row.original.ready === "False" && <span className="block text-small text-muted">{c.row.original.message}</span>}</>) }),
     col.accessor(who, { id: "who", header: "Who" }),
     col.accessor(canUse, { id: "models", header: "Can use" }),
     col.accessor((r) => (r.gitManaged ? "Git" : r.createdBy ? "Console" : "Cluster"), { id: "source", header: "Source",
-      cell: (c) => <span className="font-mono text-[12.5px]">{c.getValue()}</span> }),
+      cell: (c) => <span className="font-mono text-small">{c.getValue()}</span> }),
     col.accessor("ready", { header: "Status", cell: (c) => <Status ready={c.getValue()} /> }),
   ]), []);
   const data = useMemo(() => (rules.data ?? []).filter((r) => filter === "all" || r.ready !== "True"), [rules.data, filter]);
@@ -50,13 +50,13 @@ export function AccessRulesPage() {
         <section className="min-w-0 p-5">
           <div className="mb-4 flex items-end justify-between gap-3">
             <div>
-              <h1 className="text-xl font-semibold tracking-tight">Access rules</h1>
+              <h1 className="text-h1 font-semibold tracking-tight">Access rules</h1>
               <p className="text-muted">Who may use which models and MCP tools. Anything no rule names is closed to everyone.</p>
-              {gitops && <p className="text-[12.5px] text-muted">GitOps mode: changes open pull requests in <span className="font-mono">{config.data?.repository}</span>.</p>}
+              {gitops && <p className="text-small text-muted">GitOps mode: changes open pull requests in <span className="font-mono">{config.data?.repository}</span>.</p>}
             </div>
             {isAdmin && <Button className="w-auto" onClick={() => navigate({ search: { edit: "new" } })}>New rule</Button>}
           </div>
-          <div className="mb-3 flex gap-1.5 text-[12.5px]">
+          <div className="mb-3 flex gap-1.5 text-small">
             {([["all", `All ${rules.data?.length ?? 0}`], ["attention", `Needs attention ${attention}`]] as const).map(([k, label]) => (
               <button key={k} type="button" onClick={() => setFilter(k)} aria-pressed={filter === k}
                 className={cn("rounded-md border px-2.5 py-0.5", filter === k ? "border-ink text-ink" : "border-line text-muted")}>{label}</button>
@@ -64,10 +64,10 @@ export function AccessRulesPage() {
           </div>
           {gitops && !!changes.data?.length && (
             <div className="mb-4 rounded-md border border-line p-3" data-testid="pending-changes">
-              <p className="mb-1 font-mono text-[10.5px] uppercase tracking-[.12em] text-muted">Waiting for review in Git</p>
+              <p className="mb-1 font-mono text-label uppercase tracking-[.12em] text-muted">Waiting for review in Git</p>
               {changes.data.map((pr) => (
                 <p key={pr.number}><a className="text-accent-text underline" href={pr.url} target="_blank" rel="noopener noreferrer">#{pr.number}</a> {pr.title}
-                  {pr.author && <span className="text-[12px] text-muted"> · by {pr.author}</span>}</p>
+                  {pr.author && <span className="text-small text-muted"> · by {pr.author}</span>}</p>
               ))}
             </div>
           )}
@@ -78,7 +78,7 @@ export function AccessRulesPage() {
               {table.getHeaderGroups().map((hg) => (
                 <tr key={hg.id} className="border-b border-line">
                   {hg.headers.map((h) => (
-                    <th key={h.id} className="px-3 py-2.5 text-left font-mono text-[10.5px] font-medium uppercase tracking-[.1em] text-muted">
+                    <th key={h.id} className="px-3 py-2.5 text-left font-mono text-label font-medium uppercase tracking-[.1em] text-muted">
                       <button type="button" onClick={h.column.getToggleSortingHandler()} className="uppercase tracking-[.1em]">
                         <table.FlexRender header={h} />
                         {{ asc: " ↑", desc: " ↓" }[h.column.getIsSorted() as string] ?? ""}
@@ -129,30 +129,30 @@ function RuleDetailPanel({ name, isAdmin, gitops, repository, onEdit, onDeleted 
   return (
     <div className="space-y-5">
       <div>
-        <h2 className="font-mono text-[15px] font-medium">{r.name}</h2>
-        <p className="text-[12.5px] text-muted">AccessRule · {r.gitManaged ? "managed in Git" : r.createdBy ? `created in the console by ${r.createdBy}` : "applied directly to the cluster (for example with kubectl)"}</p>
+        <h2 className="font-mono text-h2 font-medium">{r.name}</h2>
+        <p className="text-small text-muted">AccessRule · {r.gitManaged ? "managed in Git" : r.createdBy ? `created in the console by ${r.createdBy}` : "applied directly to the cluster (for example with kubectl)"}</p>
       </div>
       <dl className="grid grid-cols-[76px_1fr] gap-x-3 gap-y-2">
         <dt className="text-muted">Who</dt><dd>{r.allSignedIn ? "Everyone with a valid token" : <>Members of <b>{r.groups.join(", ")}</b></>}</dd>
         <dt className="text-muted">Can use</dt>
         <dd>{r.models.join(", ")}{r.servers.map((sa) => <span key={sa.name} className="block">MCP {serverText(sa)}</span>)}</dd>
-        <dt className="text-muted">Status</dt><dd><Status ready={r.ready} /><span className="block text-[12.5px] text-muted">{r.message}</span></dd>
+        <dt className="text-muted">Status</dt><dd><Status ready={r.ready} /><span className="block text-small text-muted">{r.message}</span></dd>
       </dl>
       <div>
-        <p className="mb-2 font-mono text-[10.5px] uppercase tracking-[.12em] text-muted">Policy the gateway enforces</p>
+        <p className="mb-2 font-mono text-label uppercase tracking-[.12em] text-muted">Policy the gateway enforces</p>
         {r.effective.map((e) => (
           <div key={e.model} className="mb-2">
-            <p className="mb-1 text-[12.5px] text-muted">{e.model} · <span className="font-mono">{e.modelName}</span></p>
-            <pre className="whitespace-pre-wrap break-all rounded-md border border-line-soft bg-surface p-3 font-mono text-[12.5px] leading-relaxed text-accent-text">{e.cel}</pre>
+            <p className="mb-1 text-small text-muted">{e.model} · <span className="font-mono">{e.modelName}</span></p>
+            <pre className="whitespace-pre-wrap break-all rounded-md border border-line-soft bg-surface p-3 font-mono text-small leading-relaxed text-accent-text">{e.cel}</pre>
           </div>
         ))}
         {r.effectiveServers.map((e) => (
           <div key={e.server} className="mb-2">
-            <p className="mb-1 text-[12.5px] text-muted">MCP server {e.server}</p>
-            <pre className="whitespace-pre-wrap break-all rounded-md border border-line-soft bg-surface p-3 font-mono text-[12.5px] leading-relaxed text-accent-text">{e.cel}</pre>
+            <p className="mb-1 text-small text-muted">MCP server {e.server}</p>
+            <pre className="whitespace-pre-wrap break-all rounded-md border border-line-soft bg-surface p-3 font-mono text-small leading-relaxed text-accent-text">{e.cel}</pre>
           </div>
         ))}
-        <p className="text-[12px] text-muted">Merged from every rule that names the model or server.</p>
+        <p className="text-small text-muted">Merged from every rule that names the model or server.</p>
       </div>
       {pr && <PullRequestNotice pr={pr} repository={repository} onDone={() => { setPR(null); setConfirm(false); }} />}
       {isAdmin && (!r.gitManaged || gitops) && !pr && (
@@ -163,7 +163,7 @@ function RuleDetailPanel({ name, isAdmin, gitops, repository, onEdit, onDeleted 
             : <Button variant="outline" className="w-auto" onClick={() => setConfirm(true)}>Delete</Button>}
         </div>
       )}
-      {r.gitManaged && !gitops && <p className="text-[12.5px] text-muted">Change this rule with a pull request to your configuration repository.</p>}
+      {r.gitManaged && !gitops && <p className="text-small text-muted">Change this rule with a pull request to your configuration repository.</p>}
       {del.isError && <p className="text-bad">{del.error.message}</p>}
     </div>
   );
@@ -201,10 +201,10 @@ function RuleForm({ name, repository, onDone }: { name?: string; repository?: st
     save.mutate({ ...(name ? {} : { name: ruleName }), allSignedIn,
       groups: allSignedIn ? [] : groupText.split(",").map((g) => g.trim()).filter(Boolean), models: chosen, servers: chosenServers });
   };
-  const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 font-mono text-[13px] outline-none focus:border-accent";
+  const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 font-mono text-body outline-none focus:border-accent";
   return (
     <form onSubmit={submit} className="space-y-4">
-      <h2 className="text-[15px] font-semibold">{name ? `Edit ${name}` : "New access rule"}</h2>
+      <h2 className="text-h2 font-semibold">{name ? `Edit ${name}` : "New access rule"}</h2>
       {!name && (
         <label className="block"><span className="mb-1 block text-muted">Name</span>
           <input id="rule-name" className={field} value={ruleName} onChange={(e) => setRuleName(e.target.value)} placeholder="finance-payments" required /></label>
@@ -221,23 +221,23 @@ function RuleForm({ name, repository, onDone }: { name?: string; repository?: st
           <label key={m.name} className="flex items-center gap-2 py-0.5">
             <input id={`model-${m.name}`} type="checkbox" checked={chosen.includes(m.name)}
               onChange={(e) => setPicked(e.target.checked ? [...chosen, m.name] : chosen.filter((x) => x !== m.name))} />
-            <span className="whitespace-nowrap font-mono">{m.name}</span> <span className="text-[12px] text-muted">{m.model}</span>
+            <span className="whitespace-nowrap font-mono">{m.name}</span> <span className="text-small text-muted">{m.model}</span>
           </label>
         ))}
       </fieldset>
       <fieldset>
         <legend className="mb-1 text-muted">MCP tools</legend>
-        {servers.data?.length === 0 && <p className="text-[12.5px] text-muted">No MCP servers yet.</p>}
+        {servers.data?.length === 0 && <p className="text-small text-muted">No MCP servers yet.</p>}
         {servers.data?.map((srv) => {
           const sa = chosenServers.find((x) => x.name === srv.name);
           return (
             <div key={srv.name} className="py-0.5">
               <label className="flex items-center gap-2">
                 <input id={`server-${srv.name}`} type="checkbox" checked={!!sa} onChange={(e) => setServer(srv.name, e.target.checked ? { name: srv.name } : null)} />
-                <span className="font-mono">{srv.name}</span> <span className="text-[12px] text-muted">{srv.tools.length} tools</span>
+                <span className="font-mono">{srv.name}</span> <span className="text-small text-muted">{srv.tools.length} tools</span>
               </label>
               {sa && (
-                <div className="ml-6 mt-1 space-y-0.5 text-[13px]">
+                <div className="ml-6 mt-1 space-y-0.5 text-body">
                   <label className="flex items-center gap-2"><input id={`server-${srv.name}-all`} type="radio" checked={!sa.tools}
                     onChange={() => setServer(srv.name, { name: srv.name })} /> All tools, including ones it adds later</label>
                   <label className="flex items-center gap-2"><input id={`server-${srv.name}-some`} type="radio" checked={!!sa.tools}
@@ -246,7 +246,7 @@ function RuleForm({ name, repository, onDone }: { name?: string; repository?: st
                     <label key={t.name} className="ml-6 flex items-center gap-2">
                       <input id={`tool-${srv.name}-${t.name}`} type="checkbox" checked={sa.tools!.includes(t.name)}
                         onChange={(e) => setServer(srv.name, { ...sa, tools: e.target.checked ? [...sa.tools!, t.name] : sa.tools!.filter((x) => x !== t.name) })} />
-                      <span className="font-mono text-[12.5px]">{t.name}</span>
+                      <span className="font-mono text-small">{t.name}</span>
                     </label>
                   ))}
                   {sa.tools && srv.tools.length === 0 && <p className="ml-6 text-muted">Tools appear once the server is running.</p>}
@@ -257,7 +257,7 @@ function RuleForm({ name, repository, onDone }: { name?: string; repository?: st
           );
         })}
         {toolCount > TOOL_BUDGET && (
-          <p className="mt-1 rounded-md border border-warn bg-warn-soft p-2 text-[12.5px]">This rule grants {toolCount} tools. Agents choose tools less reliably above about {TOOL_BUDGET}; consider only the tools this group needs.</p>
+          <p className="mt-1 rounded-md border border-warn bg-warn-soft p-2 text-small">This rule grants {toolCount} tools. Agents choose tools less reliably above about {TOOL_BUDGET}; consider only the tools this group needs.</p>
         )}
       </fieldset>
       {save.isError && <p className="rounded-md border border-bad p-2 text-bad">{save.error.message}</p>}
@@ -265,7 +265,7 @@ function RuleForm({ name, repository, onDone }: { name?: string; repository?: st
         <Button type="submit" className="w-auto" disabled={save.isPending}>{name ? "Save changes" : "Create rule"}</Button>
         <Button type="button" variant="outline" className="w-auto" onClick={() => onDone(name)}>Cancel</Button>
       </div>
-      <p className="text-[12px] text-muted">{repository ? "Saving opens a pull request; the change applies once it is merged." : "The change reaches the gateway within seconds."}</p>
+      <p className="text-small text-muted">{repository ? "Saving opens a pull request; the change applies once it is merged." : "The change reaches the gateway within seconds."}</p>
     </form>
   );
 }
@@ -294,10 +294,10 @@ function ArgumentLimits({ sa, onChange }: { sa: ServerAccess; onChange: (a: Argu
   // What was typed in each Values box, so commas and spaces survive until the next character.
   const [typed, setTyped] = useState<Record<number, string>>({});
   const set = (i: number, a: ArgumentRule) => onChange(args.map((x, j) => (j === i ? a : x)));
-  const cell = "rounded-md border border-line bg-surface px-2 py-1 font-mono text-[12.5px] outline-none focus:border-accent";
+  const cell = "rounded-md border border-line bg-surface px-2 py-1 font-mono text-small outline-none focus:border-accent";
   return (
     <div className="ml-6 mt-2 space-y-1.5 rounded-md border border-line-soft p-2" data-testid={`limits-${sa.name}`}>
-      <p className="text-[12px] text-muted">Argument limits for these tools. A call this rule allows must meet every limit, or it is refused with the reason. Another rule that grants the same tool without limits still allows the call.</p>
+      <p className="text-small text-muted">Argument limits for these tools. A call this rule allows must meet every limit, or it is refused with the reason. Another rule that grants the same tool without limits still allows the call.</p>
       {args.map((a, i) => (
         <div key={i} className="flex flex-wrap items-center gap-1.5">
           <input aria-label="Argument name" className={`${cell} w-28`} value={a.name} placeholder="database"
@@ -310,10 +310,10 @@ function ArgumentLimits({ sa, onChange }: { sa: ServerAccess; onChange: (a: Argu
           <input aria-label="Values" className={`${cell} min-w-0 flex-1`} value={typed[i] ?? valueOf(a)}
             placeholder={kindOf(a) === "max" ? "1000" : "analytics, reporting"}
             onChange={(e) => { setTyped({ ...typed, [i]: e.target.value }); set(i, build(a.name, kindOf(a), e.target.value)); }} />
-          <button type="button" className="text-[12px] text-muted underline" onClick={() => { setTyped({}); onChange(args.filter((_, j) => j !== i)); }}>Remove</button>
+          <button type="button" className="text-small text-muted underline" onClick={() => { setTyped({}); onChange(args.filter((_, j) => j !== i)); }}>Remove</button>
         </div>
       ))}
-      <button type="button" className="text-[12.5px] text-accent-text underline" onClick={() => onChange([...args, { name: "", oneOf: [] }])}>Add a limit</button>
+      <button type="button" className="text-small text-accent-text underline" onClick={() => onChange([...args, { name: "", oneOf: [] }])}>Add a limit</button>
     </div>
   );
 }

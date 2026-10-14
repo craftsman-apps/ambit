@@ -24,19 +24,19 @@ export function PullRequestNotice({ pr, repository, onDone }: { pr: PullRequest;
   return (
     <div className="space-y-2 rounded-md border border-line bg-surface p-3" role="status">
       <p className="font-medium">Pull request #{pr.number} opened{repository && <> in <span className="font-mono">{repository}</span></>}</p>
-      {!applied && <p className="text-[12.5px] text-muted">The change applies when the pull request is merged and Argo CD syncs it.</p>}
+      {!applied && <p className="text-small text-muted">The change applies when the pull request is merged and Argo CD syncs it.</p>}
       {steps && (
-        <ol className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px]" aria-label="Progress of this change" data-testid="change-timeline">
+        <ol className="flex flex-wrap items-center gap-x-2 gap-y-1 text-small" aria-label="Progress of this change" data-testid="change-timeline">
           {steps.map((s, i) => (
             <li key={s.name} className="flex items-center gap-2" data-state={s.state}>
               {i > 0 && <span className="text-muted" aria-hidden>→</span>}
               <span className={tone[s.state]}><span aria-hidden>{mark[s.state]} </span>{s.name}</span>
-              {s.detail && <span className="font-mono text-[11.5px] text-muted">{s.detail}</span>}
+              {s.detail && <span className="font-mono text-small text-muted">{s.detail}</span>}
             </li>
           ))}
         </ol>
       )}
-      {q.isError && <p className="text-[12.5px] text-muted">Progress unavailable: {q.error.message}</p>}
+      {q.isError && <p className="text-small text-muted">Progress unavailable: {q.error.message}</p>}
       <p className="flex gap-3">
         <a className="text-accent-text underline" href={pr.url} target="_blank" rel="noopener noreferrer">Open the pull request</a>
         {onDone && <button type="button" className="text-muted underline" onClick={onDone}>Close</button>}

@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Shell, Status } from "@/components/shell";
 import { cn } from "@/lib/utils";
 
-const th = "px-3 py-2.5 text-left font-mono text-[10.5px] font-medium uppercase tracking-[.1em] text-muted";
-const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 font-mono text-[13px] outline-none focus:border-accent";
+const th = "px-3 py-2.5 text-left font-mono text-label font-medium uppercase tracking-[.1em] text-muted";
+const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 font-mono text-body outline-none focus:border-accent";
 
 // "ghcr.io/org/server@sha256:ab82…" is too long for a table cell; the full digest is in the title.
 const shortImage = (image: string) => {
@@ -32,7 +32,7 @@ export function ServersPage() {
         <section className="min-w-0 space-y-6 p-5">
           <div className="flex items-end justify-between gap-3">
             <div>
-              <h1 className="text-xl font-semibold tracking-tight">MCP servers</h1>
+              <h1 className="text-h1 font-semibold tracking-tight">MCP servers</h1>
               <p className="text-muted">Servers run in their own pods, or elsewhere and are reached by URL; either way, only through the gateway. Their tools are closed to everyone until an access rule names them.</p>
             </div>
             <Button className="w-auto whitespace-nowrap" onClick={() => setAsking(true)}>Request a server</Button>
@@ -56,8 +56,8 @@ export function ServersPage() {
           </table>
           {decided.length > 0 && (
             <div>
-              <h2 className="mb-2 font-mono text-[10.5px] uppercase tracking-[.12em] text-muted">Decisions</h2>
-              <table className="w-full border-collapse text-[13px]">
+              <h2 className="mb-2 font-mono text-label uppercase tracking-[.12em] text-muted">Decisions</h2>
+              <table className="w-full border-collapse text-body">
                 <tbody>
                   {decided.map((q) => (
                     <tr key={q.name} className="border-b border-line-soft align-top">
@@ -65,7 +65,7 @@ export function ServersPage() {
                       <td className={cn("px-3 py-2", q.decision === "Denied" && "text-bad")}>{q.decision}</td>
                       <td className="px-3 py-2 text-muted">asked by {q.requestedBy}, {q.decision.toLowerCase()} by {q.decidedBy}{q.comment && `: “${q.comment}”`}
                         {q.pullRequest && <> · <a className="text-accent-text underline" href={q.pullRequest} target="_blank" rel="noopener noreferrer">pull request</a></>}</td>
-                      <td className="px-3 py-2 font-mono text-[12px] text-muted" title={q.image || q.url}>{runs(q)}</td>
+                      <td className="px-3 py-2 font-mono text-small text-muted" title={q.image || q.url}>{runs(q)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -76,7 +76,7 @@ export function ServersPage() {
         <aside className="space-y-5 border-l border-line bg-sunken p-5">
           {asking && <RequestForm onDone={() => setAsking(false)} />}
           <div>
-            <h2 className="mb-2 text-[15px] font-semibold">Waiting for an approver <span className="font-mono text-muted">{waiting.length}</span></h2>
+            <h2 className="mb-2 text-h2 font-semibold">Waiting for an approver <span className="font-mono text-muted">{waiting.length}</span></h2>
             {waiting.length === 0 && <p className="text-muted">Nothing is waiting.</p>}
             <div className="space-y-3">
               {waiting.map((q) => <PendingCard key={q.name} q={q} me={me.data?.email ?? ""} canDecide={canDecide} />)}
@@ -106,14 +106,14 @@ function ServerRow({ s, open, onToggle }: { s: ServerView; open: boolean; onTogg
   return (
     <>
       <tr onClick={onToggle} aria-expanded={open} className={cn("cursor-pointer border-b border-line-soft align-top hover:bg-sunken", open && "bg-selected")}>
-        <td className="px-3 py-2.5"><span className="font-mono">{s.name}</span><span className="block text-[12px] text-muted">{s.displayName}</span></td>
-        <td className="whitespace-nowrap px-3 py-2.5 font-mono text-[12.5px]" title={s.image || s.url}>{runs(s)}
-          {s.connection && <span className="block font-sans text-[12px] text-muted">each user's own {s.connection} account</span>}</td>
+        <td className="px-3 py-2.5"><span className="font-mono">{s.name}</span><span className="block text-small text-muted">{s.displayName}</span></td>
+        <td className="whitespace-nowrap px-3 py-2.5 font-mono text-small" title={s.image || s.url}>{runs(s)}
+          {s.connection && <span className="block font-sans text-small text-muted">each user's own {s.connection} account</span>}</td>
         <td className="px-3 py-2.5 tabular-nums">{s.tools.length || <span className="text-muted">–</span>}</td>
         <td className="px-3 py-2.5">{s.rules.length ? s.rules.join(", ") : <span className="text-muted">None: closed to everyone</span>}</td>
         <td className="px-3 py-2.5">{s.approvedBy || <span className="text-muted">{s.gitManaged ? "pull request" : "added directly"}</span>}</td>
         <td className="px-3 py-2.5"><Status ready={s.ready} text={s.ready === "True" ? "Running" : undefined} />
-          {s.changedTools.length > 0 && <span className="block text-[12px] text-bad">{s.changedTools.length} tool(s) changed</span>}</td>
+          {s.changedTools.length > 0 && <span className="block text-small text-bad">{s.changedTools.length} tool(s) changed</span>}</td>
       </tr>
       {s.changedTools.length > 0 && (
         <tr className="border-b border-line-soft bg-warn-soft">
@@ -130,13 +130,13 @@ function ServerRow({ s, open, onToggle }: { s: ServerView; open: boolean; onTogg
       {open && (
         <tr className="border-b border-line-soft bg-sunken">
           <td colSpan={6} className="px-3 py-3">
-            <p className="mb-2 text-[12.5px] text-muted">
+            <p className="mb-2 text-small text-muted">
               Clients see these tools as <span className="font-mono">{s.name}_&lt;tool&gt;</span>. {s.url ? "URL" : "Image"} <span className="font-mono break-all">{s.url || s.image}</span>
               {s.connection && <> · each call uses the caller's own <span className="font-mono">{s.connection}</span> grant</>}
               {s.requestedBy && <> · asked for by {s.requestedBy}</>}
             </p>
             {s.connection && (
-              <p className="mb-2 flex flex-wrap items-center gap-2 text-[12.5px]" data-testid={`reader-${s.name}`}>
+              <p className="mb-2 flex flex-wrap items-center gap-2 text-small" data-testid={`reader-${s.name}`}>
                 {s.reader && s.toolsRead === "True" ? <span>Tools read with {s.reader}'s account{s.toolsReadAt && `, ${new Date(s.toolsReadAt).toLocaleString()}`}</span>
                   : s.reader && s.toolsRead === "False" ? <span className="text-warn">{s.reader}'s account could not read the tools: {s.toolsReadMessage}</span>
                   : s.reader ? <span className="text-muted">Waiting to read tools with {s.reader}'s account</span>
@@ -151,8 +151,8 @@ function ServerRow({ s, open, onToggle }: { s: ServerView; open: boolean; onTogg
             {s.tools.length === 0 && <p className="text-muted">{s.ready === "True" ? "Reading tools…" : s.message || "Tools appear once the server is running."}</p>}
             <ul className="grid grid-cols-2 gap-x-6 gap-y-1">
               {s.tools.map((t) => (
-                <li key={t.name}><span className="font-mono text-[12.5px]">{t.name}</span>
-                  {t.description && <span className="block truncate text-[12px] text-muted" title={t.description}>{t.description}</span>}</li>
+                <li key={t.name}><span className="font-mono text-small">{t.name}</span>
+                  {t.description && <span className="block truncate text-small text-muted" title={t.description}>{t.description}</span>}</li>
               ))}
             </ul>
           </td>
@@ -174,9 +174,9 @@ function PendingCard({ q, me, canDecide }: { q: RequestView; me: string; canDeci
   return (
     <div className="rounded-md border border-line bg-surface p-3" data-testid={`request-${q.serverName}`}>
       <p className="font-mono font-medium">{q.serverName}</p>
-      <p className="text-[12.5px] text-muted">{q.displayName && `${q.displayName} · `}asked by {q.requestedBy} · {q.transport}</p>
-      <p className="mt-1 break-all font-mono text-[12px]">{q.url || q.image}</p>
-      {q.connection && <p className="text-[12.5px] text-muted">Each user signs in to {app} with their own account.</p>}
+      <p className="text-small text-muted">{q.displayName && `${q.displayName} · `}asked by {q.requestedBy} · {q.transport}</p>
+      <p className="mt-1 break-all font-mono text-small">{q.url || q.image}</p>
+      {q.connection && <p className="text-small text-muted">Each user signs in to {app} with their own account.</p>}
       {q.reason && <p className="mt-2">“{q.reason}”</p>}
       {canDecide && !own && (
         <div className="mt-3 space-y-2">
@@ -186,10 +186,10 @@ function PendingCard({ q, me, canDecide }: { q: RequestView; me: string; canDeci
             <Button className="w-auto" disabled={decide.isPending} onClick={() => decide.mutate("approve")}>Approve {q.serverName}</Button>
             <Button variant="outline" className="w-auto" disabled={decide.isPending} onClick={() => decide.mutate("deny")}>Deny</Button>
           </div>
-          <p className="text-[12px] text-muted">{q.url ? "Approving lets the gateway reach this URL." : "Approving starts exactly this image digest."} Access still needs a rule.</p>
+          <p className="text-small text-muted">{q.url ? "Approving lets the gateway reach this URL." : "Approving starts exactly this image digest."} Access still needs a rule.</p>
         </div>
       )}
-      {own && <p className="mt-2 text-[12.5px] text-muted">You asked for this, so another approver decides.</p>}
+      {own && <p className="mt-2 text-small text-muted">You asked for this, so another approver decides.</p>}
       {decide.isError && <p className="mt-2 text-bad">{decide.error.message}</p>}
     </div>
   );
@@ -208,7 +208,7 @@ function RequestForm({ onDone }: { onDone: () => void }) {
   });
   return (
     <form onSubmit={(e) => { e.preventDefault(); send.mutate(); }} className="space-y-3 rounded-md border border-line bg-surface p-4">
-      <h2 className="text-[15px] font-semibold">Request a server</h2>
+      <h2 className="text-h2 font-semibold">Request a server</h2>
       <label className="block"><span className="mb-1 block text-muted">Name</span>
         <input id="req-name" className={field} value={f.serverName} onChange={set("serverName")} placeholder={remote ? "jira" : "postgres-readonly"} required /></label>
       <label className="block"><span className="mb-1 block text-muted">Display name</span>

@@ -20,7 +20,7 @@ async function get<T>(url: string): Promise<T> {
 export const useKeys = (lastUsed = true) => useQuery({ queryKey: ["keys", lastUsed],
   queryFn: () => get<KeyList>(lastUsed ? "/api/keys" : "/api/keys?lastUsed=false"), refetchInterval: 60_000 });
 
-const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-[13px] outline-none focus:border-accent";
+const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-body outline-none focus:border-accent";
 export const day = (iso: string) => iso.slice(0, 10);
 // "inactivity": the owner's last sign-in sets the stop, before the key's end date.
 export const statusText = (k: KeyView) => k.status === "stopped"
@@ -44,9 +44,9 @@ function CopyBlock({ text, testId, label }: { text: string; testId: string; labe
     <div className="space-y-1">
       <div className="flex items-center justify-between"><span className="text-muted">{label}</span>
         <Button type="button" variant="outline" className="w-auto py-1" aria-label={`Copy ${label}`} onClick={() => copy(pre)}>Copy</Button></div>
-      <pre ref={(e) => { pre = e; }} data-testid={testId} className="overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-line bg-sunken p-2 font-mono text-[12px] select-all">{text}</pre>
-      {state === "copied" && <p className="text-[12px] text-muted" role="status">Copied.</p>}
-      {state === "select" && <p className="text-[12px] text-warn" role="status">Could not copy. The text is selected: press Ctrl+C (Cmd+C on a Mac).</p>}
+      <pre ref={(e) => { pre = e; }} data-testid={testId} className="overflow-x-auto whitespace-pre-wrap break-all rounded-md border border-line bg-sunken p-2 font-mono text-small select-all">{text}</pre>
+      {state === "copied" && <p className="text-small text-muted" role="status">Copied.</p>}
+      {state === "select" && <p className="text-small text-warn" role="status">Could not copy. The text is selected: press Ctrl+C (Cmd+C on a Mac).</p>}
     </div>
   );
 }
@@ -120,7 +120,7 @@ export function KeysPage() {
       <section className="max-w-4xl space-y-4 p-5">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">Keys</h1>
+            <h1 className="text-h1 font-semibold tracking-tight">Keys</h1>
             <p className="text-muted">Personal keys for tools that call the gateway, such as Claude Code or Cursor. A key acts as you, and stops on its end date.</p>
           </div>
           {enabled && !creating && <Button className="w-auto shrink-0" onClick={() => setCreating(true)}>Create key</Button>}
@@ -139,7 +139,7 @@ export function KeysPage() {
               {q.data.keys.map((k) => (
                 <tr key={k.id} className="border-b border-line-soft">
                   <td className="py-1.5">{k.name}</td><td>{scopeName[k.scope]}</td>
-                  <td className="font-mono text-[12px]">{k.prefix}</td><td>{statusText(k)}</td><td>{day(k.until)}</td>
+                  <td className="font-mono text-small">{k.prefix}</td><td>{statusText(k)}</td><td>{day(k.until)}</td>
                   <td>{k.lastUsed ? day(k.lastUsed) : "unknown"}</td>
                   <td className="text-right">
                     {confirm === k.id ? (

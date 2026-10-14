@@ -44,7 +44,7 @@ Ambit is pre-1.0. The API is `ambitproject.dev/v1alpha1` and can change between 
 
 ## Known limitations
 
-When the model router refuses a request (status 403 or 404), Ambit records the refusal but not who made it. This is a bug in agentgateway v1.6.0, which answers before it takes the request snapshot that holds the caller's identity. A fix is being reported to agentgateway.
+When the model router refuses a request (status 403 or 404), Ambit records the refusal but not who made it. This is a bug in agentgateway v1.6.0, which answers before it takes the request snapshot that holds the caller's identity. The record keeps the time, the path and the status code, but not the caller or the model. Ambit has no workaround: a check before the router would not cover unknown models (404), and it would change the refusal message. The limitation ends when Ambit moves to an agentgateway version that takes the snapshot before it answers.
 
 ## When not to use Ambit
 

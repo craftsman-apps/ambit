@@ -161,7 +161,14 @@ grep -q 'key print --url' "$H/.claude/settings.json" && grep -q 'model_provider 
 holders=$(grep -rlF -- "$KEY" "$H" || true)
 [[ $(wc -l <<<"$holders" | tr -d ' ') == 1 && $holders == "$H/.config/ambit/keys/"* ]] || fail "6a the key is in files other than the key store: $holders"
 [[ $(stat -c %a "$holders") == 600 ]] || fail "6a the key file is not mode 600"
-AM connect claude-code --url "$LLM" --model local/echo --dry-run > "$O/dryrun.log" 2>&1 || { cat "$O/dryrun.log"; fail "6a dry run"; }
+# A dry run with another model plans a real change, and must write nothing: every file stays as it is, byte for byte.
+mkdir -p "$O/before-dry"
+cp "$H/.claude/settings.json" "$O/before-dry/settings.json"; cp "$H/.config/ambit/connect.json" "$O/before-dry/connect.json"
+ls -A "$H/.claude" > "$O/before-dry/claude.ls"
+AM connect claude-code --url "$LLM" --model local/other-model --dry-run > "$O/dryrun.log" 2>&1 || { cat "$O/dryrun.log"; fail "6a dry run"; }
+grep -q 'local/other-model' "$O/dryrun.log" || fail "6a the dry run did not plan a change"
+cmp "$O/before-dry/settings.json" "$H/.claude/settings.json" && cmp "$O/before-dry/connect.json" "$H/.config/ambit/connect.json" \
+  && [[ $(ls -A "$H/.claude") == $(cat "$O/before-dry/claude.ls") ]] || fail "6a the dry run changed a file"
 AM disconnect --all --yes > "$O/disconnect.log" 2>&1 || { cat "$O/disconnect.log"; fail "6a disconnect --all"; }
 cmp "$W/seed/claude" "$H/.claude/settings.json" && cmp "$W/seed/codex" "$H/.codex/config.toml" \
   && cmp "$W/seed/opencode" "$H/.config/opencode/opencode.json" && cmp "$W/seed/bashrc" "$H/.bashrc" || fail "6a disconnect did not give the files back"

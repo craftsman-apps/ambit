@@ -58,7 +58,7 @@ sign_in() {
 }
 # token USER: an access token from the Keycloak test realm (password grant, client ambit-cli-test).
 token() { command curl -s -d grant_type=password -d client_id=ambit-cli-test -d username="$1" -d password="$1-test-pass" \
-  "http://keycloak.localtest.me:8080/realms/acme/protocol/openid-connect/token" | uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)["access_token"])'; }
+  "${KEYCLOAK:-http://keycloak.localtest.me:8080}/realms/acme/protocol/openid-connect/token" | uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)["access_token"])'; }
 # api METHOD PATH [JSON]: console API call with the signed-in cookie jar; body in $W/api
 api() {
   local -a a=(-s -o "$W/api" -w '%{http_code}' -X "$1" -b "$W/jar")

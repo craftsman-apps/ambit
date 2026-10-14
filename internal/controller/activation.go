@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // A Kubernetes write is not gateway activation: agentgateway's controller must translate the object and push it to
@@ -131,6 +132,7 @@ func (r *Reconciler) gate(ctx context.Context, objs []gated, seen nackSeen, time
 			return err
 		}
 		if waiting == "" {
+			log.FromContext(ctx).Info("agentgateway accepted the step; waiting the settle time", "settle", r.Activation.Settle.String())
 			return r.sleep(ctx, r.Activation.Settle)
 		}
 		if !r.now().Before(deadline) {
@@ -340,6 +342,7 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 		if err := r.setPending(ctx, &target); err != nil {
 			return nil, ran, err
 		}
+		log.FromContext(ctx).Info("change step written; waiting for agentgateway", "step", s.name, "mode", target.Mode, "rulesVersion", target.RulesVersion)
 		if notWritten != nil { // a write the API server refused stops the change like a gate that does not pass
 			err = notWritten
 		} else {
@@ -357,6 +360,7 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 			}
 			return st, ran, nil
 		}
+		log.FromContext(ctx).Info("change step active in the gateway", "step", s.name, "mode", target.Mode, "rulesVersion", target.RulesVersion)
 	}
 	r.stalled = nil
 	return nil, ran, nil

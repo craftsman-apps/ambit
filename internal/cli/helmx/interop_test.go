@@ -18,6 +18,11 @@ import (
 //	KUBECONFIG=<file> go test -tags interop -run TestHelm3Interop -v ./internal/cli/helmx
 func TestHelm3Interop(t *testing.T) {
 	const ns, name = "ambit-interop", "interop"
+	// Ruling S15: this installs a release into the current kubectl context, which on a developer machine can be
+	// the maintainers' shared cluster. It runs only in CI.
+	if os.Getenv("CI") != "true" {
+		t.Fatal("TestHelm3Interop installs a release into the current kubectl context and runs only in CI (CI=true)")
+	}
 	run := func(tool string, args ...string) string {
 		t.Helper()
 		out, err := exec.Command(tool, args...).CombinedOutput()

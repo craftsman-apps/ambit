@@ -49,6 +49,9 @@ type Check struct {
 var Catalogue = []Check{
 	{"R1", GroupPre, r1KubeVersion}, {"R2", GroupPre, r2Permissions}, {"R3", GroupPre, r3Installed},
 	{"R4", GroupPre, r4StorageClass}, {"R5", GroupPre, r5TLSSecret}, {"R6", GroupPre, r6ThirdPartyCRDs},
+	{"H1", GroupHealth, h1Releases}, {"H2", GroupHealth, h2CRDs}, {"H3", GroupHealth, h3Pods},
+	{"H4", GroupHealth, h4Gateway}, {"H5", GroupHealth, h5Dex}, {"H6", GroupHealth, h6ClickHouse},
+	{"H7", GroupHealth, h7Objects}, {"H8", GroupHealth, h8Models},
 }
 
 // Run runs the checks of the given groups. A check that panics becomes an unknown result, so `ambit check`

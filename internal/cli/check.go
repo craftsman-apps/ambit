@@ -109,7 +109,7 @@ func (a *app) check(ctx context.Context, f checkFlags) error {
 	}
 	token := os.Getenv("AMBIT_TOKEN")
 	p.Redactor().Add(token)
-	e := &checks.Env{Kube: c.Kube, Ctrl: c.Ctrl, Helm: h, Namespace: a.g.namespace, ValuesFile: valuesFile,
+	e := &checks.Env{Kube: c.Kube, Ctrl: c.Ctrl, Helm: h, Namespace: a.g.namespace, Context: c.Context, ValuesFile: valuesFile,
 		CRDBundle: assets.CRDBundle(), Deep: f.deep, Token: token, HTTP: &http.Client{Timeout: 30 * time.Second},
 		Now: time.Now,
 		Forward: func(ctx context.Context, sel string, port int) (int, func(), error) {

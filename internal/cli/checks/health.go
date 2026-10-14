@@ -34,7 +34,7 @@ func h1Releases(_ context.Context, e *Env) Result {
 		return res(Fail, "live objects", "a release is missing in %s (ambit-crds: %v, ambit: %v)", e.Namespace, crds != nil, app != nil)
 	case crds.Status != "deployed" || app.Status != "deployed":
 		return res(Fail, "live objects", "ambit-crds is %s and ambit is %s", crds.Status, app.Status).
-			next(fmt.Sprintf("helm -n %s history ambit", e.Namespace))
+			next(e.helm() + " history ambit")
 	case crds.ChartVersion != app.ChartVersion:
 		return res(Fail, "live objects", "ambit-crds %s and ambit %s are at different versions", crds.ChartVersion, app.ChartVersion)
 	}
@@ -120,7 +120,7 @@ func h3Pods(ctx context.Context, e *Env) Result {
 		return res(Fail, "live objects", "no pods in %s", e.Namespace)
 	case len(bad) > 0:
 		return res(Fail, "live objects", "%d of %d pods not Ready: %s", len(bad), n, strings.Join(bad, "; ")).
-			next(fmt.Sprintf("kubectl -n %s describe pod %s", e.Namespace, strings.SplitN(bad[0], ":", 2)[0]))
+			next(e.kubectl() + " describe pod " + strings.SplitN(bad[0], ":", 2)[0])
 	}
 	return res(Pass, "live objects", "%d pods Ready", n)
 }

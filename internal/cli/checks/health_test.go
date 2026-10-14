@@ -215,3 +215,31 @@ func TestAmbitCRDNamesMatchChart(t *testing.T) {
 		t.Fatalf("ambitCRDNames = %v, chart has %v", got, fromChart)
 	}
 }
+
+// Final review, Minor 4: the next steps of the checks carry the context the check used.
+func TestNextStepsCarryContext(t *testing.T) {
+	e := &Env{Namespace: "ambit-system", Context: "kind-try"}
+	if got := e.kubectl(); got != "kubectl --context kind-try -n ambit-system" {
+		t.Errorf("kubectl() = %q", got)
+	}
+	if got := e.helm(); got != "helm --kube-context kind-try -n ambit-system" {
+		t.Errorf("helm() = %q", got)
+	}
+	e.Context = ""
+	if e.kubectl() != "kubectl -n ambit-system" || e.helm() != "helm -n ambit-system" {
+		t.Errorf("without a context: %q, %q", e.kubectl(), e.helm())
+	}
+	f := fx{helm: &fakeHelm{rel: map[string]*helmx.Release{
+		"ambit-crds": {ChartVersion: "0.2.0", Status: "deployed"}, "ambit": {ChartVersion: "0.2.0", Status: "failed"}}}}
+	env := f.env(t)
+	env.Context = "kind-try"
+	var h1 Check
+	for _, c := range Catalogue {
+		if c.ID == "H1" {
+			h1 = c
+		}
+	}
+	if r := runOne(context.Background(), env, h1); r.Next != "helm --kube-context kind-try -n ambit-system history ambit" {
+		t.Errorf("H1 next = %q", r.Next)
+	}
+}

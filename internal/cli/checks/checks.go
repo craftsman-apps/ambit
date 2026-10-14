@@ -22,6 +22,8 @@ type Env struct {
 	Ctrl      client.Client
 	Helm      helmx.Client
 	Namespace string
+	// Context is the kubeconfig context in use; the next-step commands carry it (empty: the current context).
+	Context string
 	// ValuesFile is `check -f values.yaml` for the pre group; nil when not given.
 	ValuesFile map[string]any
 	CRDBundle  []byte
@@ -214,4 +216,19 @@ func number(m map[string]any, path string) int {
 		return int(n)
 	}
 	return 0
+}
+
+// kubectl and helm return the command prefix of a next step for this namespace and context.
+func (e *Env) kubectl() string {
+	if e.Context == "" {
+		return "kubectl -n " + e.Namespace
+	}
+	return "kubectl --context " + e.Context + " -n " + e.Namespace
+}
+
+func (e *Env) helm() string {
+	if e.Context == "" {
+		return "helm -n " + e.Namespace
+	}
+	return "helm --kube-context " + e.Context + " -n " + e.Namespace
 }

@@ -210,7 +210,7 @@ func p4Records(ctx context.Context, e *Env, all map[string]any) Result {
 		}
 		if time.Now().After(deadline) {
 			return res(Fail, src, "the collector sent no record to ClickHouse within %s of a test call", wait).
-				next(fmt.Sprintf("kubectl -n %s logs deploy/ambit-otel-collector", e.Namespace))
+				next(e.kubectl() + " logs deploy/ambit-otel-collector")
 		}
 		select {
 		case <-ctx.Done():

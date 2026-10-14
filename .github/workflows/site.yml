@@ -1,7 +1,9 @@
 name: site
 on:
   pull_request: { paths: ["docs/**", "site/**", "README.md", ".github/workflows/site.yml"] }
-  push: { branches: [main], paths: ["docs/**", "site/**", "README.md", ".github/workflows/site.yml"] }
+  # The live site follows releases, not main: it is built and deployed only from a version tag (v1.2.3) or a
+  # homepage tag (site-<anything>). Prerelease tags (v1.2.3-rc.1) build but do not deploy. Merges to main deploy nothing.
+  push: { tags: ["v*", "site-*"] }
 permissions: { contents: read }
 concurrency: { group: "site-${{ github.ref }}", cancel-in-progress: true }
 jobs:
@@ -20,11 +22,17 @@ jobs:
       - name: Every README docs address has a page
         run: npm run check-readme-urls
         working-directory: site
+      - name: The quick start shows every install method
+        run: npm run check-install-methods
+        working-directory: site
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: site-build, path: site/build, retention-days: 3 }
   site-deploy:
     needs: site-build
-    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    if: >-
+      startsWith(github.ref, 'refs/tags/site-') ||
+      (startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     permissions: { contents: read, pull-requests: write }
     env:

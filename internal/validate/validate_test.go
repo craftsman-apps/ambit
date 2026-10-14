@@ -1,6 +1,7 @@
 package validate
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -287,6 +288,39 @@ func TestVertexAIModels(t *testing.T) {
 		p := check(t, d)
 		if len(p) == 0 {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func routerWith(route string) string {
+	return `apiVersion: ambitproject.dev/v1alpha1
+kind: ModelRouter
+metadata: { name: auto }
+spec:
+  default: mock-unpriced
+  classifier: { type: Rules }
+  routes:
+    - model: mock-echo
+      ` + route
+}
+
+func TestIntegerFieldsAreAcceptedLikeTheAPIServer(t *testing.T) {
+	for _, route := range []string{"minBytes: 2000", "maxBytes: 500", "minBytes: 10\n      maxBytes: 20"} {
+		if p := check(t, routerWith(route)); len(p) != 0 {
+			t.Errorf("%s: want no problems, got %v", route, p)
+		}
+	}
+}
+
+func TestIntegerFieldsStillRefuseBadValues(t *testing.T) {
+	for _, tc := range []struct{ name, route, want string }{
+		{"no condition", "description: none", "a route needs"},
+		{"fraction", "minBytes: 1.5", "minBytes"},
+		{"below minimum", "minBytes: 0", "minBytes"},
+	} {
+		p := check(t, routerWith(tc.route))
+		if len(p) == 0 || !strings.Contains(p[0].Message+fmt.Sprint(p), tc.want) {
+			t.Errorf("%s: want a problem mentioning %q, got %v", tc.name, tc.want, p)
 		}
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/defaulting"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/pruning"
 	apivalidation "k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
+	utiljson "k8s.io/apimachinery/pkg/util/json"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	celconfig "k8s.io/apiserver/pkg/apis/cel"
 	"sigs.k8s.io/yaml"
@@ -104,8 +105,13 @@ func (v *Validator) File(ctx context.Context, r io.Reader) ([]Problem, int, erro
 		if len(bytes.TrimSpace(doc)) == 0 {
 			continue
 		}
+		// The API server decodes whole numbers as int64; sigs.k8s.io/yaml would give float64, which the schema and CEL refuse.
 		var obj map[string]any
-		if err := yaml.Unmarshal(doc, &obj); err != nil {
+		j, err := yaml.YAMLToJSON(doc)
+		if err == nil {
+			err = utiljson.Unmarshal(j, &obj)
+		}
+		if err != nil {
 			problems = append(problems, Problem{Doc: n, Object: "?", Message: "not valid YAML: " + err.Error()})
 			continue
 		}

@@ -66,6 +66,9 @@ calls when the file does not exist.
   (about 50 minutes of CI time).
 - One concern per commit. Write each commit message in plain English: what changed and why.
 - Add tests with the change, not later. A failing test is revised, never skipped.
+- Add a line to `CHANGELOG.md` under "Unreleased" for each change that users can see.
+- A change is accepted when `go vet ./...` and `make test-go` pass, the front end builds with `make web` (it type-checks),
+  generated files are current, and the change comes with its tests. CI runs these checks and more.
 - Before a merge, the branch must contain the current `main` and CI must pass on that head.
 - A change that only touches `docs/`, `*.md`, `LICENSE` or `NOTICE` skips the build and end-to-end jobs.
 - After you change `api/v1alpha1`, run `make generate` and commit the generated CRDs. CI checks that they are current.

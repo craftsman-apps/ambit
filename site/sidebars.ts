@@ -7,7 +7,7 @@ const sidebars: SidebarsConfig = {
       'guides/coding-tools', 'guides/models-per-team', 'guides/mcp-apps', 'guides/spending-limits', 'guides/someone-leaves',
     ]},
     {type: 'category', label: 'Reference', collapsed: false, items: [
-      'providers', 'api-keys', 'presets', 'budgets', 'routing', 'offboarding', 'alerts', 'upgrading',
+      'providers', 'api-keys', 'presets', 'budgets', 'routing', 'offboarding', 'alerts', 'compliance', 'upgrading',
     ]},
   ],
 };

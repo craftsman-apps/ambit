@@ -23,11 +23,11 @@ import (
 func h1Releases(_ context.Context, e *Env) Result {
 	crds, err := e.Helm.Get("ambit-crds")
 	if err != nil {
-		return unknownFor(err, "get", "secrets", e.Namespace, "live objects")
+		return releaseErr(err, e.Namespace)
 	}
 	app, err := e.Helm.Get("ambit")
 	if err != nil {
-		return unknownFor(err, "get", "secrets", e.Namespace, "live objects")
+		return releaseErr(err, e.Namespace)
 	}
 	switch {
 	case crds == nil || app == nil:

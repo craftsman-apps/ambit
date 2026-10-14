@@ -91,7 +91,8 @@ func TestCheckJSONAndExitCodes(t *testing.T) {
 func TestCheckWithoutAnyKubeconfig(t *testing.T) {
 	empty := filepath.Join(t.TempDir(), "empty")
 	os.WriteFile(empty, nil, 0o600)
-	code, s := runCLI(t, &fakeHelm{}, "check", "--kubeconfig", empty)
+	t.Setenv("KUBECONFIG", empty)
+	code, s := runCLI(t, &fakeHelm{}, "check")
 	if code != 0 || !strings.Contains(s, "? R1  no cluster to look at") || !strings.Contains(s, "0 passed, 0 warnings, 0 failed, 6 unknown") {
 		t.Fatalf("code %d, output\n%s", code, s)
 	}
@@ -113,6 +114,7 @@ func TestCheckPreLocalWithoutKubeconfig(t *testing.T) {
 	os.WriteFile(empty, nil, 0o600)
 	for name, kc := range map[string]string{"empty file": empty, "no file": filepath.Join(t.TempDir(), "missing")} {
 		t.Run(name, func(t *testing.T) {
+			t.Setenv("KUBECONFIG", kc)
 			var b bytes.Buffer
 			a := &app{in: strings.NewReader(""), out: &b, errw: &b,
 				newHelm: func(helmx.Options) (helmx.Client, error) { return nil, errors.New("helm must not be used") },
@@ -122,7 +124,7 @@ func TestCheckPreLocalWithoutKubeconfig(t *testing.T) {
 					},
 					PortFree: func(int) bool { return true }}}
 			root := a.root()
-			root.SetArgs([]string{"check", "--pre", "--local", "--kubeconfig", kc})
+			root.SetArgs([]string{"check", "--pre", "--local"})
 			root.SetOut(&b)
 			root.SetErr(&b)
 			code, s := a.exit(root.Execute()), b.String()
@@ -161,5 +163,34 @@ func TestCheckJSONStdoutIsOnlyJSON(t *testing.T) {
 	}
 	if len(rs) != 6 {
 		t.Fatalf("results = %d, want 6", len(rs))
+	}
+}
+
+// An explicit --context or --kubeconfig that cannot be used is a usage error, never "no cluster" with exit 0.
+func TestCheckExplicitTargetNotFound(t *testing.T) {
+	kc := unreachable(t)
+	code, s := runCLI(t, &fakeHelm{}, "check", "--kubeconfig", kc, "--context", "typo")
+	if code != 2 || !strings.Contains(s, "context typo not found in "+kc) {
+		t.Fatalf("--context typo: code %d, output\n%s", code, s)
+	}
+	empty := filepath.Join(t.TempDir(), "empty")
+	os.WriteFile(empty, nil, 0o600)
+	for _, args := range [][]string{
+		{"check", "--kubeconfig", empty},
+		{"check", "--kubeconfig", filepath.Join(t.TempDir(), "missing"), "--pre", "--local"},
+		{"check", "--kubeconfig", empty, "--context", "typo"},
+	} {
+		if code, s := runCLI(t, &fakeHelm{}, args...); code != 2 || strings.Contains(s, "no cluster to look at") {
+			t.Errorf("%v: code %d, output\n%s", args, code, s)
+		}
+	}
+}
+
+// A Helm read error is not "Ambit is not installed": the health checks run and report it.
+func TestCheckHelmErrorIsNotNotInstalled(t *testing.T) {
+	kc := unreachable(t)
+	code, s := runCLI(t, &fakeHelm{err: errors.New("storage driver exploded")}, "check", "--kubeconfig", kc, "--no-production")
+	if code != 1 || !strings.Contains(s, "✗ H1  ") || !strings.Contains(s, "storage driver exploded") || strings.Contains(s, "R1") {
+		t.Fatalf("code %d, output\n%s", code, s)
 	}
 }

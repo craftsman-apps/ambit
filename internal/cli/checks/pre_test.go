@@ -1,6 +1,7 @@
 package checks
 
 import (
+	"errors"
 	"testing"
 
 	storagev1 "k8s.io/api/storage/v1"
@@ -25,6 +26,8 @@ func TestR2Permissions(t *testing.T) {
 func TestR3Installed(t *testing.T) {
 	rel := func(v string) *helmx.Release { return &helmx.Release{ChartVersion: v, Status: "deployed"} }
 	want(t, one(t, "R3", fx{}), Pass, "fresh install")
+	want(t, one(t, "R3", fx{helm: &fakeHelm{err: forbidden}}), Unknown, "cannot get secrets")
+	want(t, one(t, "R3", fx{helm: &fakeHelm{err: errors.New("storage driver exploded")}}), Fail, "storage driver exploded")
 	want(t, one(t, "R3", fx{helm: &fakeHelm{rel: map[string]*helmx.Release{"ambit-crds": rel("0.2.0"), "ambit": rel("0.2.0")}}}), Pass, "0.2.0 are installed")
 	want(t, one(t, "R3", fx{helm: &fakeHelm{rel: map[string]*helmx.Release{"ambit-crds": rel("0.1.0"), "ambit": rel("0.2.0")}}}), Warn, "different versions")
 	want(t, one(t, "R3", fx{helm: &fakeHelm{rel: map[string]*helmx.Release{"ambit-crds": rel("0.2.0")}}}), Warn, "only ambit-crds")

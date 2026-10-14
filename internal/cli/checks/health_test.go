@@ -31,6 +31,8 @@ func TestH1Releases(t *testing.T) {
 	want(t, one(t, "H1", h(rel("0.2.0", "deployed"), rel("0.2.0", "failed"))), Fail, "ambit is failed")
 	want(t, one(t, "H1", h(rel("0.1.0", "deployed"), rel("0.2.0", "deployed"))), Fail, "different versions")
 	want(t, one(t, "H1", h(nil, rel("0.2.0", "deployed"))), Fail, "a release is missing")
+	want(t, one(t, "H1", fx{helm: &fakeHelm{err: forbidden}}), Unknown, "cannot get secrets")
+	want(t, one(t, "H1", fx{helm: &fakeHelm{err: errors.New("storage driver exploded")}}), Fail, "storage driver exploded")
 }
 
 func TestH2CRDs(t *testing.T) {

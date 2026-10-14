@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/yaml"
 
 	"github.com/craftsman-apps/ambit/internal/cli/assets"
@@ -82,6 +83,10 @@ func (a *app) check(ctx context.Context, f checkFlags) error {
 		}
 	}
 	c, connErr := kube.Connect(kube.Target{Kubeconfig: a.g.kubeconfig, Context: a.g.context, Log: logw})
+	if connErr != nil && (a.g.kubeconfig != "" || a.g.context != "") {
+		// The user named the target: a typo is a usage error, not a laptop without a cluster.
+		return explicitTargetError(a.g.kubeconfig, a.g.context, connErr)
+	}
 	var results []checks.Result
 	if connErr != nil {
 		// No usable kubeconfig (a fresh laptop before `ambit local up`): the cluster checks cannot look, the
@@ -119,8 +124,10 @@ func (a *app) check(ctx context.Context, f checkFlags) error {
 				consoleURL, _ = console["url"].(string)
 			}
 		}
-	} else if err != nil && f.production {
-		installed = true // cannot read the release, but the user asked for the production checks
+	} else if err != nil {
+		// A read error is not "not installed" (helmx.Get returns nil, nil for that): run the health checks, and
+		// H1 reports the error.
+		installed = true
 	}
 	groups, err := selectGroups(f, installed, consoleURL)
 	if err != nil {
@@ -152,11 +159,31 @@ func (a *app) finishCheck(ctx context.Context, f checkFlags, groups map[string]b
 			return err
 		}
 	} else {
-		p.Line("Checking context %s (%s), namespace %s", kctx, server, a.g.namespace)
+		if server == "" {
+			p.Line("Checking no cluster, namespace %s", a.g.namespace)
+		} else {
+			p.Line("Checking context %s (%s), namespace %s", kctx, server, a.g.namespace)
+		}
 		checks.Print(p, results)
 	}
 	if code := checks.ExitCode(results, f.failOnUnknown); code != 0 {
 		return exitCode(code)
 	}
 	return nil
+}
+
+// explicitTargetError is the usage error for a --kubeconfig or --context that cannot be used.
+func explicitTargetError(kubeconfig, kctx string, connErr error) error {
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if kubeconfig != "" {
+		rules.ExplicitPath = kubeconfig
+	}
+	where := kubeconfig
+	if where == "" {
+		where = "the default kubeconfig"
+	}
+	if raw, err := rules.Load(); err == nil && kctx != "" && raw.Contexts[kctx] == nil {
+		return out.Usage("context "+kctx+" not found in "+where, connErr.Error(), "kubectl config get-contexts")
+	}
+	return out.Usage("kubeconfig "+where, connErr.Error(), "check --kubeconfig and --context")
 }

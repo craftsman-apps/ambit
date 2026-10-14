@@ -156,6 +156,15 @@ func unknownFor(err error, verb, resource, ns, source string) Result {
 	return res(Unknown, source, "could not %s %s%s: %v", verb, resource, where, err)
 }
 
+// releaseErr is the result when the Helm releases cannot be read: unknown for a missing permission, else a
+// failure. A read error is never taken to mean that Ambit is not installed.
+func releaseErr(err error, ns string) Result {
+	if denied(err) {
+		return unknownFor(err, "get", "secrets", ns, "live objects")
+	}
+	return res(Fail, "live objects", "could not read the Helm releases in %s: %v", ns, err)
+}
+
 // values returns the user-supplied and the computed values of the ambit release (helm get values, with and
 // without --all). Helm stores them in Secrets, so reading needs `get secrets` in the namespace.
 func (e *Env) values() (user, all map[string]any, err error) {

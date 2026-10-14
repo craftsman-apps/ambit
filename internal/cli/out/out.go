@@ -120,7 +120,7 @@ func (p *Printer) Verbose() io.Writer {
 	go func() {
 		// Read in pieces of at most 64 KiB and keep draining, so a long line never blocks the writer.
 		// A line longer than that is printed in several pieces; a secret that spans two pieces is not matched.
-		r := bufio.NewReader(pr)
+		r := bufio.NewReaderSize(pr, 64*1024)
 		for {
 			b, _, err := r.ReadLine()
 			if err != nil {

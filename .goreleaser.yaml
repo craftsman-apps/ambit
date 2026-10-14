@@ -1,0 +1,36 @@
+# The ambit CLI release (spec 6). The release workflow's `publish` job creates the GitHub release with the quick-start
+# files; its `cli` job runs `goreleaser release`, which adds the archives and checksums.txt to that release and writes
+# nothing else. The Homebrew formula is written from checksums.txt by scripts/homebrew/formula.mjs (GoReleaser's own
+# formula publisher, `brews`, is deprecated in v2 and fails `goreleaser check`; ruling S6).
+version: 2
+project_name: ambit
+
+builds:
+  - id: ambit
+    main: ./cmd/ambit
+    binary: ambit
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags: ["-s -w -X github.com/craftsman-apps/ambit/internal/cli.version={{ .Version }}"]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: ambit
+    formats: [tar.gz]
+    format_overrides:
+      - { goos: windows, formats: [zip] }
+    # No version in the name, so .../releases/latest/download/ambit_<os>_<arch>.tar.gz always works (install.sh).
+    name_template: "ambit_{{ .Os }}_{{ .Arch }}"
+    files: [LICENSE, NOTICE]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true
+
+release:
+  # The publish job already created the release (with --generate-notes); add the files, keep its notes.
+  mode: keep-existing

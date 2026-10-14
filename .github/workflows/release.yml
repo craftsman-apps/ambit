@@ -1,11 +1,15 @@
 name: release
 on:
   push: { tags: ["v*"] }
-permissions: { contents: write, packages: write }  # contents: the GitHub release and its files
+# Each job asks for its own permissions (spec 6); nothing is granted workflow-wide.
+permissions: {}
 
 jobs:
+  # The image, the charts and the GitHub release with the quick-start files. The preset gate stays first: nothing
+  # is published when it fails.
   publish:
     runs-on: ubuntu-latest
+    permissions: { contents: write, packages: write }  # contents: the GitHub release and its files
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0 }
@@ -60,3 +64,72 @@ jobs:
           # Gateway API, agentgateway and ToolHive CRDs, which neither chart installs.
           for f in deploy/crds/*.yaml; do cat "$f"; printf '\n---\n'; done > /tmp/assets/crds.yaml
           gh release create "$GITHUB_REF_NAME" /tmp/assets/* --title "$GITHUB_REF_NAME" --generate-notes
+
+  # The ambit CLI archives on the same release, with build provenance for each archive (gh attestation verify).
+  cli:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions: { contents: write, id-token: write, attestations: write }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with: { distribution: goreleaser, version: v2.18.3, args: release --clean }
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with: { subject-path: "dist/ambit_*.tar.gz, dist/ambit_*.zip, dist/checksums.txt" }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 26 }
+      # The formula installs the prebuilt binary from this release's archives, pinned by sha256 (ruling S6). It is
+      # pushed to the tap by cli-channels after approval, which holds the only tap token.
+      - name: The Homebrew formula, from this release's checksums.txt
+        run: node scripts/homebrew/formula.mjs --checksums dist/checksums.txt --version "${GITHUB_REF_NAME#v}" --out formula/ambit.rb
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with: { name: homebrew-formula, path: formula/ambit.rb, retention-days: 7, if-no-files-found: error }
+
+  # Homebrew (a formula) and npm. Runs in the Environment release-channels, so a maintainer approves each release first. A
+  # failure here does not undo the GitHub release; both steps are safe to re-run (the job can be re-run alone).
+  cli-channels:
+    needs: cli
+    runs-on: ubuntu-latest
+    environment: release-channels
+    permissions: { contents: read, id-token: write }  # id-token: npm trusted publishing with provenance
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: homebrew-formula, path: formula }
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 26, registry-url: "https://registry.npmjs.org" }
+      - name: The release's archives and checksums.txt, as published
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: gh release download "$GITHUB_REF_NAME" -p 'ambit_*' -p checksums.txt -D rel
+      # Every downloaded archive must match the release's checksums.txt before anything is published from it,
+      # and all six archives must be there (the formula pins four, npm uses six).
+      - name: The downloaded archives match checksums.txt
+        run: |
+          cd rel
+          [ "$(find . -name 'ambit_*' | wc -l)" -eq 6 ]
+          sha256sum --check --strict checksums.txt
+      # The artifact must be the formula for the published checksums: the file is where cli wrote it, it pins four
+      # archives by sha256, and the same script run on the release's checksums.txt writes the same bytes.
+      - name: The Homebrew formula matches the published release
+        run: |
+          test -f formula/ambit.rb
+          [ "$(grep -cE '^ +sha256 "[0-9a-f]{64}"$' formula/ambit.rb)" = 4 ]
+          node scripts/homebrew/formula.mjs --checksums rel/checksums.txt --version "${GITHUB_REF_NAME#v}" --out "$RUNNER_TEMP/expected.rb"
+          cmp formula/ambit.rb "$RUNNER_TEMP/expected.rb"
+      - name: Homebrew tap (craftsman-apps/homebrew-tap)
+        env: { TAP_TOKEN: "${{ secrets.HOMEBREW_TAP_TOKEN }}" }  # fine-grained, contents:write on that repository only
+        run: |
+          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/craftsman-apps/homebrew-tap.git" tap
+          mkdir -p tap/Formula && cp formula/ambit.rb tap/Formula/ambit.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/ambit.rb
+          git diff --cached --quiet || { git commit -m "ambit ${GITHUB_REF_NAME}" && git push; }
+      - name: npm (@craftsman-apps/ambit and one package per platform)
+        if: ${{ !cancelled() }}  # runs even when the tap step failed; both are safe to re-run
+        run: node scripts/npm/publish.mjs --dir rel --version "${GITHUB_REF_NAME#v}" --out npm-out --publish

@@ -1,6 +1,10 @@
 package connect
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/craftsman-apps/ambit/internal/cli/out"
+)
 
 // Tool names, as the user types them.
 const (
@@ -52,3 +56,15 @@ func (c Conflict) String() string { return c.What + " — " + c.Why }
 
 func trimSpace(b []byte) []byte   { return []byte(strings.TrimSpace(string(b))) }
 func contains(s, sub string) bool { return strings.Contains(s, sub) }
+
+// refuseSecondBackup stops a re-connect that would remove another secret while the backup of an earlier connect is
+// the only place that holds a secret. The backup is kept as it is, so the new value would be in no file at all.
+func refuseSecondBackup(in Input, removed []string) error {
+	if in.Prev == nil || len(in.Prev.RemovedSecrets) == 0 || len(removed) == 0 {
+		return nil
+	}
+	return &out.Error{What: "cannot remove " + dotted(removed[0]) + " from " + in.Path,
+		Why:  "the backup " + in.Prev.Backup + " holds an earlier removed value, and ambit keeps one backup per file",
+		Next: "copy the value you need out of the file and the backup, remove the entry from " + in.Path + " by hand, then run the command again",
+		Code: out.ExitFailed}
+}

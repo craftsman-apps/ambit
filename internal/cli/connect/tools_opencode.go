@@ -101,6 +101,9 @@ func PlanOpenCode(in Input) (*Plan, error) {
 	if len(p.Conflicts) > 0 && !in.Force {
 		return p, nil
 	}
+	if err := refuseSecondBackup(in, removed); err != nil {
+		return nil, err
+	}
 	for _, ptr := range removed {
 		d.Delete(splitPointer(ptr)...)
 	}

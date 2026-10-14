@@ -363,3 +363,13 @@ func TestWrapperRunsInRealShells(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenCodeSecondRemovedProviderIsRefused(t *testing.T) {
+	// An earlier --force connect removed an old provider.ambit; the person has added another one by hand.
+	prev := &FileRecord{Path: "/c/opencode.json", RemovedSecrets: []string{"/provider/ambit"}, Backup: "/c/opencode.json.ambit.bak"}
+	in := Input{Path: "/c/opencode.json", File: []byte(`{"provider":{"ambit":{"options":{"apiKey":"K2"}}}}`), Exists: true,
+		URL: "https://b.example.com", Model: "m", GOOS: "darwin", Force: true, Prev: prev}
+	if _, err := PlanOpenCode(in); err == nil {
+		t.Fatal("a second removed provider.ambit must be refused")
+	}
+}

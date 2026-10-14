@@ -2,6 +2,7 @@ package connect
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -212,5 +213,72 @@ func TestClaudeCodeCloudProviderVariables(t *testing.T) {
 		if len(off.Warnings) != 0 {
 			t.Fatalf("%s=0 is off, got warnings %q", v, off.Warnings)
 		}
+	}
+}
+
+// A second --force connect that would remove another secret is refused: the only backup holds the first one.
+func TestClaudeCodeSecondRemovedSecretIsNeverLost(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(path, []byte(`{"env":{"ANTHROPIC_AUTH_TOKEN":"FIRST-TOKEN"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stateOf *FileRecord
+	connectOnce := func(url string) (*Plan, error) {
+		b, _ := os.ReadFile(path)
+		in := Input{Path: path, File: b, Exists: true, URL: url, Model: "m", AmbitPath: ambitBin, GOOS: "darwin", Force: true}
+		in.Prev = stateOf
+		p, err := PlanClaudeCode(in)
+		if err != nil || p.After == nil || p.Already {
+			return p, err
+		}
+		c := FileChange{Path: path, Before: b, Exists: true, After: p.After, KeepBackup: in.Prev != nil && len(in.Prev.RemovedSecrets) > 0}
+		if _, err := WriteAll([]FileChange{c}); err != nil {
+			t.Fatal(err)
+		}
+		p.Record.Backup = path + ".ambit.bak"
+		stateOf = &p.Record
+		return p, nil
+	}
+	if _, err := connectOnce("https://a.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	// The person adds a second token and connects again with --force.
+	b, _ := os.ReadFile(path)
+	withToken := strings.Replace(string(b), `"env":{`, `"env":{"ANTHROPIC_AUTH_TOKEN":"SECOND-TOKEN",`, 1)
+	if withToken == string(b) {
+		t.Fatalf("test setup: no env object in %s", b)
+	}
+	if err := os.WriteFile(path, []byte(withToken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := connectOnce("https://b.example.com")
+	if err == nil {
+		t.Fatal("a connect that removes a second secret must be refused")
+	}
+	if after, _ := os.ReadFile(path); string(after) != withToken {
+		t.Fatalf("the file changed although the connect was refused:\n%s", after)
+	}
+	if bak, _ := os.ReadFile(path + ".ambit.bak"); !strings.Contains(string(bak), "FIRST-TOKEN") {
+		t.Fatalf("the first backup lost FIRST-TOKEN: %s", bak)
+	}
+	if !strings.Contains(err.Error(), "ANTHROPIC_AUTH_TOKEN") {
+		t.Fatalf("the error does not name the entry: %v", err)
+	}
+}
+
+func TestClaudeCodeReconnectKeepsRemovedSecretsOnceEach(t *testing.T) {
+	first, err := PlanClaudeCode(Input{Path: "/c/settings.json", File: []byte(`{"env":{"ANTHROPIC_AUTH_TOKEN":"T"}}`), Exists: true,
+		URL: "https://a.example.com", Model: "m", AmbitPath: ambitBin, GOOS: "darwin", Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := PlanClaudeCode(Input{Path: "/c/settings.json", File: first.After, Exists: true, URL: "https://b.example.com", Model: "m",
+		AmbitPath: ambitBin, GOOS: "darwin", Force: true, Prev: &first.Record})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := second.Record.RemovedSecrets; len(got) != 1 || got[0] != "/env/ANTHROPIC_AUTH_TOKEN" {
+		t.Fatalf("RemovedSecrets = %v", got)
 	}
 }

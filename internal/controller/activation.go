@@ -98,8 +98,9 @@ func (r *Reconciler) nacks(ctx context.Context) ([]corev1.Event, error) {
 }
 
 // gate waits until every object is active, polling, for up to Activation.Timeout; then the settle time. seen is
-// the NACK Events before the write.
-func (r *Reconciler) gate(ctx context.Context, objs []gated, seen nackSeen) error {
+// the NACK Events before the write;
+// timeout 0 checks once (the retry of a stopped step). Every poll first applies what must not wait (urgent).
+func (r *Reconciler) gate(ctx context.Context, objs []gated, seen nackSeen, timeout time.Duration) error {
 	if len(objs) == 0 {
 		return nil
 	}
@@ -107,8 +108,11 @@ func (r *Reconciler) gate(ctx context.Context, objs []gated, seen nackSeen) erro
 	if poll <= 0 {
 		poll = time.Second
 	}
-	deadline := r.now().Add(r.Activation.Timeout)
+	deadline := r.now().Add(timeout)
 	for {
+		if err := r.urgent(ctx); err != nil {
+			return err
+		}
 		waiting, err := r.activated(ctx, objs, seen)
 		if err != nil {
 			return err
@@ -270,6 +274,11 @@ type pending struct {
 // every step ran (the caller then publishes); ran tells which steps ran.
 func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, target pending) (stall *stalledError, ran map[string]bool, err error) {
 	ran = map[string]bool{}
+	if changing {
+		if err := r.urgent(ctx); err != nil {
+			return nil, ran, err
+		}
+	}
 	for _, s := range steps {
 		var seen nackSeen
 		if changing {
@@ -307,14 +316,17 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 			}
 			wait = append(wait, g)
 		}
+		timeout := r.Activation.Timeout
 		if !anyChanged && r.stalled != nil && r.stalled.step == s.name {
 			seen = r.stalled.seen // a NACK seen for the stopped write still counts
+			// A retry checks once: waiting the whole timeout again on every pass would hold up the rest of the pass.
+			timeout = 0
 		}
 		target.Step, target.Error = s.name, ""
 		if err := r.setPending(ctx, &target); err != nil {
 			return nil, ran, err
 		}
-		if err := r.gate(ctx, wait, seen); err != nil {
+		if err := r.gate(ctx, wait, seen, timeout); err != nil {
 			var st *stalledError
 			if !errors.As(err, &st) {
 				return nil, ran, err

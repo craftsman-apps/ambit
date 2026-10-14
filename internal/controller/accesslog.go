@@ -105,6 +105,21 @@ func (r *Reconciler) writeAccessLog(ctx context.Context, mode, rulesVersion stri
 	return []gated{{kind: p.GetKind(), name: p.GetName(), generation: p.GetGeneration(), changed: p.GetGeneration() != current.GetGeneration()}}, nil
 }
 
+// urgent applies what a change waiting for agentgateway must never hold back: the offboarding policy, from
+// ambit-offboarded as it is now. It runs before the steps of a change and on every poll of the gate.
+func (r *Reconciler) urgent(ctx context.Context) error {
+	p, err := r.offboarding(ctx)
+	if err != nil {
+		return err
+	}
+	if p != nil {
+		if _, _, err := r.applyAll(ctx, []*unstructured.Unstructured{p}, map[string]metav1.Condition{}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // publishMode writes ambit-access-mode: the mode and the rules version in force, each with the time it last
 // changed, once the change is active (no pending entry).
 func (r *Reconciler) publishMode(ctx context.Context, mode, rulesVersion string) error {

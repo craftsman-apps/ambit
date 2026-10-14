@@ -9,11 +9,13 @@ import (
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -243,5 +245,114 @@ func TestAuditOrderWritesTheAccessLogFirst(t *testing.T) {
 	wait(t, done)
 	if d, _ := accessMode(ctx, ns); d["mode"] != "audit" || d["pending"] != "" {
 		t.Fatalf("published %v", d)
+	}
+}
+
+func gateFixture(t *testing.T, ns string) {
+	t.Helper()
+	namespace(t, ns)
+	createBase(t, ns)
+	for _, o := range []client.Object{
+		&v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemma", Namespace: ns}, Spec: v1.ModelSpec{Provider: "Openrouter", Model: "google/gemma", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-k"}}},
+		&v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "eng", Namespace: ns}, Spec: v1.AccessRuleSpec{Groups: []string{"eng"}, Models: []string{"gemma"}}},
+	} {
+		if err := envClient.Create(t.Context(), o); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func offboard(t *testing.T, ns string, emails string) {
+	t.Helper()
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: OffboardedConfigMap, Namespace: ns}}
+	_, err := controllerutil.CreateOrUpdate(t.Context(), envClient, cm, func() error {
+		cm.Data = map[string]string{"emails": emails}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func offboardedExpr(ctx context.Context, ns string) string {
+	p, err := genGet(ctx, ns, "AgentgatewayPolicy", "ambit-offboarded")
+	if err != nil {
+		return ""
+	}
+	e, _, _ := unstructured.NestedStringSlice(p.Object, "spec", "traffic", "authorization", "policy", "matchExpressions")
+	return strings.Join(e, " ")
+}
+
+// A change that waits for agentgateway never holds back offboarding. Audit order: the access log is the first step, authorization
+// (where offboarding lives) waits behind it.
+func TestWaitingChangeStillOffboards(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-gate-urgent"
+	gateFixture(t, ns)
+	ctx := t.Context()
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}, AccessMode: "audit",
+		Activation: Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond}}
+	done := reconcileAsync(r)
+	eventually(t, "access log written", func() error { _, err := accessLogOf(ctx, ns); return err })
+	// While the access-log step waits, a leaver is offboarded.
+	offboard(t, ns, `["leaver@example.com"]`)
+	eventually(t, "offboarding applied while the change waits", func() error {
+		if e := offboardedExpr(ctx, ns); !strings.Contains(e, `"leaver@example.com"`) {
+			return fmt.Errorf("offboarding policy %q", e)
+		}
+		return nil
+	})
+	if _, err := genGet(ctx, ns, "AgentgatewayModel", "gemma"); !apierrors.IsNotFound(err) {
+		t.Fatalf("authorization written before the access log was active: %v", err)
+	}
+	playAgentgateway(t, ns, "AgentgatewayPolicy", AccessLogPolicy)
+	eventually(t, "authorization written", func() error { _, err := genGet(ctx, ns, "AgentgatewayModel", "gemma"); return err })
+	playAgentgateway(t, ns, "AgentgatewayModel", "gemma")
+	wait(t, done)
+}
+
+// Audit order, the access-log step stalled: authorization does not move, but offboarding and the deletion of
+// objects no longer generated still happen in the same pass.
+func TestStalledAuditChangeStillOffboardsAndDeletes(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-gate-stalled-audit"
+	gateFixture(t, ns)
+	ctx := t.Context()
+	stale := generated("agentgateway.dev/v1alpha1", "AgentgatewayPolicy", BudgetPolicyName, ns, map[string]any{
+		"targetRefs": []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": "ambit-llm"}},
+		"traffic":    map[string]any{"authorization": map[string]any{"action": "Require", "policy": map[string]any{"matchExpressions": []any{"true"}}}}})
+	if err := envClient.Create(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	offboard(t, ns, `["leaver@example.com"]`)
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}, AccessMode: "audit",
+		Activation: Activation{Timeout: 300 * time.Millisecond, Poll: 50 * time.Millisecond}}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if c := ruleReady(t, ns, "eng"); c.Reason != "RulesNotActive" {
+		t.Fatalf("rule condition %+v, want the change stalled", c)
+	}
+	if _, err := genGet(ctx, ns, "AgentgatewayModel", "gemma"); !apierrors.IsNotFound(err) {
+		t.Fatalf("authorization written before the access log was active: %v", err)
+	}
+	if e := offboardedExpr(ctx, ns); !strings.Contains(e, `"leaver@example.com"`) {
+		t.Errorf("offboarding policy %q", e)
+	}
+	if _, err := genGet(ctx, ns, "AgentgatewayPolicy", BudgetPolicyName); !apierrors.IsNotFound(err) {
+		t.Errorf("the budget policy no longer generated is still there: %v", err)
+	}
+	// The next pass, still stalled, offboards a second leaver at once: the retry does not wait the timeout again.
+	offboard(t, ns, `["leaver@example.com","second@example.com"]`)
+	r.Activation.Timeout = time.Minute
+	start := time.Now()
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("a retry of the stalled step waited %v", d)
+	}
+	if e := offboardedExpr(ctx, ns); !strings.Contains(e, `"second@example.com"`) {
+		t.Errorf("offboarding policy %q", e)
 	}
 }

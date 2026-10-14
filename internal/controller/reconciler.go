@@ -221,16 +221,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			usage = true
 		}
 	}
-	var cm corev1.ConfigMap
-	switch err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: OffboardedConfigMap}, &cm); {
-	case err == nil:
-		emails, rejected := OffboardedEmails(&cm)
-		if len(rejected) > 0 {
-			logger.Error(nil, "offboarded list has entries that are not plain emails; they are not blocked", "entries", rejected)
-		}
-		res.Objects = append(res.Objects, offboardedPolicy(&cm, emails, []string{"ambit-mcp", r.Route.Name}))
-	case !apierrors.IsNotFound(err):
+	switch p, err := r.offboarding(ctx); {
+	case err != nil:
 		return reconcile.Result{}, err
+	case p != nil:
+		res.Objects = append(res.Objects, p)
 	}
 
 	// Ready condition per Ambit object that controls a generated object, keyed "Kind/name".
@@ -271,10 +266,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		c := cond(metav1.ConditionFalse, reason, stall.msg)
 		stalled = &c
 		logger.Info("change not active in the gateway; stopped at this step", "step", r.stalled.step, "mode", mode, "rulesVersion", version, "error", stall.msg)
-		if !ran["authorization"] { // nothing else moves before the access log is active
-			return reconcile.Result{RequeueAfter: r.retryStalled()}, r.writeRuleStatuses(ctx, rules.Items, res.RuleConditions, stalled)
-		}
 	}
+	// Stopped before authorization (audit order): nothing that grants access moves before the access log is active.
+	// Offboarding was applied on every poll of the gate; the deletions below still run.
+	held := stall != nil && !ran["authorization"]
 	// Objects of refused Servers: no general prune exists, and owner references only collect on Server deletion.
 	for name := range refusedServers {
 		if err := r.deleteGenerated(ctx, "AgentgatewayPolicy", "ambit-conn-"+name); err != nil {
@@ -343,6 +338,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			!apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
 			return reconcile.Result{}, err
 		}
+	}
+	if held {
+		return reconcile.Result{RequeueAfter: r.retryStalled()}, r.writeRuleStatuses(ctx, rules.Items, res.RuleConditions, stalled)
 	}
 	// Look again while agentgateway or ToolHive has not decided yet: their status events can race
 	// with our own apply (seen when the route's listener changed), and a missed one would leave
@@ -511,6 +509,19 @@ func (r *Reconciler) writeRuleStatuses(ctx context.Context, rules []v1.AccessRul
 		}
 	}
 	return nil
+}
+
+// offboarding is the policy that refuses deactivated users, from ambit-offboarded as it is now; nil without it.
+func (r *Reconciler) offboarding(ctx context.Context) (*unstructured.Unstructured, error) {
+	var cm corev1.ConfigMap
+	if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: OffboardedConfigMap}, &cm); err != nil {
+		return nil, client.IgnoreNotFound(err)
+	}
+	emails, rejected := OffboardedEmails(&cm)
+	if len(rejected) > 0 {
+		log.FromContext(ctx).Error(nil, "offboarded list has entries that are not plain emails; they are not blocked", "entries", rejected)
+	}
+	return offboardedPolicy(&cm, emails, []string{"ambit-mcp", r.Route.Name}), nil
 }
 
 // applyAll applies every generated object. It returns the agentgateway Models and Policies it wrote, with the

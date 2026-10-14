@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -562,5 +563,31 @@ func TestConnectWriteFailureOfTheSecondFileRestoresTheFirst(t *testing.T) {
 	code := r.run("connect", "opencode", "--url", g.URL, "--model", "m", "--key-file", r.keyFile(), "--yes")
 	if code != 1 || r.readFile(oc) != seedOpenCode || !strings.Contains(r.stdout.String()+r.stderr.String(), "chmod u+w "+zsh) {
 		t.Fatalf("code %d\n%s%s\n%s", code, r.stdout.String(), r.stderr.String(), r.readFile(oc))
+	}
+}
+
+// A second connect that uses other files (another shell for opencode) must not forget the files of the first.
+func TestConnectKeepsTheRecordOfFilesThatAnotherConnectDoesNotUse(t *testing.T) {
+	g, r := newGateway(t), newRig(t)
+	zsh := r.write(".zshrc", seedZsh)
+	bashName := ".bashrc"
+	if runtime.GOOS == "darwin" {
+		bashName = ".bash_profile"
+	}
+	bash := r.write(bashName, "alias a=b\n")
+	oc := r.write(".config/opencode/opencode.json", seedOpenCode)
+	kf := r.keyFile()
+	r.run("connect", "opencode", "--url", g.URL, "--model", "m", "--key-file", kf, "--yes") // SHELL is zsh
+	if code := r.run("connect", "opencode", "--url", g.URL, "--model", "m", "--shell", "bash", "--yes"); code != 0 {
+		t.Fatalf("code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
+	}
+	if !strings.Contains(r.readFile(bash), "opencode() {") || !strings.Contains(r.readFile(zsh), "opencode() {") {
+		t.Fatal("both shells should have the function now")
+	}
+	if code := r.run("disconnect", "opencode", "--yes"); code != 0 {
+		t.Fatalf("code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
+	}
+	if r.readFile(zsh) != seedZsh || r.readFile(bash) != "alias a=b\n" || r.readFile(oc) != seedOpenCode {
+		t.Fatalf("not restored:\nzsh %q\nbash %q\noc %q", r.readFile(zsh), r.readFile(bash), r.readFile(oc))
 	}
 }

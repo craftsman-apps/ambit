@@ -368,6 +368,11 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	for _, j := range jobs {
 		rec.Files = append(rec.Files, j.plan.Record)
 	}
+	for _, old := range st.Tools[tool].Files { // a file of an earlier connect that this one does not use is still Ambit's
+		if !containsPath(jobs, old.Path) {
+			rec.Files = append(rec.Files, old)
+		}
+	}
 	st.Tools[tool] = rec
 	if err := st.Save(d.StatePath); err != nil {
 		return err
@@ -381,6 +386,15 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	}
 	a.nextSteps(tool, url, shell)
 	return nil
+}
+
+func containsPath(jobs []*job, path string) bool {
+	for _, j := range jobs {
+		if j.path == path {
+			return true
+		}
+	}
+	return false
 }
 
 func pathExists(p string) bool { _, err := os.Stat(p); return err == nil }

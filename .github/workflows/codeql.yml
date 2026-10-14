@@ -1,0 +1,41 @@
+name: codeql
+# Static analysis with GitHub CodeQL: Go (the controller, router and console) and JavaScript/TypeScript (web/ and
+# site/). Results appear under Security > Code scanning. This workflow is separate from ci.yml, so the
+# documentation-only filter in ci.yml is not affected.
+on:
+  push: { branches: [main] }
+  pull_request: { branches: [main] }
+  schedule: [{ cron: "23 4 * * 1" }]
+permissions: { contents: read }
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions: { security-events: write, contents: read, actions: read }
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [go, javascript-typescript]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: matrix.language == 'go'
+        with: { go-version-file: go.mod }
+      # web/embed.go embeds web/dist, which is not in git. An empty placeholder lets the Go build compile.
+      - name: Placeholder for web/dist
+        if: matrix.language == 'go'
+        run: mkdir -p web/dist && touch web/dist/.keep
+      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.language == 'go' && 'manual' || 'none' }}
+      - name: Build Go packages
+        if: matrix.language == 'go'
+        run: go build ./...
+      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with: { category: "/language:${{ matrix.language }}" }

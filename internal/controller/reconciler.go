@@ -68,6 +68,8 @@ type Reconciler struct {
 	Classifier Classifier
 	// Now is the clock (nil: time.Now); tests move it.
 	Now func() time.Time
+	// AccessMode is "enforce" (or "") or "audit" (--access-mode).
+	AccessMode string
 }
 
 // How often the tools of a running server are read again by default: servers may add or change tools.
@@ -117,7 +119,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	all := handler.EnqueueRequestsFromMapFunc(func(context.Context, client.Object) []reconcile.Request {
 		return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: r.Namespace, Name: "all"}}}
 	})
-	offboarded := predicate.NewPredicateFuncs(func(o client.Object) bool { return o.GetName() == OffboardedConfigMap })
+	offboarded := predicate.NewPredicateFuncs(func(o client.Object) bool { return o.GetName() == OffboardedConfigMap || o.GetName() == AccessLogBase })
 	b := ctrl.NewControllerManagedBy(mgr).Named("ambit").
 		Watches(&corev1.ConfigMap{}, all, builder.WithPredicates(offboarded)).
 		// Only spec changes of Ambit objects: our own status writes must not trigger another pass.
@@ -263,6 +265,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		case "MCPServer":
 			conds[owner] = mcpServerCondition(current)
 		}
+	}
+	// The access log after authorization: its rules version names the rules now written.
+	mode, version := r.accessMode(), RulesVersion(res.Objects)
+	if err := r.writeAccessLog(ctx, mode, version); err != nil {
+		return reconcile.Result{}, err
+	}
+	if err := r.publishMode(ctx, mode, version); err != nil {
+		return reconcile.Result{}, err
 	}
 	// Objects of refused Servers: no general prune exists, and owner references only collect on Server deletion.
 	for name := range refusedServers {

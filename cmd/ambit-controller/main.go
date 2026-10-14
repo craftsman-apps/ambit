@@ -79,7 +79,7 @@ func main() {
 	}
 	if err := (&controller.Reconciler{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), ListTools: listTools, Namespace: ns, Route: controller.RouteRef{Name: *route},
 		RateLimit: controller.RateLimit{Service: *rlService, Port: *rlPort, FailureMode: *rlFailure}, ToolsRefresh: *toolsRefresh, ArgumentLimits: *argLimits,
-		Classifier: controller.Classifier{Deployment: *routerDep, Replicas: int32(*routerReplicas)}}).SetupWithManager(mgr); err != nil {
+		Classifier: controller.Classifier{Deployment: *routerDep, Replicas: int32(*routerReplicas)}, AccessMode: *accessMode}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "set up controller")
 		os.Exit(1)
 	}
@@ -89,8 +89,14 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	// Ready only once ambit-access-log exists: an upgrade from a chart that rendered it leaves no gap unnoticed.
+	accessLog := &controller.AccessLogStartup{Client: mgr.GetClient(), Namespace: ns}
+	if err := mgr.Add(accessLog); err != nil {
+		log.Error(err, "add access-log start")
+		os.Exit(1)
+	}
 	_ = mgr.AddHealthzCheck("healthz", healthz.Ping)
-	_ = mgr.AddReadyzCheck("readyz", healthz.Ping)
+	_ = mgr.AddReadyzCheck("readyz", accessLog.Ready)
 	log.Info("starting", "namespace", ns, "llmRoute", *route, "accessMode", *accessMode, "activationTimeout", *activationTimeout, "activationSettle", *activationSettle)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Error(err, "manager stopped")

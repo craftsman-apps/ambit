@@ -31,13 +31,13 @@ rules:
   - apiGroups: [""]
     resources: [configmaps]
     verbs: [get, list, watch]
-  # Budgets: the ratelimit service's config, generated from Budget objects.
+  # Generated ConfigMaps: the ratelimit service's config (from Budgets), ambit-router's, and the published access mode.
   - apiGroups: [""]
     resources: [configmaps]
     verbs: [create]
   - apiGroups: [""]
     resources: [configmaps]
-    resourceNames: [ambit-ratelimit-config, ambit-router-config]
+    resourceNames: [ambit-ratelimit-config, ambit-router-config, ambit-access-mode]
     verbs: [update, patch]
   # agentgateway's xDS certificate: when it was not renewed, an annotation makes agentgateway renew it.
   - apiGroups: [""]

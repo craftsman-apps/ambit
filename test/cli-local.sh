@@ -13,7 +13,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 NAME=${CLI_NAME:-ambit} PORT=${CLI_PORT:-8080} HTTPS_PORT=${CLI_HTTPS_PORT:-8443}
 W=$(mktemp -d)
-O=$W/out          # every captured stdout, stderr and JSON output; searched for secrets in step 7
+O=$W/out          # every captured stdout, stderr and JSON output; searched for secrets in step 8
 mkdir "$O"
 export KUBECONFIG=$W/kubeconfig   # never the runner's default kubeconfig
 # A "previous" current context, so the test can see that local up gives it back (spec 4.1 step 2, kubeconfig).
@@ -105,16 +105,16 @@ assert any(r["status"] == "unknown" for r in rs)   # view cannot read Secrets, s
 PY
 pass "6 check with view only: every line ends in a valid status; unknown lines name the permission"
 
-# 7 · redaction (spec 9.2a): no captured stream holds the password, the Dex token or the ServiceAccount token
+# 7 · local down deletes the cluster (its output is captured in $O too, so step 8 scans it)
+"$AMBIT" local down --name "$NAME" --yes > "$O/down.log" 2>&1 || { cat "$O/down.log"; fail "7 local down"; }
+OWNED=0
+! kind get clusters | grep -qx "$NAME" || fail "7 the cluster still exists"
+pass "7 local down deleted $NAME"
+
+# 8 · redaction (spec 9.2a): no captured stream holds the password, the Dex token or the ServiceAccount token
 for f in "$O"/*; do
   for s in "$PW" "$TOK" "$SATOK"; do
-    ! grep -qF -- "$s" "$f" || fail "7 a secret appears in $(basename "$f")"
+    ! grep -qF -- "$s" "$f" || fail "8 a secret appears in $(basename "$f")"
   done
 done
-pass "7 no password or token in $(find "$O" -type f | wc -l | tr -d ' ') captured streams"
-
-# 8 · local down deletes the cluster
-"$AMBIT" local down --name "$NAME" --yes > "$W/down.log" 2>&1 || { cat "$W/down.log"; fail "8 local down"; }
-OWNED=0
-! kind get clusters | grep -qx "$NAME" || fail "8 the cluster still exists"
-pass "8 local down deleted $NAME"
+pass "8 no password or token in $(find "$O" -type f | wc -l | tr -d ' ') captured streams"

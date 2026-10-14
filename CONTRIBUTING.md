@@ -61,9 +61,9 @@ calls when the file does not exist.
 ## Pull requests
 
 - Work on a branch. Never commit to `main`; changes reach `main` only through pull requests.
-- Open the pull request as a draft: `gh pr create --draft`. A draft runs the build job only, so you can push
-  fixes freely. Mark it ready for review when the change is complete; that runs the end-to-end job once
-  (about 50 minutes of CI time).
+- Open the pull request as a draft: `gh pr create --draft`. A draft runs the build, cli-unit, cli-helm-interop,
+  cli-local and cli-partial jobs, so you can push fixes freely. Mark it ready for review when the change is complete;
+  that also runs the quickstart and end-to-end jobs once (about 50 minutes of CI time).
 - One concern per commit. Write each commit message in plain English: what changed and why.
 - Add tests with the change, not later. A failing test is revised, never skipped.
 - Add a line to `CHANGELOG.md` under "Unreleased" for each change that users can see.

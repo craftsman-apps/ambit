@@ -54,9 +54,12 @@ pass "1 local up killed during the charts step; state 'creating' with the contai
 grep -q "(exists; repairing)" "$W/up2.log" && grep -q "local/echo answered:" "$W/up2.log" || { cat "$W/up2.log"; fail "2 repair output"; }
 grep -q '"status": "ready"' "$STATE" || fail "2 state is not 'ready'"
 pass "2 local up repaired the interrupted cluster"
+# From here on the script holds the password: never trace it.
+{ set +x; } 2>/dev/null
+PW=$("$AMBIT" local password --name "$NAME")
 
 # 3 · local down deletes it
-"$AMBIT" local down --name "$NAME" --yes >/dev/null || fail "3 local down"
+"$AMBIT" local down --name "$NAME" --yes > "$W/down.log" 2>&1 || { cat "$W/down.log"; fail "3 local down"; }
 OWNED=0
 ! kind get clusters | grep -qx "$NAME" || fail "3 the cluster still exists"
 [[ ! -e "$STATE" ]] || fail "3 the state file is still there"
@@ -72,5 +75,10 @@ for cmd in "local up --name $NAME --no-key --chart-dir charts --port $PORT --htt
 done
 kind get clusters | grep -qx "$NAME" || fail "4 the foreign cluster was deleted"
 pass "4 a cluster without the ownership proofs is refused by local up and local down"
+# 5 · redaction (spec 9.2a): no captured stream holds the admin password
+for f in "$W"/up1.log "$W"/up2.log "$W"/down.log "$W"/foreign.log; do
+  ! grep -qF -- "$PW" "$f" || fail "5 the password appears in $(basename "$f")"
+done
+pass "5 no password in the captured streams"
 # The script created this cluster with kind itself, so it removes it the same way (cleanup never deletes it).
 kind delete cluster --name "$NAME" --kubeconfig "$KUBECONFIG" >/dev/null

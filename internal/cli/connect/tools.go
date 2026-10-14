@@ -22,6 +22,7 @@ type Input struct {
 	Force     bool
 	Getenv    func(string) string
 	Prev      *FileRecord // what an earlier connect of this tool wrote to this file
+	Shell     string      // the opencode wrapper: bash, zsh, fish or powershell
 }
 
 // Plan is the result of planning a connect.

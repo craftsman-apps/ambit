@@ -22,9 +22,10 @@ import (
 // a format-preserving TOML library, if one appears with a usable license.
 
 const (
-	codexBegin     = "# >>> ambit: written by `ambit connect codex`; `ambit disconnect codex` removes it >>>"
 	replacedPrefix = "# ambit-replaced: "
 )
+
+var codexBegin = blockBegin(Codex)
 
 // CodexConfigPath is $CODEX_HOME/config.toml, else ~/.codex/config.toml. Never a project file.
 func CodexConfigPath(getenv func(string) string, home string) string {
@@ -429,9 +430,9 @@ func restoreBlock(t *Text, b Block, br BlockRecord) (texts []string) {
 	return texts
 }
 
-// UnplanCodex plans the disconnect of the Codex file. rec nil: nothing is recorded, and every marked block is
+// UnplanBlocks plans the disconnect of a file that holds Ambit's marked blocks (Codex, shell profiles). rec nil: nothing is recorded, and every marked block is
 // removed. A block the person edited stays, with a note. A file that is gone is not an error.
-func UnplanCodex(rec *FileRecord, current []byte, exists bool) (*Disconnected, error) {
+func UnplanBlocks(rec *FileRecord, current []byte, exists bool) (*Disconnected, error) {
 	r := &Disconnected{}
 	if !exists {
 		return r, nil

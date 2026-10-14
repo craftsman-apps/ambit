@@ -1,0 +1,7 @@
+{
+  "provider": {
+    "ambit": {
+      "options": { "apiKey": "sk-plain-text-secret" }
+    }
+  }
+}

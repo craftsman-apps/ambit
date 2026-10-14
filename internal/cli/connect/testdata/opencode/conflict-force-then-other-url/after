@@ -1,0 +1,19 @@
+{
+  "model": "ambit/b/m",
+  "theme": "dark",
+  "provider": {
+    "ambit": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ambit",
+      "options": {
+        "baseURL": "https://b.example.com/v1",
+        "apiKey": "{env:AMBIT_API_KEY}"
+      },
+      "models": {
+        "b/m": {
+          "name": "b/m"
+        }
+      }
+    }
+  }
+}

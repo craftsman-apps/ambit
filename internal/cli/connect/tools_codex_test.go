@@ -46,7 +46,7 @@ func TestCodexGolden(t *testing.T) {
 				t.Fatalf("decode: %v %+v", err, m)
 			}
 			// connect then disconnect gives the file back.
-			d, err := UnplanCodex(prev, cur, true)
+			d, err := UnplanBlocks(prev, cur, true)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -118,7 +118,7 @@ func TestCodexNoKeyInTheFile(t *testing.T) {
 func TestCodexDisconnectLeavesAnEditedBlock(t *testing.T) {
 	p, _ := PlanCodex(codexInput(goldenStep{URL: "https://llm.example.com", Model: "m"}, []byte("a = 1\n\n[tui]\nx = 1\n"), true, nil))
 	edited := strings.Replace(string(p.After), `name = "Ambit"`, `name = "Mine"`, 1)
-	d, err := UnplanCodex(&p.Record, []byte(edited), true)
+	d, err := UnplanBlocks(&p.Record, []byte(edited), true)
 	if err != nil || len(d.Notes) != 1 || d.Notes[0] != "the Ambit block in /home/a/.codex/config.toml was edited after connect; left as it is" {
 		t.Fatalf("%v %q", err, d.Notes)
 	}
@@ -130,7 +130,7 @@ func TestCodexDisconnectLeavesAnEditedBlock(t *testing.T) {
 func TestCodexDisconnectWithoutARecordRemovesTheMarkedBlocks(t *testing.T) {
 	before := "a = 1\n\n[tui]\nx = 1\n"
 	p, _ := PlanCodex(codexInput(goldenStep{URL: "https://llm.example.com", Model: "m"}, []byte(before), true, nil))
-	d, err := UnplanCodex(nil, p.After, true)
+	d, err := UnplanBlocks(nil, p.After, true)
 	if err != nil || strings.Contains(string(d.After), "ambit") {
 		t.Fatalf("%v %q", err, d.After)
 	}
@@ -140,7 +140,7 @@ func TestCodexDisconnectWithoutARecordRemovesTheMarkedBlocks(t *testing.T) {
 }
 
 func TestCodexFileGoneAtDisconnect(t *testing.T) {
-	d, err := UnplanCodex(&FileRecord{Path: "/x"}, nil, false)
+	d, err := UnplanBlocks(&FileRecord{Path: "/x"}, nil, false)
 	if err != nil || d.After != nil || d.Delete {
 		t.Fatalf("%v %+v", err, d)
 	}
@@ -175,7 +175,7 @@ func FuzzRoundTripTOML(f *testing.F) {
 			if err != nil || p.After == nil {
 				continue // refused: nothing was written
 			}
-			d, err := UnplanCodex(&p.Record, p.After, true)
+			d, err := UnplanBlocks(&p.Record, p.After, true)
 			if err != nil || d.Delete || string(d.After) != string(src) {
 				t.Fatalf("round trip differs (force=%v)\n src  %q\n mid  %q\n back %q (%v)", force, src, p.After, d.After, err)
 			}

@@ -1,0 +1,28 @@
+﻿{
+  // my opencode setup
+  "$schema": "https://opencode.ai/config.json",
+  "theme": "tokyonight",
+  "provider": {
+    "local": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Local",
+      "options": { "baseURL": "http://localhost:11434/v1" },
+      "models": { "llama": { "name": "llama" } }, // trailing comma below
+    },
+    "ambit": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ambit",
+      "options": {
+        "baseURL": "https://llm.example.com/v1",
+        "apiKey": "{env:AMBIT_API_KEY}"
+      },
+      "models": {
+        "nvidia/nemotron-3-super-120b-a12b:free": {
+          "name": "nvidia/nemotron-3-super-120b-a12b:free"
+        }
+      }
+    },
+  },
+  "mcp": {},
+  "model": "ambit/nvidia/nemotron-3-super-120b-a12b:free",
+}

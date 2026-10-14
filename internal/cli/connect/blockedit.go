@@ -13,6 +13,11 @@ const (
 	bom         = "\xef\xbb\xbf"
 )
 
+// blockBegin is the begin line of a block that `ambit connect <tool>` wrote.
+func blockBegin(tool string) string {
+	return beginPrefix + ": written by `ambit connect " + tool + "`; `ambit disconnect " + tool + "` removes it >>>"
+}
+
 type line struct{ text, eol string }
 
 // Text is a file as lines. Every line keeps its own terminator ("\n", "\r\n" or none for the last line), so

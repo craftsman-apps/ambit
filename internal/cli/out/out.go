@@ -33,6 +33,10 @@ func Usage(what, why, next string) *Error {
 	return &Error{What: what, Why: why, Next: next, Code: ExitUsage}
 }
 
+// enableVT makes the terminal show colour codes; New asks it once. A variable so a test can simulate a console
+// that refuses (the legacy Windows console).
+var enableVT = enableConsoleVT
+
 // Options for a Printer. TTY is true when Out is a terminal.
 type Options struct {
 	Out, Err                    io.Writer
@@ -47,7 +51,7 @@ type Printer struct {
 
 func New(o Options, r *Redactor) *Printer {
 	_, noColorEnv := lookupNoColor()
-	return &Printer{o: o, r: r, color: o.TTY && !o.NoColor && !noColorEnv}
+	return &Printer{o: o, r: r, color: o.TTY && !o.NoColor && !noColorEnv && enableVT(textWriter(o))}
 }
 
 // Redactor returns the Printer's redactor, for code that reads a secret.
@@ -78,11 +82,13 @@ func (p *Printer) Mark(kind string) string {
 }
 
 // text is where progress lines go: Out, or Err in JSON mode, so standard output carries only the JSON document.
-func (p *Printer) text() io.Writer {
-	if p.o.JSON {
-		return p.o.Err
+func (p *Printer) text() io.Writer { return textWriter(p.o) }
+
+func textWriter(o Options) io.Writer {
+	if o.JSON {
+		return o.Err
 	}
-	return p.o.Out
+	return o.Out
 }
 
 // Step prints "✓ what (1.2s)" or "✗ what (1.2s)".

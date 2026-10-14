@@ -77,6 +77,32 @@ func TestColourOnTTY(t *testing.T) {
 	}
 }
 
+// A legacy Windows console that cannot process virtual-terminal sequences would print "←[32m". Colour is then off.
+func TestNoColourWhenTerminalCannotProcessEscapes(t *testing.T) {
+	if _, set := lookupNoColor(); set {
+		t.Skip("NO_COLOR is set in this environment")
+	}
+	for _, json := range []bool{false, true} {
+		var asked io.Writer
+		old := enableVT
+		enableVT = func(w io.Writer) bool { asked = w; return false }
+		var out, errw bytes.Buffer
+		p := New(Options{Out: &out, Err: &errw, TTY: true, JSON: json}, &Redactor{})
+		enableVT = old
+		p.Step(true, "x", 0)
+		want := io.Writer(&out) // the writer the progress lines go to
+		if json {
+			want = &errw
+		}
+		if asked != want {
+			t.Errorf("json=%v: enableVT asked about the wrong writer", json)
+		}
+		if strings.Contains(out.String()+errw.String(), "\x1b[") {
+			t.Errorf("json=%v: colour codes although the terminal cannot process them: %q%q", json, out.String(), errw.String())
+		}
+	}
+}
+
 func TestRedactRegisteredSecret(t *testing.T) {
 	p, b := newTest(Options{})
 	p.Redactor().Add("sk-or-v1-0123456789abcdef0123")

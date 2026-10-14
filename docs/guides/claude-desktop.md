@@ -58,11 +58,29 @@ The value of `inferenceGatewayApiKey` (one shared key in the profile) also works
 
 The helper is a program that prints the key to standard output and exits with 0. Claude Desktop runs it, trims the output, and keeps it for `inferenceCredentialHelperTtlSec` seconds. It ignores static key fields when a helper is set ([`inferenceCredentialHelper`](https://claude.com/docs/third-party/claude-desktop/configuration#inferencecredentialhelper)). The output must be only the key, with no other text. If it fails, it must exit with a number that is not 0 and write the reason to standard error.
 
-Ambit has no command that prints a key (`ambit key print` does not exist in this release), and the console shows a key only once. So each person stores their key once in the keychain of their computer, and a small script reads it. When `ambit connect` ([#95](https://github.com/craftsman-apps/ambit/issues/95)) is released, it is meant to replace the script.
+The console shows a key only once, so the key must be stored on the computer of each person. There are two ways:
+
+- **With the Ambit CLI.** `ambit key print --url <llm address>` prints the key that `ambit connect` stored for that address, and nothing else. A person who connected a coding tool with `ambit connect` (see [Connect Claude Code and Cursor](coding-tools.md#with-the-ambit-cli)) has the key stored already, and the helper only has to run this command. Claude Desktop starts a program from a path, so the helper is a two-line script that runs the command (below). There is no command that stores a key without connecting a tool, so this way fits people who also use `ambit connect`.
+- **Without the Ambit CLI.** Each person stores the key once in the keychain of their computer with the system's own command, and a small script reads it. The scripts for macOS, Linux and Windows follow.
 
 Install the script in a folder that only administrators can write, for example `/usr/local/bin`, because Claude Desktop runs it as the person. Anyone who can change the script can steal the key.
 
-**macOS.** Each person stores the key once. The command asks for the key and does not show it:
+**With the Ambit CLI.** On macOS and Linux, the script `/usr/local/bin/ambit-key`, with `chmod 755`. Use the path of `ambit` on the computer (`command -v ambit`) and your LLM address, the same address as in `ambit connect --url`:
+
+```sh
+#!/bin/sh
+exec '/opt/homebrew/bin/ambit' key print --url 'https://llm.example.com'
+```
+
+On Windows, `C:\ProgramData\Ambit\ambit-key.cmd`, and set `inferenceCredentialHelperWindows` to it:
+
+```bat
+@"C:\Program Files\Ambit\ambit.exe" key print --url https://llm.example.com
+```
+
+The command prints only the key, and exits with 1 and an error text on standard error when no key is stored. That is what the helper must do. Run by hand in a terminal, it needs `--reveal`; Claude Desktop runs it without a terminal. **Not tested with Claude Desktop.** The command itself is covered by Ambit's tests.
+
+**Without the Ambit CLI, macOS.** Each person stores the key once. The command asks for the key and does not show it:
 
 ```sh
 security add-generic-password -a ambit -s ambit-key -w
@@ -77,7 +95,7 @@ exec /usr/bin/security find-generic-password -a ambit -s ambit-key -w
 
 It prints the key from the login keychain. If the keychain item does not exist, `security` writes `The specified item could not be found in the keychain.` and exits with 44. This script was tested with a made-up key (see "What was tested").
 
-**Linux.** Needs `secret-tool` (package `libsecret-tools`) and a running desktop keyring. Each person stores the key once. The command asks for the key:
+**Without the Ambit CLI, Linux.** Needs `secret-tool` (package `libsecret-tools`) and a running desktop keyring. Each person stores the key once. The command asks for the key:
 
 ```sh
 secret-tool store --label='Ambit key' service ambit-key
@@ -92,7 +110,7 @@ exec /usr/bin/secret-tool lookup service ambit-key
 
 **Not tested.** There was no Linux computer in the test.
 
-**Windows.** Windows has no built-in program that reads the Credential Manager, so this version keeps the key in a file that only the same user on the same computer can decrypt (Windows data protection, through PowerShell). Each person stores the key once in PowerShell:
+**Without the Ambit CLI, Windows.** Windows has no built-in program that reads the Credential Manager, so this version keeps the key in a file that only the same user on the same computer can decrypt (Windows data protection, through PowerShell). Each person stores the key once in PowerShell:
 
 ```powershell
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.ambit" | Out-Null

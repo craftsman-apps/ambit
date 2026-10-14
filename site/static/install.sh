@@ -59,7 +59,7 @@ latest_tag() {
   fi
   case $reply in
     *"/tag/"*) tag=${reply##*/tag/} ;;
-    "timeout "* | 5?? | 5??" "* | 429" "*) fail "GitHub did not answer; try again" "run the command again in a few minutes" ;;
+    "timeout "* | 403" "* | 429" "* | 5??" "*) fail "GitHub did not answer; try again" "run the command again in a few minutes" ;;
     "000 "* | " "*) fail "cannot reach $base/latest" "check your network" ;;
     *) fail "No Ambit CLI release is published yet (the latest release has no ambit_<os>_<arch> file). See https://github.com/craftsman-apps/ambit/releases" ;;
   esac

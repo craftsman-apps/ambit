@@ -293,7 +293,7 @@ func githubDown(t *testing.T, status int) string {
 }
 
 func TestInstallShGitHubServerError(t *testing.T) {
-	for _, status := range []int{500, 502, 503, 429} {
+	for _, status := range []int{500, 502, 503, 429, 403} {
 		out, dir, err := runSh(t, githubDown(t, status))
 		if err == nil || !strings.Contains(out, noAnswer) || strings.Contains(out, "No Ambit CLI release") {
 			t.Fatalf("HTTP %d: err %v, output:\n%s", status, err, out)
@@ -312,8 +312,21 @@ func TestInstallShGitHubTimeout(t *testing.T) {
 }
 
 func TestInstallPs1GitHubServerError(t *testing.T) {
-	out, _, err := runPS(t, githubDown(t, 503))
-	if err == nil || !strings.Contains(out, noAnswer) || strings.Contains(out, "No Ambit CLI release") {
+	for _, status := range []int{503, 429, 403} {
+		out, _, err := runPS(t, githubDown(t, status))
+		if err == nil || !strings.Contains(out, noAnswer) || strings.Contains(out, "No Ambit CLI release") {
+			t.Fatalf("HTTP %d: err %v, output:\n%s", status, err, out)
+		}
+	}
+}
+
+// A refused connection is an HttpRequestException inside PowerShell's MethodInvocationException: "cannot reach", not a timeout.
+func TestInstallPs1GitHubUnreachable(t *testing.T) {
+	s := httptest.NewServer(http.NotFoundHandler())
+	base := s.URL
+	s.Close()
+	out, _, err := runPS(t, base)
+	if err == nil || !strings.Contains(out, "cannot reach") || strings.Contains(out, noAnswer) {
 		t.Fatalf("err %v, output:\n%s", err, out)
 	}
 }

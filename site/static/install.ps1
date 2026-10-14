@@ -32,13 +32,17 @@ function Install-Ambit {
     try {
       $reply = $client.GetAsync("$base/latest").GetAwaiter().GetResult()
     } catch {
-      # A timeout is a TaskCanceledException; a refused or failed connection is an HttpRequestException.
-      if ($_.Exception -is [System.Threading.Tasks.TaskCanceledException]) { throw 'GitHub did not answer; try again' }
+      # PowerShell wraps the .NET exception of a method call in a MethodInvocationException, so look at the whole chain.
+      # A timeout is a TaskCanceledException (PowerShell 7 adds a TimeoutException inside it); a refused or failed
+      # connection is an HttpRequestException.
+      for ($e = $_.Exception; $e; $e = $e.InnerException) {
+        if ($e -is [System.OperationCanceledException] -or $e -is [TimeoutException]) { throw 'GitHub did not answer; try again' }
+      }
       throw "cannot reach $base/latest"
     } finally {
       $client.Dispose()
     }
-    if ([int]$reply.StatusCode -ge 500 -or [int]$reply.StatusCode -eq 429) { throw 'GitHub did not answer; try again' }
+    if ([int]$reply.StatusCode -ge 500 -or [int]$reply.StatusCode -in 403, 429) { throw 'GitHub did not answer; try again' }
     $location = if ($reply.Headers.Location) { $reply.Headers.Location.ToString() } else { '' }
     if ($location -match '/tag/([^/]+)$') {
       $tag = $Matches[1]

@@ -63,19 +63,15 @@ Every call is kept in an audit log, refusals included, and shown in the console.
 
 ## Quick start
 
-On a laptop with Docker, [kind](https://kind.sigs.k8s.io), kubectl and Helm. This installs release v0.1.0 for testing only (plain HTTP, one gateway replica).
+On a laptop with Docker (macOS, Linux, or Windows with WSL 2):
 
 ```sh
-R=https://github.com/craftsman-apps/ambit/releases/download/v0.1.0
-curl -fsSLO $R/kind-cluster.yaml -O $R/quickstart.yaml -O $R/crds.yaml
-kind create cluster --config kind-cluster.yaml
-kubectl apply --server-side -f crds.yaml
-helm install ambit-crds oci://ghcr.io/craftsman-apps/charts/ambit-crds --version 0.1.0 -n ambit-system --create-namespace --wait
-helm install ambit oci://ghcr.io/craftsman-apps/charts/ambit --version 0.1.0 -n ambit-system -f quickstart.yaml --wait --timeout 10m
+brew install craftsman-apps/tap/ambit    # or: curl -fsSL https://ambitproject.dev/install.sh | sh
+ambit local up
 ```
 
-Open http://console.localtest.me:8080 and sign in as `admin@ambit.local`. `helm install` prints the command that shows the password.
-The [full guide](https://ambitproject.dev/docs/quick-start) adds a free model, an access rule and a first call.
+`ambit local up` creates a local kind cluster, installs Ambit for testing only (plain HTTP, one gateway replica), adds a model and an access rule, makes a first call, and prints the console address and the sign-in.
+The [full guide](https://ambitproject.dev/docs/quick-start) has the other install methods (PowerShell, npm, `go install`) and the next steps.
 
 ## Status: Alpha
 

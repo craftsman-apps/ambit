@@ -9,7 +9,7 @@ description: Allow the engineering group one model and the sales group another, 
 
 ## Before you start
 
-You need the cluster from the [Quick start](../quick-start.md), with its model `free-model` and the OpenRouter Secret `ambit-llm-openrouter`.
+You need the cluster from the [Quick start](../quick-start.md), with its model `free-model` and the OpenRouter Secret `ambit-llm-openrouter`. Start it with an OpenRouter key (`ambit local up --openrouter-key-file <file>`): the test model that `ambit local up` uses without a key is not `free-model`.
 
 Access by group needs sign-in through an identity provider that sends a `groups` claim. The quick-start cluster has only the bootstrap admin, who has no groups. Two ways to go on:
 
@@ -173,10 +173,10 @@ OpenRouter changes its free models often. If this one is gone, use another model
 
 ## 2. Replace the open rule with two group rules
 
-An `AccessRule` only adds access. The rule `everyone-free-model` from the quick start lets everyone use `free-model`, so delete it first. Then create one rule for each group:
+An `AccessRule` only adds access. The rule `everyone-local` from `ambit local up` (`everyone-free-model` if you used the [by-hand steps](../local-up.md)) lets everyone use `free-model`, so delete it first. Then create one rule for each group:
 
 ```sh
-kubectl -n ambit-system delete accessrule everyone-free-model
+kubectl -n ambit-system delete accessrule everyone-local everyone-free-model --ignore-not-found
 kubectl -n ambit-system apply -f - <<'EOF'
 apiVersion: ambitproject.dev/v1alpha1
 kind: AccessRule

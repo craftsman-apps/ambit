@@ -411,7 +411,7 @@ func summary(p *out.Printer, o UpOptions, model, pw string) {
 	p.Line("  Console:  %s", console)
 	p.Line("  Sign in:  %s", AdminEmail)
 	if o.NoPassword || !p.RevealOnTTY("  Password", pw) {
-		p.Line("  Password: run `ambit local password`")
+		p.Line("  Password: run `ambit local password%s`", nameFlag(o.Name))
 	}
 	p.Line("  kubectl:  kubectl --context %s -n %s get pods", KubeContext(o.Name), Namespace)
 	p.Line("  Remove:   ambit local down%s", nameFlag(o.Name))

@@ -574,3 +574,54 @@ func TestMergeValues(t *testing.T) {
 		t.Fatalf("= %v, %v", v, err)
 	}
 }
+
+// No suggestion may drop the name: on every path, each output line that names an `ambit local` command also carries
+// --name for the cluster. (The refusal of a foreign cluster is left out on purpose: it suggests another name.)
+func TestUpEverySuggestionKeepsName(t *testing.T) {
+	const name = "ambit-cli-test"
+	port401 := fakeGatewayStatus(t, map[string]int{
+		"nvidia/nemotron-3-super-120b-a12b:free": 401, "google/gemma-4-31b-it:free": 401})
+	for _, c := range []struct {
+		label string
+		setup func(*rig)
+	}{
+		{"fresh", func(*rig) {}},
+		{"fresh, no password, on a terminal", func(r *rig) { r.opts.NoPassword = true }},
+		{"repair", func(r *rig) {
+			r.kind.exists = true
+			r.env.Store.Write(State{Name: name, Status: "ready", ContainerID: cid})
+		}},
+		{"busy port after preflight", func(r *rig) {
+			r.kind.createErr = errors.New("Bind for 127.0.0.1:8443 failed: port is already allocated")
+		}},
+		{"test call refused", func(r *rig) {
+			r.opts.Key, r.opts.KeyGiven = "sk-or-v1-0123456789abcdef0123456789", true
+			r.opts.HTTPPort = port401
+			r.env.ModelsURL = "http://127.0.0.1:" + itoa(port401) + "/models"
+			r.env.HTTP = func(int) *http.Client { return HTTPClient(port401) }
+		}},
+	} {
+		r := newRig(t, c.label != "fresh")
+		r.opts.Name, r.ops.name = name, name
+		c.setup(r)
+		if err := Up(context.Background(), r.p, r.env, r.opts); err != nil {
+			var e *out.Error
+			if !errors.As(err, &e) {
+				e = &out.Error{What: "local up", Why: err.Error()}
+			}
+			r.p.Fail(e)
+		}
+		seen := 0
+		for _, l := range strings.Split(r.out.String(), "\n") {
+			if strings.Contains(l, "ambit local ") {
+				seen++
+				if !strings.Contains(l, "--name "+name) {
+					t.Errorf("%s: a suggestion drops the name: %q", c.label, l)
+				}
+			}
+		}
+		if seen == 0 {
+			t.Errorf("%s: no line mentions ambit local; the test checks nothing\n%s", c.label, r.out)
+		}
+	}
+}

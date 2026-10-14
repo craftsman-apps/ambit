@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createColumnHelper, createSortedRowModel, rowSortingFeature, sortFn_text, tableFeatures, useTable } from "@tanstack/react-table";
@@ -34,7 +34,8 @@ export function AccessRulesPage() {
     col.accessor("name", { header: "Rule", cell: (c) => (
       <><span className="whitespace-nowrap font-mono">{c.getValue()}</span>
         {c.row.original.ready === "False" && <span className="block text-small text-muted">{c.row.original.message}</span>}</>) }),
-    col.accessor(who, { id: "who", header: "Who" }),
+    col.accessor(who, { id: "who", header: "Who", cell: (c) => c.row.original.allSignedIn ? c.getValue() :
+      c.row.original.groups.map((g, i, a) => <Fragment key={g}><span className="whitespace-nowrap">{g}{i < a.length - 1 && ","}</span> </Fragment>) }),
     col.accessor(canUse, { id: "models", header: "Can use" }),
     col.accessor((r) => (r.gitManaged ? "Git" : r.createdBy ? "Console" : "Cluster"), { id: "source", header: "Source",
       cell: (c) => <span className="font-mono text-small">{c.getValue()}</span> }),

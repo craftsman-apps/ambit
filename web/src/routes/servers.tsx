@@ -28,7 +28,7 @@ export function ServersPage() {
 
   return (
     <Shell crumb="Govern / MCP servers">
-      <div className="grid min-h-full grid-cols-[1fr_272px] min-[1440px]:grid-cols-[1fr_380px]">
+      <div className="grid min-h-full grid-cols-[1fr_256px] min-[1440px]:grid-cols-[1fr_340px]">
         <section className="min-w-0 space-y-6 p-5">
           <div className="flex items-end justify-between gap-3">
             <div>
@@ -38,7 +38,7 @@ export function ServersPage() {
             <Button className="w-auto whitespace-nowrap" onClick={() => setAsking(true)}>Request a server</Button>
           </div>
           {servers.isError && <p className="text-bad">{servers.error.message}</p>}
-          <div className="overflow-x-auto"><table className="w-full border-collapse">
+          <div className="overflow-x-auto"><table className="w-full border-collapse [&_td]:px-1.5 [&_th]:px-1.5 min-[1440px]:[&_td]:px-3 min-[1440px]:[&_th]:px-3">
             <thead>
               <tr className="border-b border-line">
                 <th className={th}>Server</th><th className={th}>Runs</th><th className={th}>Tools</th>
@@ -61,7 +61,7 @@ export function ServersPage() {
                 <tbody>
                   {decided.map((q) => (
                     <tr key={q.name} className="border-b border-line-soft align-top">
-                      <td className="px-3 py-2 font-mono">{q.serverName}</td>
+                      <td className="whitespace-nowrap px-3 py-2 font-mono">{q.serverName}</td>
                       <td className={cn("px-3 py-2", q.decision === "Denied" && "text-bad")}>{q.decision}</td>
                       <td className="px-3 py-2 text-muted">asked by {q.requestedBy}, {q.decision.toLowerCase()} by {q.decidedBy}{q.comment && `: “${q.comment}”`}
                         {q.pullRequest && <> · <a className="text-accent-text underline" href={q.pullRequest} target="_blank" rel="noopener noreferrer">pull request</a></>}</td>
@@ -106,12 +106,12 @@ function ServerRow({ s, open, onToggle }: { s: ServerView; open: boolean; onTogg
   return (
     <>
       <tr onClick={onToggle} aria-expanded={open} className={cn("cursor-pointer border-b border-line-soft align-top hover:bg-sunken", open && "bg-selected")}>
-        <td className="px-3 py-2.5"><span className="font-mono">{s.name}</span><span className="block text-small text-muted">{s.displayName}</span></td>
-        <td className="min-w-[10.5rem] px-3 py-2.5 min-[1440px]:whitespace-nowrap font-mono text-small [overflow-wrap:anywhere]" title={s.image || s.url}>{runs(s)}
+        <td className="whitespace-nowrap px-3 py-2.5"><span className="font-mono">{s.name}</span><span className="block text-small text-muted">{s.displayName}</span></td>
+        <td className="min-w-[8.5rem] px-3 py-2.5 font-mono text-small [overflow-wrap:anywhere]" title={s.image || s.url}>{runs(s)}
           {s.connection && <span className="block font-sans text-small text-muted">each user's own {s.connection} account</span>}</td>
         <td className="px-3 py-2.5 tabular-nums">{s.tools.length || <span className="text-muted">–</span>}</td>
         <td className="px-3 py-2.5">{s.rules.length ? s.rules.map((r, i) => <Fragment key={r}><span className="whitespace-nowrap">{r}{i < s.rules.length - 1 && ","}</span> </Fragment>) : <span className="text-muted">None: closed to everyone</span>}</td>
-        <td className="px-3 py-2.5">{s.approvedBy?.replace("@", "@\u200b") || <span className="text-muted">{s.gitManaged ? "pull request" : "added directly"}</span>}</td>
+        <td className="whitespace-nowrap px-3 py-2.5">{s.approvedBy || <span className="text-muted">{s.gitManaged ? "pull request" : "added directly"}</span>}</td>
         <td className="whitespace-nowrap px-3 py-2.5"><Status ready={s.ready} text={s.ready === "True" ? "Running" : undefined} />
           {s.changedTools.length > 0 && <span className="block text-small text-bad">{s.changedTools.length} tool(s) changed</span>}</td>
       </tr>
@@ -182,7 +182,7 @@ function PendingCard({ q, me, canDecide }: { q: RequestView; me: string; canDeci
         <div className="mt-3 space-y-2">
           <input id={`comment-${q.name}`} aria-label="Comment for the requester" className={field} value={comment}
             onChange={(e) => setComment(e.target.value)} placeholder="Comment (optional)" />
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button className="w-auto" disabled={decide.isPending} onClick={() => decide.mutate("approve")}>Approve {q.serverName}</Button>
             <Button variant="outline" className="w-auto" disabled={decide.isPending} onClick={() => decide.mutate("deny")}>Deny</Button>
           </div>

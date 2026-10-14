@@ -10,8 +10,8 @@ function NavLink({ to, children, count }: { to: string; children: ReactNode; cou
   return (
     <Link to={to} className="flex items-center justify-between border-l-2 border-transparent px-4 py-1.5 text-muted hover:text-ink"
       activeProps={{ className: "border-accent! bg-selected text-ink font-medium" }} activeOptions={{ exact: true, includeSearch: false }}>
-      <span>{children}</span>
-      {count !== undefined && <span className="font-mono text-small text-muted">{count}</span>}
+      <span className="whitespace-nowrap">{children}</span>
+      {count !== undefined && <span className="shrink-0 pl-1 font-mono text-small text-muted">{count}</span>}
     </Link>
   );
 }
@@ -44,8 +44,8 @@ export function Shell({ crumb, children }: { crumb: string; children: ReactNode 
         <NavLink to="/servers" count={servers.data?.length}>
           MCP servers
           {!!requests.data?.filter((q) => !q.decision).length && (
-            <span className="ml-1.5 rounded bg-warn-soft px-1 font-mono text-small" title="Requests waiting for an approver">
-              {requests.data.filter((q) => !q.decision).length} waiting
+            <span className="ml-1.5 whitespace-nowrap rounded bg-warn-soft px-1 font-mono text-small" title="Requests waiting for an approver" aria-label="requests waiting for an approver">
+              {requests.data.filter((q) => !q.decision).length} new
             </span>
           )}
         </NavLink>

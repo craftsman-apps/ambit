@@ -20,11 +20,12 @@ type fakeCluster struct {
 	id         string
 	labels     map[string]map[string]string
 	apiErr     error
+	cpErr      error
 	containers []kindx.Container
 }
 
 func (f *fakeCluster) Exists(string) (bool, error)         { return f.exists, nil }
-func (f *fakeCluster) ControlPlane(string) (string, error) { return f.cp, nil }
+func (f *fakeCluster) ControlPlane(string) (string, error) { return f.cp, f.cpErr }
 func (f *fakeCluster) ContainerID(string) (string, error)  { return f.id, nil }
 func (f *fakeCluster) NodeLabels(context.Context, string) (map[string]map[string]string, error) {
 	return f.labels, f.apiErr
@@ -117,6 +118,42 @@ func TestRefusalNeverSuggestsDelete(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(e.Next+e.Why), "delete") || !strings.HasPrefix(e.Next, "ambit local up --name ambit-try") {
 		t.Fatalf("next = %q", e.Next)
+	}
+}
+
+// A cluster the CLI created, whose node container is stopped (after a reboot) or whose Docker is down, cannot
+// show both proofs. The refusal must not say the CLI did not create it, and must point at Docker.
+func TestUnreachableClusterIsNotCalledForeign(t *testing.T) {
+	ready := &State{Name: "ambit", Status: "ready", ContainerID: cid}
+	apiDown := owned()
+	apiDown.apiErr = errors.New("connection refused")
+	dockerDown := owned()
+	dockerDown.cpErr = errors.New("Cannot connect to the Docker daemon")
+	for name, c := range map[string]*fakeCluster{"API does not answer": apiDown, "control plane cannot be read": dockerDown} {
+		t.Run(name, func(t *testing.T) {
+			s := Store{Dir: t.TempDir()}
+			if err := s.Write(*ready); err != nil {
+				t.Fatal(err)
+			}
+			o, err := CheckOwnership(context.Background(), s, c, "ambit")
+			if err != nil || o.Verdict != NotOwned || !o.Unreachable {
+				t.Fatalf("ownership = %+v, %v; want NotOwned and Unreachable", o, err)
+			}
+			e := o.Refusal("ambit")
+			if strings.Contains(e.What, "was not created by") || !strings.Contains(e.What, "cannot prove") {
+				t.Errorf("what = %q", e.What)
+			}
+			if !strings.Contains(e.Next, "Docker") || strings.Contains(strings.ToLower(e.Next+e.Why), "delete") {
+				t.Errorf("next = %q", e.Next)
+			}
+		})
+	}
+	// Without a state file nothing says the CLI created the cluster: that stays a plain refusal.
+	s := Store{Dir: t.TempDir()}
+	foreign := owned()
+	foreign.apiErr = errors.New("connection refused")
+	if o, _ := CheckOwnership(context.Background(), s, foreign, "ambit"); o.Unreachable {
+		t.Error("a cluster with no state file was called unreachable")
 	}
 }
 

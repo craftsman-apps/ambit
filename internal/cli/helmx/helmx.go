@@ -7,14 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 
-	"helm.sh/helm/v3/pkg/action"
-	"helm.sh/helm/v3/pkg/chart"
-	"helm.sh/helm/v3/pkg/chart/loader"
-	"helm.sh/helm/v3/pkg/cli"
-	"helm.sh/helm/v3/pkg/registry"
-	rel "helm.sh/helm/v3/pkg/release"
-	"helm.sh/helm/v3/pkg/storage/driver"
+	"helm.sh/helm/v4/pkg/action"
+	"helm.sh/helm/v4/pkg/chart"
+	"helm.sh/helm/v4/pkg/chart/loader"
+	"helm.sh/helm/v4/pkg/cli"
+	"helm.sh/helm/v4/pkg/kube"
+	"helm.sh/helm/v4/pkg/registry"
+	rel "helm.sh/helm/v4/pkg/release/v1"
+	"helm.sh/helm/v4/pkg/storage/driver"
 )
 
 // Release is what the CLI needs to know about an installed Helm release.
@@ -62,8 +64,8 @@ func New(o Options) (Client, error) {
 	if out == nil {
 		out = io.Discard
 	}
-	cfg := new(action.Configuration)
-	if err := cfg.Init(s.RESTClientGetter(), o.Namespace, "secret", func(f string, a ...any) { fmt.Fprintf(out, f+"\n", a...) }); err != nil {
+	cfg := action.NewConfiguration(action.ConfigurationSetLogger(slog.NewTextHandler(out, nil)))
+	if err := cfg.Init(s.RESTClientGetter(), o.Namespace, "secret"); err != nil {
 		return nil, err
 	}
 	rc, err := registry.NewClient(registry.ClientOptCredentialsFile(s.RegistryConfig), registry.ClientOptWriter(out))
@@ -87,7 +89,11 @@ func (h *sdk) Get(name string) (*Release, error) {
 	if len(rs) == 0 {
 		return nil, nil
 	}
-	return toRelease(rs[len(rs)-1]), nil
+	r, ok := rs[len(rs)-1].(*rel.Release)
+	if !ok {
+		return nil, fmt.Errorf("release %s: unexpected type %T", name, rs[len(rs)-1])
+	}
+	return toRelease(r), nil
 }
 
 func (h *sdk) Apply(ctx context.Context, name, ref, version string, vals map[string]any) (Release, error) {
@@ -98,6 +104,8 @@ func (h *sdk) Apply(ctx context.Context, name, ref, version string, vals map[str
 	if cur == nil {
 		in := action.NewInstall(h.cfg)
 		in.ReleaseName, in.Namespace, in.CreateNamespace, in.Version = name, h.ns, true, version
+		in.ServerSideApply = false // client-side apply, as Helm 3 does, so Helm 3 can upgrade and roll back
+		in.WaitStrategy = kube.HookOnlyStrategy
 		ch, err := h.load(ref, &in.ChartPathOptions)
 		if err != nil {
 			return Release{}, err
@@ -106,10 +114,12 @@ func (h *sdk) Apply(ctx context.Context, name, ref, version string, vals map[str
 		if err != nil {
 			return Release{}, err
 		}
-		return *toRelease(r), nil
+		return *toRelease(r.(*rel.Release)), nil
 	}
 	up := action.NewUpgrade(h.cfg)
 	up.Namespace, up.Version = h.ns, version
+	up.ServerSideApply = "false"
+	up.WaitStrategy = kube.HookOnlyStrategy
 	ch, err := h.load(ref, &up.ChartPathOptions)
 	if err != nil {
 		return Release{}, err
@@ -118,7 +128,7 @@ func (h *sdk) Apply(ctx context.Context, name, ref, version string, vals map[str
 	if err != nil {
 		return Release{}, err
 	}
-	return *toRelease(r), nil
+	return *toRelease(r.(*rel.Release)), nil
 }
 
 func (h *sdk) Values(name string, all bool) (map[string]any, error) {
@@ -131,7 +141,7 @@ func (h *sdk) Values(name string, all bool) (map[string]any, error) {
 	return v, err
 }
 
-func (h *sdk) load(ref string, o *action.ChartPathOptions) (*chart.Chart, error) {
+func (h *sdk) load(ref string, o *action.ChartPathOptions) (chart.Charter, error) {
 	p, err := o.LocateChart(ref, h.settings)
 	if err != nil {
 		return nil, err

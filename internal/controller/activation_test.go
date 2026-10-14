@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -20,7 +21,7 @@ func gateReconciler(objs ...client.Object) (*Reconciler, *time.Time) {
 	clock := gateStart
 	c := fake.NewClientBuilder().WithObjects(objs...).Build()
 	r := &Reconciler{Client: c, Live: c, Namespace: "ambit-system", Now: func() time.Time { return clock },
-		Activation: Activation{Timeout: 120 * time.Second, Settle: 3 * time.Second,
+		Activation: &Activation{Timeout: 120 * time.Second, Settle: 3 * time.Second,
 			Sleep: func(_ context.Context, d time.Duration) error { clock = clock.Add(d); return nil }}}
 	return r, &clock
 }
@@ -164,5 +165,24 @@ func TestGateWithNothingWrittenDoesNotWait(t *testing.T) {
 	r, clock := gateReconciler()
 	if err := r.gate(t.Context(), nil, nil, 120*time.Second); err != nil || clock.Sub(gateStart) != 0 {
 		t.Fatalf("err %v, waited %v", err, clock.Sub(gateStart))
+	}
+}
+
+// --activation-timeout 0 is refused: many tools read 0 as "no limit", and here it would mean "no gate at all".
+func TestActivationFlagsAreChecked(t *testing.T) {
+	for _, c := range []struct {
+		timeout, settle time.Duration
+		want            string
+	}{
+		{120 * time.Second, 3 * time.Second, ""},
+		{time.Second, 0, ""},
+		{0, 3 * time.Second, "--activation-timeout must be more than 0 (got 0s)"},
+		{-time.Second, 3 * time.Second, "--activation-timeout must be more than 0 (got -1s)"},
+		{120 * time.Second, -time.Second, "--activation-settle must not be negative (got -1s)"},
+	} {
+		err := (&Activation{Timeout: c.timeout, Settle: c.settle}).Check()
+		if got := fmt.Sprint(err); (c.want == "" && err != nil) || (c.want != "" && got != c.want) {
+			t.Errorf("timeout %v settle %v: %v, want %q", c.timeout, c.settle, err, c.want)
+		}
 	}
 }

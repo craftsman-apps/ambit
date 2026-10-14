@@ -1,5 +1,10 @@
 {{- if not (has .Values.access.mode (list "enforce" "audit")) }}{{ fail "access.mode must be enforce or audit" }}{{ end }}
 {{- if and (eq .Values.access.mode "audit") (not .Values.evidence.enabled) }}{{ fail "access.mode=audit needs evidence.enabled=true: without the audit store, audit-only mode would allow everything and record nothing" }}{{ end }}
+{{- $duration := "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$" }}
+{{- $timeout := toString .Values.access.activationTimeout }}
+{{- if or (not (regexMatch $duration $timeout)) (regexMatch "^([0.]+(ns|us|µs|ms|s|m|h))+$" $timeout) }}{{ fail (printf "access.activationTimeout must be a duration above 0, such as 120s (got %q): 0 would turn the activation gate off, not remove its limit" $timeout) }}{{ end }}
+{{- $settle := toString .Values.access.activationSettle }}
+{{- if not (or (eq $settle "0") (regexMatch $duration $settle)) }}{{ fail (printf "access.activationSettle must be a duration of 0 or more, such as 3s (got %q)" $settle) }}{{ end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

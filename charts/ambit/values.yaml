@@ -140,7 +140,8 @@ access:
   mode: enforce
   # A mode switch or a rules change waits, step by step, until agentgateway has accepted each written object
   # (and no gateway pod rejected it), then activationSettle for the change to reach every gateway pod. After
-  # activationTimeout the change stops at that step and every AccessRule reports it.
+  # activationTimeout the change stops at that step and every AccessRule reports it. activationTimeout must be
+  # above 0 (there is no setting that turns the wait off).
   activationTimeout: 120s
   activationSettle: 3s
 

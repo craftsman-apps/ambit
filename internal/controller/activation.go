@@ -26,14 +26,27 @@ const (
 	gateRetryMax = 5 * time.Minute
 )
 
-// Activation configures the gate (--activation-timeout, --activation-settle).
+// Activation configures the gate (--activation-timeout, --activation-settle). A Reconciler without one has no gate
+// (tests that do not play agentgateway); no flag turns it off.
 type Activation struct {
-	Timeout time.Duration // 0: no gate (tests that do not play agentgateway)
+	Timeout time.Duration
 	Settle  time.Duration
 	Gateway string        // the Gateway whose NACK Events count; "": ambit
 	Poll    time.Duration // 0: 1 s
 	// Sleep waits (nil: a timer); tests move a fake clock.
 	Sleep func(context.Context, time.Duration) error
+}
+
+// Check refuses a timeout of 0 or less (many tools read 0 as "no limit"; here it would be no gate) and a negative
+// settle time.
+func (a *Activation) Check() error {
+	if a.Timeout <= 0 {
+		return fmt.Errorf("--activation-timeout must be more than 0 (got %s)", a.Timeout)
+	}
+	if a.Settle < 0 {
+		return fmt.Errorf("--activation-settle must not be negative (got %s)", a.Settle)
+	}
+	return nil
 }
 
 // gated is one object a step wrote, at the generation the write returned.

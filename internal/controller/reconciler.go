@@ -71,8 +71,8 @@ type Reconciler struct {
 	Now func() time.Time
 	// AccessMode is "enforce" (or "") or "audit" (--access-mode).
 	AccessMode string
-	// Activation is the gate each step of a mode switch or rules change waits on.
-	Activation Activation
+	// Activation is the gate each step of a mode switch or rules change waits on; nil: no gate.
+	Activation *Activation
 
 	stalled   *stalledStep  // the step a change stopped at (single worker, no lock)
 	gateRetry time.Duration // the last wait before trying a stopped change again
@@ -238,7 +238,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: AccessModeConfigMap}, &published); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, err
 	}
-	changing := r.Activation.Timeout > 0 && (published.Data["mode"] != mode || published.Data["rulesVersion"] != version)
+	changing := r.Activation != nil && (published.Data["mode"] != mode || published.Data["rulesVersion"] != version)
 	steps := []step{
 		{"authorization", func() (w []gated, err error) {
 			applyFailed, w, err = r.applyAll(ctx, res.Objects, conds)

@@ -142,6 +142,14 @@ assert "health_check" in c["service"]["extensions"], c["service"]' "collector is
 # Audit-only mode (#81): one value, refused unless enforce or audit, and audit only with the audit store.
 ! helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set access.mode=Audit >/dev/null 2>&1 || { echo "FAIL chart: access.mode must be enforce or audit"; exit 1; }
 ! helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set access.mode=audit --set evidence.enabled=false >/dev/null 2>&1 || { echo "FAIL chart: access.mode=audit needs evidence.enabled=true"; exit 1; }
+# The gate's timeout must be a positive duration: 0 would mean "no gate", not "no limit".
+for v in 0s 0 0m0s -5s 2 abc; do
+  ! helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set-string access.activationTimeout=$v >/dev/null 2>&1 || { echo "FAIL chart: access.activationTimeout=$v must be refused"; exit 1; }
+done
+for v in -1s abc; do
+  ! helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set-string access.activationSettle=$v >/dev/null 2>&1 || { echo "FAIL chart: access.activationSettle=$v must be refused"; exit 1; }
+done
+helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set-string access.activationTimeout=1m30s --set-string access.activationSettle=0s >/dev/null || { echo "FAIL chart: activationTimeout 1m30s with activationSettle 0s must render"; exit 1; }
 check_qs 'c=one("Deployment","ambit-controller")["spec"]["template"]["spec"]["containers"][0]["command"]
 assert "--access-mode=enforce" in c and "--activation-timeout=120s" in c and "--activation-settle=3s" in c, c
 e=one("Deployment","ambit-console")["spec"]["template"]["spec"]["containers"][0]["env"]

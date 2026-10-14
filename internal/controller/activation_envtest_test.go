@@ -112,7 +112,7 @@ func TestRulesChangeStepsWaitForAgentgateway(t *testing.T) {
 		}
 	}
 	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
-		Activation: Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond}}
+		Activation: &Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond}}
 	done := reconcileAsync(r)
 	eventually(t, "authorization written", func() error { _, err := genGet(ctx, ns, "AgentgatewayModel", "gemma"); return err })
 	stays(t, "access log waits for authorization", func() error {
@@ -227,7 +227,7 @@ func TestAuditOrderWritesTheAccessLogFirst(t *testing.T) {
 		}
 	}
 	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}, AccessMode: "audit",
-		Activation: Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond}}
+		Activation: &Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond}}
 	done := reconcileAsync(r)
 	eventually(t, "access log written", func() error { _, err := accessLogOf(ctx, ns); return err })
 	stays(t, "authorization waits for the access log", func() error {
@@ -292,7 +292,7 @@ func TestWaitingChangeStillOffboardsAndKeepsTheAccessLog(t *testing.T) {
 	gateFixture(t, ns)
 	ctx := t.Context()
 	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}, AccessMode: "audit",
-		Activation: Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond}}
+		Activation: &Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond}}
 	done := reconcileAsync(r)
 	eventually(t, "access log written", func() error { _, err := accessLogOf(ctx, ns); return err })
 	// While the access-log step waits: a leaver is offboarded, and someone deletes the access-log policy.
@@ -338,7 +338,7 @@ func TestStalledAuditChangeStillOffboardsAndDeletes(t *testing.T) {
 	}
 	offboard(t, ns, `["leaver@example.com"]`)
 	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}, AccessMode: "audit",
-		Activation: Activation{Timeout: 300 * time.Millisecond, Poll: 50 * time.Millisecond}}
+		Activation: &Activation{Timeout: 300 * time.Millisecond, Poll: 50 * time.Millisecond}}
 	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +377,7 @@ func TestStalledEnforceChangeWritesTheDeletedAccessLogAgain(t *testing.T) {
 	gateFixture(t, ns)
 	ctx := t.Context()
 	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
-		Activation: Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond}}
+		Activation: &Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond}}
 	done := reconcileAsync(r)
 	eventually(t, "authorization written", func() error { _, err := genGet(ctx, ns, "AgentgatewayModel", "gemma"); return err })
 	playAgentgateway(t, ns, "AgentgatewayModel", "gemma")
@@ -429,7 +429,7 @@ func TestRulesChangeWithAFailedApplyIsNotPublished(t *testing.T) {
 	gateFixture(t, ns)
 	ctx := t.Context()
 	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
-		Activation: Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond}}
+		Activation: &Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond}}
 	done := reconcileAsync(r)
 	eventually(t, "authorization written", func() error { _, err := genGet(ctx, ns, "AgentgatewayModel", "gemma"); return err })
 	playAgentgateway(t, ns, "AgentgatewayModel", "gemma")

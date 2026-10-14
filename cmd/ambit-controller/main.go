@@ -50,6 +50,11 @@ func main() {
 		log.Info("--access-mode must be enforce or audit", "got", *accessMode)
 		os.Exit(1)
 	}
+	activation := &controller.Activation{Timeout: *activationTimeout, Settle: *activationSettle}
+	if err := activation.Check(); err != nil {
+		log.Info(err.Error())
+		os.Exit(1)
+	}
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		panic(err)
@@ -80,7 +85,7 @@ func main() {
 	if err := (&controller.Reconciler{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), ListTools: listTools, Namespace: ns, Route: controller.RouteRef{Name: *route},
 		RateLimit: controller.RateLimit{Service: *rlService, Port: *rlPort, FailureMode: *rlFailure}, ToolsRefresh: *toolsRefresh, ArgumentLimits: *argLimits,
 		Classifier: controller.Classifier{Deployment: *routerDep, Replicas: int32(*routerReplicas)}, AccessMode: *accessMode,
-		Activation: controller.Activation{Timeout: *activationTimeout, Settle: *activationSettle}}).SetupWithManager(mgr); err != nil {
+		Activation: activation}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "set up controller")
 		os.Exit(1)
 	}

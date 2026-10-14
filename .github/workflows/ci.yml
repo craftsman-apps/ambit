@@ -317,3 +317,26 @@ jobs:
           CLI_HTTPS_PORT: "8443"
           CLI_ARCHIVES: "${{ runner.temp }}/images.tar ${{ runner.temp }}/thirdparty/agentgateway.tar"
         run: test/cli-partial.sh
+
+  # The release configuration still builds: GoReleaser checks .goreleaser.yaml and builds every archive without
+  # publishing; it writes no Homebrew file (the formula comes from scripts/homebrew, Task 17); the linux amd64
+  # binary runs and reports the snapshot version.
+  cli-snapshot:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with: { distribution: goreleaser, version: v2.18.3, args: check }
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with: { distribution: goreleaser, version: v2.18.3, args: release --snapshot --clean }
+      - name: Six archives, checksums, no Homebrew file from GoReleaser, a binary that runs
+        run: |
+          ls dist/ambit_{darwin,linux}_{amd64,arm64}.tar.gz dist/ambit_windows_{amd64,arm64}.zip dist/checksums.txt
+          [ -z "$(find dist -name '*.rb')" ]
+          tar -xzf dist/ambit_linux_amd64.tar.gz -C "$RUNNER_TEMP" ambit
+          "$RUNNER_TEMP/ambit" version --kubeconfig /dev/null | grep -E '^ambit [0-9]+\.[0-9]+\.[0-9]+'

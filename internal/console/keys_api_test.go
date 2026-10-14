@@ -47,9 +47,9 @@ func (f *keysFixture) call(t *testing.T, method, path string, ck *http.Cookie, b
 }
 
 type createdKey struct {
-	Key      string            `json:"key"`
-	View     map[string]any    `json:"view"`
-	Snippets map[string]string `json:"snippets"`
+	Key  string            `json:"key"`
+	View map[string]any    `json:"view"`
+	URLs map[string]string `json:"urls"`
 }
 
 func (f *keysFixture) create(t *testing.T, ck *http.Cookie, scope string, days int) createdKey {
@@ -75,13 +75,9 @@ func TestKeysAPI(t *testing.T) {
 	if !strings.HasPrefix(created.Key, "ambit_") || created.View["prefix"] != created.Key[:10] || created.View["scope"] != "both" {
 		t.Fatalf("%+v", created)
 	}
-	for _, s := range []string{"claudeCode", "cursor", "openai", "anthropic", "mcp"} {
-		if !strings.Contains(created.Snippets[s], created.Key) {
-			t.Errorf("snippet %s lacks the key", s)
-		}
-	}
-	if !strings.Contains(created.Snippets["openai"], "http://llm.localtest.me:8080/v1") || !strings.Contains(created.Snippets["mcp"], "http://mcp.localtest.me:8080/mcp") {
-		t.Errorf("snippets lack the URLs: %v", created.Snippets)
+	// The console builds the per-tool setup text from these addresses, so the key never travels in a second place.
+	if created.URLs["llm"] != "http://llm.localtest.me:8080" || created.URLs["mcp"] != "http://mcp.localtest.me:8080/mcp" {
+		t.Errorf("urls: %v", created.URLs)
 	}
 	body := f.call(t, "GET", "/api/keys", ck, nil).Body.String()
 	if strings.Contains(body, created.Key) || strings.Contains(body, "sha256:") || !strings.Contains(body, created.View["id"].(string)) {
@@ -137,24 +133,6 @@ func TestKeyErrorMapping(t *testing.T) {
 	}
 }
 
-func TestSnippetsFollowTheScope(t *testing.T) {
-	keys := func(m map[string]string) (n []string) {
-		for k := range m {
-			n = append(n, k)
-		}
-		return
-	}
-	if m := snippets("http://l", "http://m/mcp", "ambit_k", ScopeLLM); m["mcp"] != "" || len(keys(m)) != 4 {
-		t.Fatal(m)
-	}
-	if m := snippets("http://l", "http://m/mcp", "ambit_k", ScopeMCP); len(keys(m)) != 1 || m["mcp"] == "" {
-		t.Fatal(m)
-	}
-	if m := snippets("http://l", "http://m/mcp", "ambit_k", ScopeBoth); len(keys(m)) != 5 {
-		t.Fatal(m)
-	}
-}
-
 func TestAdminKeysNeedAdmin(t *testing.T) {
 	f := newKeysFixture(t)
 	v := f.cookie("mira@acme.com", RoleViewer)
@@ -199,7 +177,7 @@ func TestPeopleCannotRevokeOthersKeys(t *testing.T) {
 func TestKeySettingsEndpoint(t *testing.T) {
 	f := newKeysFixture(t)
 	r := f.call(t, "GET", "/api/settings/keys", f.cookie("mira@acme.com", RoleViewer), nil)
-	if r.Code != 200 || strings.TrimSpace(r.Body.String()) != `{"enabled":true,"inactivityDays":30,"maxDays":365}` {
+	if r.Code != 200 || strings.TrimSpace(r.Body.String()) != `{"enabled":true,"inactivityDays":30,"maxDays":365,"lastUsedAvailable":false}` {
 		t.Fatal(r.Code, r.Body.String())
 	}
 }
@@ -392,5 +370,35 @@ func TestKeyStatus(t *testing.T) {
 		if got := strings.Join(slices.Sorted(slices.Values(status(c.now))), " "); got != c.want {
 			t.Errorf("at %v: %s, want %s", c.now, got, c.want)
 		}
+	}
+}
+
+// The created-key screen shows its "first request" line only when the console can tell a key's last use.
+func TestKeySettingsSayWhetherLastUseIsKnown(t *testing.T) {
+	f := newKeysFixture(t)
+	ck := f.cookie("mira@acme.com", RoleViewer)
+	avail := func() bool {
+		var out struct {
+			Settings map[string]any `json:"settings"`
+		}
+		if err := json.Unmarshal(f.call(t, "GET", "/api/keys?lastUsed=false", ck, nil).Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		v, ok := out.Settings["lastUsedAvailable"].(bool)
+		if !ok {
+			t.Fatalf("settings lack lastUsedAvailable: %v", out.Settings)
+		}
+		return v
+	}
+	cat := &Catalog{Client: f.keys.Client, Namespace: f.keys.Namespace, Keys: f.keys}
+	if cat.keySettings().LastUsedAvailable {
+		t.Error("no audit and no lookup: last use is unknown")
+	}
+	cat.LastUsed = func(context.Context, []string, time.Time) (map[string]time.Time, error) { return nil, nil }
+	if !cat.keySettings().LastUsedAvailable {
+		t.Error("with a lookup, last use is known")
+	}
+	if avail() {
+		t.Error("the fixture has no audit: lastUsedAvailable must be false")
 	}
 }

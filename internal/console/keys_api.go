@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -15,6 +14,9 @@ type keySettingsView struct {
 	Enabled        bool `json:"enabled"`
 	InactivityDays int  `json:"inactivityDays"`
 	MaxDays        int  `json:"maxDays"`
+	// LastUsedAvailable is false when the console cannot tell a key's last use (no audit trail), so a screen that
+	// waits for the first request can say nothing instead of waiting for ever.
+	LastUsedAvailable bool `json:"lastUsedAvailable"`
 }
 
 // KeyView is what the console shows of a key: never the key itself or its hash.
@@ -92,7 +94,7 @@ func (c *Catalog) registerKeys(mux *http.ServeMux, read func(func(http.ResponseW
 
 func (c *Catalog) keySettings() keySettingsView {
 	s := c.Keys.Settings
-	return keySettingsView{Enabled: s.Enabled, InactivityDays: s.InactivityDays, MaxDays: s.MaxDays}
+	return keySettingsView{Enabled: s.Enabled, InactivityDays: s.InactivityDays, MaxDays: s.MaxDays, LastUsedAvailable: c.lastUsedFunc() != nil}
 }
 
 // keyErr maps the key service's errors to HTTP answers.
@@ -201,7 +203,7 @@ func (c *Catalog) createKey(w http.ResponseWriter, r *http.Request, s Session) {
 	}
 	w.Header().Set("Cache-Control", "no-store") // the answer holds the key, shown once
 	writeJSON(w, http.StatusCreated, map[string]any{"key": plain, "view": c.views(r.Context(), []Key{k}, false, false)[0],
-		"snippets": snippets(c.LLMURL, c.MCPURL, plain, k.Scope)})
+		"urls": map[string]string{"llm": c.LLMURL, "mcp": c.MCPURL}})
 }
 
 func (c *Catalog) revokeKey(w http.ResponseWriter, r *http.Request, s Session, admin bool) {
@@ -230,19 +232,4 @@ func (c *Catalog) expireKey(w http.ResponseWriter, r *http.Request, _ Session) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-// snippets are copy-ready settings for each client, holding the new key. The LLM ones need llm scope, MCP needs mcp.
-func snippets(llm, mcp, key string, scope Scope) map[string]string {
-	m := map[string]string{}
-	if scope != ScopeMCP {
-		m["claudeCode"] = fmt.Sprintf(`{"env":{"ANTHROPIC_BASE_URL":%q,"ANTHROPIC_AUTH_TOKEN":%q}}`, llm, key)
-		m["cursor"] = "OpenAI API Key: " + key + "\nOverride OpenAI Base URL: " + llm + "/v1"
-		m["openai"] = "export OPENAI_BASE_URL=" + llm + "/v1\nexport OPENAI_API_KEY=" + key
-		m["anthropic"] = "export ANTHROPIC_BASE_URL=" + llm + "\nexport ANTHROPIC_API_KEY=" + key
-	}
-	if scope != ScopeLLM {
-		m["mcp"] = "claude mcp add --transport http ambit " + mcp + ` --header "Authorization: Bearer ` + key + `"`
-	}
-	return m
 }

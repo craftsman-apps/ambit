@@ -47,6 +47,7 @@ func TestHelm3Interop(t *testing.T) {
 			t.Logf("--- %s: revision %d all values: %s", label, n, strings.TrimSpace(sh("helm", "get", "values", name, "-n", ns, "--revision", r, "--all", "-o", "json")))
 			t.Logf("--- %s: revision %d manifest:\n%s", label, n, sh("helm", "get", "manifest", name, "-n", ns, "--revision", r))
 		}
+		t.Logf("--- %s: every namespace that holds the ConfigMap\n%s", label, sh("kubectl", "get", "configmap", "-A", "--field-selector", "metadata.name="+name+"-greeting", "-o", "custom-columns=NAMESPACE:.metadata.namespace,NAME:.metadata.name,GREETING:.data.greeting,MANAGERS:.metadata.managedFields[*].manager"))
 		t.Logf("--- %s: live ConfigMap\n%s", label, sh("kubectl", "-n", ns, "get", "configmap", name+"-greeting", "-o", "yaml", "--show-managed-fields"))
 	}
 	if v := run("helm", "version", "--short"); !strings.HasPrefix(v, "v3.") {

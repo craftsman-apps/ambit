@@ -552,8 +552,8 @@ func TestConnectNeverPrintsOrWritesTheKey(t *testing.T) {
 }
 
 func TestConnectWriteFailureOfTheSecondFileRestoresTheFirst(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("file modes do not stop root")
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("file modes do not stop root, and Windows has no mode bits")
 	}
 	g, r := newGateway(t), newRig(t)
 	oc := r.write(".config/opencode/opencode.json", seedOpenCode)
@@ -570,11 +570,7 @@ func TestConnectWriteFailureOfTheSecondFileRestoresTheFirst(t *testing.T) {
 func TestConnectKeepsTheRecordOfFilesThatAnotherConnectDoesNotUse(t *testing.T) {
 	g, r := newGateway(t), newRig(t)
 	zsh := r.write(".zshrc", seedZsh)
-	bashName := ".bashrc"
-	if runtime.GOOS == "darwin" {
-		bashName = ".bash_profile"
-	}
-	bash := r.write(bashName, "alias a=b\n")
+	bash := r.write(".bashrc", "alias a=b\n")
 	oc := r.write(".config/opencode/opencode.json", seedOpenCode)
 	kf := r.keyFile()
 	r.run("connect", "opencode", "--url", g.URL, "--model", "m", "--key-file", kf, "--yes") // SHELL is zsh

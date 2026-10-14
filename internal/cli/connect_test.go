@@ -6,7 +6,6 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -53,9 +52,11 @@ func (r *connectRig) run(args ...string) int {
 	r.t.Helper()
 	r.stdout.Reset()
 	r.stderr.Reset()
-	d := &connectDeps{Keychain: r.kc, File: r.file, StatePath: r.statePath, GOOS: runtime.GOOS, Home: r.home,
+	// The flow tests are the same on every system: they run as on Linux (quoting, shell, store names). The Windows
+	// cases are unit tests of the connect package.
+	d := &connectDeps{Keychain: r.kc, File: r.file, StatePath: r.statePath, GOOS: "linux", Home: r.home,
 		Getenv:  func(k string) string { return r.env[k] },
-		Bin:     connect.BinEnv{Executable: func() (string, error) { return fakeAmbit, nil }, LookPath: func(string) (string, error) { return "", errors.New("not on PATH") }, GOOS: runtime.GOOS},
+		Bin:     connect.BinEnv{Executable: func() (string, error) { return fakeAmbit, nil }, LookPath: func(string) (string, error) { return "", errors.New("not on PATH") }, GOOS: "linux"},
 		Profile: func() (string, error) { return "", errors.New("no PowerShell here") },
 		HTTP:    func(string) *http.Client { return http.DefaultClient }, CallLimit: 300 * time.Millisecond, CallEvery: 20 * time.Millisecond}
 	if r.secret != "" {

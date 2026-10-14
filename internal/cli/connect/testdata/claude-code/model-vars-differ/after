@@ -6,5 +6,5 @@
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "nvidia/nemotron-3-super-120b-a12b:free",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "nvidia/nemotron-3-super-120b-a12b:free"
   },
-  "apiKeyHelper": "'/opt/homebrew/bin/ambit' key print --url https://llm.example.com"
+  "apiKeyHelper": "'/opt/homebrew/bin/ambit' key print --url 'https://llm.example.com'"
 }

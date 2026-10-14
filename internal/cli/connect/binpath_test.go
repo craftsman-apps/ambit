@@ -88,6 +88,10 @@ func TestQuote(t *testing.T) {
 		{"linux", "/home/a b/bin/ambit", `'/home/a b/bin/ambit'`},
 		{"linux", "/home/it's/ambit", `'/home/it'\''s/ambit'`},
 		{"windows", `C:\Users\First Last\bin\ambit.exe`, `"C:\Users\First Last\bin\ambit.exe"`},
+		{"windows", `C:\Users\O'Brien\ambit.exe`, `"C:\Users\O'Brien\ambit.exe"`},
+		// A space, a quote and $ in one word: nothing in it may be read by the shell.
+		{"linux", `https://h/a b'c"d$(x)`, `'https://h/a b'\''c"d$(x)'`},
+		{"windows", `https://h/a b'c"d$(x)` + "`e", `'https://h/a b''c"d$(x)` + "`e'"},
 	} {
 		if got := Quote(tt.goos, tt.in); got != tt.want {
 			t.Errorf("Quote(%s, %q) = %s, want %s", tt.goos, tt.in, got, tt.want)

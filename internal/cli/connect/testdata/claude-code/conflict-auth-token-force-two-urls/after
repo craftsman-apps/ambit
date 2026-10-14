@@ -7,5 +7,5 @@
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "new/model",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "new/model"
   },
-  "apiKeyHelper": "'/opt/homebrew/bin/ambit' key print --url https://llm.example.com"
+  "apiKeyHelper": "'/opt/homebrew/bin/ambit' key print --url 'https://llm.example.com'"
 }

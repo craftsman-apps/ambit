@@ -8,5 +8,5 @@
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "nvidia/nemotron-3-super-120b-a12b:free"
   },
   "theme": "dark",
-  "apiKeyHelper": "'/opt/homebrew/bin/ambit' key print --url https://llm.example.com"
+  "apiKeyHelper": "'/opt/homebrew/bin/ambit' key print --url 'https://llm.example.com'"
 }

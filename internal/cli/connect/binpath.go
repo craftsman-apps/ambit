@@ -62,9 +62,14 @@ func isUnder(dir, path string) bool {
 }
 
 // Quote makes s one word for the shell a tool uses to run a command: POSIX single quotes, or double quotes on
-// Windows, where paths hold spaces (C:\Users\First Last\).
+// Windows, where paths hold spaces (C:\Users\First Last\). On Windows a string with a double quote, $ or a
+// backtick (a URL can hold them; a path cannot hold a double quote) gets single quotes, in which PowerShell and
+// Git Bash read nothing; a single quote inside is doubled.
 func Quote(goos, s string) string {
 	if goos == "windows" {
+		if strings.ContainsAny(s, "\"$`") {
+			return `'` + strings.ReplaceAll(s, `'`, `''`) + `'`
+		}
 		return `"` + s + `"`
 	}
 	return `'` + strings.ReplaceAll(s, `'`, `'\''`) + `'`

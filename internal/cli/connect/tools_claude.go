@@ -22,7 +22,7 @@ var claudeSecretVars = []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"}
 
 func claudeSets(in Input) []Set {
 	sets := []Set{
-		{Path: []string{"apiKeyHelper"}, Value: marshalString(Quote(in.GOOS, in.AmbitPath) + " key print --url " + in.URL)},
+		{Path: []string{"apiKeyHelper"}, Value: marshalString(Quote(in.GOOS, in.AmbitPath) + " key print --url " + Quote(in.GOOS, in.URL))},
 		{Path: []string{"env", "ANTHROPIC_BASE_URL"}, Value: marshalString(in.URL)},
 	}
 	for _, v := range claudeModelVars {

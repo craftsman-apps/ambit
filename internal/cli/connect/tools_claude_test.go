@@ -100,7 +100,7 @@ func TestClaudeCodeWindowsQuoting(t *testing.T) {
 	in := claudeInput(goldenCase{}, goldenStep{URL: "https://llm.example.com", Model: "m"}, nil, false, nil)
 	in.GOOS, in.AmbitPath = "windows", `C:\Users\First Last\bin\ambit.exe`
 	p, _ := PlanClaudeCode(in)
-	want := `"apiKeyHelper": "\"C:\\Users\\First Last\\bin\\ambit.exe\" key print --url https://llm.example.com"`
+	want := `"apiKeyHelper": "\"C:\\Users\\First Last\\bin\\ambit.exe\" key print --url \"https://llm.example.com\""`
 	if !strings.Contains(string(p.After), want) {
 		t.Fatalf("got %s", p.After)
 	}
@@ -162,5 +162,18 @@ func TestClaudeCodeReconnectKeepsTheFirstRecord(t *testing.T) {
 	d, err := UnplanJSON(second.Record, second.After, true)
 	if err != nil || len(d.Notes) != 1 || !strings.Contains(d.Notes[0], "env.ANTHROPIC_AUTH_TOKEN was removed at connect") {
 		t.Fatalf("%v %q", err, d.Notes)
+	}
+}
+
+// The URL is part of a command that a shell runs at every start of Claude Code: it is quoted like the path.
+func TestClaudeCodeQuotesTheURLInTheHelper(t *testing.T) {
+	in := claudeInput(goldenCase{}, goldenStep{URL: "https://llm.example.com/a;touch$%7BIFS%7D/x&b", Model: "m"}, nil, false, nil)
+	p, err := PlanClaudeCode(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"apiKeyHelper": "'/opt/homebrew/bin/ambit' key print --url 'https://llm.example.com/a;touch$%7BIFS%7D/x&b'"`
+	if !strings.Contains(string(p.After), want) {
+		t.Fatalf("got %s", p.After)
 	}
 }

@@ -60,6 +60,8 @@ jobs:
       # The console binary embeds web/dist, so the front end must be built before Go compiles.
       - name: Front end type-check and build
         run: cd web && npm ci --no-fund --no-audit && npm run build
+      - name: npm packaging and Homebrew formula scripts (node:test)
+        run: node --test scripts/npm/ scripts/homebrew/
       - name: Go vet, unit and integration tests (envtest API server)
         run: go vet ./... && KUBEBUILDER_ASSETS="$(make -s envtest-assets)" go test -count=1 ./...
       - name: Preset versions bumped
@@ -340,3 +342,18 @@ jobs:
           [ -z "$(find dist -name '*.rb')" ]
           tar -xzf dist/ambit_linux_amd64.tar.gz -C "$RUNNER_TEMP" ambit
           "$RUNNER_TEMP/ambit" version --kubeconfig /dev/null | grep -E '^ambit [0-9]+\.[0-9]+\.[0-9]+'
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 26 }
+      - name: npm packages from the snapshot archives; the launcher runs the linux x64 binary
+        run: |
+          node scripts/npm/publish.mjs --dir dist --version 0.0.0-snapshot --out "$RUNNER_TEMP/npm"
+          m="$RUNNER_TEMP/try/node_modules/@craftsman-apps"
+          mkdir -p "$m"
+          cp -r "$RUNNER_TEMP/npm/ambit" "$m/ambit"
+          cp -r "$RUNNER_TEMP/npm/ambit-linux-x64" "$m/ambit-linux-x64"
+          node "$m/ambit/bin/ambit.js" version --kubeconfig /dev/null | grep -E '^ambit [0-9]'
+      - name: The Homebrew formula from the snapshot's checksums.txt is valid Ruby and pins four archives
+        run: |
+          node scripts/homebrew/formula.mjs --checksums dist/checksums.txt --version "$(jq -r .version dist/metadata.json)" --out "$RUNNER_TEMP/ambit.rb"
+          ruby -c "$RUNNER_TEMP/ambit.rb"
+          [ "$(grep -cE '^ +sha256 "[0-9a-f]{64}"$' "$RUNNER_TEMP/ambit.rb")" = 4 ]

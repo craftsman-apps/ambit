@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	"github.com/craftsman-apps/ambit/internal/cli/kindx"
@@ -36,10 +37,26 @@ func DefaultStore() (Store, error) {
 	return Store{Dir: filepath.Join(d, "ambit", "local")}, nil
 }
 
+// validName is stricter than kind's own rule (^[a-z0-9.-]+$, kind v0.33.0): it also requires a letter or digit
+// first and at most 63 characters, so a name can never leave the store directory or become a hidden file.
+var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,62}$`)
+
+func checkName(name string) error {
+	if validName.MatchString(name) {
+		return nil
+	}
+	return out.Usage(fmt.Sprintf("%q is not a valid cluster name", name),
+		"a cluster name has lower-case letters, digits, '-' and '.', starts with a letter or digit, and has at most 63 characters",
+		"ambit local up --name ambit")
+}
+
 func (s Store) Path(name string) string { return filepath.Join(s.Dir, name+".json") }
 
 // Read returns nil, nil when there is no state file.
 func (s Store) Read(name string) (*State, error) {
+	if err := checkName(name); err != nil {
+		return nil, err
+	}
 	b, err := os.ReadFile(s.Path(name))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -56,6 +73,9 @@ func (s Store) Read(name string) (*State, error) {
 
 // Write replaces the state file atomically (write to a temporary file, then rename).
 func (s Store) Write(st State) error {
+	if err := checkName(st.Name); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
 		return err
 	}
@@ -80,6 +100,9 @@ func (s Store) Write(st State) error {
 }
 
 func (s Store) Remove(name string) error {
+	if err := checkName(name); err != nil {
+		return err
+	}
 	err := os.Remove(s.Path(name))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -121,6 +144,9 @@ type Ownership struct {
 // the only one, it was created after the state file, and its node carries the ownership label. The ID is then
 // written to the state file, so repair continues with both proofs.
 func CheckOwnership(ctx context.Context, store Store, c Cluster, name string) (Ownership, error) {
+	if err := checkName(name); err != nil {
+		return Ownership{}, err
+	}
 	exists, err := c.Exists(name)
 	if err != nil {
 		return Ownership{}, err
@@ -152,7 +178,7 @@ func CheckOwnership(ctx context.Context, store Store, c Cluster, name string) (O
 				store.Path(name), len(cs), kindx.NodeLabelKey, name)
 		}
 		if !cs[0].Created.After(st.Created) {
-			return notOwned("container %s was created at %s, before the state file %s (%s)", short(cs[0].ID),
+			return notOwned("container %s was created at %s, before the state file %s (%s); the clocks may differ", short(cs[0].ID),
 				cs[0].Created.UTC().Format(time.RFC3339), store.Path(name), st.Created.UTC().Format(time.RFC3339))
 		}
 		st.ContainerID, recovered = cs[0].ID, true
@@ -186,10 +212,14 @@ func CheckOwnership(ctx context.Context, store Store, c Cluster, name string) (O
 // Refusal is the error every local command prints for a cluster it does not own. It never suggests a delete
 // command: the docs page explains how a person checks and removes such a cluster.
 func (o Ownership) Refusal(name string) *out.Error {
+	other := "ambit-try"
+	if name == other {
+		other = "ambit-try-2"
+	}
 	return &out.Error{
 		What: fmt.Sprintf("a kind cluster named %q exists and was not created by ambit local up", name),
 		Why:  o.Reason,
-		Next: "ambit local up --name ambit-try (or see https://ambitproject.dev/docs/local-up#a-cluster-that-ambit-did-not-create)",
+		Next: "ambit local up --name " + other + " (or see https://ambitproject.dev/docs/local-up#a-cluster-that-ambit-did-not-create)",
 		Code: out.ExitFailed,
 	}
 }

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/craftsman-apps/ambit/internal/cli/kindx"
+	"github.com/craftsman-apps/ambit/internal/cli/out"
 )
 
 type fakeCluster struct {
@@ -194,12 +196,53 @@ func TestOlderContainerRefusalNamesBothTimes(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := o.Refusal("ambit")
-	for _, want := range []string{s.Path("ambit"), "2026-10-14T08:00:00Z", "2026-10-14T09:00:00Z"} {
+	for _, want := range []string{s.Path("ambit"), "2026-10-14T08:00:00Z", "2026-10-14T09:00:00Z", "clocks may differ"} {
 		if !strings.Contains(e.Why, want) {
 			t.Errorf("why %q does not contain %q", e.Why, want)
 		}
 	}
 	if !strings.HasPrefix(e.Next, "ambit local up --name ") || strings.Contains(strings.ToLower(e.Next+e.Why), "delete") {
 		t.Errorf("next = %q", e.Next)
+	}
+}
+
+func TestInvalidNameIsUsageError(t *testing.T) {
+	dir := t.TempDir()
+	s := Store{Dir: dir}
+	outside := filepath.Join(filepath.Dir(dir), "x.json")
+	if err := os.WriteFile(outside, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"../x", "a/b", "", "UPPER", strings.Repeat("a", 64), "-a"} {
+		ops := map[string]error{
+			"Remove": s.Remove(name),
+			"Write":  s.Write(State{Name: name}),
+		}
+		_, ops["Read"] = s.Read(name)
+		_, ops["CheckOwnership"] = CheckOwnership(context.Background(), s, owned(), name)
+		for op, err := range ops {
+			var e *out.Error
+			if !errors.As(err, &e) || e.Code != out.ExitUsage || !strings.Contains(e.Why, "63") {
+				t.Errorf("%s(%q) = %v, want usage error naming the rule", op, name, err)
+			}
+		}
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("file outside the store was touched: %v", err)
+	}
+	if _, err := s.Read(strings.Repeat("a", 63)); err != nil {
+		t.Fatalf("valid 63-character name: %v", err)
+	}
+	if err := s.Write(State{Name: "ambit-try.1"}); err != nil {
+		t.Fatalf("valid name: %v", err)
+	}
+}
+
+func TestRefusalNextDiffersFromRefusedName(t *testing.T) {
+	for name, want := range map[string]string{"ambit": "ambit-try", "ambit-try": "ambit-try-2"} {
+		e := Ownership{Verdict: NotOwned, Reason: "x"}.Refusal(name)
+		if !strings.HasPrefix(e.Next, "ambit local up --name "+want+" ") {
+			t.Errorf("Refusal(%q).Next = %q, want name %q", name, e.Next, want)
+		}
 	}
 }

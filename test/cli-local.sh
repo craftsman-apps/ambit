@@ -134,7 +134,7 @@ def call(method, path, body=None):
     except urllib.error.HTTPError as e: return e.code, e.read()
 if mode == "create":
     for _ in range(15):  # 503 while the console takes over the key Lease
-        code, body = call("POST", "/api/keys", {"name": "cli-e2e", "scope": "llm", "days": 1})
+        code, body = call("POST", "/api/keys", {"name": "cli-e2e", "scope": "llm", "days": 30})
         if code != 503: break
         time.sleep(2)
     assert code == 201, (code, body[:200])

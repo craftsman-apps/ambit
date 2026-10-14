@@ -66,7 +66,7 @@ The controls below are in Annex A of ISO/IEC 27001:2022. Their titles and number
 
 Regulation (EU) 2024/1689 sets record-keeping duties for **high-risk** AI systems. Ambit records the calls that pass through it. It does not decide whether your system is high-risk, and it does not make a system compliant by itself.
 
-The duties for high-risk systems apply from 2 December 2027 for systems listed in Annex III and from 2 August 2028 for systems that are safety components of products under Annex I. Regulation (EU) 2026/1744 (the Digital Omnibus on AI, in force since 27 July 2026) moved them from the earlier date of 2 August 2026. These dates come from secondary sources that cite the regulation, and I could not read the Official Journal text. Confirm the dates and the article texts below on EUR-Lex before you rely on them.
+The duties for high-risk systems apply from 2 December 2027 for systems listed in Annex III and from 2 August 2028 for systems that are safety components of products under Annex I. Regulation (EU) 2026/1744 (the Digital Omnibus on AI, in force since 27 July 2026) moved them from 2 August 2026. These dates come from summaries of the regulation, not from the Official Journal text. Confirm the dates and the article texts below on EUR-Lex before you rely on them.
 
 | Provision | What it says | What Ambit provides |
 |---|---|---|

@@ -324,3 +324,16 @@ func TestIntegerFieldsStillRefuseBadValues(t *testing.T) {
 		}
 	}
 }
+
+func TestDecodeGivesInt64ForWholeNumbers(t *testing.T) {
+	obj, err := Decode([]byte("a: 2000\nb: 1.5\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := obj["a"].(int64); !ok {
+		t.Errorf("a: want int64, got %T", obj["a"])
+	}
+	if _, ok := obj["b"].(float64); !ok {
+		t.Errorf("b: want float64, got %T", obj["b"])
+	}
+}

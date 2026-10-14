@@ -46,7 +46,7 @@ export function AccessRulesPage() {
 
   return (
     <Shell crumb="Govern / Access rules">
-      <div className="grid min-h-full grid-cols-[1fr_380px]">
+      <div className="grid min-h-full grid-cols-[1fr_272px] min-[1440px]:grid-cols-[1fr_380px]">
         <section className="min-w-0 p-5">
           <div className="mb-4 flex items-end justify-between gap-3">
             <div>

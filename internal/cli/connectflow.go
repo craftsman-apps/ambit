@@ -665,6 +665,9 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 		for u := range st.Keys {
 			urls[u] = true
 		}
+		if len(tools) == 0 {
+			p.Line("%s no tool is connected (nothing recorded)", p.Mark("ok"))
+		}
 	}
 	// The state file goes first: if deleting a key fails, it lists the key that is still stored and no tool.
 	if err := st.Save(d.StatePath); err != nil {

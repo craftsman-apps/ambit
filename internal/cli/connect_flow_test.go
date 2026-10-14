@@ -644,3 +644,10 @@ func TestDisconnectKeyDeletionFailureLeavesAConsistentState(t *testing.T) {
 		t.Fatalf("state: %+v", st)
 	}
 }
+
+func TestDisconnectAllWithNothingRecordedSaysSo(t *testing.T) {
+	r := newRig(t)
+	if code := r.run("disconnect", "--all", "--yes"); code != 0 || !strings.Contains(r.stdout.String(), "✓ no tool is connected (nothing recorded)") {
+		t.Fatalf("code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
+	}
+}

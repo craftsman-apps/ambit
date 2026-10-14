@@ -128,7 +128,7 @@ wait_for 90 '[[ $(keyrecs admin@ambit.local "$KID_K") -ge 1 ]]' || fail "5 no ke
 pass "5 audit records the key's requests as the owner, with the key id and no subject"
 
 # 11 · the settings endpoint reports the chart values
-[[ $(api GET /api/settings/keys) == 200 && "$(field '__import__("json").dumps(d,sort_keys=True)')" == '{"enabled": true, "inactivityDays": 30, "maxDays": 365}' ]] || fail "11 settings: $(cat "$W/api")"
+[[ $(api GET /api/settings/keys) == 200 && "$(field '__import__("json").dumps(d,sort_keys=True)')" == '{"enabled": true, "inactivityDays": 30, "lastUsedAvailable": true, "maxDays": 365}' ]] || fail "11 settings: $(cat "$W/api")"
 pass "11 GET /api/settings/keys: $(cat "$W/api")"
 
 # 6 · offboarding: keytest's key is refused at once (block list) and deleted (SCIM, as in step 6)

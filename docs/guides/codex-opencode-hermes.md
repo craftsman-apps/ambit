@@ -1,13 +1,13 @@
 ---
 title: Connect Codex, opencode and Hermes Agent
-description: Point OpenAI Codex CLI, opencode or Hermes Agent at Ambit with a personal API key, and give them the Ambit MCP gateway. Each snippet was run against a live Ambit.
+description: Point OpenAI Codex CLI, opencode or Hermes Agent at Ambit with a personal API key, and give them the Ambit MCP gateway. Each snippet except the Hermes MCP note was run against a live Ambit.
 ---
 
 # Connect Codex, opencode and Hermes Agent
 
 **What you get:** three more coding agents use your company's models through Ambit, with the same personal API key, access rules, budgets and audit log as [Claude Code and Cursor](coding-tools.md).
 
-All snippets on this page were run against a real Ambit install, with a real model. Nothing here is copied from a vendor page without a test.
+Every snippet on this page was run against a real Ambit install, with a real model, except the Hermes MCP note, which comes from the vendor page and was not run. The list of what was not tested is at the end of the page.
 
 ## What was tested
 
@@ -17,7 +17,7 @@ All snippets on this page were run against a real Ambit install, with a real mod
 | opencode | 1.18.34 | OpenAI Chat Completions (`/v1/chat/completions`) | Works. One file-read tool call, answer correct. |
 | Hermes Agent | v0.13.0 (2026.5.7) | OpenAI Chat Completions (`/v1/chat/completions`) | Works with the config below. The first config we tried failed; see [Hermes Agent](#hermes-agent). |
 
-Test setup: Ambit from the [Quick start](../quick-start.md) on kind, the model `nvidia/nemotron-3-super-120b-a12b:free` at OpenRouter, a personal key with the scope **LLM and MCP**, on 2026-10-14. Only this one model was tried. Each tool made one prompt that needs one tool call, and every call is in the Audit log with status 200.
+Test setup: Ambit from the [Quick start](../quick-start.md) on kind, the model `nvidia/nemotron-3-super-120b-a12b:free` at OpenRouter, a personal key with the scope **LLM and MCP**, on 2026-10-14. Only this one model was tried. Each tool made one prompt that needs one tool call, and every successful call is in the Audit log with status 200.
 
 ## Before you start
 
@@ -48,13 +48,13 @@ Put the key in the environment and run a prompt:
 
 ```sh
 export AMBIT_API_KEY=ambit_...
-codex exec "Run the shell command 'cat note.txt' and tell me what it prints."
+codex exec --skip-git-repo-check --sandbox read-only "Run the shell command 'cat note.txt' and tell me what it prints."
 ```
 
 Codex ran the command and printed the file. Notes from the test:
 
 - Codex prints `Model metadata for ... not found. Defaulting to fallback metadata`. It does not know your model. The warning is harmless.
-- The model is not an OpenAI model, and the call still worked. Ambit sent the Responses request on to OpenRouter and OpenRouter answered. We did not check whether Ambit or OpenRouter converts the format, so we cannot say that every provider works this way. Try your own provider with one prompt before you roll Codex out.
+- The model is not an OpenAI model, and the call still worked. Ambit sent the Responses request on to OpenRouter and OpenRouter answered. We did not check whether Ambit or OpenRouter converts the format, so we cannot say that every provider works this way. Try your own provider with one prompt before you give Codex to your team.
 - When `codex exec` runs from a script, it can wait for more input on standard input. Add `< /dev/null` to the command. We saw one run stop without output until we did this, and cannot say for sure that standard input was the cause.
 
 **MCP.** Add the Ambit MCP gateway with the key as a static bearer token:
@@ -84,7 +84,7 @@ opencode needs a custom provider that uses the OpenAI-compatible package. Put th
         "apiKey": "{env:AMBIT_API_KEY}"
       },
       "models": {
-        "nvidia/nemotron-3-super-120b-a12b:free": { "name": "Free model" }
+        "nvidia/nemotron-3-super-120b-a12b:free": { "name": "nvidia/nemotron-3-super-120b-a12b:free" }
       }
     }
   }
@@ -96,7 +96,7 @@ export AMBIT_API_KEY=ambit_...
 opencode run "Use the read tool to read note.txt and tell me what it says."
 ```
 
-The first start in a new data directory did not answer for more than 5 minutes in our test, and we stopped it. The second start answered normally, and so did every later start. We did not find the cause. If the first start seems stuck, stop it and start again.
+The first start in a new data directory did not answer for more than 5 minutes in our test, and we stopped it. The second start answered normally. We did not find the cause. If the first start seems stuck, stop it and start again.
 
 **MCP.** Add a remote server with the key as a header:
 
@@ -135,9 +135,17 @@ export AMBIT_API_KEY=ambit_...
 hermes chat -Q -t file -q "Use a tool to read the file note.txt in the current directory and tell me what it says."
 ```
 
-**What failed first.** Our first config put `provider: custom`, `base_url` and `key_env: AMBIT_API_KEY` directly in the `model:` block. Hermes ran, sent no key, and ended with `Error: authorization failed`. The gateway answered 403. In Hermes, `key_env` works inside `custom_providers` (and in the fallback provider list), not in the `model:` block. The config above is the one that worked. The other way, `api_key:` in the `model:` block, puts the key itself into the file, and we did not test it.
+**What failed first.** Our first config put `provider: custom`, `base_url` and `key_env: AMBIT_API_KEY` directly in the `model:` block. Hermes ran, sent no key, and ended with `Error: authorization failed`. The gateway answered 403. In Hermes, `key_env` works inside `custom_providers` not in the `model:` block. The config above is the one that worked. The other way, `api_key:` in the `model:` block, puts the key itself into the file, and we did not test it.
 
 We did not test Hermes with MCP. Hermes reads MCP servers from `mcp_servers` in the same file, with `url` and `headers`; see the [Hermes MCP guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp). Treat that as not tested by Ambit yet.
+
+## Not tested
+
+- Hermes with MCP, and Hermes with the `anthropic_messages` format.
+- A real Claude model behind `/v1/messages`.
+- Codex with a model of an OpenAI-type provider. Only an OpenRouter model was used.
+- Claude Code without `ANTHROPIC_SMALL_FAST_MODEL` or the `ANTHROPIC_DEFAULT_*_MODEL` variables.
+- Any model other than `nvidia/nemotron-3-super-120b-a12b:free`.
 
 ## Check it in the console
 

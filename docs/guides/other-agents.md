@@ -7,7 +7,7 @@ description: Settings that should connect other coding agents to Ambit. Ambit ha
 
 **Status: not tested by Ambit yet.** The agents in the table below should work with Ambit, because they speak a format that the Ambit LLM gateway serves. The settings come from each vendor's documentation, read on 2026-10-14. Nobody has run these agents against Ambit. A vendor can change its settings at any time, so check the vendor link first.
 
-Agents that Ambit has tested have their own pages: [Claude Code and Cursor](coding-tools.md), and [Codex, opencode and Hermes Agent](codex-opencode-hermes.md).
+Ambit tested Claude Code, Codex, opencode and Hermes Agent; see [Claude Code and Cursor](coding-tools.md) and [Codex, opencode and Hermes Agent](codex-opencode-hermes.md).
 
 ## What Ambit serves
 
@@ -17,7 +17,7 @@ In the settings below, `<llm>` is your LLM address (on the quick start: `http://
 
 ## Agents with settings from the vendor
 
-| Agent | Format | Settings | Vendor documentation |
+| Agent | Format | Settings (not tested) | Vendor documentation |
 |---|---|---|---|
 | GitHub Copilot CLI | Chat Completions | Environment variables `COPILOT_PROVIDER_BASE_URL=<llm>/v1`, `COPILOT_PROVIDER_API_KEY=<key>`, `COPILOT_MODEL=<model>`. The provider type is `openai` by default. The model must support tool calls and streaming. | [Use your own model key](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-byok-models) |
 | Cline | Chat Completions | In the settings, choose the API provider "OpenAI Compatible". Base URL `<llm>/v1`, API key `<key>`, model ID `<model>`. | [OpenAI Compatible](https://docs.cline.bot/provider-config/openai-compatible) |
@@ -33,13 +33,13 @@ In the settings below, `<llm>` is your LLM address (on the quick start: `http://
 | pi | Chat Completions | In the pi models file, a provider with `baseUrl: "<llm>/v1"`, `api: "openai-completions"`, `apiKey` and `models`. The project has an open report (issue 3168) that custom OpenAI-compatible providers can stop responding; we do not know if it is fixed. | [Models](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/models.md) |
 | Warp | Chat Completions | In the Warp settings, add a custom inference endpoint with the URL `<llm>/v1` and the key. It works for local agent runs only, not for cloud agent runs. | [Custom inference endpoint](https://docs.warp.dev/agents/inference/custom-inference-endpoint/) |
 
-For the MCP gateway, most of these agents take a URL and a header. Use `<mcp>/mcp` with the header `Authorization: Bearer <key>`, as in [Connect Codex, opencode and Hermes Agent](codex-opencode-hermes.md). We have not checked the exact setting names of these agents; read the vendor's MCP page.
+For the MCP gateway, some of these agents may take a URL and a header. Use `<mcp>/mcp` with the header `Authorization: Bearer <key>`, as in [Connect Codex, opencode and Hermes Agent](codex-opencode-hermes.md). We have not checked the exact setting names of these agents; read the vendor's MCP page.
 
-## Agents that do not work, or that we cannot say
+## Agents that should not work, or that we cannot say
 
 | Agent | Status |
 |---|---|
-| Gemini CLI and Antigravity CLI | Do not work today. They speak the Gemini API (`/v1beta/models/...:generateContent`) and send the key as `x-goog-api-key`. Ambit refuses those paths and does not read that header. |
+| Gemini CLI and Antigravity CLI | Should not work today, and nobody has tested it. They speak the Gemini API (`/v1beta/models/...:generateContent`), and Ambit serves none of the Gemini API paths. One third-party guide says they send the key as `x-goog-api-key`; we could not confirm this, and Ambit reads only `Authorization` and `x-api-key`. |
 | Amp, Windsurf, JetBrains AI Assistant | Unknown. We found no documented setting for a custom endpoint in Amp and Windsurf. JetBrains documents an OpenAI-compatible provider, but we could not confirm which request format and headers it uses. |
 | GitHub Copilot in VS Code | Unknown. VS Code has "bring your own key" for models, but we have not confirmed the details. Inline completions never use your own key. |
 

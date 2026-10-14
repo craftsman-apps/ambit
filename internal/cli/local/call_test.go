@@ -6,7 +6,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -41,10 +43,9 @@ func TestDexTokenThroughLocaltestMe(t *testing.T) {
 }
 
 func sequence(codes ...int) http.HandlerFunc {
-	i := 0
+	var i atomic.Int32
 	return func(w http.ResponseWriter, r *http.Request) {
-		code := codes[min(i, len(codes)-1)]
-		i++
+		code := codes[min(int(i.Add(1))-1, len(codes)-1)]
 		w.WriteHeader(code)
 		if code == 200 {
 			w.Write([]byte(`{"choices":[{"message":{"content":"Hello there, nice to meet!\nSecond line"}}]}`))
@@ -76,5 +77,41 @@ func TestTestCallTimeoutNamesLastAnswer(t *testing.T) {
 	_, err := TestCall(context.Background(), HTTPClient(port), LLMURL(port), "tok", "local/echo", 50*time.Millisecond, 10*time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "no answer within 50ms; the last answer was HTTP 403") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestTestCallOurOwnRefusalIsNotAProviderError(t *testing.T) {
+	for code, want := range map[int]string{401: "the token or access rule is wrong", 400: "the request was rejected"} {
+		port := gateway(t, sequence(code))
+		_, err := TestCall(context.Background(), HTTPClient(port), LLMURL(port), "tok", "local/echo", 5*time.Second, 10*time.Millisecond)
+		var pe *ProviderError
+		if err == nil || errors.As(err, &pe) || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), strconv.Itoa(code)) {
+			t.Fatalf("HTTP %d: err = %v", code, err)
+		}
+	}
+}
+
+func TestTestCallUpstreamFailureIsAProviderError(t *testing.T) {
+	for _, code := range []int{429, 500, 504} {
+		port := gateway(t, sequence(code))
+		_, err := TestCall(context.Background(), HTTPClient(port), LLMURL(port), "tok", "m:free", 5*time.Second, 10*time.Millisecond)
+		var pe *ProviderError
+		if !errors.As(err, &pe) || pe.Status != code {
+			t.Fatalf("HTTP %d: err = %v", code, err)
+		}
+	}
+}
+
+func TestTestCallHangingGatewayStopsAtTheLimit(t *testing.T) {
+	port := gateway(t, func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-time.After(3 * time.Second):
+		}
+	})
+	start := time.Now()
+	_, err := TestCall(context.Background(), HTTPClient(port), LLMURL(port), "tok", "local/echo", 100*time.Millisecond, 10*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "no answer within 100ms") || time.Since(start) > 2*time.Second {
+		t.Fatalf("after %s: err = %v", time.Since(start), err)
 	}
 }

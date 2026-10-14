@@ -65,8 +65,9 @@ func DexToken(ctx context.Context, c *http.Client, consoleURL, password string) 
 	return t.AccessToken, nil
 }
 
-// ProviderError is an answer that is neither 200 nor part of the gateway's settling window: the model's provider
-// refused the call. local up then tries the next free model.
+// ProviderError is an answer that is not 200, not part of the gateway's settling window, and not a refusal of our own
+// call (400, 401): the model's provider failed or refused it (429, 500, 504 and similar). local up then tries the next
+// free model.
 type ProviderError struct {
 	Status int
 	Body   string
@@ -85,6 +86,9 @@ const Prompt = "Say hello in five words."
 func TestCall(ctx context.Context, c *http.Client, llmURL, token, model string, limit, every time.Duration) (string, error) {
 	body, _ := json.Marshal(map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": Prompt}}})
 	deadline := time.Now().Add(limit)
+	parent := ctx
+	ctx, cancel := context.WithDeadline(ctx, deadline) // a request that hangs must not outlast limit
+	defer cancel()
 	last := ""
 	for {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, llmURL+"/v1/chat/completions", bytes.NewReader(body))
@@ -109,6 +113,10 @@ func TestCall(ctx context.Context, c *http.Client, llmURL, token, model string, 
 				return first, nil
 			case settling[resp.StatusCode]:
 				last = fmt.Sprintf("HTTP %d: %.200s", resp.StatusCode, strings.TrimSpace(string(b)))
+			case resp.StatusCode == http.StatusUnauthorized:
+				return "", fmt.Errorf("the test call was refused: HTTP %d — the token or access rule is wrong: %.200s", resp.StatusCode, strings.TrimSpace(string(b)))
+			case resp.StatusCode == http.StatusBadRequest:
+				return "", fmt.Errorf("the test call failed: HTTP %d — the request was rejected: %.200s", resp.StatusCode, strings.TrimSpace(string(b)))
 			default:
 				return "", &ProviderError{Status: resp.StatusCode, Body: fmt.Sprintf("%.300s", strings.TrimSpace(string(b)))}
 			}
@@ -120,7 +128,10 @@ func TestCall(ctx context.Context, c *http.Client, llmURL, token, model string, 
 		}
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			if parent.Err() != nil {
+				return "", parent.Err()
+			}
+			return "", fmt.Errorf("no answer within %s; the last answer was %s", limit, last)
 		case <-time.After(every):
 		}
 	}

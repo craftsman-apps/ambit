@@ -34,7 +34,7 @@ test("create a key, see it once, revoke it", async ({ page }) => {
     const key = await page.getByTestId("new-key").textContent();
     expect(key).toMatch(/^ambit_[0-9A-Za-z]{43}$/);
     await expect(page.getByText("This is the only time the key is shown")).toBeVisible();
-    await expect(page.getByTestId("snippet-claudeCode")).toContainText(key!);
+    await expect(page.getByTestId("snippet-claudeCode-0")).toContainText(key!);
     await page.getByRole("button", { name: "Done" }).click();
     await expect(page.getByTestId("new-key")).toHaveCount(0);
     const row = page.getByRole("row", { name: /e2e laptop/ });

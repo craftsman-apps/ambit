@@ -67,8 +67,8 @@ func isUnder(dir, path string) bool {
 // Git Bash read nothing; a single quote inside is doubled.
 func Quote(goos, s string) string {
 	if goos == "windows" {
-		if strings.ContainsAny(s, "\"$`") {
-			return `'` + strings.ReplaceAll(s, `'`, `''`) + `'`
+		if strings.ContainsAny(s, "\"$`“”„") { // PowerShell reads “ ” „ as double quotes
+			return psQuote(s)
 		}
 		return `"` + s + `"`
 	}

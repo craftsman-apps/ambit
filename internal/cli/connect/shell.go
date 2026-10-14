@@ -91,7 +91,14 @@ func powerShellProfile(run func(name string, args ...string) ([]byte, error)) (s
 	return "", fmt.Errorf("cannot ask PowerShell for its profile path")
 }
 
-func psQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+// psQuote makes s one single-quoted PowerShell string. PowerShell ends such a string at U+2018, U+2019, U+201A
+// and U+201B as well as at ', and a doubled quote character is a literal one.
+func psQuote(s string) string {
+	for _, q := range "'‘’‚‛" {
+		s = strings.ReplaceAll(s, string(q), string(q)+string(q))
+	}
+	return "'" + s + "'"
+}
 
 // WrapperLines are the lines of the function, quoted for the shell. Everything the shell could read in the path
 // or in the address stays inside quotes.

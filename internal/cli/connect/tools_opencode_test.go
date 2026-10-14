@@ -373,3 +373,10 @@ func TestOpenCodeSecondRemovedProviderIsRefused(t *testing.T) {
 		t.Fatal("a second removed provider.ambit must be refused")
 	}
 }
+
+func TestWrapperLinesPowerShellTypographicQuotes(t *testing.T) {
+	got := WrapperLines(PowerShell, "windows", `C:\Users\O’Brien\ambit.exe`, "https://h/a‘b")[0]
+	if !strings.Contains(got, `& 'C:\Users\O’’Brien\ambit.exe'`) || !strings.Contains(got, `'https://h/a‘‘b'`) {
+		t.Fatalf("typographic single quotes are not doubled: %s", got)
+	}
+}

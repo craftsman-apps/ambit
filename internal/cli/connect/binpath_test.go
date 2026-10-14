@@ -91,6 +91,10 @@ func TestQuote(t *testing.T) {
 		{"windows", `C:\Users\O'Brien\ambit.exe`, `"C:\Users\O'Brien\ambit.exe"`},
 		// A space, a quote and $ in one word: nothing in it may be read by the shell.
 		{"linux", `https://h/a b'c"d$(x)`, `'https://h/a b'\''c"d$(x)'`},
+		// PowerShell reads typographic quotes as quotes: ’ ends a single-quoted string, “ ” „ end a double-quoted one.
+		{"windows", `C:\Users\O’Brien\ambit.exe`, `"C:\Users\O’Brien\ambit.exe"`},
+		{"windows", `https://h/a“b’c`, `'https://h/a“b’’c'`},
+		{"windows", `https://h/a„b`, `'https://h/a„b'`},
 		{"windows", `https://h/a b'c"d$(x)` + "`e", `'https://h/a b''c"d$(x)` + "`e'"},
 	} {
 		if got := Quote(tt.goos, tt.in); got != tt.want {

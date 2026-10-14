@@ -3,6 +3,8 @@ package kube
 import (
 	"bytes"
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,11 +14,16 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/craftsman-apps/ambit/internal/cli/out"
 )
@@ -185,5 +192,136 @@ func TestPickPod(t *testing.T) {
 	}
 	if _, err := pickPod(nil); err == nil {
 		t.Fatal("no pods must be an error")
+	}
+}
+
+func notReadyPods(t *testing.T, cs *fake.Clientset, required []string) (*NotReadyError, []string) {
+	t.Helper()
+	var progress []string
+	err := WaitWorkloads(context.Background(), cs, "ambit-system", required, 10*time.Millisecond, 30*time.Millisecond,
+		func(l string) { progress = append(progress, l) })
+	nr, ok := err.(*NotReadyError)
+	if !ok {
+		t.Fatalf("err = %v", err)
+	}
+	return nr, progress
+}
+
+func TestWaitWorkloadsNamesWorkloadWithoutPods(t *testing.T) {
+	// A quota or admission rejection leaves a Deployment with no pods at all.
+	nr, progress := notReadyPods(t, fake.NewSimpleClientset(deployment("ambit-console", nil, 0)), nil)
+	all := strings.Join(nr.Pods, "\n")
+	if !strings.Contains(all, "Deployment ambit-console: 0/1 ready") || strings.Contains(all, "missing") {
+		t.Fatalf("pods = %q", all)
+	}
+	if len(progress) == 0 || progress[0] != "waiting for Deployment ambit-console: 0/1 ready" {
+		t.Fatalf("progress = %q", progress)
+	}
+}
+
+func TestWaitWorkloadsStatefulSetBelowReplicas(t *testing.T) {
+	one := int32(1)
+	sts := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: "ambit-clickhouse", Namespace: "ambit-system"},
+		Spec: appsv1.StatefulSetSpec{Replicas: &one}}
+	nr, _ := notReadyPods(t, fake.NewSimpleClientset(sts), nil)
+	if all := strings.Join(nr.Pods, "\n"); !strings.Contains(all, "StatefulSet ambit-clickhouse: 0/1 ready") {
+		t.Fatalf("pods = %q", all)
+	}
+}
+
+func TestWaitWorkloadsSaysMissingOnlyWhenAbsent(t *testing.T) {
+	sel := "gateway.networking.k8s.io/gateway-name=ambit"
+	nr, _ := notReadyPods(t, fake.NewSimpleClientset(deployment("ambit-console", nil, 1)), []string{sel})
+	if all := strings.Join(nr.Pods, "\n"); !strings.Contains(all, "no Deployment matches "+sel+" (missing)") {
+		t.Fatalf("pods = %q", all)
+	}
+}
+
+func TestWaitWorkloadsReportsAPIErrors(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	cs.PrependReactor("list", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "apps", Resource: "deployments"}, "", nil)
+	})
+	cs.PrependReactor("list", "pods", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "", nil)
+	})
+	nr, progress := notReadyPods(t, cs, nil)
+	all := strings.Join(nr.Pods, "\n")
+	if !strings.Contains(all, "last API error: ") || !strings.Contains(all, "forbidden") || strings.Contains(all, "missing") {
+		t.Fatalf("pods = %q", all)
+	}
+	if len(progress) == 0 || !strings.Contains(progress[0], "forbidden") {
+		t.Fatalf("progress = %q", progress)
+	}
+}
+
+// stderrDuring returns what f writes to os.Stderr.
+func stderrDuring(t *testing.T, f func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stderr
+	os.Stderr = w
+	f()
+	os.Stderr = old
+	w.Close()
+	var b bytes.Buffer
+	b.ReadFrom(r)
+	return b.String()
+}
+
+func warningServer(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Warning", `299 - "v1 Foo is deprecated"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"kind":"PodList","apiVersion":"v1","items":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+	path := filepath.Join(t.TempDir(), "config")
+	cfg := strings.NewReplacer("https://prod.example.com:6443", srv.URL).Replace(kubeconfig)
+	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestConnectRoutesLibraryOutputToLog(t *testing.T) {
+	path := warningServer(t)
+	var log bytes.Buffer
+	stderr := stderrDuring(t, func() {
+		c, err := Connect(Target{Kubeconfig: path, Log: &log})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Kube.CoreV1().Pods("x").List(context.Background(), metav1.ListOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		ctrllog.Log.Info("library line")
+	})
+	if !strings.Contains(log.String(), "v1 Foo is deprecated") || !strings.Contains(log.String(), "library line") {
+		t.Fatalf("log = %q", log.String())
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
+func TestConnectWithoutLogPrintsNothing(t *testing.T) {
+	path := warningServer(t)
+	stderr := stderrDuring(t, func() {
+		c, err := Connect(Target{Kubeconfig: path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Kube.CoreV1().Pods("x").List(context.Background(), metav1.ListOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		ctrllog.Log.Info("library line")
+	})
+	if stderr != "" {
+		t.Fatalf("stderr = %q", stderr)
 	}
 }

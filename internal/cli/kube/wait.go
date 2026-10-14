@@ -31,13 +31,16 @@ func (e *NotReadyError) Error() string {
 func WaitWorkloads(ctx context.Context, cs kubernetes.Interface, ns string, required []string, every, timeout time.Duration, progress func(string)) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		ready, err := workloadsReady(ctx, cs, ns, required)
-		if err == nil && ready {
+		unmet, err := workloadsReady(ctx, cs, ns, required)
+		lastErr := err
+		if err == nil && len(unmet) == 0 {
 			return nil
 		}
-		pods, _ := cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
 		var waiting []corev1.Pod
-		if pods != nil {
+		pods, perr := cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{})
+		if perr != nil {
+			lastErr = perr
+		} else {
 			for _, p := range pods.Items {
 				if !podReady(&p) && p.Status.Phase != corev1.PodSucceeded {
 					waiting = append(waiting, p)
@@ -49,8 +52,9 @@ func WaitWorkloads(ctx context.Context, cs kubernetes.Interface, ns string, requ
 			for _, p := range waiting {
 				e.Pods = append(e.Pods, p.Name+": "+PodReason(&p, func(pod, container string) string { return lastLogLine(ctx, cs, ns, pod, container) }))
 			}
-			if len(e.Pods) == 0 {
-				e.Pods = []string{"no pod is failing, but the workloads are not complete (the gateway Deployment is missing)"}
+			e.Pods = append(e.Pods, unmet...)
+			if lastErr != nil {
+				e.Pods = append(e.Pods, "last API error: "+sanitize(lastErr.Error()))
 			}
 			return e
 		}
@@ -59,10 +63,13 @@ func WaitWorkloads(ctx context.Context, cs kubernetes.Interface, ns string, requ
 			names = append(names, p.Name)
 		}
 		sort.Strings(names)
-		if len(names) > 0 {
+		switch {
+		case len(names) > 0:
 			progress("waiting for " + strings.Join(names, ", "))
-		} else {
-			progress("waiting for the gateway Deployment")
+		case len(unmet) > 0:
+			progress("waiting for " + strings.Join(unmet, ", "))
+		default:
+			progress("waiting: API error: " + sanitize(lastErr.Error()))
 		}
 		select {
 		case <-ctx.Done():
@@ -72,36 +79,44 @@ func WaitWorkloads(ctx context.Context, cs kubernetes.Interface, ns string, requ
 	}
 }
 
-func workloadsReady(ctx context.Context, cs kubernetes.Interface, ns string, required []string) (bool, error) {
+// workloadsReady returns one line for each workload that is not complete, or an API error.
+func workloadsReady(ctx context.Context, cs kubernetes.Interface, ns string, required []string) ([]string, error) {
+	var unmet []string
 	deps, err := cs.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	for _, d := range deps.Items {
 		if !deploymentReady(&d) {
-			return false, nil
+			unmet = append(unmet, fmt.Sprintf("Deployment %s: %d/%d ready", d.Name, d.Status.ReadyReplicas, replicas(d.Spec.Replicas)))
 		}
 	}
 	sts, err := cs.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	for _, s := range sts.Items {
-		want := int32(1)
-		if s.Spec.Replicas != nil {
-			want = *s.Spec.Replicas
-		}
-		if s.Status.ReadyReplicas < want {
-			return false, nil
+		if want := replicas(s.Spec.Replicas); s.Status.ReadyReplicas < want {
+			unmet = append(unmet, fmt.Sprintf("StatefulSet %s: %d/%d ready", s.Name, s.Status.ReadyReplicas, want))
 		}
 	}
 	for _, sel := range required {
 		l, err := cs.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{LabelSelector: sel})
-		if err != nil || len(l.Items) == 0 {
-			return false, err
+		if err != nil {
+			return nil, err
+		}
+		if len(l.Items) == 0 {
+			unmet = append(unmet, "no Deployment matches "+sel+" (missing)")
 		}
 	}
-	return true, nil
+	return unmet, nil
+}
+
+func replicas(r *int32) int32 {
+	if r == nil {
+		return 1
+	}
+	return *r
 }
 
 func deploymentReady(d *appsv1.Deployment) bool {

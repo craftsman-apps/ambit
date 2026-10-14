@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -15,7 +16,9 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrllog "sigs.k8s.io/controller-runtime/pkg/log"
 
 	ambitv1alpha1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/cli/out"
@@ -25,7 +28,11 @@ import (
 const GatewaySelector = "gateway.networking.k8s.io/gateway-name=ambit"
 
 // Target selects a cluster. Empty Kubeconfig: $KUBECONFIG or ~/.kube/config. Empty Context: the current context.
-type Target struct{ Kubeconfig, Context string }
+// Log receives what client-go, controller-runtime and klog would print (server warnings, library logs); nil discards it.
+type Target struct {
+	Kubeconfig, Context string
+	Log                 io.Writer
+}
 
 // Clients talk to one context. Context and Server are what the CLI prints before it changes anything.
 type Clients struct {
@@ -47,6 +54,35 @@ var Scheme = func() *runtime.Scheme {
 	return s
 }()
 
+// logSink is where klog writes. klog and controller-runtime are process-wide, so they are set up once and follow
+// the Log of the latest Connect.
+var logSink struct {
+	sync.Mutex
+	w io.Writer
+}
+
+type sinkWriter struct{}
+
+func (sinkWriter) Write(b []byte) (int, error) {
+	logSink.Lock()
+	defer logSink.Unlock()
+	return logSink.w.Write(b)
+}
+
+var routeLibraryLogs sync.Once
+
+// useLog sends klog and controller-runtime output to w, and nothing to stderr.
+func useLog(w io.Writer) {
+	logSink.Lock()
+	logSink.w = w
+	logSink.Unlock()
+	routeLibraryLogs.Do(func() {
+		klog.LogToStderr(false)
+		klog.SetOutput(sinkWriter{})
+		ctrllog.SetLogger(klog.NewKlogr())
+	})
+}
+
 // Connect builds clients for t. It does not contact the cluster.
 func Connect(t Target) (*Clients, error) {
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
@@ -67,6 +103,12 @@ func Connect(t Target) (*Clients, error) {
 		return nil, err
 	}
 	cfg.Timeout = 30 * time.Second
+	log := t.Log
+	if log == nil {
+		log = io.Discard
+	}
+	useLog(log)
+	cfg.WarningHandler = rest.NewWarningWriter(log, rest.WarningWriterOptions{})
 	cs, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		return nil, err

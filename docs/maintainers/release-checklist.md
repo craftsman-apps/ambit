@@ -15,3 +15,14 @@ result here (spec of the CLI, section 9.3).
 
 | Date | Version | System | Docker | Result |
 |---|---|---|---|---|
+
+## Before the first `v*` tag
+
+Do these once, before the first release tag is pushed.
+
+1. Check P1 on a real install with 2 replicas (`gateway.replicas: 2`). The PodDisruptionBudget label comes from agentgateway's controller, so only a real install shows that P1 finds the budget: `ambit check --production` must print `✓ P1`.
+2. Open USER ACTIONs (a maintainer does them in GitHub and npm; the release workflow cannot run without them):
+   - Create the repository `homebrew-tap` and the secret `HOMEBREW_TAP_TOKEN` that can push to it.
+   - Create the Environment `release-channels` with the maintainer as required reviewer.
+   - Create the npm scope `@craftsman-apps`. Use trusted publishing, or create an `NPM_TOKEN` and wire it as `NODE_AUTH_TOKEN` on the npm step of the release workflow.
+   - Make `cli-unit`, `cli-local` and `cli-partial` required checks of `main`.

@@ -27,11 +27,11 @@ description: Every command, flag and exit code of the ambit CLI, the checks of a
 | 1 | A step failed, or (for `ambit check`) at least one check failed. |
 | 2 | Usage error: a bad flag, a missing file, a `--context` or `--kubeconfig` that you named and that does not exist (also for `ambit check`), or no `--yes` where the command must ask but there is no terminal. |
 
-Every failure prints a line `✗ <what> — <why>` and, on the next line, `next:` with the command to run or a page to read.
+Every failure of `ambit local up` and the other commands prints a line `✗ <what> — <why>` and, on the next line, `next:` with the command to run or a page to read. If Docker is not running, `ambit local up` stops before it changes anything: the line reads `✗ Docker is not running — <why>`, and `next:` says `start Docker Desktop` (macOS and Windows) or `start Docker: sudo systemctl start docker` (Linux).
 
 ## Secrets in the output
 
-The CLI never prints the OpenRouter key, the admin password or tokens: one output layer replaces them with `[redacted]` in text, JSON and `--verbose` output, also inside error messages from the libraries it uses. Keys are read from a hidden prompt, an environment variable or a file, never from a flag value, so they do not end up in your shell history. The local admin password is printed by `ambit local up` only on a terminal (`--no-password` hides it there too), and by `ambit local password`, whose purpose is to print it.
+The CLI never prints the OpenRouter key, the admin password or tokens: one output layer replaces them with `[redacted]` in text, JSON and `--verbose` output, also inside error messages from the libraries it uses. Keys are read from a hidden prompt (the question is written to stderr, so it stays on the terminal when you redirect stdout, for example `ambit local up > log`), an environment variable or a file, never from a flag value, so they do not end up in your shell history. The local admin password is printed by `ambit local up` only on a terminal (`--no-password` hides it there too), and by `ambit local password`, whose purpose is to print it.
 
 ## ambit local up
 
@@ -80,6 +80,8 @@ Without flags it runs the checks that apply: the pre-install group when Ambit is
 | `--fail-on-unknown` | exit 1 when a check could not look, for CI that must prove every check ran |
 
 `--output json` prints a list of `{"id", "group", "status", "message", "next", "source"}`.
+
+**In CI and scripts, run `ambit check --fail-on-unknown`.** Without it, a check that could not look is `?` and the exit code stays 0. If `KUBECONFIG` points to a file that does not exist, every check is `?` and the command exits 0. With `--fail-on-unknown` the same run exits 1. A `--kubeconfig` or `--context` that you pass on the command line and that cannot be used exits 2 in both cases.
 
 | ID | Group | Check | Source |
 |---|---|---|---|

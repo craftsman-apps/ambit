@@ -62,7 +62,7 @@ The [release page](https://github.com/craftsman-apps/ambit/releases) also has an
 ambit local up
 ```
 
-It asks for an OpenRouter API key and does not show what you type. Press Enter to use the test model. Without a terminal, or to skip the question, pass `--no-key`, or give the key in `OPENROUTER_API_KEY` or in a file with `--openrouter-key-file <file>`. Each step prints one line with its duration:
+It asks for an OpenRouter API key and does not show what you type. The question goes to stderr, so it stays on the terminal if you redirect the output to a file. Press Enter to use the test model. Without a terminal, or to skip the question, pass `--no-key`, or give the key in `OPENROUTER_API_KEY` or in a file with `--openrouter-key-file <file>`. Each step prints one line with its duration:
 
 ```text
 ✓ Preflight (0.4s)
@@ -92,7 +92,7 @@ Call the model from your shell:
 
 Without a terminal, or with `--no-password`, the password line reads ``Password: run `ambit local password` ``. On Windows the call command is for PowerShell. With an OpenRouter key, the model in the summary is the one that answered.
 
-If a step fails, the line says what is wrong, and the next line starts with `next:` and gives the command to run. Run `ambit local up` again at any time: it repairs the cluster it created, and it never changes a kind cluster that it did not create. Press Ctrl+C once to stop `ambit local up`: it stops and says how to remove the cluster if it was created. Press Ctrl+C a second time to end it at once.
+If a step fails, the line says what is wrong, and the next line starts with `next:` and gives the command to run. Every failure of `ambit local up` has a `next:` line. For example, if Docker is not running, the command stops at once with `✗ Docker is not running` and `next: start Docker Desktop` (on Linux, `next: start Docker: sudo systemctl start docker`). Run `ambit local up` again at any time: it repairs the cluster it created, and it never changes a kind cluster that it did not create. Press Ctrl+C once to stop `ambit local up`: it stops and says how to remove the cluster if it was created. Press Ctrl+C a second time to end it at once.
 
 To use another cluster name, pass `--name <name>` to `ambit local up`, `ambit local down` and `ambit local password`. The kubectl context is then `kind-<name>`.
 

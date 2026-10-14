@@ -23,3 +23,10 @@ func TestReleaseBuildRejectsDevFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestReleaseBuildRejectsKeyringServiceFlag(t *testing.T) {
+	r := newRig(t)
+	if code := r.run("key", "print", "--url", "https://llm.example.com", "--dev-keyring-service", "x"); code != 2 || !strings.Contains(r.stderr.String(), "unknown flag: --dev-keyring-service") {
+		t.Fatalf("code %d, stderr %q", code, r.stderr.String())
+	}
+}

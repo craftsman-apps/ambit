@@ -16,8 +16,9 @@ type Redactor struct {
 	secrets []string
 }
 
-// Patterns for secrets the CLI never registered, e.g. a token inside a library error.
-var secretPattern = regexp.MustCompile(`(?i)(bearer\s+)[a-z0-9._~+/=-]{8,}|sk-or-v1-[a-z0-9]{16,}`)
+// Patterns for secrets the CLI never registered, e.g. a token inside a library error, or an Ambit key that the
+// person already had in plain text in a config file.
+var secretPattern = regexp.MustCompile(`(?i)(bearer\s+)[a-z0-9._~+/=-]{8,}|sk-or-v1-[a-z0-9]{16,}|ambit_[0-9A-Za-z]{43}`)
 
 // Add registers a secret and the encoded forms it can take in library output (JSON string, URL query, URL path).
 // Values shorter than 4 characters are ignored: replacing them would damage ordinary text.

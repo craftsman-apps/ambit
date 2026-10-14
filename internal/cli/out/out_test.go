@@ -235,3 +235,14 @@ func TestStepAndLineInJSONModeGoToErr(t *testing.T) {
 		t.Fatalf("stdout %q, stderr %q", outb.String(), errb.String())
 	}
 }
+
+func TestRedactAmbitKeyPattern(t *testing.T) {
+	r := &Redactor{}
+	key := "ambit_0123456789abcdefghijklmnopqrstuvwxyzABCDEFG"
+	if got := r.Redact(`ANTHROPIC_AUTH_TOKEN = "` + key + `"`); strings.Contains(got, "ambit_") || !strings.Contains(got, "[redacted]") {
+		t.Fatalf("Redact = %q", got)
+	}
+	if got := r.Redact("the ambit_ prefix and ambit_short stay"); got != "the ambit_ prefix and ambit_short stay" {
+		t.Fatalf("Redact changed ordinary text: %q", got)
+	}
+}

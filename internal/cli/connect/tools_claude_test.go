@@ -177,3 +177,17 @@ func TestClaudeCodeQuotesTheURLInTheHelper(t *testing.T) {
 		t.Fatalf("got %s", p.After)
 	}
 }
+
+// A conflict line names the key, never the value: a helper such as `echo sk-ant-...` is a secret.
+func TestClaudeCodeConflictLinesNeverPrintAValue(t *testing.T) {
+	before := `{"apiKeyHelper": "echo sk-ant-api03-SECRETSECRET", "env": {"ANTHROPIC_BASE_URL": "https://sk-ant-SECRETSECRET.example", "ANTHROPIC_API_KEY": "sk-ant-SECRETSECRET"}}` + "\n"
+	p, err := PlanClaudeCode(claudeInput(goldenCase{}, goldenStep{URL: "https://llm.example.com", Model: "m"}, []byte(before), true, nil))
+	if err != nil || len(p.Conflicts) != 3 {
+		t.Fatalf("%v %+v", err, p)
+	}
+	for _, c := range p.Conflicts {
+		if strings.Contains(c.String(), "SECRET") || strings.Contains(c.String(), "echo") {
+			t.Errorf("conflict line prints a value: %s", c)
+		}
+	}
+}

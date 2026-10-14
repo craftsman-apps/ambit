@@ -66,10 +66,10 @@ func PlanClaudeCode(in Input) (*Plan, error) {
 	}
 	p := &Plan{}
 	if cmd, ok := d.Get("apiKeyHelper"); ok && !jsonEqual(cmd, sets[0].Value) {
-		p.Conflicts = append(p.Conflicts, Conflict{What: "apiKeyHelper is " + cmd, Why: "Claude Code would use that command instead of Ambit's key"})
+		p.Conflicts = append(p.Conflicts, Conflict{What: "apiKeyHelper is set to another command", Why: "Claude Code would use that command instead of Ambit's key"})
 	}
 	if u, ok := d.Get("env", "ANTHROPIC_BASE_URL"); ok && !jsonEqual(u, sets[1].Value) {
-		p.Conflicts = append(p.Conflicts, Conflict{What: "env.ANTHROPIC_BASE_URL is " + u, Why: "Claude Code would send its requests to that address"})
+		p.Conflicts = append(p.Conflicts, Conflict{What: "env.ANTHROPIC_BASE_URL is set to another address", Why: "Claude Code would send its requests to that address"})
 	}
 	var removed []string
 	for _, v := range claudeSecretVars {

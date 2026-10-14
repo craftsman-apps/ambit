@@ -21,19 +21,24 @@ that person's token: the same access rules, budgets, audit records and offboardi
 
 1. Sign in to the console and open **Keys**.
 2. Give the key a name, choose the scope and the end date, and create it.
-3. Copy the key and the snippet for your tool. The console fills in your company's addresses.
+3. Copy the key, choose the tab for your tool and copy its snippet. The console fills in your company's addresses and
+   the model name you choose. The tabs are Claude Code, Codex, opencode, Cursor, SDK (OpenAI and Anthropic) and MCP.
+   Where a tool reads an environment variable, the tab shows the line for bash or zsh, fish and PowerShell.
 
 Clients can send the key as `Authorization: Bearer <key>` or as `x-api-key: <key>`. Both work on both
 gateways. Clients send the **provider's model ID** (for example `google/gemma-4-31b-it:free`), not the name of
 the Model object.
 
-The console writes these snippets for you. `<llm>` is the LLM address (for example `https://llm.example.com`)
-and `<mcp>` is the MCP address (for example `https://mcp.example.com/mcp`).
+The console writes these snippets for you. `<llm>` is the LLM address (for example `https://llm.example.com`),
+`<mcp>` is the MCP address (for example `https://mcp.example.com/mcp`) and `<model>` is the provider's model ID.
+[Connect Claude Code and Cursor](guides/coding-tools.md) has the same snippets for Codex and opencode.
 
-**Claude Code**, in `settings.json`:
+**Claude Code**, merged into the `"env"` object of `~/.claude/settings.json` (never a project's
+`.claude/settings.json`). Restart Claude Code and run `/status` to check the base URL:
 
 ```json
-{"env": {"ANTHROPIC_BASE_URL": "<llm>", "ANTHROPIC_AUTH_TOKEN": "ambit_..."}}
+{"env": {"ANTHROPIC_BASE_URL": "<llm>", "ANTHROPIC_AUTH_TOKEN": "ambit_...", "ANTHROPIC_MODEL": "<model>",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL": "<model>", "ANTHROPIC_DEFAULT_SONNET_MODEL": "<model>", "ANTHROPIC_DEFAULT_HAIKU_MODEL": "<model>"}}
 ```
 
 **Cursor**, in the model settings:
@@ -68,7 +73,9 @@ export ANTHROPIC_API_KEY=ambit_...
 claude mcp add --transport http ambit <mcp> --header "Authorization: Bearer ambit_..."
 ```
 
-A key with scope `LLM` gets the first four snippets. A key with scope `MCP` gets the last one.
+A key with scope `LLM` gets every tab except MCP. A key with scope `MCP` gets only the MCP tab. After you create a
+key, the console shows "Waiting for the first request with this key…" and then "First request seen at HH:MM". This
+uses the same last-use data as the **Last used** column, so it needs the audit trail.
 
 ## Scope, end date and limits
 

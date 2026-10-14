@@ -14,6 +14,9 @@ type keySettingsView struct {
 	Enabled        bool `json:"enabled"`
 	InactivityDays int  `json:"inactivityDays"`
 	MaxDays        int  `json:"maxDays"`
+	// LastUsedAvailable is false when the console cannot tell a key's last use (no audit trail), so a screen that
+	// waits for the first request can say nothing instead of waiting for ever.
+	LastUsedAvailable bool `json:"lastUsedAvailable"`
 }
 
 // KeyView is what the console shows of a key: never the key itself or its hash.
@@ -91,7 +94,7 @@ func (c *Catalog) registerKeys(mux *http.ServeMux, read func(func(http.ResponseW
 
 func (c *Catalog) keySettings() keySettingsView {
 	s := c.Keys.Settings
-	return keySettingsView{Enabled: s.Enabled, InactivityDays: s.InactivityDays, MaxDays: s.MaxDays}
+	return keySettingsView{Enabled: s.Enabled, InactivityDays: s.InactivityDays, MaxDays: s.MaxDays, LastUsedAvailable: c.lastUsedFunc() != nil}
 }
 
 // keyErr maps the key service's errors to HTTP answers.

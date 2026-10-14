@@ -177,7 +177,7 @@ func TestPeopleCannotRevokeOthersKeys(t *testing.T) {
 func TestKeySettingsEndpoint(t *testing.T) {
 	f := newKeysFixture(t)
 	r := f.call(t, "GET", "/api/settings/keys", f.cookie("mira@acme.com", RoleViewer), nil)
-	if r.Code != 200 || strings.TrimSpace(r.Body.String()) != `{"enabled":true,"inactivityDays":30,"maxDays":365}` {
+	if r.Code != 200 || strings.TrimSpace(r.Body.String()) != `{"enabled":true,"inactivityDays":30,"maxDays":365,"lastUsedAvailable":false}` {
 		t.Fatal(r.Code, r.Body.String())
 	}
 }
@@ -370,5 +370,35 @@ func TestKeyStatus(t *testing.T) {
 		if got := strings.Join(slices.Sorted(slices.Values(status(c.now))), " "); got != c.want {
 			t.Errorf("at %v: %s, want %s", c.now, got, c.want)
 		}
+	}
+}
+
+// The created-key screen shows its "first request" line only when the console can tell a key's last use.
+func TestKeySettingsSayWhetherLastUseIsKnown(t *testing.T) {
+	f := newKeysFixture(t)
+	ck := f.cookie("mira@acme.com", RoleViewer)
+	avail := func() bool {
+		var out struct {
+			Settings map[string]any `json:"settings"`
+		}
+		if err := json.Unmarshal(f.call(t, "GET", "/api/keys?lastUsed=false", ck, nil).Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		v, ok := out.Settings["lastUsedAvailable"].(bool)
+		if !ok {
+			t.Fatalf("settings lack lastUsedAvailable: %v", out.Settings)
+		}
+		return v
+	}
+	cat := &Catalog{Client: f.keys.Client, Namespace: f.keys.Namespace, Keys: f.keys}
+	if cat.keySettings().LastUsedAvailable {
+		t.Error("no audit and no lookup: last use is unknown")
+	}
+	cat.LastUsed = func(context.Context, []string, time.Time) (map[string]time.Time, error) { return nil, nil }
+	if !cat.keySettings().LastUsedAvailable {
+		t.Error("with a lookup, last use is known")
+	}
+	if avail() {
+		t.Error("the fixture has no audit: lastUsedAvailable must be false")
 	}
 }

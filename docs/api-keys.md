@@ -73,9 +73,11 @@ export ANTHROPIC_API_KEY=ambit_...
 claude mcp add --transport http ambit <mcp> --header "Authorization: Bearer ambit_..."
 ```
 
-A key with scope `LLM` gets every tab except MCP. A key with scope `MCP` gets only the MCP tab. After you create a
+A key with scope `LLM` gets every tab except MCP. A key with scope `MCP` gets only the MCP tab, with commands for Claude Code, Codex,
+opencode and Cursor. The model list on the screen shows only the models your access rules allow. After you create a
 key, the console shows "Waiting for the first request with this key…" and then "First request seen at HH:MM". This
-uses the same last-use data as the **Last used** column, so it needs the audit trail.
+uses the same last-use data as the **Last used** column. Without the audit trail the console shows no line. After 5
+minutes without a request it says "No request seen yet. Check the steps above, or see Audit."
 
 ## Scope, end date and limits
 

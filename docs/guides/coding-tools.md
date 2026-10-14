@@ -22,7 +22,7 @@ You need the cluster from the [Quick start](../quick-start.md), with the free mo
 3. Enter a name, for example `laptop`. Choose the scope **LLM** and an end date. Choose **Create**.
 4. Copy the key. It starts with `ambit_`. The console shows it once. It stores only a hash. If you lose the key, revoke it and create a new one.
 
-The console then shows one tab for each tool (Claude Code, Codex, opencode, Cursor, SDK, MCP) with your addresses and the model name filled in. The snippets below are the same. Under the snippets, the console shows "Waiting for the first request with this key…" and changes it to "First request seen at HH:MM" when the first call arrives. It reads this from the audit trail, so it needs the audit trail to be on.
+The console then shows one tab for each tool (Claude Code, Codex, opencode, Cursor, SDK, MCP) with your addresses and the model name filled in. The snippets below are the same. Under the snippets, the console shows "Waiting for the first request with this key…" and changes it to "First request seen at HH:MM" when the first call arrives. It reads this from the audit trail: without the audit trail the line is not shown, and after 5 minutes without a request it changes to "No request seen yet. Check the steps above, or see Audit."
 
 Treat the key like a password. A key carries the access of its owner and never more.
 

@@ -1,7 +1,7 @@
 // The per-tool setup text on the "key created" screen. Pure functions, so they run without a browser.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { toolTabs, isPublicHttps } from "../src/lib/tool-setup.ts";
+import { toolTabs, isPublicHttps, nextTabId, usableModelIds, firstUseLine, FIRST_USE_TIMEOUT_MS } from "../src/lib/tool-setup.ts";
 
 const setup = { llm: "https://llm.example.com", mcp: "https://mcp.example.com/mcp", key: "ambit_TESTKEY", model: "acme/model-1" };
 const tab = (id, scope = "both") => toolTabs(setup, scope).find((t) => t.id === id);
@@ -113,4 +113,60 @@ test("no tab puts the key in a URL", () => {
 test("without a model the snippets show a visible placeholder", () => {
   const t = toolTabs({ ...setup, model: "" }, "both").find((x) => x.id === "claudeCode");
   assert.equal(JSON.parse(t.blocks[0].text).env.ANTHROPIC_MODEL, "<model-id>");
+});
+
+test("MCP tab: Claude Code, Codex, opencode and Cursor, with a static header and no OAuth", () => {
+  const t = tab("mcp");
+  const by = (re) => t.blocks.find((b) => re.test(b.label));
+  const codex = by(/Codex/);
+  assert.match(codex.label, /beta/);
+  assert.match(codex.text, /\[mcp_servers\.ambit\]/);
+  assert.match(codex.text, /url = "https:\/\/mcp\.example\.com\/mcp"/);
+  assert.match(codex.text, /bearer_token_env_var = "AMBIT_API_KEY"/);
+  assert.ok(!codex.text.includes(setup.key));
+  const oc = by(/opencode/);
+  assert.match(oc.label, /beta/);
+  const mcp = JSON.parse(oc.text).mcp.ambit;
+  assert.deepEqual([mcp.type, mcp.url, mcp.oauth], ["remote", setup.mcp, false]);
+  assert.equal(mcp.headers.Authorization, "Bearer {env:AMBIT_API_KEY}");
+  const cur = by(/Cursor/);
+  assert.match(cur.label, /beta/);
+  const c = JSON.parse(cur.text).mcpServers.ambit;
+  assert.equal(c.url, setup.mcp);
+  assert.equal(c.headers.Authorization, "Bearer ambit_TESTKEY");
+  assert.match(cur.label, /\.cursor\/mcp\.json/);
+  assert.ok(t.blocks.some((b) => b.shells && b.shells.bash.includes("AMBIT_API_KEY")), "a shell block sets AMBIT_API_KEY");
+});
+
+test("tab keys: arrows wrap, Home and End jump, other keys do nothing", () => {
+  const ids = ["a", "b", "c"];
+  assert.equal(nextTabId(ids, "a", "ArrowRight"), "b");
+  assert.equal(nextTabId(ids, "c", "ArrowRight"), "a");
+  assert.equal(nextTabId(ids, "a", "ArrowLeft"), "c");
+  assert.equal(nextTabId(ids, "b", "Home"), "a");
+  assert.equal(nextTabId(ids, "b", "End"), "c");
+  assert.equal(nextTabId(ids, "b", "x"), null);
+});
+
+test("model list: only the models the person may use, as provider model IDs", () => {
+  const models = [{ name: "free", model: "nvidia/x:free" }, { name: "sonnet", model: "anthropic.sonnet" }, { name: "dup", model: "nvidia/x:free" }];
+  assert.deepEqual(usableModelIds(models, { models: ["dup", "free"] }), ["nvidia/x:free"]);
+  assert.deepEqual(usableModelIds(models, { models: [] }), []);
+  assert.deepEqual(usableModelIds(undefined, undefined), []);
+});
+
+test("first-use line: hidden, waiting, seen, timeout", () => {
+  const at = new Date(Date.UTC(2026, 9, 14, 12, 3)).toISOString();
+  assert.equal(firstUseLine({ available: false, lastUsed: null, waitedMs: 0 }), null);
+  assert.equal(firstUseLine({ available: false, lastUsed: at, waitedMs: 0 }), null);
+  assert.deepEqual(firstUseLine({ available: true, lastUsed: null, waitedMs: 1000 }), { kind: "waiting", text: "Waiting for the first request with this key…" });
+  assert.match(firstUseLine({ available: true, lastUsed: at, waitedMs: 1000 }).text, /^First request seen at \d\d:\d\d$/);
+  assert.equal(firstUseLine({ available: true, lastUsed: at, waitedMs: 1000 }).kind, "seen");
+  assert.deepEqual(firstUseLine({ available: true, lastUsed: null, waitedMs: FIRST_USE_TIMEOUT_MS }),
+    { kind: "timeout", text: "No request seen yet. Check the steps above, or see Audit." });
+  assert.equal(FIRST_USE_TIMEOUT_MS, 5 * 60 * 1000);
+  // a request that arrives after the timeout still wins
+  assert.equal(firstUseLine({ available: true, lastUsed: at, waitedMs: FIRST_USE_TIMEOUT_MS * 2 }).kind, "seen");
+  // while the first answer is still loading, show waiting
+  assert.equal(firstUseLine({ available: undefined, lastUsed: null, waitedMs: 0 }).kind, "waiting");
 });

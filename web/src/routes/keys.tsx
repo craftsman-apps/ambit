@@ -1,15 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { sendJSON, useModels } from "@/api";
+import { sendJSON, useModels, useMyAccess } from "@/api";
 import { cn } from "@/lib/utils";
-import { shellNames, toolTabs, type Block, type Shell as ShellName } from "@/lib/tool-setup";
+import { FIRST_USE_TIMEOUT_MS, firstUseLine, nextTabId, shellNames, toolTabs, usableModelIds, type Block, type Shell as ShellName } from "@/lib/tool-setup";
 import { Button } from "@/components/ui/button";
 import { Shell } from "@/components/shell";
 
 export type KeyView = { id: string; name: string; prefix: string; scope: "llm" | "mcp" | "both"; created: string;
   expires: string; until: string; owner?: string; lastUsed: string | null;
   status: "active" | "stops-soon" | "stopped"; stopsBecause: "inactivity" | "end-date" };
-export type KeySettings = { enabled: boolean; inactivityDays: number; maxDays: number };
+export type KeySettings = { enabled: boolean; inactivityDays: number; maxDays: number; lastUsedAvailable: boolean };
 export type KeyList = { settings: KeySettings; keys: KeyView[] };
 type Created = { key: string; view: KeyView; urls: { llm: string; mcp: string } };
 
@@ -55,25 +55,32 @@ function CopyBlock({ text, testId, label }: { text: string; testId: string; labe
 // Shown under the snippets. The keys list already carries each key's last use (from the audit trail); poll it until
 // the first request appears. The poll asks for the list only: the plain key is never sent again.
 function FirstUse({ id }: { id: string }) {
-  const q = useQuery({ queryKey: ["keys", "first-use", id], refetchInterval: (query) => (query.state.data ? false : 15_000),
-    queryFn: async () => (await get<KeyList>("/api/keys")).keys.find((k) => k.id === id)?.lastUsed ?? null });
-  const at = q.data ? new Date(q.data).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" }) : null;
-  return <p data-testid="first-use" role="status" className={at ? "text-ok" : "text-muted"}>
-    {at ? `First request seen at ${at}` : "Waiting for the first request with this key…"}</p>;
+  const [started] = useState(Date.now);
+  const [timedOut, setTimedOut] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setTimedOut(true), FIRST_USE_TIMEOUT_MS); return () => clearTimeout(t); }, []);
+  const q = useQuery({ queryKey: ["keys", "first-use", id], refetchInterval: (query) => (query.state.data?.lastUsed || query.state.data?.available === false || timedOut ? false : 30_000),
+    queryFn: async () => { const l = await get<KeyList>("/api/keys"); return { available: l.settings.lastUsedAvailable, lastUsed: l.keys.find((k) => k.id === id)?.lastUsed ?? null }; } });
+  const line = firstUseLine({ available: q.data?.available, lastUsed: q.data?.lastUsed ?? null, waitedMs: timedOut ? FIRST_USE_TIMEOUT_MS : Date.now() - started });
+  if (!line) return null;
+  return <p data-testid="first-use" role="status" className={line.kind === "seen" ? "text-ok" : line.kind === "timeout" ? "text-warn" : "text-muted"}>{line.text}</p>;
 }
 
 function KeyCreated({ created, onDone }: { created: Created; onDone: () => void }) {
   const models = useModels();
-  const ids = [...new Set((models.data ?? []).map((m) => m.model).filter(Boolean))];
+  const access = useMyAccess();
+  const ids = usableModelIds(models.data, access.data);
   const [chosen, setChosen] = useState("");
   const model = chosen || ids[0] || "";
   const tabs = toolTabs({ ...created.urls, key: created.key, model }, created.view.scope);
   const [active, setActive] = useState(tabs[0].id);
   const [shell, setShell] = useState<ShellName>("bash");
   const tab = tabs.find((t) => t.id === active) ?? tabs[0];
-  const hasShells = tab.blocks.some((b) => b.shells);
-  const block = (b: Block, i: number) => <CopyBlock key={`${tab.id}-${i}-${b.shells ? shell : ""}`} text={b.shells ? b.shells[shell] : b.text}
-    testId={`snippet-${tab.id}-${i}`} label={b.label} />;
+  const firstShells = tab.blocks.findIndex((b) => b.shells);
+  const picker = <div role="group" aria-label="Shell" className="flex items-center gap-1"><span className="mr-1 text-muted">Shell</span>
+    {(Object.keys(shellNames) as ShellName[]).map((k) => <Button key={k} type="button" variant={k === shell ? "primary" : "outline"} aria-pressed={k === shell}
+      className="w-auto py-1" onClick={() => setShell(k)}>{shellNames[k]}</Button>)}</div>;
+  const block = (b: Block, i: number) => <div key={`${tab.id}-${i}-${b.shells ? shell : ""}`} className="space-y-3">{i === firstShells && picker}
+    <CopyBlock text={b.shells ? b.shells[shell] : b.text} testId={`snippet-${tab.id}-${i}`} label={b.label} /></div>;
   return (
     <div className="space-y-3 rounded-md border border-line p-4">
       <h2 className="font-semibold">Key ‘{created.view.name}’ created</h2>
@@ -84,18 +91,17 @@ function KeyCreated({ created, onDone }: { created: Created; onDone: () => void 
         <label className="flex items-center gap-2"><span className="text-muted">Model name</span>
           {ids.length ? <select className={cn(field, "w-auto")} value={model} onChange={(e) => setChosen(e.target.value)}>
             {ids.map((m) => <option key={m}>{m}</option>)}</select>
-            : <span className="text-muted">Not known. The snippets show {"<model-id>"}: replace it with the provider's model name.</span>}</label>
+            : models.data && access.data && <span className="text-muted">No model is open to you. The snippets show {"<model-id>"}: replace it with a provider model name once you have access.</span>}</label>
       )}
-      <div role="tablist" aria-label="Tool" className="flex flex-wrap gap-1 border-b border-line">
-        {tabs.map((t) => <button key={t.id} role="tab" type="button" aria-selected={t.id === tab.id} onClick={() => setActive(t.id)}
-          className={cn("-mb-px border-b-2 px-3 py-1.5 text-body", t.id === tab.id ? "border-accent font-medium text-ink" : "border-transparent text-muted hover:text-ink")}>{t.title}</button>)}
+      <div role="tablist" aria-label="Tool" className="flex flex-wrap gap-1 border-b border-line"
+        onKeyDown={(e) => { const n = nextTabId(tabs.map((t) => t.id), tab.id, e.key); if (!n) return; e.preventDefault(); setActive(n); document.getElementById(`tab-${n}`)?.focus(); }}>
+        {tabs.map((t) => <button key={t.id} id={`tab-${t.id}`} role="tab" type="button" aria-selected={t.id === tab.id} aria-controls="tool-panel"
+          tabIndex={t.id === tab.id ? 0 : -1} onClick={() => setActive(t.id)}
+          className={cn("-mb-px border-b-2 px-3 py-1.5 text-body focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent", t.id === tab.id ? "border-accent font-medium text-ink" : "border-transparent text-muted hover:text-ink")}>{t.title}</button>)}
       </div>
-      <div role="tabpanel" className="space-y-3">
+      <div role="tabpanel" id="tool-panel" aria-labelledby={`tab-${tab.id}`} tabIndex={0} className="space-y-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
         {tab.warning && <p role="alert" data-testid="tab-warning" className="rounded-md bg-warn-soft p-2 text-warn">{tab.warning}</p>}
         <ol className="list-decimal space-y-1 pl-5">{tab.steps.map((s) => <li key={s}>{s}</li>)}</ol>
-        {hasShells && <div role="group" aria-label="Shell" className="flex items-center gap-1"><span className="mr-1 text-muted">Shell</span>
-          {(Object.keys(shellNames) as ShellName[]).map((k) => <Button key={k} type="button" variant={k === shell ? "primary" : "outline"} aria-pressed={k === shell}
-            className="w-auto py-1" onClick={() => setShell(k)}>{shellNames[k]}</Button>)}</div>}
         {tab.blocks.map(block)}
       </div>
       <FirstUse id={created.view.id} />

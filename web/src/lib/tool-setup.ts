@@ -84,9 +84,48 @@ export function toolTabs({ llm, mcp, key, model }: Setup, scope: Scope): ToolTab
     ] });
   }
   if (scope !== "llm") {
+    const remote = `{env:AMBIT_API_KEY}`;
     tabs.push({ id: "mcp", title: "MCP", blocks: [
       { label: "Claude Code", text: `claude mcp add --transport http ambit ${mcp} --header "Authorization: Bearer ${key}"` },
-    ], steps: ["Run this command in a terminal."] });
+      { label: "Codex (beta: being tested): ~/.codex/config.toml", text: `[mcp_servers.ambit]\nurl = "${mcp}"\nbearer_token_env_var = "AMBIT_API_KEY"` },
+      { label: "opencode (beta: being tested): opencode.json", text: JSON.stringify({ mcp: { ambit: { type: "remote", url: mcp, oauth: false,
+        headers: { Authorization: `Bearer ${remote}` } } } }, null, 2) },
+      { label: "Key for Codex and opencode, in your terminal", shells: vars([["AMBIT_API_KEY", key]]) },
+      { label: "Cursor (beta: being tested): ~/.cursor/mcp.json", text: JSON.stringify({ mcpServers: { ambit: { url: mcp, headers: { Authorization: `Bearer ${key}` } } } }, null, 2) },
+    ], steps: [
+      "Claude Code: run the command in a terminal.",
+      "Codex and opencode: merge the block into the file named in its label, set the variable in your terminal, and start the tool from that terminal. " + keepShell + " opencode needs \"oauth\": false: the gateway has no OAuth sign-in.",
+      "Cursor: merge the block into ~/.cursor/mcp.json. This file holds the key, so keep it private. Cursor does not see variables set in a terminal when you start it from the dock or the Start menu.",
+    ] });
   }
   return tabs;
+}
+
+// WAI-ARIA tabs: arrows move (and wrap), Home and End jump. Returns the id to select, or null for any other key.
+export function nextTabId(ids: string[], current: string, key: string): string | null {
+  const i = ids.indexOf(current);
+  if (key === "ArrowRight") return ids[(i + 1) % ids.length];
+  if (key === "ArrowLeft") return ids[(i - 1 + ids.length) % ids.length];
+  if (key === "Home") return ids[0];
+  if (key === "End") return ids[ids.length - 1];
+  return null;
+}
+
+// The models the person's access rules allow, as the provider model IDs that clients send. /api/me/access lists Model names.
+export function usableModelIds(models?: { name: string; model: string }[], access?: { models: string[] }): string[] {
+  if (!models || !access) return [];
+  return [...new Set(models.filter((m) => m.model && access.models.includes(m.name)).map((m) => m.model))];
+}
+
+export const FIRST_USE_TIMEOUT_MS = 5 * 60 * 1000;
+// The status line under the snippets. null hides it: the console cannot tell a key's last use (available === false).
+export function firstUseLine({ available, lastUsed, waitedMs }: { available?: boolean; lastUsed: string | null; waitedMs: number }):
+  { kind: "waiting" | "seen" | "timeout"; text: string } | null {
+  if (available === false) return null;
+  if (lastUsed) {
+    const at = new Date(lastUsed).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+    return { kind: "seen", text: `First request seen at ${at}` };
+  }
+  if (waitedMs >= FIRST_USE_TIMEOUT_MS) return { kind: "timeout", text: "No request seen yet. Check the steps above, or see Audit." };
+  return { kind: "waiting", text: "Waiting for the first request with this key…" };
 }

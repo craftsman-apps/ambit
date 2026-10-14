@@ -16,6 +16,21 @@ result here (spec of the CLI, section 9.3).
 | Date | Version | System | Docker | Result |
 |---|---|---|---|---|
 
+## Release order
+
+The website, the Helm charts, the image and the CLI are all released from one tagged commit. Merging to `main`
+deploys nothing.
+
+1. Merge every pull request for the release into `main`, including its docs.
+2. Push the tag on that commit: `git tag v0.2.0 <commit>` then `git push origin v0.2.0`. The `release` workflow
+   publishes the image, the charts and the CLI; the `site` workflow deploys ambitproject.dev from the same commit.
+   A prerelease tag (`v0.2.0-rc.1`) publishes to GitHub only and does not deploy the site.
+3. Approve the `cli-channels` job (Homebrew and npm) after the checksum check passes.
+
+To publish a homepage or docs fix between releases, push a site tag: `git tag site-2026-10-20 <commit>` then
+`git push origin site-2026-10-20`. The site tag publishes every page on that commit, so pick a commit whose docs do
+not describe unreleased features (for example a branch made from the last `v*` tag with only the fix on it).
+
 ## Before the first `v*` tag
 
 Do these once, before the first release tag is pushed.
@@ -26,3 +41,4 @@ Do these once, before the first release tag is pushed.
    - Create the Environment `release-channels` with the maintainer as required reviewer.
    - Create the npm scope `@craftsman-apps`. Use trusted publishing, or create an `NPM_TOKEN` and wire it as `NODE_AUTH_TOKEN` on the npm step of the release workflow.
    - Make `cli-unit`, `cli-local` and `cli-partial` required checks of `main`.
+3. At the first tag, confirm in the `cli` job log that `attest-build-provenance` attested every archive (its `subject-path` is a comma-separated list, which runs for the first time there): `gh attestation verify <archive> --repo craftsman-apps/ambit` passes for one archive of each system.

@@ -1,12 +1,14 @@
 package local
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/craftsman-apps/ambit/internal/cli/checks"
 )
@@ -22,16 +24,28 @@ type DockerInfo struct {
 	Podman        bool
 }
 
+// dockerTimeout bounds `docker info`, which hangs when the daemon is stuck.
+const dockerTimeout = 10 * time.Second
+
 // ReadDockerInfo runs `docker info`. kind itself runs the docker command, so it must be on PATH.
-func ReadDockerInfo() DockerInfo {
-	raw, err := exec.Command("docker", "info", "--format", "{{json .}}").Output()
+func ReadDockerInfo() DockerInfo { return readDockerInfo("docker", dockerTimeout) }
+
+func readDockerInfo(command string, timeout time.Duration) DockerInfo {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, command, "info", "--format", "{{json .}}")
+	cmd.WaitDelay = time.Second // a killed command's children must not keep the output pipe open
+	raw, err := cmd.Output()
 	if err != nil {
 		msg := err.Error()
 		if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
 			msg = strings.TrimSpace(string(ee.Stderr))
 		}
-		if _, lookErr := exec.LookPath("docker"); lookErr != nil {
+		if _, lookErr := exec.LookPath(command); lookErr != nil {
 			msg = "the docker command is not installed"
+		}
+		if ctx.Err() == context.DeadlineExceeded {
+			msg = fmt.Sprintf("Docker did not answer in %s", timeout)
 		}
 		return DockerInfo{Err: msg}
 	}
@@ -47,12 +61,19 @@ func ParseDockerInfo(raw []byte) DockerInfo {
 		SecurityOptions []string
 		ServerErrors    []string
 		Host            json.RawMessage `json:"host"` // only in Podman's own format
+		Components      []struct{ Name string }
 	}
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return DockerInfo{Err: "docker info returned no JSON: " + err.Error()}
 	}
 	d := DockerInfo{ServerVersion: v.ServerVersion, OS: v.OperatingSystem, MemTotal: v.MemTotal,
-		Podman: v.Host != nil || strings.Contains(strings.ToLower(string(raw)), "podman")}
+		Podman: v.Host != nil}
+	// Only the runtime's identity counts: a Docker host name, label or path may contain "podman".
+	for _, c := range v.Components {
+		if c.Name == "Podman Engine" {
+			d.Podman = true
+		}
+	}
 	for _, o := range v.SecurityOptions {
 		if strings.Contains(o, "rootless") {
 			d.Rootless = true
@@ -139,6 +160,10 @@ func Preflight(in PreflightInput) []checks.Result {
 	if in.Ownership.Verdict == Owned {
 		out = append(out, r("L4", checks.NA, fmt.Sprintf("ports %d and %d belong to the existing cluster", in.HTTPPort, in.HTTPSPort), "", "host"))
 	} else {
+		nameFlag := ""
+		if in.Name != "ambit" { // "ambit" is the default name
+			nameFlag = " --name " + in.Name
+		}
 		var busy []string
 		for _, p := range []int{in.HTTPPort, in.HTTPSPort} {
 			if !in.PortFree(p) {
@@ -147,7 +172,7 @@ func Preflight(in PreflightInput) []checks.Result {
 		}
 		if len(busy) > 0 {
 			out = append(out, r("L4", checks.Fail, "port "+strings.Join(busy, " and ")+" on 127.0.0.1 is in use",
-				fmt.Sprintf("ambit local up --port %d --https-port %d", in.HTTPPort+10000, in.HTTPSPort+10000), "host"))
+				fmt.Sprintf("ambit local up%s --port %d --https-port %d", nameFlag, in.HTTPPort+10000, in.HTTPSPort+10000), "host"))
 		} else {
 			out = append(out, r("L4", checks.Pass, fmt.Sprintf("ports %d and %d are free", in.HTTPPort, in.HTTPSPort), "", "host"))
 		}

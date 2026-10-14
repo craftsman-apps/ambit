@@ -56,7 +56,7 @@ export function Shell({ crumb, children }: { crumb: string; children: ReactNode 
         <NavLink to="/keys">Keys</NavLink>
         {u.role === "admin" && <><Section>Settings</Section><NavLink to="/settings/sign-in">Sign-in</NavLink><NavLink to="/settings/apps">Apps</NavLink><NavLink to="/settings/keys">Keys</NavLink><NavLink to="/settings/offboarding">Offboarding</NavLink><NavLink to="/settings/dependencies">Dependencies</NavLink></>}
       </nav>
-      <div className="grid grid-rows-[auto_1fr]">
+      <div className="flex flex-col">
         <header className="flex items-center justify-between border-b border-line bg-surface px-4 py-2">
           <span className="text-muted">{crumb}</span>
           <div className="flex items-center gap-3 text-body">
@@ -69,7 +69,7 @@ export function Shell({ crumb, children }: { crumb: string; children: ReactNode 
           </div>
         </header>
         <KeyBanner />
-        <main className="min-w-0 bg-surface">{children}</main>
+        <main className="min-w-0 flex-1 bg-surface">{children}</main>
       </div>
     </div>
   );

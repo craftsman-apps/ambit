@@ -23,6 +23,9 @@ type FileChange struct {
 	After      []byte
 	Delete     bool     // remove the file instead of writing After
 	RemoveDirs []string // with Delete: directories to remove afterwards when they are empty
+	// KeepBackup leaves an existing .ambit.bak as it is. A re-connect uses it while the first backup is the only
+	// place that holds a secret connect removed.
+	KeepBackup bool
 }
 
 // FileResult says what WriteAll did to one file.
@@ -101,8 +104,10 @@ func writeOne(c FileChange) (FileResult, error) {
 		}
 		if !c.Delete { // a file that is deleted holds only what connect made; there is nothing to keep
 			r.Backup = c.Path + ".ambit.bak"
-			if err := atomicWrite(r.Backup, c.Before, 0o600); err != nil {
-				return r, writeError(r.Backup, err)
+			if _, err := os.Stat(r.Backup); !(c.KeepBackup && err == nil) {
+				if err := atomicWrite(r.Backup, c.Before, 0o600); err != nil {
+					return r, writeError(r.Backup, err)
+				}
 			}
 		}
 	}

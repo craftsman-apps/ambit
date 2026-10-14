@@ -291,3 +291,23 @@ func TestWriteAllSaysWhatItCouldNotPutBack(t *testing.T) {
 		t.Fatalf("err = %#v", err)
 	}
 }
+func TestWriteAllKeepsTheFirstBackupWhenAskedTo(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "settings.json")
+	os.WriteFile(p, []byte("one"), 0o644)
+	if _, err := WriteAll([]FileChange{{Path: p, Before: []byte("one"), Exists: true, After: []byte("two")}}); err != nil {
+		t.Fatal(err)
+	}
+	res, err := WriteAll([]FileChange{{Path: p, Before: []byte("two"), Exists: true, After: []byte("three"), KeepBackup: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bak := p + ".ambit.bak"; res[0].Backup != bak || read(t, bak) != "one" {
+		t.Fatalf("backup %q holds %q", res[0].Backup, read(t, p+".ambit.bak"))
+	}
+	// Without an earlier backup, KeepBackup still writes one.
+	q := filepath.Join(t.TempDir(), "q.json")
+	os.WriteFile(q, []byte("a"), 0o644)
+	if _, err := WriteAll([]FileChange{{Path: q, Before: []byte("a"), Exists: true, After: []byte("b"), KeepBackup: true}}); err != nil || read(t, q+".ambit.bak") != "a" {
+		t.Fatalf("%v %q", err, read(t, q+".ambit.bak"))
+	}
+}

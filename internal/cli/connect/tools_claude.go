@@ -81,12 +81,12 @@ func PlanClaudeCode(in Input) (*Plan, error) {
 		return nil, fmt.Errorf("%s is not valid JSON — %w", in.Path, err)
 	}
 	sets := claudeSets(in)
+	already := false
 	if in.Prev != nil {
 		// Entries an earlier connect wrote are ours: take them out, and write them again below. The file then
 		// ends up as if the earlier connect had not happened, so a disconnect restores the very first state.
-		if in.Exists && claudeAlready(d, sets) {
-			return &Plan{After: in.File, Record: *in.Prev, Already: true}, nil
-		}
+		// The checks below run also when the entries are unchanged: a secret may have come back since.
+		already = in.Exists && claudeAlready(d, sets)
 		if _, err := d.Remove(in.Prev.Entries); err != nil {
 			return nil, err
 		}
@@ -114,6 +114,11 @@ func PlanClaudeCode(in Input) (*Plan, error) {
 	if len(p.Conflicts) > 0 && !in.Force {
 		return p, nil
 	}
+	if already && len(removed) == 0 {
+		p.After, p.Record, p.Already = in.File, *in.Prev, true
+		claudeShellWarnings(in, p)
+		return p, nil
+	}
 	if err := refuseSecondBackup(in, removed); err != nil {
 		return nil, err
 	}
@@ -132,6 +137,12 @@ func PlanClaudeCode(in Input) (*Plan, error) {
 		p.Record.Seed = in.Prev.Seed
 		p.Record.RemovedSecrets = append(append([]string{}, in.Prev.RemovedSecrets...), removed...)
 	}
+	claudeShellWarnings(in, p)
+	return p, nil
+}
+
+// claudeShellWarnings adds a warning for each variable of the shell that outranks Ambit's key helper.
+func claudeShellWarnings(in Input, p *Plan) {
 	if in.Getenv != nil {
 		warn := func(v string) {
 			p.Warnings = append(p.Warnings, v+" is set in your shell and outranks Ambit's key; remove it from your shell profile")
@@ -147,7 +158,6 @@ func PlanClaudeCode(in Input) (*Plan, error) {
 			}
 		}
 	}
-	return p, nil
 }
 
 func claudeAlready(d *Doc, sets []Set) bool {

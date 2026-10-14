@@ -77,11 +77,11 @@ func PlanOpenCode(in Input) (*Plan, error) {
 	}
 	sets := opencodeSets(in)
 	decidedModel := false
+	already := false
 	if in.Prev != nil {
-		// Entries an earlier connect wrote are ours: take them out, and write them again below.
-		if in.Exists && claudeAlready(d, sets) {
-			return &Plan{After: in.File, Record: *in.Prev, Already: true}, nil
-		}
+		// Entries an earlier connect wrote are ours: take them out, and write them again below. The checks below
+		// run also when the entries are unchanged.
+		already = in.Exists && claudeAlready(d, sets)
 		for _, e := range in.Prev.Entries {
 			decidedModel = decidedModel || e.Pointer == "/model" && e.Previous != nil
 		}
@@ -100,6 +100,9 @@ func PlanOpenCode(in Input) (*Plan, error) {
 	}
 	if len(p.Conflicts) > 0 && !in.Force {
 		return p, nil
+	}
+	if already && len(removed) == 0 {
+		return &Plan{After: in.File, Record: *in.Prev, Already: true}, nil
 	}
 	if err := refuseSecondBackup(in, removed); err != nil {
 		return nil, err

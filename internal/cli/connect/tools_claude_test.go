@@ -283,6 +283,40 @@ func TestClaudeCodeReconnectKeepsRemovedSecretsOnceEach(t *testing.T) {
 	}
 }
 
+// A re-run that finds Ambit's entries unchanged still checks for a secret that outranks Ambit's key.
+func TestClaudeCodeAlreadyConnectedStillChecksConflictsAndShell(t *testing.T) {
+	base := Input{Path: "/c/settings.json", File: []byte(`{}`), Exists: true, URL: "https://a.example.com", Model: "m", AmbitPath: ambitBin, GOOS: "darwin"}
+	first, err := PlanClaudeCode(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again := base
+	again.File, again.Prev = first.After, &first.Record
+
+	// Nothing changed, but the shell holds a token: still "already", now with a warning.
+	again.Getenv = func(k string) string { return map[string]string{"ANTHROPIC_AUTH_TOKEN": "x"}[k] }
+	p, err := PlanClaudeCode(again)
+	if err != nil || !p.Already || len(p.Warnings) != 1 {
+		t.Fatalf("already = %v, warnings = %v, err = %v", p != nil && p.Already, p.Warnings, err)
+	}
+
+	// The person adds a token to settings.json.
+	again.Getenv = nil
+	again.File = []byte(strings.Replace(string(first.After), `"env": {`, `"env": {"ANTHROPIC_AUTH_TOKEN":"T",`, 1))
+	if string(again.File) == string(first.After) {
+		t.Fatalf("test setup: no env object in %s", first.After)
+	}
+	p, err = PlanClaudeCode(again)
+	if err != nil || p.Already || p.After != nil || len(p.Conflicts) != 1 {
+		t.Fatalf("file %s\nwithout --force: already = %v, conflicts = %v, err = %v", again.File, p.Already, p.Conflicts, err)
+	}
+	again.Force = true
+	p, err = PlanClaudeCode(again)
+	if err != nil || p.Already || strings.Contains(string(p.After), `"T"`) || len(p.Record.RemovedSecrets) != 1 {
+		t.Fatalf("with --force: %+v, err = %v", p, err)
+	}
+}
+
 // Connect into `{}` writes apiKeyHelper and env. If the person adds an env entry afterwards, disconnect must still
 // leave valid JSON.
 func TestClaudeCodeDisconnectKeepsValidJSONWhenEnvHoldsAnotherEntry(t *testing.T) {

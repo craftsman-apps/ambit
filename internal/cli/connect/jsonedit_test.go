@@ -8,7 +8,7 @@ import (
 	"github.com/tailscale/hujson"
 )
 
-var claudeSets = []Set{
+var testSets = []Set{
 	{Path: []string{"apiKeyHelper"}, Value: `"'/usr/local/bin/ambit' key print --url https://llm.example.com"`},
 	{Path: []string{"env", "ANTHROPIC_BASE_URL"}, Value: `"https://llm.example.com"`},
 	{Path: []string{"env", "ANTHROPIC_MODEL"}, Value: `"nvidia/nemotron"`},
@@ -69,7 +69,7 @@ func TestJSONConnectThenDisconnectIsByteIdentical(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			entries, err := d.Apply(claudeSets)
+			entries, err := d.Apply(testSets)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -77,7 +77,7 @@ func TestJSONConnectThenDisconnectIsByteIdentical(t *testing.T) {
 			if !json.Valid(stripForValid(t, after)) {
 				t.Fatalf("not valid JSON(C) after Apply:\n%s", after)
 			}
-			for _, s := range claudeSets {
+			for _, s := range testSets {
 				if got, ok := d.Get(s.Path...); !ok || !jsonEqual(got, s.Value) {
 					t.Fatalf("Get(%v) = %q, %v", s.Path, got, ok)
 				}
@@ -101,7 +101,7 @@ func TestJSONConnectThenDisconnectIsByteIdentical(t *testing.T) {
 func TestJSONApplyKeepsStrictJSONStrict(t *testing.T) {
 	for _, before := range []string{"{}", "{\n  \"a\": 1\n}\n", "{\n  \"a\": {\"b\": 1}\n}\n", "{\"env\":{}}"} {
 		d, _ := ParseJSON([]byte(before))
-		if _, err := d.Apply(claudeSets); err != nil {
+		if _, err := d.Apply(testSets); err != nil {
 			t.Fatal(err)
 		}
 		if !json.Valid(d.Bytes()) {
@@ -112,7 +112,7 @@ func TestJSONApplyKeepsStrictJSONStrict(t *testing.T) {
 
 func TestJSONApplyMatchesTheFilesIndent(t *testing.T) {
 	d, _ := ParseJSON([]byte("{\n    \"theme\": \"dark\"\n}\n"))
-	if _, err := d.Apply(claudeSets[:2]); err != nil {
+	if _, err := d.Apply(testSets[:2]); err != nil {
 		t.Fatal(err)
 	}
 	want := `{
@@ -128,7 +128,7 @@ func TestJSONApplyMatchesTheFilesIndent(t *testing.T) {
 	}
 	// CRLF files get CRLF in the inserted lines.
 	d, _ = ParseJSON([]byte("{\r\n  \"a\": 1\r\n}\r\n"))
-	d.Apply(claudeSets[:1])
+	d.Apply(testSets[:1])
 	if strings.Contains(strings.ReplaceAll(string(d.Bytes()), "\r\n", ""), "\n") {
 		t.Fatalf("a bare LF in a CRLF file: %q", d.Bytes())
 	}
@@ -139,7 +139,7 @@ func TestJSONNewFile(t *testing.T) {
 	if string(d.Bytes()) != "{}\n" {
 		t.Fatalf("new file = %q", d.Bytes())
 	}
-	entries, _ := d.Apply(claudeSets)
+	entries, _ := d.Apply(testSets)
 	if left, _ := d.Remove(entries); len(left) != 0 || string(d.Bytes()) != "{}\n" {
 		t.Fatalf("after remove: %q, left %v", d.Bytes(), left)
 	}
@@ -171,7 +171,7 @@ func TestJSONRemoveAfterChanges(t *testing.T) {
 	before := "{\n  \"theme\": \"dark\"\n}\n"
 	connected := func(t *testing.T) (string, []Entry) {
 		d, _ := ParseJSON([]byte(before))
-		e, err := d.Apply(claudeSets)
+		e, err := d.Apply(testSets)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -218,7 +218,7 @@ func TestJSONRemoveAfterChanges(t *testing.T) {
 		d, _ := ParseJSON([]byte(`{"env": {"ANTHROPIC_MODEL": "nvidia/nemotron", "ANTHROPIC_BASE_URL": "https://llm.example.com"}, "theme": "x", "apiKeyHelper": "'/usr/local/bin/ambit' key print --url https://llm.example.com"}`))
 		_, e := ParseJSON([]byte(before))
 		dd, _ := ParseJSON([]byte(before))
-		entries, _ := dd.Apply(claudeSets)
+		entries, _ := dd.Apply(testSets)
 		_ = e
 		left, err := d.Remove(entries)
 		if err != nil || len(left) != 0 || string(d.Bytes()) != `{"theme": "x"}` {
@@ -245,7 +245,7 @@ func TestJSONRemoveAfterChanges(t *testing.T) {
 func TestJSONRestoresAReplacedValue(t *testing.T) {
 	before := "{\n  \"env\": {\n    \"ANTHROPIC_MODEL\":   \"old\"\n  }\n}\n"
 	d, _ := ParseJSON([]byte(before))
-	entries, _ := d.Apply(claudeSets[2:])
+	entries, _ := d.Apply(testSets[2:])
 	if entries[0].Previous == nil || *entries[0].Previous != `"old"` {
 		t.Fatalf("entries = %+v", entries)
 	}
@@ -269,7 +269,7 @@ func TestParseJSONErrors(t *testing.T) {
 		}
 	}
 	d, _ := ParseJSON([]byte(`{"env": "text"}`))
-	if _, err := d.Apply(claudeSets); err == nil || !strings.Contains(err.Error(), "env") {
+	if _, err := d.Apply(testSets); err == nil || !strings.Contains(err.Error(), "env") {
 		t.Errorf("an env that is not an object: err = %v", err)
 	}
 }
@@ -283,7 +283,7 @@ func FuzzRoundTripJSONC(f *testing.F) {
 		if err != nil {
 			return
 		}
-		entries, err := d.Apply(claudeSets)
+		entries, err := d.Apply(testSets)
 		if err != nil {
 			return // an env that is not an object, for example
 		}

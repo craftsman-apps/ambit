@@ -37,6 +37,11 @@ type FileRecord struct {
 	Entries []Entry       `json:"entries,omitempty"`
 	Blocks  []BlockRecord `json:"blocks,omitempty"`
 	Wrote   []string      `json:"wrote,omitempty"` // the body of each block as connect wrote it, same order as Blocks
+	// Seed is what a file held that existed but was empty (white space only): disconnect writes it back.
+	Seed *string `json:"seed,omitempty"`
+	// RemovedSecrets are JSON pointers connect removed with --force because they held a secret. The value is
+	// not recorded (the state file never holds a secret); it stays in the backup only.
+	RemovedSecrets []string `json:"removedSecrets,omitempty"`
 }
 
 // Entry is one JSON member Ambit wrote. Wrote and Previous are JSON texts; Previous nil means the member did not

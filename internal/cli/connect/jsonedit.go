@@ -253,7 +253,9 @@ func (d *Doc) insertMember(hv hujson.Value, name, value string) string {
 		at = start + 1
 		parent := d.lineIndent(start)
 		child := parent + d.unit()
-		if bytes.Contains(o.AfterExtra, []byte("\n")) {
+		if !bytes.Contains(d.src, []byte("\n")) { // the whole file is one line: keep it that way
+			ins = d.render(name, value, "", false)
+		} else if bytes.Contains(o.AfterExtra, []byte("\n")) {
 			ins = d.eol + child + d.render(name, value, child, true)
 		} else {
 			ins = d.eol + child + d.render(name, value, child, true) + d.eol + parent
@@ -335,4 +337,15 @@ func jsonEqual(a, b string) bool {
 	x, ok1 := parse(a)
 	y, ok2 := parse(b)
 	return ok1 && ok2 && reflect.DeepEqual(x, y)
+}
+
+// Delete removes the member at path and reports whether there was one. Nothing is recorded: it is for a value that
+// must not be kept anywhere but in the backup file (a secret).
+func (d *Doc) Delete(path ...string) bool {
+	hv, idx, depth, err := d.walk(path)
+	if err != nil || depth != len(path)-1 || !memberFound(hv.Value.(*hujson.Object), path[len(path)-1]) {
+		return false
+	}
+	d.removeMember(hv, idx, "")
+	return true
 }

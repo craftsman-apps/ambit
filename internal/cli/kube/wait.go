@@ -124,7 +124,8 @@ func deploymentReady(d *appsv1.Deployment) bool {
 	if d.Spec.Replicas != nil {
 		want = *d.Spec.Replicas
 	}
-	return d.Status.ReadyReplicas >= want && d.Status.UpdatedReplicas >= want
+	// ObservedGeneration: until the controller has seen the new spec, the counts are those of the old rollout.
+	return d.Status.ObservedGeneration >= d.Generation && d.Status.ReadyReplicas >= want && d.Status.UpdatedReplicas >= want
 }
 
 func podReady(p *corev1.Pod) bool {

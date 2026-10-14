@@ -4,6 +4,8 @@ import {createHash} from 'node:crypto';
 import {existsSync, mkdtempSync, readFileSync, statSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {spawnSync} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import {TARGETS, build, parseChecksums, publish} from './publish.mjs';
 
 // fakeRelease writes one fake archive per target and a checksums.txt that matches them.
@@ -95,4 +97,20 @@ test('release matrix: GoReleaser checksums.txt names exactly the six archives', 
   assert.equal(text.trim().split('\n').length, 6, 'one line per archive, nothing else');
   assert.deepEqual([...sums.keys()].sort(), MATRIX.map(r => r[0]).sort());
   assert.equal(TARGETS.length, MATRIX.length);
+});
+
+// Release candidates reach GitHub only; they are not published to npm unless asked (--allow-prerelease).
+test('build refuses a prerelease version unless allowed', () => {
+  const out = mkdtempSync(join(tmpdir(), 'npm-'));
+  assert.throws(() => build({dir: fakeRelease(), version: '0.2.0-rc.1', out, extractFn: fakeExtract}), /prerelease 0\.2\.0-rc\.1 is not published to/);
+  assert.equal(build({dir: fakeRelease(), version: '0.2.0-rc.1', out, extractFn: fakeExtract, allowPrerelease: true}).length, 7);
+});
+
+test('the command exits 1 on a prerelease and builds nothing', () => {
+  const out = mkdtempSync(join(tmpdir(), 'npm-'));
+  const r = spawnSync(process.execPath, [fileURLToPath(new URL('./publish.mjs', import.meta.url)), '--dir', fakeRelease(), '--version', '0.2.0-rc.1', '--out', out, '--publish'], {encoding: 'utf8'});
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /✗ prerelease 0\.2\.0-rc\.1/);
+  assert.match(r.stderr, /next: .*--allow-prerelease/);
+  assert.equal(existsSync(join(out, 'ambit')), false);
 });

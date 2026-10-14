@@ -26,6 +26,12 @@ export const TARGETS = [
   binary: t.goos === 'windows' ? 'ambit.exe' : 'ambit',
   name: `${SCOPE}/ambit-${t.os}-${t.cpu}`}));
 
+// A version with a '-' (0.2.0-rc.1) is a prerelease: it gets a GitHub release only, never npm or Homebrew.
+export const PRERELEASE_NEXT = 'pass --allow-prerelease only if you mean to publish a prerelease';
+export function refusePrerelease(version, channel, allow) {
+  if (version.includes('-') && !allow) throw new Error(`prerelease ${version} is not published to ${channel} — releases with a '-' in the version go to GitHub only`);
+}
+
 export function parseChecksums(text) {
   const sums = new Map();
   for (const line of text.split('\n')) {
@@ -78,7 +84,8 @@ process.exit(r.status === null ? 1 : r.status);
 const common = version => ({version, license: 'Apache-2.0', repository: REPOSITORY, homepage: 'https://ambitproject.dev'});
 
 // build writes one directory per package into out and returns them in publish order (platform packages first).
-export function build({dir, version, out, extractFn = extract}) {
+export function build({dir, version, out, extractFn = extract, allowPrerelease = false}) {
+  refusePrerelease(version, 'npm', allowPrerelease);
   const sums = parseChecksums(readFileSync(join(dir, 'checksums.txt'), 'utf8'));
   const dirs = [];
   for (const t of TARGETS) {
@@ -126,7 +133,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.error('usage: node scripts/npm/publish.mjs --dir <dir> --version <x.y.z> --out <dir> [--publish]');
     process.exit(2);
   }
-  const dirs = build({dir, version, out});
-  if (args.includes('--publish')) publish(dirs);
-  else console.log('built (not published):\n' + dirs.join('\n'));
+  try {
+    const dirs = build({dir, version, out, allowPrerelease: args.includes('--allow-prerelease')});
+    if (args.includes('--publish')) publish(dirs);
+    else console.log('built (not published):\n' + dirs.join('\n'));
+  } catch (e) {
+    console.error(`✗ ${e.message}`);
+    if (/^prerelease /.test(e.message)) console.error(`  next: ${PRERELEASE_NEXT}`);
+    process.exit(1);
+  }
 }

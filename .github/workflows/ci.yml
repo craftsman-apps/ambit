@@ -346,7 +346,7 @@ jobs:
         with: { node-version: 26 }
       - name: npm packages from the snapshot archives; the launcher runs the linux x64 binary
         run: |
-          node scripts/npm/publish.mjs --dir dist --version 0.0.0-snapshot --out "$RUNNER_TEMP/npm"
+          node scripts/npm/publish.mjs --dir dist --version 0.0.0-snapshot --out "$RUNNER_TEMP/npm" --allow-prerelease
           m="$RUNNER_TEMP/try/node_modules/@craftsman-apps"
           mkdir -p "$m"
           cp -r "$RUNNER_TEMP/npm/ambit" "$m/ambit"
@@ -354,6 +354,6 @@ jobs:
           node "$m/ambit/bin/ambit.js" version --kubeconfig /dev/null | grep -E '^ambit [0-9]'
       - name: The Homebrew formula from the snapshot's checksums.txt is valid Ruby and pins four archives
         run: |
-          node scripts/homebrew/formula.mjs --checksums dist/checksums.txt --version "$(jq -r .version dist/metadata.json)" --out "$RUNNER_TEMP/ambit.rb"
+          node scripts/homebrew/formula.mjs --checksums dist/checksums.txt --version "$(jq -r .version dist/metadata.json)" --out "$RUNNER_TEMP/ambit.rb" --allow-prerelease
           ruby -c "$RUNNER_TEMP/ambit.rb"
           [ "$(grep -cE '^ +sha256 "[0-9a-f]{64}"$' "$RUNNER_TEMP/ambit.rb")" = 4 ]

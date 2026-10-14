@@ -63,7 +63,9 @@ jobs:
           cp deploy/quickstart.yaml /tmp/assets/quickstart.yaml
           # Gateway API, agentgateway and ToolHive CRDs, which neither chart installs.
           for f in deploy/crds/*.yaml; do cat "$f"; printf '\n---\n'; done > /tmp/assets/crds.yaml
-          gh release create "$GITHUB_REF_NAME" /tmp/assets/* --title "$GITHUB_REF_NAME" --generate-notes
+          # A tag with a '-' (v0.2.0-rc.1) is a prerelease: marked so on GitHub, and not sent to Homebrew or npm.
+          pre=; case "$GITHUB_REF_NAME" in *-*) pre=--prerelease ;; esac
+          gh release create "$GITHUB_REF_NAME" /tmp/assets/* --title "$GITHUB_REF_NAME" --generate-notes $pre
 
   # The ambit CLI archives on the same release, with build provenance for each archive (gh attestation verify).
   cli:
@@ -80,19 +82,28 @@ jobs:
         env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with: { subject-path: "dist/ambit_*.tar.gz, dist/ambit_*.zip, dist/checksums.txt" }
+      - name: Prerelease tags go to GitHub only
+        if: ${{ contains(github.ref_name, '-') }}
+        run: |
+          echo "::notice::${GITHUB_REF_NAME} is a prerelease (the tag has a '-'): no Homebrew formula, and the cli-channels job (Homebrew and npm) is skipped."
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: ${{ !contains(github.ref_name, '-') }}
         with: { node-version: 26 }
       # The formula installs the prebuilt binary from this release's archives, pinned by sha256 (ruling S6). It is
       # pushed to the tap by cli-channels after approval, which holds the only tap token.
       - name: The Homebrew formula, from this release's checksums.txt
+        if: ${{ !contains(github.ref_name, '-') }}
         run: node scripts/homebrew/formula.mjs --checksums dist/checksums.txt --version "${GITHUB_REF_NAME#v}" --out formula/ambit.rb
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !contains(github.ref_name, '-') }}
         with: { name: homebrew-formula, path: formula/ambit.rb, retention-days: 7, if-no-files-found: error }
 
   # Homebrew (a formula) and npm. Runs in the Environment release-channels, so a maintainer approves each release first. A
   # failure here does not undo the GitHub release; both steps are safe to re-run (the job can be re-run alone).
   cli-channels:
     needs: cli
+    # Prerelease tags (a '-' in the tag) are not published to Homebrew or npm; the cli job logs that.
+    if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     environment: release-channels
     permissions: { contents: read, id-token: write }  # id-token: npm trusted publishing with provenance

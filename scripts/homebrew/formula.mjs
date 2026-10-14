@@ -2,11 +2,11 @@
 // The formula installs the prebuilt binary from the GitHub release archive for the system, pinned by its sha256.
 // Homebrew does not set the quarantine attribute on files a formula installs, so the formula needs no xattr call
 // (ruling S8). GoReleaser's own formula publisher (`brews`) is deprecated in v2 and fails `goreleaser check`.
-//   node scripts/homebrew/formula.mjs --checksums dist/checksums.txt --version 0.2.0 --out formula/ambit.rb
+//   node scripts/homebrew/formula.mjs --checksums dist/checksums.txt --version 0.2.0 --out formula/ambit.rb [--allow-prerelease]
 import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {parseChecksums} from '../npm/publish.mjs';
+import {PRERELEASE_NEXT, parseChecksums, refusePrerelease} from '../npm/publish.mjs';
 
 export const RELEASES = 'https://github.com/craftsman-apps/ambit/releases/download';
 
@@ -16,8 +16,9 @@ const SYSTEMS = [
   ['on_linux', [['on_arm', 'ambit_linux_arm64.tar.gz'], ['on_intel', 'ambit_linux_amd64.tar.gz']]],
 ];
 
-export function formula(checksumsText, version) {
+export function formula(checksumsText, version, {allowPrerelease = false} = {}) {
   if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error(`not a release version: ${version}`);
+  refusePrerelease(version, 'Homebrew', allowPrerelease);
   const sums = parseChecksums(checksumsText);
   const blocks = SYSTEMS.map(([os, cpus]) => `  ${os} do\n` + cpus.map(([cpu, archive]) => {
     const sum = sums.get(archive);
@@ -50,7 +51,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.error('usage: node scripts/homebrew/formula.mjs --checksums <checksums.txt> --version <x.y.z> --out <file>');
     process.exit(2);
   }
-  mkdirSync(dirname(out), {recursive: true});
-  writeFileSync(out, formula(readFileSync(checksums, 'utf8'), version));
-  console.log(`wrote ${out}`);
+  try {
+    const text = formula(readFileSync(checksums, 'utf8'), version, {allowPrerelease: args.includes('--allow-prerelease')});
+    mkdirSync(dirname(out), {recursive: true});
+    writeFileSync(out, text);
+    console.log(`wrote ${out}`);
+  } catch (e) {
+    console.error(`✗ ${e.message}`);
+    if (/^prerelease /.test(e.message)) console.error(`  next: ${PRERELEASE_NEXT}`);
+    process.exit(1);
+  }
 }

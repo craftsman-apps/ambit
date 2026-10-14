@@ -27,7 +27,7 @@ test("Claude Code: names the file, merges into env, sets the model variables, sa
 test("tabs are Claude Code, Codex, opencode, Cursor, SDK, MCP in that order", () => {
   assert.deepEqual(toolTabs(setup, "both").map((t) => t.id), ["claudeCode", "codex", "opencode", "cursor", "sdk", "mcp"]);
   assert.deepEqual(toolTabs(setup, "both").map((t) => t.title),
-    ["Claude Code", "Codex (beta: being tested)", "opencode (beta: being tested)", "Cursor", "SDK", "MCP"]);
+    ["Claude Code", "Codex", "opencode", "Cursor", "SDK", "MCP"]);
 });
 
 test("scope: llm keys get no MCP tab, mcp keys get only the MCP tab", () => {
@@ -119,13 +119,13 @@ test("MCP tab: Claude Code, Codex, opencode and Cursor, with a static header and
   const t = tab("mcp");
   const by = (re) => t.blocks.find((b) => re.test(b.label));
   const codex = by(/Codex/);
-  assert.match(codex.label, /beta/);
+  assert.doesNotMatch(codex.label, /beta/);
   assert.match(codex.text, /\[mcp_servers\.ambit\]/);
   assert.match(codex.text, /url = "https:\/\/mcp\.example\.com\/mcp"/);
   assert.match(codex.text, /bearer_token_env_var = "AMBIT_API_KEY"/);
   assert.ok(!codex.text.includes(setup.key));
   const oc = by(/opencode/);
-  assert.match(oc.label, /beta/);
+  assert.doesNotMatch(oc.label, /beta/);
   const mcp = JSON.parse(oc.text).mcp.ambit;
   assert.deepEqual([mcp.type, mcp.url, mcp.oauth], ["remote", setup.mcp, false]);
   assert.equal(mcp.headers.Authorization, "Bearer {env:AMBIT_API_KEY}");

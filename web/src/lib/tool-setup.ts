@@ -44,7 +44,7 @@ export function toolTabs({ llm, mcp, key, model }: Setup, scope: Scope): ToolTab
       "Restart Claude Code, then run /status. The line \"Anthropic base URL\" must show your gateway address.",
       "The model variables are required: Claude Code's default model names do not exist at your provider. Claude Code may print a notice that it does not know this model. The notice is harmless.",
     ] });
-    tabs.push({ id: "codex", title: "Codex (beta: being tested)", blocks: [
+    tabs.push({ id: "codex", title: "Codex", blocks: [
       { label: "~/.codex/config.toml", text: `model = "${m}"\nmodel_provider = "ambit"\n\n[model_providers.ambit]\nname = "Ambit"\nbase_url = "${llm}/v1"\nenv_key = "AMBIT_API_KEY"\nwire_api = "responses"` },
       { label: "Key, in your terminal", shells: vars([["AMBIT_API_KEY", key]]) },
     ], steps: [
@@ -52,7 +52,7 @@ export function toolTabs({ llm, mcp, key, model }: Setup, scope: Scope): ToolTab
       "The key is not written to the file. Codex reads it from the variable AMBIT_API_KEY, which you set in your terminal. " + keepShell,
       "Start Codex from that terminal.",
     ] });
-    tabs.push({ id: "opencode", title: "opencode (beta: being tested)", blocks: [
+    tabs.push({ id: "opencode", title: "opencode", blocks: [
       { label: "~/.config/opencode/opencode.json", text: JSON.stringify({ $schema: "https://opencode.ai/config.json", model: `ambit/${m}`,
         provider: { ambit: { npm: "@ai-sdk/openai-compatible", name: "Ambit", options: { baseURL: `${llm}/v1`, apiKey: "{env:AMBIT_API_KEY}" },
           models: { [m]: { name: m } } } } }, null, 2) },
@@ -87,14 +87,14 @@ export function toolTabs({ llm, mcp, key, model }: Setup, scope: Scope): ToolTab
     const remote = `{env:AMBIT_API_KEY}`;
     tabs.push({ id: "mcp", title: "MCP", blocks: [
       { label: "Claude Code", text: `claude mcp add --transport http ambit ${mcp} --header "Authorization: Bearer ${key}"` },
-      { label: "Codex (beta: being tested): ~/.codex/config.toml", text: `[mcp_servers.ambit]\nurl = "${mcp}"\nbearer_token_env_var = "AMBIT_API_KEY"` },
-      { label: "opencode (beta: being tested): opencode.json", text: JSON.stringify({ mcp: { ambit: { type: "remote", url: mcp, oauth: false,
+      { label: "Codex: ~/.codex/config.toml", text: `[mcp_servers.ambit]\nurl = "${mcp}"\nbearer_token_env_var = "AMBIT_API_KEY"` },
+      { label: "opencode: opencode.json", text: JSON.stringify({ mcp: { ambit: { type: "remote", url: mcp, oauth: false,
         headers: { Authorization: `Bearer ${remote}` } } } }, null, 2) },
       { label: "Key for Codex and opencode, in your terminal", shells: vars([["AMBIT_API_KEY", key]]) },
       { label: "Cursor (beta: being tested): ~/.cursor/mcp.json", text: JSON.stringify({ mcpServers: { ambit: { url: mcp, headers: { Authorization: `Bearer ${key}` } } } }, null, 2) },
     ], steps: [
       "Claude Code: run the command in a terminal.",
-      "Codex and opencode: merge the block into the file named in its label, set the variable in your terminal, and start the tool from that terminal. " + keepShell + " opencode needs \"oauth\": false: the gateway has no OAuth sign-in.",
+      "Codex and opencode: merge the block into the file named in its label, set the variable in your terminal, and start the tool from that terminal. " + keepShell + " Keep \"oauth\": false in the opencode block: the gateway has no OAuth sign-in, so opencode does not need to try one.",
       "Cursor: merge the block into ~/.cursor/mcp.json. This file holds the key, so keep it private. Cursor does not see variables set in a terminal when you start it from the dock or the Start menu.",
     ] });
   }

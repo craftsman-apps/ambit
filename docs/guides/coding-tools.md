@@ -45,7 +45,26 @@ Treat the key like a password. A key carries the access of its owner and never m
 
 Do not put the key in a project's `.claude/settings.json`: that file is committed and shared with everyone who clones the project. Restart Claude Code, then run `/status`. The line `Anthropic base URL` must show your gateway address. Claude Code prints a notice that it does not know this model. The notice is harmless. The variables are described in the Claude Code pages [Connect to an LLM gateway](https://code.claude.com/docs/en/llm-gateway-connect) and [Model configuration](https://code.claude.com/docs/en/model-config).
 
-**Codex (beta: being tested).** Add this to `~/.codex/config.toml`. Put `model` and `model_provider` above the first `[table]` line. The key stays out of the file: Codex reads it from the variable `AMBIT_API_KEY`.
+**Claude Code with a model that is not a Claude model.** Claude Code was tested (version 2.1.299, 2026-10-14) with `nvidia/nemotron-3-super-120b-a12b:free` at OpenRouter, through `/v1/messages`. A prompt that needs one tool call worked, with and without the switch below. What to know:
+
+- *Model variables.* The snippet above sets `ANTHROPIC_MODEL` and the three `ANTHROPIC_DEFAULT_*_MODEL` variables, as the Claude Code page [Model configuration](https://code.claude.com/docs/en/model-config) describes them (`ANTHROPIC_DEFAULT_HAIKU_MODEL` also covers Claude Code's background work). The older `ANTHROPIC_SMALL_FAST_MODEL` is deprecated in favor of `ANTHROPIC_DEFAULT_HAIKU_MODEL`. Our test used `ANTHROPIC_MODEL` and `ANTHROPIC_SMALL_FAST_MODEL`, not the three `ANTHROPIC_DEFAULT_*_MODEL` variables, so those three are documented by Claude Code but not tested by Ambit.
+- *Experimental beta fields.* By default, Claude Code sends the fields `context_management` and `safeguards` in each request, and also `thinking` and `output_config`. A provider that does not know them can refuse the request. With `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`, Claude Code does not send `context_management` and `safeguards`. It still sends `thinking` and `output_config`, and `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1` did not remove them in our test. Nemotron accepted all of it, so we cannot say which provider needs the switch. If a model refuses Claude Code's requests, set it first. Put it in the same `env` block:
+
+  ```json
+  "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"
+  ```
+
+- *Token counts are estimates.* Claude Code asks `/v1/messages/count_tokens` for exact counts, for example when you run `/context`. Ambit does not serve that path and answers 403 `authorization failed`. Claude Code goes on and shows estimated numbers; `/context` printed "Estimated usage by category". Each refused call is listed in **Audit** with status 403, under your email address, also for people who never see an error, so a count of 403 entries in Audit can look like an attack. A short prompt with a tool call does not call this path.
+
+**MCP with Claude Code.** Add the MCP gateway with a personal key that has the scope **MCP** (or **LLM and MCP**):
+
+```sh
+claude mcp add --transport http ambit http://mcp.localtest.me:8080/mcp --header "Authorization: Bearer ambit_..."
+```
+
+`claude mcp list` shows `ambit ... Connected`. In the test, Claude Code called `time_get_current_time` of the `time` server (see the [Quick start](../quick-start.md), step 9).
+
+**Codex.** Add this to `~/.codex/config.toml`. Put `model` and `model_provider` above the first `[table]` line. The key stays out of the file: Codex reads it from the variable `AMBIT_API_KEY`.
 
 ```toml
 model = "nvidia/nemotron-3-super-120b-a12b:free"
@@ -58,7 +77,7 @@ env_key = "AMBIT_API_KEY"
 wire_api = "responses"
 ```
 
-**opencode (beta: being tested).** Merge this provider into `~/.config/opencode/opencode.json`. The key is read from the variable `AMBIT_API_KEY`.
+**opencode.** Merge this provider into `~/.config/opencode/opencode.json`. The key is read from the variable `AMBIT_API_KEY`.
 
 ```json
 {
@@ -139,6 +158,7 @@ Then restart Claude Code with the settings above, run `/status`, and ask it a qu
 
 ## Related
 
+- [Connect Codex, opencode and Hermes Agent](codex-opencode-hermes.md) and [Other coding agents](other-agents.md): more tools.
 - [Personal API keys](../api-keys.md): scope, end dates, limits, revoking, and how the gateway checks a key.
 - [Models and providers](../providers.md): other providers and models.
 - [Someone leaves](someone-leaves.md): what happens to a person's keys when they are offboarded.

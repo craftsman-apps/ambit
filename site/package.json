@@ -15,7 +15,8 @@
     "typecheck": "tsc",
     "test": "node --test scripts/",
     "outline-svg": "node scripts/outline-svg.mjs",
-    "check-readme-urls": "node scripts/check-readme-urls.mjs ../README.md build"
+    "check-readme-urls": "node scripts/check-readme-urls.mjs ../README.md build",
+    "check-install-methods": "node scripts/check-install-methods.mjs build/docs/quick-start.html"
   },
   "dependencies": {
     "@docusaurus/core": "3.10.2",

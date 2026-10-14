@@ -1,146 +1,109 @@
 ---
 title: Quick start
-description: Install Ambit on a laptop with kind, add a free model through OpenRouter, allow it with an access rule, and make a first call.
+description: Install the ambit CLI and start a local Ambit with one command, ambit local up, with a model, an access rule and a first call.
 ---
 
 # Quick start
 
-In this guide you install Ambit release v0.1.0 on a laptop, add a free model, allow people to use it, and make a first call through the gateway. The install takes from 2 to 20 minutes, depending on your network, because Ambit pulls about 1 GB of images.
+In this guide you install the `ambit` command and start Ambit on your laptop with one command. `ambit local up` creates a local Kubernetes cluster (kind) inside Docker, installs Ambit, adds a model and an access rule, and makes a first call through the gateway. It takes from 3 to 20 minutes, depending on your network, because Ambit pulls about 1 GB of images.
 
-This install is for testing only: plain HTTP, one gateway replica, and sign-in tokens from Ambit's own Dex. To install on a real cluster, see [Install on your cluster](install.md).
+This install is for testing only: plain HTTP, one gateway replica, and sign-in tokens from Ambit's own Dex. To install on a real cluster, see [Install on your cluster](install.md). To see each object that `ambit local up` creates, or to do the steps by hand, see [What ambit local up does](local-up.md).
 
 ## What you need
 
-- Docker, [kind](https://kind.sigs.k8s.io), `kubectl` and Helm 3. Kubernetes 1.30 or later is required; kind's default image meets this.
-- Free ports 8080 and 8443 on your laptop.
-- A free [OpenRouter](https://openrouter.ai) account and an API key. Free models need no credit.
-- About 6 GB of memory for Docker.
+- Docker: Docker Desktop (macOS, or Windows with WSL 2), OrbStack or Colima (macOS), or Docker Engine (Linux). Rootless Docker and Podman are not supported.
+- About 6 GB of memory for Docker. With less than 4 GB, `ambit local up` stops.
+- Free ports 8080 and 8443 on your laptop. `--port` and `--https-port` choose other ports.
+- Optional: a free [OpenRouter](https://openrouter.ai) API key, for a real model. Without a key, Ambit uses a test model that repeats your message.
 
-The addresses in this guide use `localtest.me`. Every name under `localtest.me` resolves to `127.0.0.1`, so you do not change DNS.
+You do not need kind, kubectl or Helm. The addresses use `localtest.me`: every name under it resolves to `127.0.0.1`, so you do not change DNS.
 
-## 1. Create the cluster
+## 1. Install the CLI
 
-Download the three files of the release. The cluster file maps port 8080 on your laptop to the Ambit gateway.
+Use one of these commands.
+
+Homebrew (macOS and Linux):
 
 ```sh
-R=https://github.com/craftsman-apps/ambit/releases/download/v0.1.0
-curl -fsSLO $R/kind-cluster.yaml -O $R/quickstart.yaml -O $R/crds.yaml
-kind create cluster --config kind-cluster.yaml
+brew install craftsman-apps/tap/ambit
 ```
 
-The cluster is named `ambit`. If you already have a kind cluster of that name, delete it first or change `name:` in `kind-cluster.yaml`.
-
-## 2. Install Ambit
-
-Install the CRDs of Ambit's dependencies, then the two charts.
+Install script (macOS and Linux). It downloads the archive for your system, checks its SHA-256 checksum, and installs `ambit` in `~/.local/bin`:
 
 ```sh
-kubectl apply --server-side -f crds.yaml
-helm install ambit-crds oci://ghcr.io/craftsman-apps/charts/ambit-crds --version 0.1.0 -n ambit-system --create-namespace --wait
-helm install ambit oci://ghcr.io/craftsman-apps/charts/ambit --version 0.1.0 -n ambit-system -f quickstart.yaml --wait --timeout 10m
+curl -fsSL https://ambitproject.dev/install.sh | sh
 ```
 
-The last command waits until every pod is ready. The first time, it pulls about 1 GB of images, so it can take several minutes. If your network or computer is slow, the command can stop after 10 minutes with `INSTALLATION FAILED ... context deadline exceeded`. The pods keep starting. Run `kubectl -n ambit-system get pods` and wait until every pod shows `1/1`; then go on. Do not install again.
+PowerShell (Windows):
 
-## 3. Sign in to the console
-
-Print the password of the bootstrap admin:
-
-```sh
-kubectl -n ambit-system get secret ambit-initial-admin -o jsonpath='{.data.password}' | base64 -d; echo
+```powershell
+irm https://ambitproject.dev/install.ps1 | iex
 ```
 
-Open <http://console.localtest.me:8080> and sign in as `admin@ambit.local` with that password. The console is empty: no models, no servers, and no rules. Ambit denies everything until a rule allows it.
-
-## 4. Add a free model
-
-Ambit keeps provider keys in a Kubernetes Secret. The name of the Secret starts with `ambit-llm-`. Create it from your OpenRouter key. The first command reads the key without showing it on the screen:
+npm (any system with Node.js). This runs the CLI without installing it; `npm install -g @craftsman-apps/ambit` installs it:
 
 ```sh
-read -rs OPENROUTER_KEY
-kubectl -n ambit-system create secret generic ambit-llm-openrouter --from-literal=Authorization="$OPENROUTER_KEY"
-unset OPENROUTER_KEY
+npx @craftsman-apps/ambit local up
 ```
 
-Then create the `Model`. `spec.model` is the model's name at OpenRouter. This guide uses `nvidia/nemotron-3-super-120b-a12b:free`. OpenRouter changes its free models often. If this one is gone, take another model whose name ends in `:free` from the [OpenRouter model list](https://openrouter.ai/models?q=free).
+Go:
 
 ```sh
-kubectl -n ambit-system apply -f - <<'EOF'
-apiVersion: ambitproject.dev/v1alpha1
-kind: Model
-metadata: { name: free-model }
-spec:
-  displayName: Free model
-  provider: Openrouter
-  model: nvidia/nemotron-3-super-120b-a12b:free
-  credentialsRef: { name: ambit-llm-openrouter }
-EOF
-kubectl -n ambit-system wait models.ambitproject.dev/free-model --for=condition=Ready --timeout=120s
+go install github.com/craftsman-apps/ambit/cmd/ambit@v0.2.0
 ```
 
+Check the install: `ambit version` prints `ambit 0.2.0`. If no CLI release is published yet, the install scripts say so (`No Ambit CLI release is published yet`) and install nothing. Releases with a `-` in the tag, such as `v0.2.0-rc.1`, are published on GitHub only, not to Homebrew or npm.
 
-## 5. Get a token and make a call that is refused
+The [release page](https://github.com/craftsman-apps/ambit/releases) also has an archive for each system. The binaries are not signed by Apple or Microsoft. A binary installed with the commands above runs without a warning. An archive that you download with a web browser can show a warning: on macOS, open System Settings, then Privacy & Security, and choose "Open Anyway" for `ambit`; on Windows, choose "More info" and then "Run anyway". To check that an archive was built by this project's release workflow: `gh attestation verify ambit_linux_amd64.tar.gz --repo craftsman-apps/ambit`.
 
-Ambit's own Dex issues tokens in this setup. Ask it for a token for the bootstrap admin:
+## 2. Start Ambit
 
 ```sh
-PW=$(kubectl -n ambit-system get secret ambit-initial-admin -o jsonpath='{.data.password}' | base64 -d)
-TOKEN=$(curl -s http://console.localtest.me:8080/dex/token -d grant_type=password -d client_id=ambit-cli \
-  -d scope="openid email profile" --data-urlencode username=admin@ambit.local --data-urlencode password="$PW" \
-  | sed -E 's/.*"access_token":"([^"]+)".*/\1/')
+ambit local up
 ```
 
-Call the model:
+It asks for an OpenRouter API key and does not show what you type. Press Enter to use the test model. Without a terminal, or to skip the question, pass `--no-key`, or give the key in `OPENROUTER_API_KEY` or in a file with `--openrouter-key-file <file>`. Each step prints one line with its duration:
 
-```sh
-curl -s -w '\nHTTP %{http_code}\n' http://llm.localtest.me:8080/v1/chat/completions \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"model":"nvidia/nemotron-3-super-120b-a12b:free","messages":[{"role":"user","content":"Say hello in five words."}]}'
+```text
+✓ Preflight (0.4s)
+✓ Cluster ambit (created) (41.2s)
+✓ CRDs (Gateway API, agentgateway, ToolHive) (6.8s)
+  waiting for ambit-console-6f7d9c8b7-x2k4q, ambit-dex-5d8b6c4f9-9mzlp
+✓ Charts ambit-crds and ambit (3m12s)
+✓ Model local-test (test model) (4.1s)
+  Using a test model that repeats your message. Add a real model later: ambit local up --openrouter-key-file <file>
+✓ Rule everyone-local (100ms)
+✓ Test call (6.3s)
+  local/echo answered: You said: Say hello in five words.
+
+Ambit is running.
+  Console:  http://console.localtest.me:8080
+  Sign in:  admin@ambit.local
+  Password: (shown on your terminal)
 ```
 
-The answer is `HTTP 403` with the message `Model authorization denied`. The token is valid, but no `AccessRule` allows this person to use the model. Right after you create a `Model`, the answer can be `HTTP 404` for a few seconds, until the gateway has its configuration. Repeat the command.
+If a step fails, the line says what is wrong, and the next line starts with `next:` and gives the command to run. Run `ambit local up` again at any time: it repairs the cluster it created, and it never changes a kind cluster that it did not create. Press Ctrl+C once to stop `ambit local up`: it stops and says how to remove the cluster if it was created. Press Ctrl+C a second time to end it at once.
 
-Clients send the provider's model name (`spec.model`), not the name of the `Model` object.
+To use another cluster name, pass `--name <name>` to `ambit local up`, `ambit local down` and `ambit local password`. The kubectl context is then `kind-<name>`.
 
-## 6. Allow the model
+With an OpenRouter key, `ambit local up` reads OpenRouter's list of free models and uses the first one that answers, trying at most three. `--model <id>` chooses the model.
 
-An `AccessRule` says who may use what. This rule allows every signed-in person to use the model:
+## 3. Sign in and see the call
+
+Open <http://console.localtest.me:8080> and sign in as `admin@ambit.local` with the password from the summary. `ambit local password` prints it again. Open **Audit** and search for `admin@ambit.local`: the test call is there, with the model name and the numbers of input and output tokens.
+
+The summary ends with a command for your shell (PowerShell on Windows) that gets a token from Ambit's Dex and calls the model, so you can make more calls. To check the install at any time:
 
 ```sh
-kubectl -n ambit-system apply -f - <<'EOF'
-apiVersion: ambitproject.dev/v1alpha1
-kind: AccessRule
-metadata: { name: everyone-free-model }
-spec:
-  allSignedIn: true
-  models: [free-model]
-EOF
+ambit check --context kind-ambit
 ```
 
-In a real install you list identity-provider groups instead of `allSignedIn`: `groups: [engineering]`.
+## 4. Optional: an MCP server that needs no account
 
-## 7. Make the first call
-
-Run the same command again. The gateway needs a few seconds to load the rule, so repeat it if you still see 403.
+A `Server` makes an MCP server available. These commands use `kubectl` (not installed by `ambit`; see [kubectl](https://kubernetes.io/docs/tasks/tools/)) and the `TOKEN` from the summary's call command. This one is a small server that tells the time. ToolHive runs it inside your cluster, and it needs no account.
 
 ```sh
-curl -s -w '\nHTTP %{http_code}\n' http://llm.localtest.me:8080/v1/chat/completions \
-  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"model":"nvidia/nemotron-3-super-120b-a12b:free","messages":[{"role":"user","content":"Say hello in five words."}]}'
-```
-
-You get `HTTP 200` and an answer from the model. If you get `HTTP 429`, OpenRouter's free quota for that model is used up. Wait a minute or change `spec.model` to another free model.
-
-## 8. See the call in the console
-
-Open the console at <http://console.localtest.me:8080>. Open **Audit**, search for `admin@ambit.local`, and you see your call with the model name and the numbers of input and output tokens. Ambit records every call that passes the gateway. A call that is refused before Ambit knows who sent it, such as the first call in step 5, is recorded without an email address, so a search by email does not show it.
-
-## 9. Optional: an MCP server that needs no account
-
-A `Server` makes an MCP server available. This one is a small server that tells the time. ToolHive runs it inside your cluster, and it needs no account.
-
-```sh
-kubectl -n ambit-system apply -f - <<'EOF'
+kubectl --context kind-ambit -n ambit-system apply -f - <<'EOF'
 apiVersion: ambitproject.dev/v1alpha1
 kind: Server
 metadata: { name: time }
@@ -158,7 +121,7 @@ spec:
     - name: time
       tools: [get_current_time]
 EOF
-kubectl -n ambit-system wait servers.ambitproject.dev/time --for=condition=Ready --timeout=300s
+kubectl --context kind-ambit -n ambit-system wait servers.ambitproject.dev/time --for=condition=Ready --timeout=300s
 ```
 
 The rule allows one tool, `get_current_time`. Open an MCP session and list the tools. The gateway shows each tool with the name of its server in front, so the tool appears as `time_get_current_time`.
@@ -177,11 +140,17 @@ curl -s $MCP -H "Authorization: Bearer $TOKEN" -H "Mcp-Session-Id: $SID" -H 'Con
 
 The answer lists the allowed tool. Real MCP clients, such as Claude Code or Cursor, do these steps for you; see [Personal API keys](api-keys.md).
 
-## 10. Clean up
+## 5. Clean up
 
 ```sh
-kind delete cluster --name ambit
+ambit local down
 ```
+
+It asks before it deletes the kind cluster, and it deletes only a cluster that `ambit local up` created.
+
+## Windows, and systems that are not tested
+
+On Windows, `ambit local up` needs Docker Desktop with WSL 2. It is tested by hand before each release, not on every change; see [kind's notes on WSL 2](https://kind.sigs.k8s.io/docs/user/using-wsl2/). The arm64 builds for Windows and Linux are built but not tested.
 
 ## Next
 

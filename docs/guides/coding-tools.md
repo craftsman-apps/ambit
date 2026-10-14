@@ -9,7 +9,7 @@ description: Give a person a personal API key and point Claude Code, Cursor or a
 
 ## Before you start
 
-You need the cluster from the [Quick start](../quick-start.md), with the free model and the rule `everyone-free-model`. The addresses below are the quick-start addresses. On your own cluster, use your own LLM address.
+You need the cluster from the [Quick start](../quick-start.md), with a model and a rule that allows everyone. `ambit local up` makes the rule `everyone-local`; the [by-hand steps](../local-up.md) make `everyone-free-model`. The addresses below are the quick-start addresses. On your own cluster, use your own LLM address.
 
 - LLM address: `http://llm.localtest.me:8080`
 - Console: `http://console.localtest.me:8080`

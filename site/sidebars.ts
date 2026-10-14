@@ -2,12 +2,12 @@ import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
 const sidebars: SidebarsConfig = {
   docs: [
     'index',
-    {type: 'category', label: 'Getting started', collapsed: false, items: ['quick-start', 'concepts', 'install']},
+    {type: 'category', label: 'Getting started', collapsed: false, items: ['quick-start', 'local-up', 'concepts', 'install']},
     {type: 'category', label: 'Guides', collapsed: false, items: [
       'guides/coding-tools', 'guides/models-per-team', 'guides/mcp-apps', 'guides/spending-limits', 'guides/someone-leaves',
     ]},
     {type: 'category', label: 'Reference', collapsed: false, items: [
-      'providers', 'api-keys', 'presets', 'budgets', 'routing', 'offboarding', 'alerts', 'compliance', 'upgrading',
+      'cli', 'providers', 'api-keys', 'presets', 'budgets', 'routing', 'offboarding', 'alerts', 'compliance', 'upgrading',
     ]},
   ],
 };

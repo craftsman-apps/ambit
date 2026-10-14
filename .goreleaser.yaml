@@ -34,3 +34,5 @@ changelog:
 release:
   # The publish job already created the release (with --generate-notes); add the files, keep its notes.
   mode: keep-existing
+  # A re-run of the cli job replaces the files it uploaded before.
+  replace_existing_artifacts: true

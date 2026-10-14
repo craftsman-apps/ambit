@@ -11,3 +11,4 @@ site/node_modules/
 site/build/
 site/.docusaurus/
 .vercel/
+dist/

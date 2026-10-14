@@ -108,6 +108,7 @@ jobs:
       # Every downloaded archive must match the release's checksums.txt before anything is published from it,
       # and all six archives must be there (the formula pins four, npm uses six).
       - name: The downloaded archives match checksums.txt
+        id: verify
         run: |
           cd rel
           [ "$(find . -name 'ambit_*' | wc -l)" -eq 6 ]
@@ -122,8 +123,13 @@ jobs:
           cmp formula/ambit.rb "$RUNNER_TEMP/expected.rb"
       - name: Homebrew tap (craftsman-apps/homebrew-tap)
         env: { TAP_TOKEN: "${{ secrets.HOMEBREW_TAP_TOKEN }}" }  # fine-grained, contents:write on that repository only
+        # The token goes in an HTTP header set through environment variables, so it is never in a URL or in .git/config.
         run: |
-          git clone --depth 1 "https://x-access-token:${TAP_TOKEN}@github.com/craftsman-apps/homebrew-tap.git" tap
+          echo "::add-mask::$(printf 'x-access-token:%s' "$TAP_TOKEN" | base64 -w0)"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TAP_TOKEN" | base64 -w0)"
+          export GIT_CONFIG_VALUE_0
+          git clone --depth 1 https://github.com/craftsman-apps/homebrew-tap.git tap
           mkdir -p tap/Formula && cp formula/ambit.rb tap/Formula/ambit.rb
           cd tap
           git config user.name "github-actions[bot]"
@@ -131,5 +137,6 @@ jobs:
           git add Formula/ambit.rb
           git diff --cached --quiet || { git commit -m "ambit ${GITHUB_REF_NAME}" && git push; }
       - name: npm (@craftsman-apps/ambit and one package per platform)
-        if: ${{ !cancelled() }}  # runs even when the tap step failed; both are safe to re-run
+        # Runs even when the tap step failed (both are safe to re-run), but never from archives that failed verification.
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
         run: node scripts/npm/publish.mjs --dir rel --version "${GITHUB_REF_NAME#v}" --out npm-out --publish

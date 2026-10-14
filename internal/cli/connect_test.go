@@ -2,6 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"net/http"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -29,6 +32,9 @@ type connectRig struct {
 	t         *testing.T
 	kc, file  memStore
 	statePath string
+	home      string
+	env       map[string]string // the environment the commands see
+	secret    string            // what the hidden prompt returns; "" means there is no terminal to ask in
 	stdout    bytes.Buffer
 	stderr    bytes.Buffer
 	tty       bool
@@ -36,15 +42,26 @@ type connectRig struct {
 }
 
 func newRig(t *testing.T) *connectRig {
-	return &connectRig{t: t, kc: memStore{}, file: memStore{}, statePath: filepath.Join(t.TempDir(), "connect.json")}
+	home := t.TempDir()
+	return &connectRig{t: t, kc: memStore{}, file: memStore{}, statePath: filepath.Join(home, "state", "connect.json"), home: home,
+		env: map[string]string{"SHELL": "/bin/zsh"}}
 }
+
+const fakeAmbit = "/usr/local/bin/ambit-under-test"
 
 func (r *connectRig) run(args ...string) int {
 	r.t.Helper()
 	r.stdout.Reset()
 	r.stderr.Reset()
-	a := &app{in: strings.NewReader(r.stdin), out: &r.stdout, errw: &r.stderr, tty: r.tty,
-		testConnect: &connectDeps{Keychain: r.kc, File: r.file, StatePath: r.statePath, GOOS: runtime.GOOS}}
+	d := &connectDeps{Keychain: r.kc, File: r.file, StatePath: r.statePath, GOOS: runtime.GOOS, Home: r.home,
+		Getenv:  func(k string) string { return r.env[k] },
+		Bin:     connect.BinEnv{Executable: func() (string, error) { return fakeAmbit, nil }, LookPath: func(string) (string, error) { return "", errors.New("not on PATH") }, GOOS: runtime.GOOS},
+		Profile: func() (string, error) { return "", errors.New("no PowerShell here") },
+		HTTP:    func(string) *http.Client { return http.DefaultClient }, CallLimit: 300 * time.Millisecond, CallEvery: 20 * time.Millisecond}
+	if r.secret != "" {
+		d.ReadSecret = func(context.Context, string) (string, error) { return r.secret, nil }
+	}
+	a := &app{in: strings.NewReader(r.stdin), out: &r.stdout, errw: &r.stderr, tty: r.tty, testConnect: d}
 	root := a.root()
 	root.SetArgs(args)
 	root.SetOut(&r.stdout)

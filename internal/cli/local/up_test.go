@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -758,6 +759,9 @@ func TestUpEveryStepErrorHasNextStep(t *testing.T) {
 		}},
 	} {
 		t.Run(c.step, func(t *testing.T) {
+			if c.step == "state file" && runtime.GOOS == "windows" { // needs POSIX directory permissions
+				t.Skip("Windows does not honour a read-only directory mode; Linux and macOS cover this step")
+			}
 			r := newRig(t, false)
 			r.opts.Name, r.ops.name = name, name
 			c.setup(r)

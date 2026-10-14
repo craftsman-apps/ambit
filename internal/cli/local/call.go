@@ -95,39 +95,122 @@ var settling = map[int]bool{404: true, 403: true, 502: true, 503: true}
 // Prompt is the message of the test call.
 const Prompt = "Say hello in five words."
 
-// TestCall calls /v1/chat/completions until it answers 200 or limit passes, and returns the first line of the answer.
+// Format is the request a tool sends: OpenAI Chat Completions (opencode, the SDKs), Anthropic Messages (Claude
+// Code) or OpenAI Responses (Codex).
+type Format int
+
+const (
+	FormatChat Format = iota
+	FormatMessages
+	FormatResponses
+)
+
+// request is the path, the JSON body and the headers of the test call in this format.
+func (f Format) request(model, token string) (path string, body []byte, header http.Header) {
+	header = http.Header{"Content-Type": {"application/json"}}
+	var v map[string]any
+	switch f {
+	case FormatMessages:
+		path, v = "/v1/messages", map[string]any{"model": model, "max_tokens": 16, "messages": []map[string]string{{"role": "user", "content": Prompt}}}
+		header.Set("x-api-key", token)
+		header.Set("anthropic-version", "2023-06-01")
+	case FormatResponses:
+		path, v = "/v1/responses", map[string]any{"model": model, "max_output_tokens": 16, "input": Prompt}
+		header.Set("Authorization", "Bearer "+token)
+	default:
+		path, v = "/v1/chat/completions", map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": Prompt}}}
+		header.Set("Authorization", "Bearer "+token)
+	}
+	body, _ = json.Marshal(v)
+	return path, body, header
+}
+
+// answer is the text of a 200 answer in this format.
+func (f Format) answer(b []byte) (string, bool) {
+	var text []string
+	switch f {
+	case FormatMessages:
+		var r struct{ Content []struct{ Type, Text string } }
+		if json.Unmarshal(b, &r) != nil {
+			return "", false
+		}
+		for _, c := range r.Content {
+			if c.Type == "text" {
+				text = append(text, c.Text)
+			}
+		}
+	case FormatResponses:
+		var r struct {
+			Output []struct{ Content []struct{ Type, Text string } }
+		}
+		if json.Unmarshal(b, &r) != nil {
+			return "", false
+		}
+		for _, o := range r.Output {
+			for _, c := range o.Content {
+				if c.Type == "output_text" {
+					text = append(text, c.Text)
+				}
+			}
+		}
+	default:
+		var r struct {
+			Choices []struct{ Message struct{ Content string } }
+		}
+		if json.Unmarshal(b, &r) != nil || len(r.Choices) == 0 {
+			return "", false
+		}
+		text = append(text, r.Choices[0].Message.Content)
+	}
+	first, _, _ := strings.Cut(strings.TrimSpace(strings.Join(text, "")), "\n")
+	return first, len(text) > 0
+}
+
+// RefusedError is the gateway's own refusal of the key (HTTP 401).
+type RefusedError struct {
+	Status int
+	Body   string
+}
+
+func (e *RefusedError) Error() string {
+	return fmt.Sprintf("the test call was refused: HTTP %d — the token or access rule is wrong: %.200s", e.Status, e.Body)
+}
+
+// TestCall is CallWith in the Chat Completions format.
 func TestCall(ctx context.Context, c *http.Client, llmURL, token, model string, limit, every time.Duration) (string, error) {
-	body, _ := json.Marshal(map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": Prompt}}})
+	return CallWith(ctx, c, llmURL, token, model, FormatChat, limit, every)
+}
+
+// CallWith calls the gateway in the format until it answers 200 or limit passes, and returns the first line of the
+// answer.
+func CallWith(ctx context.Context, c *http.Client, llmURL, token, model string, f Format, limit, every time.Duration) (string, error) {
+	path, body, header := f.request(model, token)
 	deadline := time.Now().Add(limit)
 	parent := ctx
 	ctx, cancel := context.WithDeadline(ctx, deadline) // a request that hangs must not outlast limit
 	defer cancel()
 	last, lastStatus := "", 0
 	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, llmURL+"/v1/chat/completions", bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, llmURL+path, bytes.NewReader(body))
 		if err != nil {
 			return "", err
 		}
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+token)
+		req.Header = header.Clone()
 		resp, err := c.Do(req)
 		if err == nil {
 			b, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 			resp.Body.Close()
 			switch {
 			case resp.StatusCode == http.StatusOK:
-				var r struct {
-					Choices []struct{ Message struct{ Content string } }
-				}
-				if err := json.Unmarshal(b, &r); err != nil || len(r.Choices) == 0 {
+				first, ok := f.answer(b)
+				if !ok {
 					return "", fmt.Errorf("HTTP 200 without an answer: %.200s", b)
 				}
-				first, _, _ := strings.Cut(strings.TrimSpace(r.Choices[0].Message.Content), "\n")
 				return first, nil
 			case settling[resp.StatusCode]:
 				last, lastStatus = fmt.Sprintf("HTTP %d: %.200s", resp.StatusCode, strings.TrimSpace(string(b))), resp.StatusCode
 			case resp.StatusCode == http.StatusUnauthorized:
-				return "", fmt.Errorf("the test call was refused: HTTP %d — the token or access rule is wrong: %.200s", resp.StatusCode, strings.TrimSpace(string(b)))
+				return "", &RefusedError{Status: resp.StatusCode, Body: strings.TrimSpace(string(b))}
 			case resp.StatusCode == http.StatusBadRequest:
 				return "", fmt.Errorf("the test call failed: HTTP %d — the request was rejected: %.200s", resp.StatusCode, strings.TrimSpace(string(b)))
 			default:

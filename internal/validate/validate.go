@@ -20,6 +20,7 @@ import (
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/defaulting"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/pruning"
 	apivalidation "k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
+	utiljson "k8s.io/apimachinery/pkg/util/json"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	celconfig "k8s.io/apiserver/pkg/apis/cel"
 	"sigs.k8s.io/yaml"
@@ -104,8 +105,8 @@ func (v *Validator) File(ctx context.Context, r io.Reader) ([]Problem, int, erro
 		if len(bytes.TrimSpace(doc)) == 0 {
 			continue
 		}
-		var obj map[string]any
-		if err := yaml.Unmarshal(doc, &obj); err != nil {
+		obj, err := Decode(doc)
+		if err != nil {
 			problems = append(problems, Problem{Doc: n, Object: "?", Message: "not valid YAML: " + err.Error()})
 			continue
 		}
@@ -121,6 +122,19 @@ func (v *Validator) File(ctx context.Context, r io.Reader) ([]Problem, int, erro
 			problems = append(problems, Problem{Doc: n, Object: name(obj), Message: m})
 		}
 	}
+}
+
+// Decode reads one YAML document the way the API server does: whole numbers become int64.
+// sigs.k8s.io/yaml alone gives float64, which the schema and CEL rules refuse. Use it for every
+// object passed to Object.
+func Decode(doc []byte) (map[string]any, error) {
+	j, err := yaml.YAMLToJSON(doc)
+	if err != nil {
+		return nil, err
+	}
+	var obj map[string]any
+	err = utiljson.Unmarshal(j, &obj)
+	return obj, err
 }
 
 func name(obj map[string]any) string {

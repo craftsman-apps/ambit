@@ -59,4 +59,4 @@ When the model router refuses a request (status 403 or 404), Ambit records the r
 - [Concepts](concepts.md): the Ambit objects and how a request is checked.
 - [Install on your cluster](install.md): single sign-on, TLS, your own ClickHouse and Valkey, Argo CD and a production checklist.
 - Guides: [coding tools](guides/coding-tools.md), [models per team](guides/models-per-team.md), [MCP servers with per-person sign-in](guides/mcp-apps.md), [spending limits](guides/spending-limits.md), and [offboarding](guides/someone-leaves.md).
-- Reference: [Models and providers](providers.md), [Personal API keys](api-keys.md), [MCP servers and apps](presets.md), [Budgets](budgets.md), [Model routing](routing.md), [Offboarding](offboarding.md), [Alerts](alerts.md) and [Upgrading](upgrading.md).
+- Reference: [Models and providers](providers.md), [Personal API keys](api-keys.md), [MCP servers and apps](presets.md), [Budgets](budgets.md), [Model routing](routing.md), [Offboarding](offboarding.md), [Alerts](alerts.md), [Compliance and audits](compliance.md) and [Upgrading](upgrading.md).

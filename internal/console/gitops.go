@@ -79,8 +79,8 @@ func (g *GitOps) Propose(ctx context.Context, verb, kind, plural, name, by strin
 		if err != nil {
 			return PullRequest{}, err
 		}
-		var obj map[string]any
-		if err := yaml.Unmarshal(manifest, &obj); err != nil {
+		obj, err := validate.Decode(manifest)
+		if err != nil {
 			return PullRequest{}, err
 		}
 		if problems, err := v.Object(ctx, obj); err != nil || len(problems) > 0 {
@@ -118,8 +118,8 @@ func (g *GitOps) ProposeObjects(ctx context.Context, branch, title, by string, o
 	var b strings.Builder
 	fmt.Fprintf(&b, "Requested by %s in the Ambit console.\n\n", by)
 	for _, o := range objs {
-		var obj map[string]any
-		if err := yaml.Unmarshal(o.Manifest, &obj); err != nil {
+		obj, err := validate.Decode(o.Manifest)
+		if err != nil {
 			return PullRequest{}, err
 		}
 		if problems, err := v.Object(ctx, obj); err != nil || len(problems) > 0 {

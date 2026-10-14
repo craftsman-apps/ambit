@@ -52,6 +52,10 @@ var Catalogue = []Check{
 	{"H1", GroupHealth, h1Releases}, {"H2", GroupHealth, h2CRDs}, {"H3", GroupHealth, h3Pods},
 	{"H4", GroupHealth, h4Gateway}, {"H5", GroupHealth, h5Dex}, {"H6", GroupHealth, h6ClickHouse},
 	{"H7", GroupHealth, h7Objects}, {"H8", GroupHealth, h8Models},
+	{"P1", GroupProduction, p1Gateway}, {"P2", GroupProduction, p2Bootstrap}, {"P3", GroupProduction, p3TLS},
+	{"P4", GroupProduction, p4Evidence}, {"P5", GroupProduction, p5Limits}, {"P6", GroupProduction, p6Valkey},
+	{"P7", GroupProduction, p7Protection}, {"P8", GroupProduction, p8Alerts}, {"P9", GroupProduction, p9Console},
+	{"P10", GroupProduction, p10Credentials},
 }
 
 // Run runs the checks of the given groups. A check that panics becomes an unknown result, so `ambit check`

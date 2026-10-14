@@ -159,6 +159,7 @@ Then restart Claude Code with the settings above, run `/status`, and ask it a qu
 ## Related
 
 - [Connect Codex, opencode and Hermes Agent](codex-opencode-hermes.md) and [Other coding agents](other-agents.md): more tools.
+- [Claude Desktop with Ambit's models](claude-desktop.md): the Claude Desktop app with third-party inference and a personal key.
 - [Claude Desktop with MCP tools](claude-desktop-mcp.md): the `mcp-remote` bridge and a personal key, for the Claude Desktop app.
 - [Personal API keys](../api-keys.md): scope, end dates, limits, revoking, and how the gateway checks a key.
 - [Models and providers](../providers.md): other providers and models.

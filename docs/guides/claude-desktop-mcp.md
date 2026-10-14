@@ -18,7 +18,7 @@ Claude Desktop starts local programs as MCP servers. It does not yet send a pers
 - **Node.js is required.** Claude Desktop starts the bridge with `npx`. Install the LTS version from [nodejs.org](https://nodejs.org/) and check `node --version`.
 - **The key stays on this computer.** Anyone who can read your user files can read the key, so protect it as in [Personal API keys](../api-keys.md).
 - **`mcp-remote` is a third-party program** (MIT license; npm package [`mcp-remote`](https://www.npmjs.com/package/mcp-remote), source [github.com/punkpeye/mcp-remote](https://github.com/punkpeye/mcp-remote)). It handles your key. Pin a version, as the examples do, and change it only after you have read its release notes.
-- **Tools only.** This page is about MCP tools. For models, see the Claude Desktop model guide when it is published; the models of Ambit are a different gateway and a different key scope.
+- **Tools only.** This page is about MCP tools. For models, see [Claude Desktop with Ambit's models](claude-desktop.md); the models of Ambit are a different gateway and a different key scope.
 
 ## Before you start
 
@@ -164,6 +164,7 @@ To test the key without Claude Desktop, use the `mcp` function in [Give an agent
 
 ## Related
 
+- [Claude Desktop with Ambit's models](claude-desktop.md): send the model calls of Claude Desktop through Ambit.
 - [Connect Claude Code and Cursor](coding-tools.md): personal keys, and the same key in other tools.
 - [Give an agent tools and apps](mcp-apps.md): the access rules that decide which tools you see.
 - [Personal API keys](../api-keys.md): scopes, end dates and revoking a key.

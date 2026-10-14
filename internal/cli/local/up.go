@@ -226,7 +226,7 @@ func Up(ctx context.Context, p *out.Printer, e *Env, o UpOptions) error {
 			if err := ops.Apply(ctx, assets.TestModel()); err != nil {
 				return err
 			}
-			return ops.WaitModelReady(ctx, "local-test", e.ModelWait)
+			return ops.WaitReady(ctx, "Model", "local-test", e.ModelWait)
 		}); err != nil {
 			return stepError("the test model did not become ready", again, err)
 		}
@@ -268,7 +268,7 @@ func Up(ctx context.Context, p *out.Printer, e *Env, o UpOptions) error {
 					fatal = err
 					return nil
 				}
-				if err := ops.WaitModelReady(ctx, "free-model", e.ModelWait); err != nil {
+				if err := ops.WaitReady(ctx, "Model", "free-model", e.ModelWait); err != nil {
 					fatal = err
 					return nil
 				}
@@ -296,6 +296,11 @@ func Up(ctx context.Context, p *out.Printer, e *Env, o UpOptions) error {
 		}); err != nil {
 			return testCallError(o.Name, err)
 		}
+	}
+	// The controller sets the rule's Ready only once the gateway applied it, a few seconds after the write: wait,
+	// so that `ambit check` right after local up finds it Ready.
+	if err := step("Rule everyone-local Ready", func() error { return ops.WaitReady(ctx, "AccessRule", "everyone-local", e.ModelWait) }); err != nil {
+		return stepError("the access rule did not become ready", again, err)
 	}
 	p.Line("  %s answered: %s", chosen, answer)
 

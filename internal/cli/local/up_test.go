@@ -66,10 +66,12 @@ type fakeOps struct {
 	password string
 	// secretErr is returned by ApplySecret, e.g. a library error that dumps the request with the key in it.
 	secretErr error
-	// errs makes a method fail by its name; applyErr fails Apply for one manifest; onReady runs in WaitModelReady.
+	// errs makes a method fail by its name; applyErr fails Apply for one manifest; onReady runs in WaitReady;
+	// readyErr fails WaitReady for one object name.
 	errs     map[string]error
 	applyErr func(manifest []byte) error
 	onReady  func()
+	readyErr map[string]error
 }
 
 func (o *fakeOps) NodeLabels(context.Context) (map[string]map[string]string, error) {
@@ -101,12 +103,12 @@ func (o *fakeOps) Apply(_ context.Context, m []byte) error {
 	}
 	return nil
 }
-func (o *fakeOps) WaitModelReady(_ context.Context, name string, _ time.Duration) error {
+func (o *fakeOps) WaitReady(_ context.Context, kind, name string, _ time.Duration) error {
 	o.calls = append(o.calls, "ready "+name)
-	if o.onReady != nil {
+	if kind == "Model" && o.onReady != nil {
 		o.onReady()
 	}
-	return nil
+	return o.readyErr[name]
 }
 func (o *fakeOps) AdminPassword(context.Context) (string, error) {
 	return o.password, o.errs["AdminPassword"]
@@ -209,6 +211,11 @@ func TestUpFreshWithTestModel(t *testing.T) {
 	}
 	if strings.Contains(o, "Local-Admin-Password-1") || strings.Contains(o, "token-for-test") {
 		t.Fatalf("a secret reached non-TTY output:\n%s", o)
+	}
+	// The rule's Ready comes only once the gateway applied it: local up waits for it, so `ambit check` right after
+	// it passes H7.
+	if c := r.ops.calls; c[len(c)-1] != "ready everyone-local" {
+		t.Fatalf("local up did not wait for the rule to be Ready last: %v", c)
 	}
 	if got := r.ops.calls[1]; got != "charts oci://ghcr.io/craftsman-apps/charts/ambit http://console.localtest.me:"+itoa(r.opts.HTTPPort) {
 		t.Fatalf("charts call = %q", got)
@@ -744,6 +751,10 @@ func TestUpEveryStepErrorHasNextStep(t *testing.T) {
 				}
 				return nil
 			}
+		}},
+		{"rule not Ready", func(r *rig) {
+			r.opts.NoKey = true
+			r.ops.readyErr = map[string]error{"everyone-local": boom}
 		}},
 		{"OpenRouter secret", func(r *rig) {
 			r.opts.Key, r.opts.KeyGiven = "sk-or-v1-0123456789abcdef0123456789", true

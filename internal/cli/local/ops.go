@@ -43,7 +43,7 @@ type Ops interface {
 	SecretExists(ctx context.Context, name string) (bool, error)
 	ApplySecret(ctx context.Context, name string, data map[string]string) error
 	Apply(ctx context.Context, manifest []byte) error
-	WaitModelReady(ctx context.Context, name string, timeout time.Duration) error
+	WaitReady(ctx context.Context, kind, name string, timeout time.Duration) error // kind: Model or AccessRule
 	AdminPassword(ctx context.Context) (string, error)
 }
 
@@ -124,20 +124,31 @@ func (o *clusterOps) Apply(ctx context.Context, manifest []byte) error {
 	return kube.Apply(ctx, o.c.Ctrl, Namespace, manifest)
 }
 
-func (o *clusterOps) WaitModelReady(ctx context.Context, name string, timeout time.Duration) error {
+func (o *clusterOps) WaitReady(ctx context.Context, kind, name string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		var m ambitv1alpha1.Model
-		err := o.c.Ctrl.Get(ctx, client.ObjectKey{Namespace: Namespace, Name: name}, &m)
-		if err == nil && meta.IsStatusConditionTrue(m.Status.Conditions, "Ready") {
+		var obj client.Object
+		var conds *[]metav1.Condition
+		switch kind {
+		case "Model":
+			m := &ambitv1alpha1.Model{}
+			obj, conds = m, &m.Status.Conditions
+		case "AccessRule":
+			a := &ambitv1alpha1.AccessRule{}
+			obj, conds = a, &a.Status.Conditions
+		default:
+			return fmt.Errorf("WaitReady: unknown kind %s", kind)
+		}
+		err := o.c.Ctrl.Get(ctx, client.ObjectKey{Namespace: Namespace, Name: name}, obj)
+		if err == nil && meta.IsStatusConditionTrue(*conds, "Ready") {
 			return nil
 		}
 		if time.Now().After(deadline) {
 			msg := "no Ready condition"
-			if c := meta.FindStatusCondition(m.Status.Conditions, "Ready"); c != nil {
+			if c := meta.FindStatusCondition(*conds, "Ready"); c != nil {
 				msg = c.Message
 			}
-			return fmt.Errorf("Model %s not Ready after %s: %s", name, timeout, msg)
+			return fmt.Errorf("%s %s not Ready after %s: %s", kind, name, timeout, msg)
 		}
 		select {
 		case <-ctx.Done():

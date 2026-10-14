@@ -21,7 +21,8 @@ archives:
     formats: [tar.gz]
     format_overrides:
       - { goos: windows, formats: [zip] }
-    # No version in the name, so .../releases/latest/download/ambit_<os>_<arch>.tar.gz always works (install.sh).
+    # No version in the name, so the name is the same in every release (install.sh builds it from the OS and the
+    # processor, and downloads it from .../releases/download/<tag>/).
     name_template: "ambit_{{ .Os }}_{{ .Arch }}"
     files: [LICENSE, NOTICE]
 
@@ -36,5 +37,8 @@ release:
   mode: keep-existing
   # A tag with a '-' (v0.2.0-rc.1) is marked as a prerelease on GitHub.
   prerelease: auto
+  # The release workflow's cli job marks the release as the latest after the upload; GoReleaser must not do it
+  # (or undo it) earlier.
+  make_latest: "false"
   # A re-run of the cli job replaces the files it uploaded before.
   replace_existing_artifacts: true

@@ -65,9 +65,12 @@ jobs:
           for f in deploy/crds/*.yaml; do cat "$f"; printf '\n---\n'; done > /tmp/assets/crds.yaml
           # A tag with a '-' (v0.2.0-rc.1) is a prerelease: marked so on GitHub, and not sent to Homebrew or npm.
           pre=; case "$GITHUB_REF_NAME" in *-*) pre=--prerelease ;; esac
-          gh release create "$GITHUB_REF_NAME" /tmp/assets/* --title "$GITHUB_REF_NAME" --generate-notes $pre
+          # Not the latest release yet: the cli job marks it latest after it has uploaded the CLI archives, so
+          # install.sh and install.ps1 never find a latest release without them.
+          gh release create "$GITHUB_REF_NAME" /tmp/assets/* --title "$GITHUB_REF_NAME" --generate-notes --latest=false $pre
 
   # The ambit CLI archives on the same release, with build provenance for each archive (gh attestation verify).
+  # This job also marks the release as the latest, once the archives are uploaded.
   cli:
     needs: publish
     runs-on: ubuntu-latest
@@ -80,6 +83,11 @@ jobs:
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with: { distribution: goreleaser, version: v2.18.3, args: release --clean }
         env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+      # The archives and checksums.txt are on the release now. A prerelease is never the latest release.
+      - name: Mark the release as the latest
+        if: ${{ !contains(github.ref_name, '-') }}
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: gh release edit "$GITHUB_REF_NAME" --latest
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with: { subject-path: "dist/ambit_*.tar.gz, dist/ambit_*.zip, dist/checksums.txt" }
       - name: Prerelease tags go to GitHub only

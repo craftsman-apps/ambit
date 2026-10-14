@@ -41,6 +41,12 @@ func h1Releases(_ context.Context, e *Env) Result {
 	return res(Pass, "live objects", "ambit-crds and ambit %s are deployed", app.ChartVersion)
 }
 
+// ambitCRDNames are the CRDs of the ambit-crds chart. TestAmbitCRDNamesMatchChart keeps the list in step.
+var ambitCRDNames = []string{
+	"accessrules.ambitproject.dev", "budgets.ambitproject.dev", "connections.ambitproject.dev", "modelrouters.ambitproject.dev",
+	"models.ambitproject.dev", "serverrequests.ambitproject.dev", "servers.ambitproject.dev",
+}
+
 // H2: the third-party CRDs and Ambit's CRDs are Established.
 func h2CRDs(ctx context.Context, e *Env) Result {
 	var list apiextensionsv1.CustomResourceDefinitionList
@@ -74,6 +80,12 @@ func h2CRDs(ctx context.Context, e *Env) Result {
 	}
 	if ambit == 0 {
 		bad = append(bad, "the ambitproject.dev CRDs (release ambit-crds)")
+	} else {
+		for _, n := range ambitCRDNames { // some Ambit CRDs are not all of them
+			if !have[n] {
+				bad = append(bad, n)
+			}
+		}
 	}
 	if len(bad) > 0 {
 		return res(Fail, "live objects", "missing or not Established: %s", strings.Join(bad, ", "))

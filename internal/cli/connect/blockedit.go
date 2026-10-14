@@ -64,6 +64,9 @@ func (t *Text) Bytes() []byte {
 type BlockRecord struct {
 	AddedFinalNewline bool `json:"addedFinalNewline,omitempty"` // the line before the block had no line break; one was added
 	Padded            bool `json:"padded,omitempty"`            // a blank line was added before the block
+	// ReplacedEOL is the line terminator of each line the block replaced (those lines sit in the block as
+	// "# ambit-replaced: " comments), in order, so removing the block gives them back byte for byte.
+	ReplacedEOL []string `json:"replacedEol,omitempty"`
 }
 
 // Block is a begin line, its body and its end line. Start and End are the line indexes of the two markers.

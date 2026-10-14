@@ -1,0 +1,4 @@
+model_provider = "openai"  # my default
+
+[tui]
+x = 1

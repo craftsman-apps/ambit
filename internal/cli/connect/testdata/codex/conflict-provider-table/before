@@ -1,0 +1,11 @@
+approval_policy = "never"
+
+[model_providers.ambit]
+name = "My own"
+base_url = "http://localhost:1234/v1"
+
+[model_providers.ambit.auth]
+command = "mine"
+
+[tui]
+x = 1

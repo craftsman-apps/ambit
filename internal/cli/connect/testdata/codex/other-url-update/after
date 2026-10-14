@@ -1,0 +1,25 @@
+# Codex configuration
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+# >>> ambit: written by `ambit connect codex`; `ambit disconnect codex` removes it >>>
+model = "new/model"
+model_provider = "ambit"
+# <<< ambit <<<
+# Trusted projects
+[projects."/Users/a/code/app"]
+trust_level = "trusted"
+
+[tui]
+notifications = true
+
+# >>> ambit: written by `ambit connect codex`; `ambit disconnect codex` removes it >>>
+[model_providers.ambit]
+name = "Ambit"
+base_url = "https://llm.example.com/v1"
+wire_api = "responses"
+
+[model_providers.ambit.auth]
+command = "/opt/homebrew/bin/ambit"
+args = ["key", "print", "--url", "https://llm.example.com"]
+# <<< ambit <<<

@@ -98,6 +98,24 @@ jobs:
       - name: Chart rules (ambit-router shape and RBAC)
         run: test/chart.sh
 
+  # Spec 9.2a: the CLI's Helm SDK must write releases that Helm 3 can list, read, roll back and upgrade, and the
+  # SDK must upgrade again over Helm 3's revision. This job decided the SDK version (Helm v4) and stays as a guard.
+  cli-helm-interop:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with: { version: v3.22.0 }   # Helm 3 on purpose: the version most users run
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with: { cluster_name: ambit-interop, wait: 120s }
+      - name: Helm 3 reads, rolls back and upgrades releases written by the CLI's SDK
+        run: go test -tags interop -count=1 -run TestHelm3Interop -v ./internal/cli/helmx
+
   # The quick start as the docs give it: deploy/quickstart.yaml on a fresh kind cluster, without the CoreDNS
   # rewrite or Keycloak the other parts use. Sign-in, a token from Dex, a first call, the audit record.
   quickstart:

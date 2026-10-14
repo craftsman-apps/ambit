@@ -17,7 +17,7 @@ description: How a person asks for a new MCP server in the console, how an appro
 | Member of the group `ambit-approvers` (role `approver`) | Yes | Yes, but not their own request | No |
 | Member of the group `ambit-admins`, or the bootstrap `admin@ambit.local` (role `admin`) | Yes | Yes, but not their own request | Yes |
 
-The roles come from groups that your identity provider sends. See "Console roles" in [Install on your cluster](../install.md). Nobody can decide on their own request. This includes admins. If an admin asks for a server, another approver or admin must decide.
+The roles come from groups that your identity provider sends. See "Groups and console roles" in [Install on your cluster](../install.md). Nobody can decide on their own request. This includes admins. If an admin asks for a server, another approver or admin must decide.
 
 ## 1. Ask for a server
 
@@ -33,7 +33,7 @@ Open **MCP servers** in the console and choose **Request a server**. Fill in the
 | **Image, pinned by digest** | For an image. It must look like `ghcr.io/org/server@sha256:<64 hex characters>`. A tag is refused, because a tag can later point to different code. |
 | **Server URL** | For a server reached by URL. It must look like `https://host/path`, without a query string or fragment. Plain `http` is accepted only for services inside the cluster (`*.svc`) and for `localhost`. |
 | **Sign-in for each user** | Only for a server reached by URL. Choose the app connection when each person must sign in to the vendor with their own account. Admins add connections under **Settings**, **Apps** (see [App presets](../presets.md)). |
-| **Transport** | `stdio` for an image. `streamable-http` or `sse` for a URL. |
+| **Transport** | `stdio` is the usual choice for an image. `streamable-http` or `sse` for a URL (a URL cannot use `stdio`). |
 | **Why your team needs it** | Free text, at most 2000 characters. The approver reads it. |
 
 Choose **Send request**. The console records your email address from your sign-in as the requester. You cannot type another name.
@@ -58,10 +58,11 @@ Check these before you decide:
 - **Image:** the digest is exactly the code that will run. Approving starts exactly this digest.
 - **URL:** approving lets the gateway reach this address.
 - **Reason:** does the team need it?
+- **Access:** the card reminds you: "Access still needs a rule." Approval alone gives nobody the tools.
 
-Write a comment if you want the requester to know why. The comment is optional, at most 2000 characters, and is kept with the decision. Then choose **Approve** or **Deny**.
+Write a comment if you want the requester to know why. The comment is optional, at most 2000 characters, and is kept with the decision. Then choose the **Approve** or **Deny** button. Each button carries the server name, for example **Approve jira**.
 
-**Approve** creates the `Server` with the name and settings from the request. The server starts (image) or is checked (URL). Its tools are closed to everyone. The card says so: "Access still needs a rule."
+**Approve** creates the `Server` with the name and settings from the request. The server starts (image) or is checked (URL). Its tools are closed to everyone until an access rule exists.
 
 **Deny** creates nothing. The request stays in the **Decisions** list with your comment.
 
@@ -92,12 +93,18 @@ Read the records with `kubectl`:
 kubectl -n ambit-system get serverrequests.ambitproject.dev
 ```
 
+Example output (made-up names; the columns are those of the `ServerRequest` definition):
+
 ```text
 NAME              SERVER   REQUESTED BY      DECISION   DECIDED BY
 jira-x7k2p        jira     marta@acme.test   Approved   priya@acme.test
 ```
 
-The **Audit** page does not list requests and decisions. It lists the calls that pass the gateway. After approval, calls to the new server's tools appear there, and calls that no rule allows are refused and listed too. To answer "who approved this server and which image?", use the `ServerRequest`, the `Server` annotations or the **Decisions** list.
+The **Audit** page does not list requests and decisions. It lists the calls that pass the gateway. After approval, calls to the new server's tools appear there. To answer "who approved this server and which image?", use the `ServerRequest`, the `Server` annotations or the **Decisions** list.
+
+## What was checked
+
+The screenshots were made with a mocked console API and made-up data. The request, approval and denial flow was read from the code and the unit tests. It was not run on a cluster, and the `kubectl` output above is an example.
 
 ## Related
 

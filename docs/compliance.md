@@ -25,7 +25,7 @@ This page is not legal advice.
 | **Kubernetes objects** (`AccessRule`, `Model`, `Server`, `Budget`, `ModelRouter`, `Connection`) | Who may use what. With GitOps mode, every change is a pull request with its author, reviewer and time. | `kubectl get`, or your configuration repository. |
 | **Settings → Keys** (admins only) | All personal API keys, and the history of key changes: who created or revoked which key, settings changes, sign-ins that changed groups (newest 500). | Console. |
 | **Settings → Offboarding** (admins only) | One record per person who left: trigger, sessions ended, gateway block, keys deleted, and each app vendor's answer to the revocation request. | Console. |
-| **Servers** page | Requests to add an MCP server: who asked, who decided, the decision and the image digest. A person cannot approve their own request. | Console. This flow is in the console but not yet described in these docs; see `internal/console/servers.go` in the repository. |
+| **Servers** page | Requests to add an MCP server: who asked, who decided, the decision and the image digest. A person cannot approve their own request. | Console. The flow is described in [Ask for an MCP app and approve it](guides/request-an-app.md). |
 | **Helm values** | The settings that matter to an auditor: token issuers, TLS, `bootstrapAdmin.enabled`, `apiKeys.*`, `evidence.*`, `limits.*`, `protection.enabled`. | `helm get values ambit -n ambit-system`, or your values file in Git. |
 
 The Audit and Usage pages and the ClickHouse records exist only with `evidence.enabled: true`. The default is `false`.

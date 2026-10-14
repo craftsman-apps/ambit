@@ -47,6 +47,7 @@ The console is at http://console.localtest.me:8080. `make kind-down` deletes the
 `make test-go` and `go test ./...` need no cluster and can run in many places at once.
 
 - Preset tests (catalog, contract, live, release gate): [docs/maintainers/preset-testing.md](docs/maintainers/preset-testing.md)
+- Release checklist (the CLI by hand on macOS and Windows, a failed `cli` job): [docs/maintainers/release-checklist.md](docs/maintainers/release-checklist.md)
 
 The acceptance tests (`test/step*.sh`) share one kind cluster and replace the installed console. Run them one
 at a time. If several people or agents use one machine, run each cluster step under a lock:

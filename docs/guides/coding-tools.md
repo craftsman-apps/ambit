@@ -43,6 +43,25 @@ Treat the key like a password. A key carries the access of its owner and never m
 
 Claude Code prints a notice that it does not know this model. The notice is harmless.
 
+**Claude Code with a model that is not a Claude model.** Claude Code was tested (version 2.1.299, 2026-10-14) with `nvidia/nemotron-3-super-120b-a12b:free` at OpenRouter, through `/v1/messages`. A prompt that needs one tool call worked, with and without the switch below. What to know:
+
+- *Model variables.* Claude Code uses Claude model names for its background work unless you set the names. `ANTHROPIC_MODEL` and `ANTHROPIC_SMALL_FAST_MODEL` (above) were enough in the test. Claude Code also has `ANTHROPIC_DEFAULT_HAIKU_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` and `ANTHROPIC_DEFAULT_OPUS_MODEL`; set them to your model name if you use the model names `haiku`, `sonnet` or `opus` in Claude Code. We did not test these three.
+- *Experimental beta fields.* By default, Claude Code sends the fields `context_management` and `safeguards` in each request, and also `thinking` and `output_config`. A provider that does not know them can refuse the request. With `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`, Claude Code does not send `context_management` and `safeguards`. It still sends `thinking` and `output_config`, and `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1` did not remove them in our test. Nemotron accepted all of it, so we cannot say which provider needs the switch. If a model refuses Claude Code's requests, set it first. Put it in the same `env` block:
+
+  ```json
+  "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"
+  ```
+
+- *Token counts are estimates.* Claude Code asks `/v1/messages/count_tokens` for exact counts, for example when you run `/context`. Ambit does not serve that path and answers 403 `authorization failed`. Claude Code goes on and shows estimated numbers; `/context` printed "Estimated usage by category". Each refused call is listed in **Audit** with status 403, under your email address. A short prompt with a tool call does not call this path.
+
+**MCP with Claude Code.** Add the MCP gateway with a personal key that has the scope **MCP** (or **LLM and MCP**):
+
+```sh
+claude mcp add --transport http ambit http://mcp.localtest.me:8080/mcp --header "Authorization: Bearer ambit_..."
+```
+
+`claude mcp list` shows `ambit ... Connected`. In the test, Claude Code called `time_get_current_time` of the `time` server (see the [Quick start](../quick-start.md), step 9).
+
 **Cursor.** In the model settings, enter:
 
 ```text
@@ -101,6 +120,7 @@ Then start Claude Code with the settings above and ask it a question. In the con
 
 ## Related
 
+- [Connect Codex, opencode and Hermes Agent](codex-opencode-hermes.md) and [Other coding agents](other-agents.md): more tools.
 - [Personal API keys](../api-keys.md): scope, end dates, limits, revoking, and how the gateway checks a key.
 - [Models and providers](../providers.md): other providers and models.
 - [Someone leaves](someone-leaves.md): what happens to a person's keys when they are offboarded.

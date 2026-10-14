@@ -162,3 +162,40 @@ func TestRevealOnTTY(t *testing.T) {
 		}
 	}
 }
+
+func TestVerboseLongLineDoesNotBlock(t *testing.T) {
+	var errb lockedBuffer
+	p, _ := newTest(Options{Verbose: true, Err: &errb})
+	w := p.Verbose()
+	done := make(chan struct{})
+	go func() {
+		io.WriteString(w, strings.Repeat("x", 200*1024)+"\n")
+		io.WriteString(w, "after the long line\n")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Verbose writer blocked on a long line")
+	}
+	w.(io.Closer).Close()
+	deadline := time.Now().Add(time.Second)
+	for !strings.Contains(errb.String(), "after the long line") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(errb.String(), "after the long line") {
+		t.Fatal("the line after the long line was lost")
+	}
+}
+
+func TestFailInJSONModeGoesToErr(t *testing.T) {
+	var outb, errb bytes.Buffer
+	p := New(Options{Out: &outb, Err: &errb, JSON: true}, &Redactor{})
+	p.Fail(&Error{What: "Docker is not running", Why: "no daemon", Next: "start Docker"})
+	if outb.Len() != 0 {
+		t.Fatalf("stdout must carry only JSON, got %q", outb.String())
+	}
+	if !strings.Contains(errb.String(), "Docker is not running") || !strings.Contains(errb.String(), "next: start Docker") {
+		t.Fatalf("stderr = %q", errb.String())
+	}
+}

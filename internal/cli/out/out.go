@@ -89,11 +89,15 @@ func (p *Printer) Step(ok bool, what string, d time.Duration) {
 // Line prints one plain line.
 func (p *Printer) Line(format string, a ...any) { p.line(p.o.Out, fmt.Sprintf(format, a...)) }
 
-// Fail prints "✗ what — why" and, when next is set, "  next: next".
+// Fail prints "✗ what — why" and, when next is set, "  next: next". In JSON mode it writes to Err.
 func (p *Printer) Fail(e *Error) {
-	p.line(p.o.Out, fmt.Sprintf("%s %s — %s", p.Mark("fail"), e.What, e.Why))
+	w := p.o.Out
+	if p.o.JSON {
+		w = p.o.Err // standard output carries only the JSON document
+	}
+	p.line(w, fmt.Sprintf("%s %s — %s", p.Mark("fail"), e.What, e.Why))
 	if e.Next != "" {
-		p.line(p.o.Out, "  next: "+e.Next)
+		p.line(w, "  next: "+e.Next)
 	}
 }
 
@@ -114,9 +118,15 @@ func (p *Printer) Verbose() io.Writer {
 	}
 	pr, pw := io.Pipe()
 	go func() {
-		s := bufio.NewScanner(pr)
-		for s.Scan() {
-			p.line(p.o.Err, s.Text())
+		// Read in pieces of at most 64 KiB and keep draining, so a long line never blocks the writer.
+		// A line longer than that is printed in several pieces; a secret that spans two pieces is not matched.
+		r := bufio.NewReader(pr)
+		for {
+			b, _, err := r.ReadLine()
+			if err != nil {
+				return
+			}
+			p.line(p.o.Err, string(b))
 		}
 	}()
 	return pw

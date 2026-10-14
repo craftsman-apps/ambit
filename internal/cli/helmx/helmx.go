@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart"
@@ -15,6 +16,7 @@ import (
 	"helm.sh/helm/v4/pkg/cli"
 	"helm.sh/helm/v4/pkg/kube"
 	"helm.sh/helm/v4/pkg/registry"
+	relcommon "helm.sh/helm/v4/pkg/release/common"
 	rel "helm.sh/helm/v4/pkg/release/v1"
 	"helm.sh/helm/v4/pkg/storage/driver"
 )
@@ -117,6 +119,11 @@ func (h *sdk) Apply(ctx context.Context, name, ref, version string, vals map[str
 		}
 		return *toRelease(r.(*rel.Release)), nil
 	}
+	if strings.HasPrefix(cur.Status, "pending-") {
+		if err := h.failPending(name); err != nil {
+			return Release{}, err
+		}
+	}
 	up := action.NewUpgrade(h.cfg)
 	up.Namespace, up.Version = h.ns, version
 	up.ServerSideApply = "false"
@@ -130,6 +137,25 @@ func (h *sdk) Apply(ctx context.Context, name, ref, version string, vals map[str
 		return Release{}, err
 	}
 	return *toRelease(r.(*rel.Release)), nil
+}
+
+// failPending marks a revision that a hard stop left in pending-install or pending-upgrade as failed. Helm refuses
+// to upgrade a pending revision, but upgrades a failed one. This is the safest recovery: nothing in the cluster is
+// deleted or rolled back (a rollback needs an earlier revision, which a first install lacks), and the next upgrade
+// applies the chart over whatever the stopped operation left. It assumes no other operation on the release is
+// running, which holds for `ambit local up` on a cluster the CLI owns.
+func (h *sdk) failPending(name string) error {
+	last, err := h.cfg.Releases.Last(name)
+	if err != nil {
+		return err
+	}
+	r, ok := last.(*rel.Release)
+	if !ok || r.Info == nil {
+		return fmt.Errorf("release %s: unexpected type %T", name, last)
+	}
+	r.Info.Status = relcommon.StatusFailed
+	r.Info.Description = "marked failed by ambit: an earlier operation was stopped before it finished"
+	return h.cfg.Releases.Update(r)
 }
 
 func (h *sdk) Values(name string, all bool) (map[string]any, error) {

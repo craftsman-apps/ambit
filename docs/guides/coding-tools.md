@@ -13,7 +13,7 @@ You need the cluster from the [Quick start](../quick-start.md), with a model and
 
 - LLM address: `http://llm.localtest.me:8080`
 - Console: `http://console.localtest.me:8080`
-- Model name for clients: `nvidia/nemotron-3-super-120b-a12b:free`. Clients send the provider's model name, not the name of the `Model` object.
+- Model name for clients: the provider's model name, not the name of the `Model` object. `ambit local up` prints it in the summary (the `"model"` value of the call command) and on the line `<model> answered:`; it is `local/echo` for the test model. The console page **Models** shows it too. The by-hand steps use `nvidia/nemotron-3-super-120b-a12b:free`. The examples below use that name: replace it with yours.
 
 ## 1. Create a key
 

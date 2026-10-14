@@ -79,8 +79,18 @@ It asks for an OpenRouter API key and does not show what you type. Press Enter t
 Ambit is running.
   Console:  http://console.localtest.me:8080
   Sign in:  admin@ambit.local
-  Password: (shown on your terminal)
+  Password: (the password is printed here on a terminal)
+  kubectl:  kubectl --context kind-ambit -n ambit-system get pods
+  Remove:   ambit local down
+
+Call the model from your shell:
+  TOKEN=$(curl -s http://console.localtest.me:8080/dex/token -d grant_type=password -d client_id=ambit-cli -d scope="openid email profile" \
+    --data-urlencode username=admin@ambit.local --data-urlencode password="$(ambit local password)" | sed -E 's/.*"access_token":"([^"]+)".*/\1/')
+  curl -s http://llm.localtest.me:8080/v1/chat/completions -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    -d '{"model":"local/echo","messages":[{"role":"user","content":"Hello"}]}'
 ```
+
+Without a terminal, or with `--no-password`, the password line reads ``Password: run `ambit local password` ``. On Windows the call command is for PowerShell. With an OpenRouter key, the model in the summary is the one that answered.
 
 If a step fails, the line says what is wrong, and the next line starts with `next:` and gives the command to run. Run `ambit local up` again at any time: it repairs the cluster it created, and it never changes a kind cluster that it did not create. Press Ctrl+C once to stop `ambit local up`: it stops and says how to remove the cluster if it was created. Press Ctrl+C a second time to end it at once.
 

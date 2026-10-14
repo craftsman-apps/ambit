@@ -1,8 +1,10 @@
 package connect
 
 import (
+	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 )
 
 // ClaudeSettingsPath is $CLAUDE_CONFIG_DIR/settings.json, else ~/.claude/settings.json. Never a project file:
@@ -19,6 +21,31 @@ var claudeModelVars = []string{"ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL"
 
 // claudeSecretVars outrank apiKeyHelper in Claude Code. In settings.json they are a conflict.
 var claudeSecretVars = []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"}
+
+// claudeProviderVars switch Claude Code to a cloud provider's own credentials, which outrank everything else
+// (Claude Code, Authentication: the order is cloud provider, ANTHROPIC_AUTH_TOKEN, ANTHROPIC_API_KEY, apiKeyHelper).
+var claudeProviderVars = []string{"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"}
+
+// providerOn reads the value of a CLAUDE_CODE_USE_* variable as Claude Code does: unset, empty, 0 and false are off.
+// raw is JSON text when it comes from settings.json, plain text from the shell.
+func providerOn(raw string) bool {
+	var v any
+	if json.Unmarshal([]byte(raw), &v) != nil {
+		v = raw
+	}
+	switch x := v.(type) {
+	case string:
+		x = strings.ToLower(strings.TrimSpace(x))
+		return x != "" && x != "0" && x != "false"
+	case bool:
+		return x
+	case float64:
+		return x != 0
+	case nil:
+		return false
+	}
+	return true
+}
 
 func claudeSets(in Input) []Set {
 	sets := []Set{
@@ -78,6 +105,12 @@ func PlanClaudeCode(in Input) (*Plan, error) {
 			removed = append(removed, "/env/"+v)
 		}
 	}
+	for _, v := range claudeProviderVars {
+		if raw, ok := d.Get("env", v); ok && providerOn(raw) {
+			p.Conflicts = append(p.Conflicts, Conflict{What: "env." + v + " is set", Why: "it makes Claude Code use a cloud provider's credentials, which outrank Ambit's key helper"})
+			removed = append(removed, "/env/"+v)
+		}
+	}
 	if len(p.Conflicts) > 0 && !in.Force {
 		return p, nil
 	}
@@ -97,9 +130,17 @@ func PlanClaudeCode(in Input) (*Plan, error) {
 		p.Record.RemovedSecrets = append(append([]string{}, in.Prev.RemovedSecrets...), removed...)
 	}
 	if in.Getenv != nil {
+		warn := func(v string) {
+			p.Warnings = append(p.Warnings, v+" is set in your shell and outranks Ambit's key; remove it from your shell profile")
+		}
 		for _, v := range claudeSecretVars {
 			if in.Getenv(v) != "" {
-				p.Warnings = append(p.Warnings, v+" is set in your shell and outranks Ambit's key; remove it from your shell profile")
+				warn(v)
+			}
+		}
+		for _, v := range claudeProviderVars {
+			if providerOn(in.Getenv(v)) {
+				warn(v)
 			}
 		}
 	}

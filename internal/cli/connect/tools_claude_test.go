@@ -191,3 +191,26 @@ func TestClaudeCodeConflictLinesNeverPrintAValue(t *testing.T) {
 		}
 	}
 }
+
+// Cloud provider settings outrank apiKeyHelper (Claude Code authentication order): Bedrock, Vertex and Foundry.
+func TestClaudeCodeCloudProviderVariables(t *testing.T) {
+	for _, v := range []string{"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"} {
+		before := `{"env": {"` + v + `": "1"}}` + "\n"
+		p, err := PlanClaudeCode(claudeInput(goldenCase{}, goldenStep{URL: "https://llm.example.com", Model: "m"}, []byte(before), true, nil))
+		if err != nil || len(p.Conflicts) != 1 || p.After != nil || !strings.HasPrefix(p.Conflicts[0].What, "env."+v+" is set") {
+			t.Fatalf("%s: %v %+v", v, err, p)
+		}
+		p, _ = PlanClaudeCode(claudeInput(goldenCase{}, goldenStep{URL: "https://llm.example.com", Model: "m", Force: true}, []byte(before), true, nil))
+		if len(p.Record.RemovedSecrets) != 1 || strings.Contains(string(p.After), v) {
+			t.Fatalf("%s with --force: %+v %s", v, p.Record, p.After)
+		}
+		w, _ := PlanClaudeCode(claudeInput(goldenCase{}, goldenStep{URL: "https://llm.example.com", Model: "m", Env: map[string]string{v: "true"}}, nil, false, nil))
+		if len(w.Warnings) != 1 || !strings.HasPrefix(w.Warnings[0], v+" is set in your shell and outranks") {
+			t.Fatalf("%s in the shell: %q", v, w.Warnings)
+		}
+		off, _ := PlanClaudeCode(claudeInput(goldenCase{}, goldenStep{URL: "https://llm.example.com", Model: "m", Env: map[string]string{v: "0"}}, nil, false, nil))
+		if len(off.Warnings) != 0 {
+			t.Fatalf("%s=0 is off, got warnings %q", v, off.Warnings)
+		}
+	}
+}

@@ -253,10 +253,9 @@ jobs:
       - name: Build the CLI
         shell: bash
         run: go build -o bin/ambit ./cmd/ambit
-      # Task 18 adds ./internal/installscript/... here (go test fails on a directory that does not exist).
       - name: CLI unit tests
         shell: bash
-        run: go test -count=1 ./cmd/ambit/... ./internal/cli/... ./internal/validate/... ./deploy/... ./kind/...
+        run: go test -count=1 ./cmd/ambit/... ./internal/cli/... ./internal/validate/... ./internal/installscript/... ./deploy/... ./kind/...
       - name: The development flags exist only in the dev build (ruling S9)
         shell: bash
         run: go test -count=1 -tags dev ./internal/cli/

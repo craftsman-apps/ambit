@@ -99,7 +99,7 @@ func TestHiddenPromptCancelled(t *testing.T) {
 	var w bytes.Buffer
 	res := make(chan error, 1)
 	go func() {
-		_, err := hiddenPrompt(ctx, func() ([]byte, error) { close(started); <-block; return nil, nil }, func() { restored.Store(true) }, &w)
+		_, err := hiddenPrompt(ctx, "", func() ([]byte, error) { close(started); <-block; return nil, nil }, func() { restored.Store(true) }, &w)
 		res <- err
 	}()
 	<-started
@@ -115,8 +115,26 @@ func TestHiddenPromptCancelled(t *testing.T) {
 }
 
 func TestHiddenPromptReadsKey(t *testing.T) {
-	k, err := hiddenPrompt(context.Background(), func() ([]byte, error) { return []byte("sk-or-v1-x"), nil }, func() {}, io.Discard)
+	k, err := hiddenPrompt(context.Background(), "", func() ([]byte, error) { return []byte("sk-or-v1-x"), nil }, func() {}, io.Discard)
 	if err != nil || k != "sk-or-v1-x" {
 		t.Fatalf("%q, %v", k, err)
+	}
+}
+
+// The prompt text and the line end go to the writer it is given (stderr in `local up`), so `ambit local up > log`
+// does not put the prompt in the file.
+func TestHiddenPromptWritesToItsWriter(t *testing.T) {
+	var w bytes.Buffer
+	hiddenPrompt(context.Background(), "Key: ", func() ([]byte, error) { return []byte("k"), nil }, func() {}, &w)
+	if w.String() != "Key: \n" {
+		t.Fatalf("writer got %q", w.String())
+	}
+}
+
+// The development-build usage error keeps --name in its suggestion (final review, Minor 3).
+func TestDevBuildUsageKeepsName(t *testing.T) {
+	code, s := runCLI(t, &fakeHelm{}, "local", "up", "--name", "ambit-try")
+	if code != 2 || !strings.Contains(s, "next: ambit local up --name ambit-try --chart-dir") {
+		t.Fatalf("code %d, output\n%s", code, s)
 	}
 }

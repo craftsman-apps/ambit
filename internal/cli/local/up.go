@@ -86,14 +86,31 @@ func (v clusterView) NodeLabels(ctx context.Context, n string) (map[string]map[s
 	return ops.NodeLabels(ctx)
 }
 
-// Owner runs the one ownership check for name.
+// Owner runs the one ownership check for name. An error that is not already an *out.Error gets a next step.
 func (e *Env) Owner(ctx context.Context, name string) (Ownership, error) {
-	return CheckOwnership(ctx, e.Store, clusterView{e}, name)
+	own, err := CheckOwnership(ctx, e.Store, clusterView{e}, name)
+	var oe *out.Error
+	if err != nil && !errors.As(err, &oe) {
+		err = &out.Error{What: fmt.Sprintf("cannot check the kind cluster %q", name), Why: err.Error(),
+			Next: "check that `docker ps` works, then run the command again (add --verbose for details)"}
+	}
+	return own, err
+}
+
+// ReadyDocker reads `docker info` before any other Docker call, so kind's docker ps never runs against an
+// unreachable daemon. When Docker is not reachable it returns the L1 line as an error.
+func (e *Env) ReadyDocker() (DockerInfo, error) {
+	d := e.Docker()
+	if !d.Reachable {
+		return d, &out.Error{What: "Docker is not running", Why: d.Err, Next: dockerNext()}
+	}
+	return d, nil
 }
 
 // Up runs `ambit local up` (spec 4.1). Every step prints one line with its duration.
 func Up(ctx context.Context, p *out.Printer, e *Env, o UpOptions) error {
 	kctx := KubeContext(o.Name)
+	again := fmt.Sprintf("run ambit local up%s again (it repairs); add --verbose for details", nameFlag(o.Name))
 	step := func(what string, f func() error) error {
 		start := time.Now()
 		err := f()
@@ -103,14 +120,18 @@ func Up(ctx context.Context, p *out.Printer, e *Env, o UpOptions) error {
 
 	// 1. Preflight.
 	var own Ownership
+	var docker DockerInfo
 	if err := step("Preflight", func() error {
 		var err error
+		if docker, err = e.ReadyDocker(); err != nil {
+			return err
+		}
 		if own, err = e.Owner(ctx, o.Name); err != nil {
 			return err
 		}
 		var failed *checks.Result
 		for _, r := range Preflight(PreflightInput{Name: o.Name, HTTPPort: o.HTTPPort, HTTPSPort: o.HTTPSPort,
-			SkipChecks: o.SkipChecks, Docker: e.Docker(), Ownership: own, PortFree: e.PortFree}) {
+			SkipChecks: o.SkipChecks, Docker: docker, Ownership: own, PortFree: e.PortFree}) {
 			if r.Status == checks.Pass || r.Status == checks.NA {
 				continue
 			}
@@ -142,31 +163,31 @@ func Up(ctx context.Context, p *out.Printer, e *Env, o UpOptions) error {
 		}
 		return createCluster(ctx, e, o)
 	}); err != nil {
-		return err
+		return stepError("the kind cluster could not be created", fmt.Sprintf("ambit local up%s --verbose", nameFlag(o.Name)), err)
 	}
 	ops, err := e.OpenOps(e.Kubeconfig, kctx)
 	if err != nil {
-		return err
+		return stepError("the cluster cannot be reached", again, err)
 	}
 	for _, a := range o.DevArchives {
 		if err := e.Kind.LoadArchive(o.Name, a); err != nil {
-			return err
+			return stepError("the image archive "+a+" could not be loaded", again, err)
 		}
 	}
 
 	// 3. CRDs.
 	if err := step("CRDs (Gateway API, agentgateway, ToolHive)", func() error { return ops.ApplyCRDs(ctx, e.CRDBundle) }); err != nil {
-		return err
+		return stepError("the CRDs were not applied", again, err)
 	}
 
 	// 4. Charts.
 	base, err := assets.QuickstartValues(ConsoleURL(o.HTTPPort))
 	if err != nil {
-		return err
+		return stepError("the quick-start values cannot be read", "report this at https://github.com/craftsman-apps/ambit/issues", err)
 	}
 	vals, err := MergeValues(base, o.DevValues)
 	if err != nil {
-		return out.Usage("--dev-values", err.Error(), "")
+		return out.Usage("--dev-values", err.Error(), "check the files given to --dev-values")
 	}
 	if err := step("Charts ambit-crds and ambit", func() error {
 		return ops.InstallCharts(ctx, o.Charts, vals, o.Timeout, func(l string) { p.Line("  %s", l) })
@@ -178,14 +199,14 @@ func Up(ctx context.Context, p *out.Printer, e *Env, o UpOptions) error {
 	// Model's spec.model changes until a candidate answers.
 	key, useKey, err := chooseKey(ctx, ops, o)
 	if err != nil {
-		return err
+		return stepError("the OpenRouter key cannot be chosen", fmt.Sprintf("ambit local up%s --no-key for the test model, or %s", nameFlag(o.Name), again), err)
 	}
 	if useKey != "" {
 		p.Redactor().Add(useKey)
 	}
 	pw, err := ops.AdminPassword(ctx)
 	if err != nil {
-		return fmt.Errorf("read the bootstrap admin password: %w", err)
+		return stepError("the bootstrap admin password cannot be read", again, err)
 	}
 	p.Redactor().Add(pw)
 	httpc := e.HTTP(o.HTTPPort)
@@ -207,11 +228,11 @@ func Up(ctx context.Context, p *out.Printer, e *Env, o UpOptions) error {
 			}
 			return ops.WaitModelReady(ctx, "local-test", e.ModelWait)
 		}); err != nil {
-			return err
+			return stepError("the test model did not become ready", again, err)
 		}
 		p.Line("  Using a test model that repeats your message. Add a real model later: ambit local up%s --openrouter-key-file <file>", nameFlag(o.Name))
 		if err := step("Rule everyone-local", func() error { return ops.Apply(ctx, accessRule("local-test")) }); err != nil {
-			return err
+			return stepError("the access rule was not applied", again, err)
 		}
 		if err := step("Test call", func() error { answer, err = call(chosen); return err }); err != nil {
 			return testCallError(o.Name, err)
@@ -235,10 +256,10 @@ func Up(ctx context.Context, p *out.Printer, e *Env, o UpOptions) error {
 			cands, err = Candidates(free, "")
 			return err
 		}); err != nil {
-			return err
+			return stepError("the OpenRouter model could not be set up", fmt.Sprintf("ambit local up%[1]s --model <model id>, or ambit local up%[1]s --no-key for the test model", nameFlag(o.Name)), err)
 		}
 		if err := step("Rule everyone-local", func() error { return ops.Apply(ctx, accessRule("free-model")) }); err != nil {
-			return err
+			return stepError("the access rule was not applied", again, err)
 		}
 		var fatal error // a failure that is not the model's: stop trying candidates
 		if err := step("Test call", func() error {
@@ -281,14 +302,27 @@ func Up(ctx context.Context, p *out.Printer, e *Env, o UpOptions) error {
 	// 8. Summary.
 	st, err := e.Store.Read(o.Name)
 	if err != nil || st == nil {
-		return fmt.Errorf("state file %s: %v", e.Store.Path(o.Name), err)
+		why := "the file is gone"
+		if err != nil {
+			why = err.Error()
+		}
+		return &out.Error{What: "the state file " + e.Store.Path(o.Name) + " cannot be read", Why: why, Next: again}
 	}
 	st.Status = "ready"
 	if err := e.Store.Write(*st); err != nil {
-		return err
+		return stepError("the state file "+e.Store.Path(o.Name)+" cannot be written", again, err)
 	}
 	summary(p, o, chosen, pw)
 	return nil
+}
+
+// stepError turns a raw error of a step into an *out.Error with a next step; an *out.Error passes through.
+func stepError(what, next string, err error) error {
+	var oe *out.Error
+	if err == nil || errors.As(err, &oe) {
+		return err
+	}
+	return &out.Error{What: what, Why: err.Error(), Next: next}
 }
 
 func createCluster(ctx context.Context, e *Env, o UpOptions) error {

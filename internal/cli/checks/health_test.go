@@ -8,6 +8,9 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -15,6 +18,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/yaml"
 
 	ambitv1alpha1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/cli/helmx"
@@ -38,10 +42,12 @@ func TestH1Releases(t *testing.T) {
 func TestH2CRDs(t *testing.T) {
 	b := "apiVersion: apiextensions.k8s.io/v1\nkind: CustomResourceDefinition\nmetadata: {name: gateways.gateway.networking.k8s.io}\n"
 	gw := crd("gateways.gateway.networking.k8s.io", "gateway.networking.k8s.io", true, nil, "v1")
-	am := crd("models.ambitproject.dev", "ambitproject.dev", true, nil, "v1alpha1")
-	want(t, one(t, "H2", fx{bundle: b, ctrlObjs: []runtime.Object{gw, am}}), Pass, "1 third-party and 1 Ambit CRDs")
-	want(t, one(t, "H2", fx{bundle: b, ctrlObjs: []runtime.Object{am}}), Fail, "gateways.gateway.networking.k8s.io")
+	am := ambitCRDs()
+	want(t, one(t, "H2", fx{bundle: b, ctrlObjs: append([]runtime.Object{gw}, am...)}), Pass, "1 third-party and 7 Ambit CRDs")
+	want(t, one(t, "H2", fx{bundle: b, ctrlObjs: am}), Fail, "gateways.gateway.networking.k8s.io")
 	want(t, one(t, "H2", fx{bundle: b, ctrlObjs: []runtime.Object{gw}}), Fail, "the ambitproject.dev CRDs")
+	// Final review, Task 12 #4: some Ambit CRDs are not all of them. A half-applied ambit-crds release is a fail.
+	want(t, one(t, "H2", fx{bundle: b, ctrlObjs: append([]runtime.Object{gw}, am[:3]...)}), Fail, "modelrouters.ambitproject.dev")
 	want(t, one(t, "H2", fx{bundle: b, ctrlDenied: true}), Unknown, "cannot list customresourcedefinitions")
 }
 
@@ -109,8 +115,7 @@ func TestLLMURL(t *testing.T) {
 }
 
 func TestH2BundleUnreadable(t *testing.T) {
-	am := crd("models.ambitproject.dev", "ambitproject.dev", true, nil, "v1alpha1")
-	r := one(t, "H2", fx{bundle: "{{{ not yaml", ctrlObjs: []runtime.Object{am}})
+	r := one(t, "H2", fx{bundle: "{{{ not yaml", ctrlObjs: ambitCRDs()})
 	want(t, r, Fail, "cannot read the third-party CRD bundle")
 }
 
@@ -174,4 +179,67 @@ func TestH8(t *testing.T) {
 		t.Fatalf("prints <nil>: %s", r.Message)
 	}
 	want(t, one(t, "H8", fx{}), NA, "--deep sends one test call per model")
+}
+
+// ambitCRDs is the full set of Established Ambit CRDs.
+func ambitCRDs() []runtime.Object {
+	var out []runtime.Object
+	for _, n := range ambitCRDNames {
+		out = append(out, crd(n, "ambitproject.dev", true, nil, "v1alpha1"))
+	}
+	return out
+}
+
+// ambitCRDNames must list every CRD of the ambit-crds chart; H2 fails when one is missing.
+func TestAmbitCRDNamesMatchChart(t *testing.T) {
+	files, err := filepath.Glob("../../../charts/ambit-crds/templates/ambit/ambitproject.dev_*.yaml")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("no CRD files found: %v", err)
+	}
+	var fromChart []string
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var v struct{ Metadata struct{ Name string } }
+		if err := yaml.Unmarshal(b, &v); err != nil || v.Metadata.Name == "" {
+			t.Fatalf("%s: %v", f, err)
+		}
+		fromChart = append(fromChart, v.Metadata.Name)
+	}
+	sort.Strings(fromChart)
+	got := append([]string(nil), ambitCRDNames...)
+	sort.Strings(got)
+	if strings.Join(got, ",") != strings.Join(fromChart, ",") {
+		t.Fatalf("ambitCRDNames = %v, chart has %v", got, fromChart)
+	}
+}
+
+// Final review, Minor 4: the next steps of the checks carry the context the check used.
+func TestNextStepsCarryContext(t *testing.T) {
+	e := &Env{Namespace: "ambit-system", Context: "kind-try"}
+	if got := e.kubectl(); got != "kubectl --context kind-try -n ambit-system" {
+		t.Errorf("kubectl() = %q", got)
+	}
+	if got := e.helm(); got != "helm --kube-context kind-try -n ambit-system" {
+		t.Errorf("helm() = %q", got)
+	}
+	e.Context = ""
+	if e.kubectl() != "kubectl -n ambit-system" || e.helm() != "helm -n ambit-system" {
+		t.Errorf("without a context: %q, %q", e.kubectl(), e.helm())
+	}
+	f := fx{helm: &fakeHelm{rel: map[string]*helmx.Release{
+		"ambit-crds": {ChartVersion: "0.2.0", Status: "deployed"}, "ambit": {ChartVersion: "0.2.0", Status: "failed"}}}}
+	env := f.env(t)
+	env.Context = "kind-try"
+	var h1 Check
+	for _, c := range Catalogue {
+		if c.ID == "H1" {
+			h1 = c
+		}
+	}
+	if r := runOne(context.Background(), env, h1); r.Next != "helm --kube-context kind-try -n ambit-system history ambit" {
+		t.Errorf("H1 next = %q", r.Next)
+	}
 }

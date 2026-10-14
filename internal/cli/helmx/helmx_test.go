@@ -12,6 +12,8 @@ import (
 	"helm.sh/helm/v4/pkg/cli"
 	kubefake "helm.sh/helm/v4/pkg/kube/fake"
 	"helm.sh/helm/v4/pkg/registry"
+	relcommon "helm.sh/helm/v4/pkg/release/common"
+	rel "helm.sh/helm/v4/pkg/release/v1"
 	"helm.sh/helm/v4/pkg/storage"
 	"helm.sh/helm/v4/pkg/storage/driver"
 )
@@ -99,5 +101,33 @@ current-context: x
 	ns, _, err := c.(*sdk).settings.RESTClientGetter().ToRawKubeConfigLoader().Namespace()
 	if err != nil || ns != "ambit-system" {
 		t.Fatalf("namespace of the REST client getter = %q, %v; want ambit-system", ns, err)
+	}
+}
+
+// Final review, Minor 1: a hard stop during the Helm step leaves the last revision pending, which Helm refuses to
+// upgrade. Apply marks that revision failed (nothing is deleted) and goes on.
+func TestApplyRecoversPendingRelease(t *testing.T) {
+	for _, st := range []relcommon.Status{relcommon.StatusPendingInstall, relcommon.StatusPendingUpgrade} {
+		t.Run(string(st), func(t *testing.T) {
+			c := memClient(t)
+			ctx := context.Background()
+			if _, err := c.Apply(ctx, "interop", "testdata/interop", "", map[string]any{"greeting": "one"}); err != nil {
+				t.Fatal(err)
+			}
+			s := c.(*sdk)
+			last, err := s.cfg.Releases.Last("interop")
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := last.(*rel.Release)
+			r.Info.Status = st
+			if err := s.cfg.Releases.Update(r); err != nil {
+				t.Fatal(err)
+			}
+			got, err := c.Apply(ctx, "interop", "testdata/interop", "", map[string]any{"greeting": "two"})
+			if err != nil || got.Status != "deployed" || got.Revision != 2 {
+				t.Fatalf("Apply over a %s release = %+v, %v", st, got, err)
+			}
+		})
 	}
 }

@@ -40,7 +40,7 @@ type Catalog struct {
 	Connectors []Connector
 	HTTP       *http.Client // for reaching identity providers; nil uses a 10-second client
 	// Keys serves personal API keys; nil leaves the key routes out. LLMURL and MCPURL are the gateway URLs shown in
-	// the copy-ready snippets. LastUsed overrides the audit lookup of each key's last use (tests).
+	// the setup text for each tool, which the web UI builds from them. LastUsed overrides the audit lookup of each key's last use (tests).
 	Keys     *KeyService
 	LLMURL   string
 	MCPURL   string

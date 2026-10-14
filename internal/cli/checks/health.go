@@ -34,11 +34,17 @@ func h1Releases(_ context.Context, e *Env) Result {
 		return res(Fail, "live objects", "a release is missing in %s (ambit-crds: %v, ambit: %v)", e.Namespace, crds != nil, app != nil)
 	case crds.Status != "deployed" || app.Status != "deployed":
 		return res(Fail, "live objects", "ambit-crds is %s and ambit is %s", crds.Status, app.Status).
-			next(fmt.Sprintf("helm -n %s history ambit", e.Namespace))
+			next(e.helm() + " history ambit")
 	case crds.ChartVersion != app.ChartVersion:
 		return res(Fail, "live objects", "ambit-crds %s and ambit %s are at different versions", crds.ChartVersion, app.ChartVersion)
 	}
 	return res(Pass, "live objects", "ambit-crds and ambit %s are deployed", app.ChartVersion)
+}
+
+// ambitCRDNames are the CRDs of the ambit-crds chart. TestAmbitCRDNamesMatchChart keeps the list in step.
+var ambitCRDNames = []string{
+	"accessrules.ambitproject.dev", "budgets.ambitproject.dev", "connections.ambitproject.dev", "modelrouters.ambitproject.dev",
+	"models.ambitproject.dev", "serverrequests.ambitproject.dev", "servers.ambitproject.dev",
 }
 
 // H2: the third-party CRDs and Ambit's CRDs are Established.
@@ -74,6 +80,12 @@ func h2CRDs(ctx context.Context, e *Env) Result {
 	}
 	if ambit == 0 {
 		bad = append(bad, "the ambitproject.dev CRDs (release ambit-crds)")
+	} else {
+		for _, n := range ambitCRDNames { // some Ambit CRDs are not all of them
+			if !have[n] {
+				bad = append(bad, n)
+			}
+		}
 	}
 	if len(bad) > 0 {
 		return res(Fail, "live objects", "missing or not Established: %s", strings.Join(bad, ", "))
@@ -108,7 +120,7 @@ func h3Pods(ctx context.Context, e *Env) Result {
 		return res(Fail, "live objects", "no pods in %s", e.Namespace)
 	case len(bad) > 0:
 		return res(Fail, "live objects", "%d of %d pods not Ready: %s", len(bad), n, strings.Join(bad, "; ")).
-			next(fmt.Sprintf("kubectl -n %s describe pod %s", e.Namespace, strings.SplitN(bad[0], ":", 2)[0]))
+			next(e.kubectl() + " describe pod " + strings.SplitN(bad[0], ":", 2)[0])
 	}
 	return res(Pass, "live objects", "%d pods Ready", n)
 }

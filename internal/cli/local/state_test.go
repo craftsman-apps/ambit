@@ -246,3 +246,13 @@ func TestRefusalNextDiffersFromRefusedName(t *testing.T) {
 		}
 	}
 }
+
+// Minor 3 of the final review: the next step of a bad name is neutral (the command at hand is not known here, and
+// the default name may be the maintainers' shared cluster).
+func TestInvalidNameNextIsNeutral(t *testing.T) {
+	err := checkName("UPPER")
+	var e *out.Error
+	if !errors.As(err, &e) || !strings.Contains(e.Next, "--name ambit-try") || strings.Contains(e.Next, "ambit local") || strings.Contains(e.Next, "--name ambit\n") {
+		t.Fatalf("next = %#v", err)
+	}
+}

@@ -114,10 +114,18 @@ func (a *app) localEnv(f localFlags) (*local.Env, error) {
 	}, nil
 }
 
+// nameArg is " --name <name>" unless the name is the default, as in the suggestions of package local.
+func nameArg(name string) string {
+	if name == "ambit" {
+		return ""
+	}
+	return " --name " + name
+}
+
 func (a *app) localUp(ctx context.Context, f localFlags) error {
 	charts := local.Charts{Dir: f.chartDir, Repo: f.chartRepo, Version: version}
 	if version == "dev" && f.chartDir == "" {
-		return out.Usage("development build", "this ambit was built from source and has no chart version", "ambit local up --chart-dir <path to charts/ in a checkout>")
+		return out.Usage("development build", "this ambit was built from source and has no chart version", "ambit local up"+nameArg(f.name)+" --chart-dir <path to charts/ in a checkout>")
 	}
 	if f.chartDir != "" {
 		for _, c := range []string{"ambit", "ambit-crds"} {
@@ -151,13 +159,12 @@ func (a *app) localUp(ctx context.Context, f localFlags) error {
 	if a.stdinTTY() && !given && !f.noKey {
 		fd := int(a.in.(*os.File).Fd())
 		o.Prompt = func() (string, error) {
-			fmt.Fprint(a.out, "OpenRouter API key (Enter to use a test model): ")
 			old, err := term.GetState(fd)
 			if err != nil {
 				return "", err
 			}
-			return hiddenPrompt(ctx, func() ([]byte, error) { return term.ReadPassword(fd) },
-				func() { term.Restore(fd, old) }, a.out)
+			return hiddenPrompt(ctx, "OpenRouter API key (Enter to use a test model): ", func() ([]byte, error) { return term.ReadPassword(fd) },
+				func() { term.Restore(fd, old) }, a.errw) // stderr: with `> log` the prompt must stay on the terminal
 		}
 	}
 	err = local.Up(ctx, a.printer(), e, o)
@@ -202,12 +209,13 @@ func interruptContext(parent context.Context, notify func(context.Context, ...os
 	return ctx, func() { close(finished); stop() }
 }
 
-// hiddenPrompt reads a secret with read. When ctx ends first it calls restore (puts the terminal's echo back, which
+// hiddenPrompt writes prompt to w and reads a secret with read. When ctx ends first it calls restore (puts the terminal's echo back, which
 // the read had turned off) and returns an error at once; the read stays blocked until the process ends.
-func hiddenPrompt(ctx context.Context, read func() ([]byte, error), restore func(), w io.Writer) (string, error) {
+func hiddenPrompt(ctx context.Context, prompt string, read func() ([]byte, error), restore func(), w io.Writer) (string, error) {
 	if ctx.Err() != nil {
 		return "", errInterrupted
 	}
+	fmt.Fprint(w, prompt)
 	type result struct {
 		b   []byte
 		err error

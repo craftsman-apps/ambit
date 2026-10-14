@@ -325,3 +325,17 @@ func TestConnectWithoutLogPrintsNothing(t *testing.T) {
 		t.Fatalf("stderr = %q", stderr)
 	}
 }
+
+// Final review, Task 6 #4: a Deployment whose spec changed (a repair) is not ready until the controller has seen
+// the new generation, even when the old pods are still ready.
+func TestDeploymentReadyHonoursObservedGeneration(t *testing.T) {
+	d := deployment("ambit-console", nil, 1)
+	d.Generation, d.Status.ObservedGeneration = 2, 1
+	if deploymentReady(d) {
+		t.Fatal("ready before the controller observed the new generation")
+	}
+	d.Status.ObservedGeneration = 2
+	if !deploymentReady(d) {
+		t.Fatal("not ready after the generation was observed")
+	}
+}

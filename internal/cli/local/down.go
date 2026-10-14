@@ -12,6 +12,9 @@ import (
 
 // Down runs `ambit local down` (spec 4.2): it deletes the kind cluster only with both ownership proofs.
 func Down(ctx context.Context, p *out.Printer, e *Env, name string, in io.Reader, interactive, yes bool) error {
+	if _, err := e.ReadyDocker(); err != nil {
+		return err
+	}
 	own, err := e.Owner(ctx, name)
 	if err != nil {
 		return err
@@ -45,6 +48,9 @@ func Down(ctx context.Context, p *out.Printer, e *Env, name string, in io.Reader
 
 // Password prints the bootstrap admin password of the local cluster (spec 4.2).
 func Password(ctx context.Context, p *out.Printer, e *Env, name string) error {
+	if _, err := e.ReadyDocker(); err != nil {
+		return err
+	}
 	own, err := e.Owner(ctx, name)
 	if err != nil {
 		return err

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -28,9 +29,17 @@ type fakeKind struct {
 	onCreate func() // e.g. simulate kind making kind-<name> current
 	// createErr makes Create fail the way kind does: the cluster does not exist afterwards.
 	createErr error
+	// existsErr makes Exists fail like kind's docker ps does when Docker is down; existsCalls counts the calls.
+	existsErr   error
+	existsCalls int
+	loadErr     error
+	cpErr       error // ControlPlane
 }
 
-func (k *fakeKind) Exists(string) (bool, error) { return k.exists, nil }
+func (k *fakeKind) Exists(string) (bool, error) {
+	k.existsCalls++
+	return k.exists, k.existsErr
+}
 func (k *fakeKind) Create(name string, cfg []byte, _ string) error {
 	if k.createErr != nil {
 		return k.createErr
@@ -42,8 +51,11 @@ func (k *fakeKind) Create(name string, cfg []byte, _ string) error {
 	return nil
 }
 func (k *fakeKind) Delete(string, string) error           { k.deleted, k.exists = true, false; return nil }
-func (k *fakeKind) ControlPlane(n string) (string, error) { return n + "-control-plane", nil }
-func (k *fakeKind) LoadArchive(_, path string) error      { k.loaded = append(k.loaded, path); return nil }
+func (k *fakeKind) ControlPlane(n string) (string, error) { return n + "-control-plane", k.cpErr }
+func (k *fakeKind) LoadArchive(_, path string) error {
+	k.loaded = append(k.loaded, path)
+	return k.loadErr
+}
 
 type fakeOps struct {
 	name     string
@@ -54,6 +66,10 @@ type fakeOps struct {
 	password string
 	// secretErr is returned by ApplySecret, e.g. a library error that dumps the request with the key in it.
 	secretErr error
+	// errs makes a method fail by its name; applyErr fails Apply for one manifest; onReady runs in WaitModelReady.
+	errs     map[string]error
+	applyErr func(manifest []byte) error
+	onReady  func()
 }
 
 func (o *fakeOps) NodeLabels(context.Context) (map[string]map[string]string, error) {
@@ -64,27 +80,37 @@ func (o *fakeOps) NodeLabels(context.Context) (map[string]map[string]string, err
 }
 func (o *fakeOps) ApplyCRDs(context.Context, []byte) error {
 	o.calls = append(o.calls, "crds")
-	return nil
+	return o.errs["ApplyCRDs"]
 }
 func (o *fakeOps) InstallCharts(_ context.Context, c Charts, vals map[string]any, _ time.Duration, progress func(string)) error {
 	o.calls = append(o.calls, "charts "+c.Ref("ambit")+" "+vals["console"].(map[string]any)["url"].(string))
 	progress("waiting for ambit-console-1")
 	return nil
 }
-func (o *fakeOps) SecretExists(context.Context, string) (bool, error) { return o.secret, nil }
+func (o *fakeOps) SecretExists(context.Context, string) (bool, error) {
+	return o.secret, o.errs["SecretExists"]
+}
 func (o *fakeOps) ApplySecret(_ context.Context, name string, data map[string]string) error {
 	o.calls = append(o.calls, "secret "+name)
 	return o.secretErr
 }
 func (o *fakeOps) Apply(_ context.Context, m []byte) error {
 	o.applied = append(o.applied, m)
+	if o.applyErr != nil {
+		return o.applyErr(m)
+	}
 	return nil
 }
 func (o *fakeOps) WaitModelReady(_ context.Context, name string, _ time.Duration) error {
 	o.calls = append(o.calls, "ready "+name)
+	if o.onReady != nil {
+		o.onReady()
+	}
 	return nil
 }
-func (o *fakeOps) AdminPassword(context.Context) (string, error) { return o.password, nil }
+func (o *fakeOps) AdminPassword(context.Context) (string, error) {
+	return o.password, o.errs["AdminPassword"]
+}
 
 // fakeGateway answers Dex and the chat API like a local install; refuse lists models whose calls get HTTP 429.
 func fakeGateway(t *testing.T, refuse ...string) int {
@@ -623,5 +649,130 @@ func TestUpEverySuggestionKeepsName(t *testing.T) {
 		if seen == 0 {
 			t.Errorf("%s: no line mentions ambit local; the test checks nothing\n%s", c.label, r.out)
 		}
+	}
+}
+
+// I1 of the final review: Docker is read before the ownership check, so kind's docker ps never runs against an
+// unreachable daemon, and the user gets the L1 line with its next step.
+func TestLocalCommandsReadDockerFirst(t *testing.T) {
+	for name, run := range map[string]func(r *rig) error{
+		"up": func(r *rig) error { return Up(context.Background(), r.p, r.env, r.opts) },
+		"down": func(r *rig) error {
+			return Down(context.Background(), r.p, r.env, "ambit", strings.NewReader(""), false, true)
+		},
+		"password": func(r *rig) error { return Password(context.Background(), r.p, r.env, "ambit") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t, false)
+			r.kind.existsErr = errors.New(`failed to list clusters: exec: "docker": executable file not found in $PATH`)
+			r.env.Docker = func() DockerInfo { return DockerInfo{Err: "the docker command is not installed"} }
+			err := run(r)
+			var e *out.Error
+			if !errors.As(err, &e) || e.What != "Docker is not running" || !strings.Contains(e.Next, "start Docker") ||
+				!strings.Contains(e.Why, "the docker command is not installed") {
+				t.Fatalf("err = %#v", err)
+			}
+			if r.kind.existsCalls != 0 {
+				t.Fatal("the ownership check ran against an unreachable Docker")
+			}
+		})
+	}
+}
+
+// An ownership check that fails for another reason (Docker answers, but kind cannot list clusters) also ends with
+// a next step in up, down and password.
+func TestOwnerErrorHasNextStep(t *testing.T) {
+	for name, run := range map[string]func(r *rig) error{
+		"up": func(r *rig) error { return Up(context.Background(), r.p, r.env, r.opts) },
+		"down": func(r *rig) error {
+			return Down(context.Background(), r.p, r.env, "ambit", strings.NewReader(""), false, true)
+		},
+		"password": func(r *rig) error { return Password(context.Background(), r.p, r.env, "ambit") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t, false)
+			r.kind.existsErr = errors.New("failed to list clusters: boom")
+			err := run(r)
+			var e *out.Error
+			if !errors.As(err, &e) || e.Next == "" || !strings.Contains(e.Why, "boom") {
+				t.Fatalf("err = %#v", err)
+			}
+		})
+	}
+}
+
+// I2 of the final review: every step of local up that fails ends with an *out.Error that has a next step, and the
+// next step keeps --name.
+func TestUpEveryStepErrorHasNextStep(t *testing.T) {
+	const name = "ambit-cli-test"
+	boom := errors.New("boom")
+	badURL := "http://127.0.0.1:1/models" // nothing listens: the model list cannot be fetched
+	for _, c := range []struct {
+		step  string
+		setup func(*rig)
+	}{
+		{"open the cluster", func(r *rig) {
+			r.env.OpenOps = func(_, kctx string) (Ops, error) {
+				if len(r.contexts) > 0 { // the first call is the ownership check of a fresh cluster: no label read
+					return nil, boom
+				}
+				r.contexts = append(r.contexts, kctx)
+				return r.ops, nil
+			}
+		}},
+		{"kind create", func(r *rig) { r.kind.createErr = boom }},
+		{"control plane", func(r *rig) { r.kind.cpErr = boom }},
+		{"state file", func(r *rig) {
+			d := t.TempDir()
+			os.Chmod(d, 0o500) // reading works, writing the state file does not
+			t.Cleanup(func() { os.Chmod(d, 0o700) })
+			r.env.Store = Store{Dir: d}
+		}},
+		{"load archive", func(r *rig) { r.opts.DevArchives, r.kind.loadErr = []string{"console.tar"}, boom }},
+		{"CRDs", func(r *rig) { r.ops.errs = map[string]error{"ApplyCRDs": boom} }},
+		{"key lookup", func(r *rig) { r.ops.errs = map[string]error{"SecretExists": boom} }},
+		{"admin password", func(r *rig) { r.ops.errs = map[string]error{"AdminPassword": boom} }},
+		{"test model", func(r *rig) {
+			r.opts.NoKey = true
+			r.ops.applyErr = func([]byte) error { return boom }
+		}},
+		{"rule", func(r *rig) {
+			r.opts.NoKey = true
+			r.ops.applyErr = func(m []byte) error {
+				if strings.Contains(string(m), "AccessRule") {
+					return boom
+				}
+				return nil
+			}
+		}},
+		{"OpenRouter secret", func(r *rig) {
+			r.opts.Key, r.opts.KeyGiven = "sk-or-v1-0123456789abcdef0123456789", true
+			r.ops.secretErr = boom
+		}},
+		{"OpenRouter model list", func(r *rig) {
+			r.opts.Key, r.opts.KeyGiven = "sk-or-v1-0123456789abcdef0123456789", true
+			r.env.ModelsURL = badURL
+		}},
+		{"final state file", func(r *rig) {
+			r.opts.NoKey = true
+			r.ops.onReady = func() { r.env.Store.Remove(name) }
+		}},
+	} {
+		t.Run(c.step, func(t *testing.T) {
+			if c.step == "state file" && runtime.GOOS == "windows" { // needs POSIX directory permissions
+				t.Skip("Windows does not honour a read-only directory mode; Linux and macOS cover this step")
+			}
+			r := newRig(t, false)
+			r.opts.Name, r.ops.name = name, name
+			c.setup(r)
+			err := Up(context.Background(), r.p, r.env, r.opts)
+			var e *out.Error
+			if !errors.As(err, &e) {
+				t.Fatalf("err = %#v, want *out.Error", err)
+			}
+			if e.Next == "" || !strings.Contains(e.Next, "--name "+name) {
+				t.Errorf("next step %q is empty or drops the name", e.Next)
+			}
+		})
 	}
 }

@@ -110,6 +110,39 @@ func TestP4Deep(t *testing.T) {
 	want(t, one(t, "P4", with(func(f *fx) { f.forward = counter("41", "42"); f.ctrlObjs = nil })), Unknown, "no Ready Model")
 }
 
+// Final review, Task 13 #1: Ctrl+C ends the wait for the audit record at once (it used to wait up to 60 s).
+func TestP4DeepStopsOnCancel(t *testing.T) {
+	gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"OK"}}]}`)
+	}))
+	t.Cleanup(gw.Close)
+	f := fx{helm: vals(map[string]any{
+		"console":  map[string]any{"url": gw.URL},
+		"llm":      map[string]any{"host": "127.0.0.1"},
+		"evidence": map[string]any{"enabled": true, "clickhouse": map[string]any{"external": map[string]any{"host": "ch.example.com"}}},
+	}),
+		kubeObjs: []runtime.Object{readyPod("c", map[string]string{"app.kubernetes.io/name": "ambit-otel-collector"})},
+		ctrlObjs: []runtime.Object{model("local-test", "OpenAI", "ambit-llm-local", true)},
+		deep:     true, token: "user-token-1", deepWait: 30 * time.Second,
+		forward: func(w http.ResponseWriter, _ *http.Request) {
+			fmt.Fprintln(w, `otelcol_exporter_sent_log_records_total{exporter="clickhouse"} 41`) // never grows
+		}}
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(200*time.Millisecond, cancel)
+	var chk Check
+	for _, c := range Catalogue {
+		if c.ID == "P4" {
+			chk = c
+		}
+	}
+	start := time.Now()
+	r := runOne(ctx, f.env(t), chk)
+	if time.Since(start) > 5*time.Second {
+		t.Fatalf("P4 took %s after the cancel", time.Since(start))
+	}
+	want(t, r, Unknown, "interrupted")
+}
+
 func TestSentLogRecords(t *testing.T) {
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, `# HELP otelcol_exporter_sent_log_records_total Number of log record successfully sent to destination.

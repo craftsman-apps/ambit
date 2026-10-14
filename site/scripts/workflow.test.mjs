@@ -6,7 +6,13 @@ const ci = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.ur
 
 test('site workflow only for site files', () => {
   for (const p of ['"docs/**"', '"site/**"', '"README.md"', '".github/workflows/site.yml"']) assert.ok(site.includes(p), p);
-  assert.equal((site.match(/paths:/g) || []).length, 2);
+  assert.equal((site.match(/paths:/g) || []).length, 1);
+});
+test('the live site deploys only from a release tag or a site-* tag, never from main', () => {
+  assert.ok(site.includes('push: { tags: ["v*", "site-*"] }'));
+  assert.ok(!/branches: \[main\]/.test(site));
+  assert.ok(site.includes("startsWith(github.ref, 'refs/tags/site-')"));
+  assert.ok(site.includes("!contains(github.ref_name, '-')"), 'prerelease tags do not deploy');
 });
 test('site job names cannot collide with the required check "build"', () => {
   assert.ok(/^  site-build:/m.test(site) && /^  site-deploy:/m.test(site));

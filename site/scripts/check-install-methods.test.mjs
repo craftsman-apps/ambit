@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {INSTALL_COMMANDS, missingInstallMethods} from './check-install-methods.mjs';
+import {INSTALL_COMMANDS, missingInstallMethods, pageText} from './check-install-methods.mjs';
 
 // One code block the way Docusaurus renders it: the command split into highlighted spans.
 const block = cmd => `<pre class="prism-code"><code><div class="token-line">` +
@@ -20,4 +20,15 @@ test('each missing install method is named', () => {
 
 test('the methods are the five release-1 channels that install the CLI', () => {
   assert.deepEqual(Object.keys(INSTALL_COMMANDS), ['Homebrew', 'install script', 'PowerShell', 'npm', 'go install']);
+});
+
+test('removing one command from a page that had all of them makes the check fail', () => {
+  const all = Object.values(INSTALL_COMMANDS);
+  assert.deepEqual(missingInstallMethods(page(all)), []);
+  assert.deepEqual(missingInstallMethods(page(all.filter(c => !c.startsWith('brew')))), ['Homebrew']);
+});
+
+test('pageText decodes entities once and leaves no tag text', () => {
+  assert.equal(pageText('<p>a &amp;lt; b &lt;script&gt;</p>'), 'a &lt; b <script>');
+  assert.equal(pageText('<scr<b>ipt>x'), 'ipt>x');
 });

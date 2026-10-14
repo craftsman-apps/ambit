@@ -11,11 +11,20 @@ export const INSTALL_COMMANDS = {
   'go install': 'go install github.com/craftsman-apps/ambit/cmd/ambit@',
 };
 
-// pageText is the text a reader sees: tags removed (code highlighting splits a command into spans) and the
-// entities Docusaurus writes decoded.
+const ENTITIES = {'&lt;': '<', '&gt;': '>', '&quot;': '"', '&#x27;': "'", '&#39;': "'", '&amp;': '&'};
+
+// pageText is the text a reader sees: tags skipped (code highlighting splits a command into spans) and the
+// entities Docusaurus writes decoded in one pass, so "&amp;lt;" becomes "&lt;" and not "<". The tags are
+// skipped with a scan, not a regex replace: a replace can leave a tag behind after one pass.
 export function pageText(html) {
-  return html.replace(/<[^>]*>/g, '')
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&amp;/g, '&');
+  let text = '';
+  let inTag = false;
+  for (const ch of html) {
+    if (ch === '<') inTag = true;
+    else if (ch === '>' && inTag) inTag = false;
+    else if (!inTag) text += ch;
+  }
+  return text.replace(/&(?:lt|gt|quot|amp|#x27|#39);/g, e => ENTITIES[e]);
 }
 
 export function missingInstallMethods(html) {

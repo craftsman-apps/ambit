@@ -194,3 +194,51 @@ func TestCheckHelmErrorIsNotNotInstalled(t *testing.T) {
 		t.Fatalf("code %d, output\n%s", code, s)
 	}
 }
+
+// I1 of the final review: with Docker down, `check --pre --local` does not run kind's docker ps. L1 fails with its
+// next step, L5 is unknown, and stdout is still one JSON document.
+func TestCheckPreLocalDockerDown(t *testing.T) {
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing"))
+	var o, e bytes.Buffer
+	k := &countingKind{}
+	a := &app{in: strings.NewReader(""), out: &o, errw: &e,
+		newHelm: func(helmx.Options) (helmx.Client, error) { return nil, errors.New("helm must not be used") },
+		testLocalEnv: &local.Env{Store: local.Store{Dir: t.TempDir()}, Kind: k,
+			Docker:   func() local.DockerInfo { return local.DockerInfo{Err: "Cannot connect to the Docker daemon"} },
+			PortFree: func(int) bool { return true }}}
+	root := a.root()
+	root.SetArgs([]string{"check", "--pre", "--local", "--output", "json"})
+	root.SetOut(&o)
+	root.SetErr(&e)
+	if code := a.exit(root.Execute()); code != 1 {
+		t.Fatalf("exit %d, stdout\n%s\nstderr\n%s", code, o.String(), e.String())
+	}
+	var rs []checks.Result
+	if err := json.Unmarshal(o.Bytes(), &rs); err != nil {
+		t.Fatalf("stdout is not one JSON document: %v\n%s", err, o.String())
+	}
+	got := map[string]checks.Result{}
+	for _, r := range rs {
+		got[r.ID] = r
+	}
+	if got["L1"].Status != checks.Fail || !strings.Contains(got["L1"].Message, "Docker is not running") || !strings.Contains(got["L1"].Next, "start Docker") {
+		t.Errorf("L1 = %+v", got["L1"])
+	}
+	if got["L5"].Status != checks.Unknown {
+		t.Errorf("L5 = %+v", got["L5"])
+	}
+	if k.calls != 0 {
+		t.Error("the ownership check ran against an unreachable Docker")
+	}
+}
+
+// countingKind counts Exists calls; kind's docker ps is what it stands for.
+type countingKind struct {
+	noKind
+	calls int
+}
+
+func (k *countingKind) Exists(string) (bool, error) {
+	k.calls++
+	return false, errors.New("docker ps hangs")
+}

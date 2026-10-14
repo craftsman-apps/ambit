@@ -28,9 +28,15 @@ type fakeKind struct {
 	onCreate func() // e.g. simulate kind making kind-<name> current
 	// createErr makes Create fail the way kind does: the cluster does not exist afterwards.
 	createErr error
+	// existsErr makes Exists fail like kind's docker ps does when Docker is down; existsCalls counts the calls.
+	existsErr   error
+	existsCalls int
 }
 
-func (k *fakeKind) Exists(string) (bool, error) { return k.exists, nil }
+func (k *fakeKind) Exists(string) (bool, error) {
+	k.existsCalls++
+	return k.exists, k.existsErr
+}
 func (k *fakeKind) Create(name string, cfg []byte, _ string) error {
 	if k.createErr != nil {
 		return k.createErr
@@ -623,5 +629,54 @@ func TestUpEverySuggestionKeepsName(t *testing.T) {
 		if seen == 0 {
 			t.Errorf("%s: no line mentions ambit local; the test checks nothing\n%s", c.label, r.out)
 		}
+	}
+}
+
+// I1 of the final review: Docker is read before the ownership check, so kind's docker ps never runs against an
+// unreachable daemon, and the user gets the L1 line with its next step.
+func TestLocalCommandsReadDockerFirst(t *testing.T) {
+	for name, run := range map[string]func(r *rig) error{
+		"up": func(r *rig) error { return Up(context.Background(), r.p, r.env, r.opts) },
+		"down": func(r *rig) error {
+			return Down(context.Background(), r.p, r.env, "ambit", strings.NewReader(""), false, true)
+		},
+		"password": func(r *rig) error { return Password(context.Background(), r.p, r.env, "ambit") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t, false)
+			r.kind.existsErr = errors.New(`failed to list clusters: exec: "docker": executable file not found in $PATH`)
+			r.env.Docker = func() DockerInfo { return DockerInfo{Err: "the docker command is not installed"} }
+			err := run(r)
+			var e *out.Error
+			if !errors.As(err, &e) || e.What != "Docker is not running" || !strings.Contains(e.Next, "start Docker") ||
+				!strings.Contains(e.Why, "the docker command is not installed") {
+				t.Fatalf("err = %#v", err)
+			}
+			if r.kind.existsCalls != 0 {
+				t.Fatal("the ownership check ran against an unreachable Docker")
+			}
+		})
+	}
+}
+
+// An ownership check that fails for another reason (Docker answers, but kind cannot list clusters) also ends with
+// a next step in up, down and password.
+func TestOwnerErrorHasNextStep(t *testing.T) {
+	for name, run := range map[string]func(r *rig) error{
+		"up": func(r *rig) error { return Up(context.Background(), r.p, r.env, r.opts) },
+		"down": func(r *rig) error {
+			return Down(context.Background(), r.p, r.env, "ambit", strings.NewReader(""), false, true)
+		},
+		"password": func(r *rig) error { return Password(context.Background(), r.p, r.env, "ambit") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t, false)
+			r.kind.existsErr = errors.New("failed to list clusters: boom")
+			err := run(r)
+			var e *out.Error
+			if !errors.As(err, &e) || e.Next == "" || !strings.Contains(e.Why, "boom") {
+				t.Fatalf("err = %#v", err)
+			}
+		})
 	}
 }

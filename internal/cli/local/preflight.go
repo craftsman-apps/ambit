@@ -90,6 +90,14 @@ func ParseDockerInfo(raw []byte) DockerInfo {
 	return d
 }
 
+// dockerNext is the next step of L1 for this platform.
+func dockerNext() string {
+	if runtime.GOOS == "linux" {
+		return "start Docker: sudo systemctl start docker"
+	}
+	return "start Docker Desktop"
+}
+
 // PreflightInput is everything preflight looks at. PortFree reports whether 127.0.0.1:port can be opened.
 type PreflightInput struct {
 	Name                string
@@ -126,11 +134,7 @@ func Preflight(in PreflightInput) []checks.Result {
 	var out []checks.Result
 	d := in.Docker
 	if !d.Reachable {
-		next := "start Docker Desktop"
-		if runtime.GOOS == "linux" {
-			next = "start Docker: sudo systemctl start docker"
-		}
-		out = append(out, r("L1", checks.Fail, "Docker is not running: "+d.Err, next, "docker"))
+		out = append(out, r("L1", checks.Fail, "Docker is not running: "+d.Err, dockerNext(), "docker"))
 		return out // without Docker nothing else can be checked
 	}
 	out = append(out, r("L1", checks.Pass, "Docker "+d.ServerVersion+" is running", "", "docker"))

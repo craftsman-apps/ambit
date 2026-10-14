@@ -147,12 +147,19 @@ func (a *app) finishCheck(ctx context.Context, f checkFlags, groups map[string]b
 		if err != nil {
 			return err
 		}
-		own, err := le.Owner(ctx, f.name)
-		if err != nil {
-			return err
+		docker := le.Docker()
+		var own local.Ownership
+		if docker.Reachable { // kind's docker ps must not run against an unreachable daemon
+			if own, err = le.Owner(ctx, f.name); err != nil {
+				return err
+			}
 		}
 		results = append(results, local.Preflight(local.PreflightInput{Name: f.name, HTTPPort: f.httpPort, HTTPSPort: f.httpsPort,
-			Docker: le.Docker(), Ownership: own, PortFree: le.PortFree})...)
+			Docker: docker, Ownership: own, PortFree: le.PortFree})...)
+		if !docker.Reachable {
+			results = append(results, checks.Result{ID: "L5", Group: checks.GroupLocal, Status: checks.Unknown,
+				Message: "Docker is not running, so the cluster cannot be looked at", Next: "start Docker, then run ambit check --pre --local again", Source: "docker"})
+		}
 	}
 	if a.g.output == "json" {
 		if err := p.JSON(results); err != nil {

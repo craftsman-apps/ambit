@@ -86,9 +86,25 @@ func (v clusterView) NodeLabels(ctx context.Context, n string) (map[string]map[s
 	return ops.NodeLabels(ctx)
 }
 
-// Owner runs the one ownership check for name.
+// Owner runs the one ownership check for name. An error that is not already an *out.Error gets a next step.
 func (e *Env) Owner(ctx context.Context, name string) (Ownership, error) {
-	return CheckOwnership(ctx, e.Store, clusterView{e}, name)
+	own, err := CheckOwnership(ctx, e.Store, clusterView{e}, name)
+	var oe *out.Error
+	if err != nil && !errors.As(err, &oe) {
+		err = &out.Error{What: fmt.Sprintf("cannot check the kind cluster %q", name), Why: err.Error(),
+			Next: "check that `docker ps` works, then run the command again (add --verbose for details)"}
+	}
+	return own, err
+}
+
+// ReadyDocker reads `docker info` before any other Docker call, so kind's docker ps never runs against an
+// unreachable daemon. When Docker is not reachable it returns the L1 line as an error.
+func (e *Env) ReadyDocker() (DockerInfo, error) {
+	d := e.Docker()
+	if !d.Reachable {
+		return d, &out.Error{What: "Docker is not running", Why: d.Err, Next: dockerNext()}
+	}
+	return d, nil
 }
 
 // Up runs `ambit local up` (spec 4.1). Every step prints one line with its duration.
@@ -103,14 +119,18 @@ func Up(ctx context.Context, p *out.Printer, e *Env, o UpOptions) error {
 
 	// 1. Preflight.
 	var own Ownership
+	var docker DockerInfo
 	if err := step("Preflight", func() error {
 		var err error
+		if docker, err = e.ReadyDocker(); err != nil {
+			return err
+		}
 		if own, err = e.Owner(ctx, o.Name); err != nil {
 			return err
 		}
 		var failed *checks.Result
 		for _, r := range Preflight(PreflightInput{Name: o.Name, HTTPPort: o.HTTPPort, HTTPSPort: o.HTTPSPort,
-			SkipChecks: o.SkipChecks, Docker: e.Docker(), Ownership: own, PortFree: e.PortFree}) {
+			SkipChecks: o.SkipChecks, Docker: docker, Ownership: own, PortFree: e.PortFree}) {
 			if r.Status == checks.Pass || r.Status == checks.NA {
 				continue
 			}

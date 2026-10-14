@@ -282,3 +282,21 @@ func TestClaudeCodeReconnectKeepsRemovedSecretsOnceEach(t *testing.T) {
 		t.Fatalf("RemovedSecrets = %v", got)
 	}
 }
+
+// Connect into `{}` writes apiKeyHelper and env. If the person adds an env entry afterwards, disconnect must still
+// leave valid JSON.
+func TestClaudeCodeDisconnectKeepsValidJSONWhenEnvHoldsAnotherEntry(t *testing.T) {
+	p, err := PlanClaudeCode(Input{Path: "/c/settings.json", File: []byte(`{}`), Exists: true, URL: "https://a.example.com", Model: "m", AmbitPath: ambitBin, GOOS: "darwin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := strings.Replace(string(p.After), `"ANTHROPIC_BASE_URL"`, `"FOO":"1","ANTHROPIC_BASE_URL"`, 1)
+	d, err := UnplanJSON(p.Record, []byte(edited), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(d.After, &v); err != nil || v["env"].(map[string]any)["FOO"] != "1" {
+		t.Fatalf("not valid JSON or FOO lost (%v): %s", err, d.After)
+	}
+}

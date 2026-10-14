@@ -333,7 +333,8 @@ func (d *Doc) removeMember(hv hujson.Value, i int, inserted string) {
 	if i > 0 {
 		start = o.Members[i-1].Value.EndOffset
 	}
-	if inserted != "" && bytes.HasPrefix(d.src[start:], []byte(inserted)) && m.Name.StartOffset >= start && m.Value.EndOffset <= start+len(inserted) {
+	firstOfMore := i == 0 && len(o.Members) > 1 && !strings.HasPrefix(inserted, ",") // the comma after it must go too
+	if inserted != "" && !firstOfMore && bytes.HasPrefix(d.src[start:], []byte(inserted)) && m.Name.StartOffset >= start && m.Value.EndOffset <= start+len(inserted) {
 		d.splice(start, start+len(inserted), nil)
 		return
 	}

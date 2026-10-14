@@ -70,6 +70,11 @@ type Reconciler struct {
 	Now func() time.Time
 	// AccessMode is "enforce" (or "") or "audit" (--access-mode).
 	AccessMode string
+	// Activation is the gate each step of a mode switch or rules change waits on.
+	Activation Activation
+
+	stalled   *stalledStep  // the step a change stopped at (single worker, no lock)
+	gateRetry time.Duration // the last wait before trying a stopped change again
 }
 
 // How often the tools of a running server are read again by default: servers may add or change tools.
@@ -231,48 +236,44 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	// Ready condition per Ambit object that controls a generated object, keyed "Kind/name".
 	conds := map[string]metav1.Condition{}
 	applyFailed := false
-	for _, desired := range res.Objects {
-		name, kind := desired.GetName(), desired.GetKind()
-		owner := controllerOwner(desired) // "" for the shared MCP backend and policy
-		current := &unstructured.Unstructured{}
-		current.SetGroupVersionKind(desired.GroupVersionKind())
-		err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: name}, current)
-		switch {
-		case err == nil && !ownedByAmbit(current):
-			msg := fmt.Sprintf("a %s named %q already exists and was not created by Ambit", kind, name)
-			if owner == "" {
-				logger.Error(nil, msg+"; MCP traffic stays on the existing object until it is removed")
-				continue
-			}
-			conds[owner] = cond(metav1.ConditionFalse, "NameConflict", msg+"; rename the "+strings.Split(owner, "/")[0])
-			continue
-		case err != nil && !apierrors.IsNotFound(err):
+	mode, version := r.accessMode(), RulesVersion(res.Objects)
+	steps := []step{
+		{"authorization", func() (w []gated, err error) {
+			applyFailed, w, err = r.applyAll(ctx, res.Objects, conds)
+			return w, err
+		}},
+		// After authorization: its rules version names the rules now written.
+		{"access log", func() ([]gated, error) { return r.writeAccessLog(ctx, mode, version) }},
+	}
+	if mode == "audit" { // the access log first: a request allowed in audit mode always finds its fields
+		steps[0], steps[1] = steps[1], steps[0]
+	}
+	var published corev1.ConfigMap // the mode and rules version in force; empty before the first change is active
+	if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: AccessModeConfigMap}, &published); client.IgnoreNotFound(err) != nil {
+		return reconcile.Result{}, err
+	}
+	changing := r.Activation.Timeout > 0 && (published.Data["mode"] != mode || published.Data["rulesVersion"] != version)
+	stall, ran, err := r.runSteps(ctx, steps, changing, pending{Mode: mode, RulesVersion: version})
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	var stalled *metav1.Condition
+	if stall == nil {
+		r.gateRetry = 0
+		if err := r.publishMode(ctx, mode, version); err != nil {
 			return reconcile.Result{}, err
 		}
-		// Server-side apply keeps the generated object exactly as compiled; a manual edit is overwritten.
-		if err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
-			logger.Error(err, "apply generated object", "kind", kind, "name", name)
-			if owner == "" {
-				return reconcile.Result{}, err
-			}
-			conds[owner] = cond(metav1.ConditionFalse, "ApplyFailed", err.Error())
-			applyFailed = true
-			continue
+	} else {
+		reason := "RulesNotActive"
+		if published.Data["mode"] != "" && published.Data["mode"] != mode {
+			reason = "ModeSwitchStalled"
 		}
-		switch kind {
-		case "AgentgatewayModel":
-			conds[owner] = acceptedCondition(current)
-		case "MCPServer":
-			conds[owner] = mcpServerCondition(current)
+		c := cond(metav1.ConditionFalse, reason, stall.msg)
+		stalled = &c
+		logger.Info("change not active in the gateway; stopped at this step", "step", r.stalled.step, "mode", mode, "rulesVersion", version, "error", stall.msg)
+		if !ran["authorization"] { // nothing else moves before the access log is active
+			return reconcile.Result{RequeueAfter: r.retryStalled()}, r.writeRuleStatuses(ctx, rules.Items, res.RuleConditions, stalled)
 		}
-	}
-	// The access log after authorization: its rules version names the rules now written.
-	mode, version := r.accessMode(), RulesVersion(res.Objects)
-	if err := r.writeAccessLog(ctx, mode, version); err != nil {
-		return reconcile.Result{}, err
-	}
-	if err := r.publishMode(ctx, mode, version); err != nil {
-		return reconcile.Result{}, err
 	}
 	// Objects of refused Servers: no general prune exists, and owner references only collect on Server deletion.
 	for name := range refusedServers {
@@ -485,15 +486,75 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			return reconcile.Result{}, err
 		}
 	}
-	for i := range rules.Items {
-		ar := &rules.Items[i]
-		next := ar.DeepCopy()
-		meta.SetStatusCondition(&next.Status.Conditions, res.RuleConditions[ar.Name])
-		if err := r.updateStatus(ctx, ar.Status, next.Status, next); err != nil {
-			return reconcile.Result{}, err
+	if stall != nil {
+		if retry := r.retryStalled(); result.RequeueAfter == 0 || result.RequeueAfter > retry {
+			result.RequeueAfter = retry
 		}
 	}
-	return result, nil
+	return result, r.writeRuleStatuses(ctx, rules.Items, res.RuleConditions, stalled)
+}
+
+// writeRuleStatuses sets each AccessRule's Ready condition; a change that is not active in the gateway replaces
+// it on every rule.
+func (r *Reconciler) writeRuleStatuses(ctx context.Context, rules []v1.AccessRule, compiled map[string]metav1.Condition, stalled *metav1.Condition) error {
+	for i := range rules {
+		ar := &rules[i]
+		next := ar.DeepCopy()
+		c := compiled[ar.Name]
+		if stalled != nil {
+			c = *stalled
+			c.ObservedGeneration = ar.Generation
+		}
+		meta.SetStatusCondition(&next.Status.Conditions, c)
+		if err := r.updateStatus(ctx, ar.Status, next.Status, next); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// applyAll applies every generated object. It returns the agentgateway Models and Policies it wrote, with the
+// generation each write returned, for the activation gate.
+func (r *Reconciler) applyAll(ctx context.Context, objs []*unstructured.Unstructured, conds map[string]metav1.Condition) (applyFailed bool, written []gated, err error) {
+	for _, desired := range objs {
+		name, kind := desired.GetName(), desired.GetKind()
+		owner := controllerOwner(desired) // "" for the shared MCP backend and policy
+		current := &unstructured.Unstructured{}
+		current.SetGroupVersionKind(desired.GroupVersionKind())
+		err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: name}, current)
+		switch {
+		case err == nil && !ownedByAmbit(current):
+			msg := fmt.Sprintf("a %s named %q already exists and was not created by Ambit", kind, name)
+			if owner == "" {
+				log.FromContext(ctx).Error(nil, msg+"; MCP traffic stays on the existing object until it is removed")
+				continue
+			}
+			conds[owner] = cond(metav1.ConditionFalse, "NameConflict", msg+"; rename the "+strings.Split(owner, "/")[0])
+			continue
+		case err != nil && !apierrors.IsNotFound(err):
+			return applyFailed, written, err
+		}
+		// Server-side apply keeps the generated object exactly as compiled; a manual edit is overwritten.
+		if err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
+			log.FromContext(ctx).Error(err, "apply generated object", "kind", kind, "name", name)
+			if owner == "" {
+				return applyFailed, written, err
+			}
+			conds[owner] = cond(metav1.ConditionFalse, "ApplyFailed", err.Error())
+			applyFailed = true
+			continue
+		}
+		if kind == "AgentgatewayModel" || kind == "AgentgatewayPolicy" {
+			written = append(written, gated{kind: kind, name: name, generation: desired.GetGeneration(), changed: desired.GetGeneration() != current.GetGeneration()})
+		}
+		switch kind {
+		case "AgentgatewayModel":
+			conds[owner] = acceptedCondition(current)
+		case "MCPServer":
+			conds[owner] = mcpServerCondition(current)
+		}
+	}
+	return applyFailed, written, nil
 }
 
 // readTools returns the server's tools, reading them again when they are older than toolsRefresh.

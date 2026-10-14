@@ -79,7 +79,8 @@ func main() {
 	}
 	if err := (&controller.Reconciler{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), ListTools: listTools, Namespace: ns, Route: controller.RouteRef{Name: *route},
 		RateLimit: controller.RateLimit{Service: *rlService, Port: *rlPort, FailureMode: *rlFailure}, ToolsRefresh: *toolsRefresh, ArgumentLimits: *argLimits,
-		Classifier: controller.Classifier{Deployment: *routerDep, Replicas: int32(*routerReplicas)}, AccessMode: *accessMode}).SetupWithManager(mgr); err != nil {
+		Classifier: controller.Classifier{Deployment: *routerDep, Replicas: int32(*routerReplicas)}, AccessMode: *accessMode,
+		Activation: controller.Activation{Timeout: *activationTimeout, Settle: *activationSettle}}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "set up controller")
 		os.Exit(1)
 	}
@@ -97,7 +98,7 @@ func main() {
 	}
 	_ = mgr.AddHealthzCheck("healthz", healthz.Ping)
 	_ = mgr.AddReadyzCheck("readyz", accessLog.Ready)
-	log.Info("starting", "namespace", ns, "llmRoute", *route, "accessMode", *accessMode, "activationTimeout", *activationTimeout, "activationSettle", *activationSettle)
+	log.Info("starting", "namespace", ns, "llmRoute", *route, "accessMode", *accessMode)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Error(err, "manager stopped")
 		os.Exit(1)

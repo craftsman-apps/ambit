@@ -85,20 +85,43 @@ func (r *Reconciler) accessMode() string {
 
 // writeAccessLog writes ambit-access-log from the base ConfigMap, also over the chart's object of an older
 // version (Helm deletes that one after an upgrade; the watch then writes it again). No base: no policy.
-func (r *Reconciler) writeAccessLog(ctx context.Context, mode, rulesVersion string) error {
+func (r *Reconciler) writeAccessLog(ctx context.Context, mode, rulesVersion string) ([]gated, error) {
 	var base corev1.ConfigMap
 	if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: AccessLogBase}, &base); err != nil {
-		return client.IgnoreNotFound(err)
+		return nil, client.IgnoreNotFound(err)
 	}
 	p, err := accessLogPolicy(&base, mode, rulesVersion)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return r.Patch(ctx, p, client.Apply, fieldOwner, client.ForceOwnership)
+	current := &unstructured.Unstructured{}
+	current.SetGroupVersionKind(AgentgatewayPolicyGVK)
+	if err := r.Get(ctx, client.ObjectKeyFromObject(p), current); err != nil && !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	if err := r.Patch(ctx, p, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
+		return nil, err
+	}
+	return []gated{{kind: p.GetKind(), name: p.GetName(), generation: p.GetGeneration(), changed: p.GetGeneration() != current.GetGeneration()}}, nil
 }
 
-// publishMode writes ambit-access-mode: the mode and the rules version in force, each with the time it last changed.
+// publishMode writes ambit-access-mode: the mode and the rules version in force, each with the time it last
+// changed, once the change is active (no pending entry).
 func (r *Reconciler) publishMode(ctx context.Context, mode, rulesVersion string) error {
+	now := r.now().UTC().Format(time.RFC3339)
+	return r.updateMode(ctx, func(d map[string]string) {
+		if d["mode"] != mode {
+			d["mode"], d["modeSince"] = mode, now
+		}
+		if d["rulesVersion"] != rulesVersion {
+			d["rulesVersion"], d["rulesSince"] = rulesVersion, now
+		}
+		delete(d, "pending")
+	})
+}
+
+// updateMode changes ambit-access-mode's data, writing only when something changed.
+func (r *Reconciler) updateMode(ctx context.Context, change func(map[string]string)) error {
 	var cm corev1.ConfigMap
 	err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: AccessModeConfigMap}, &cm)
 	if err != nil && !apierrors.IsNotFound(err) {
@@ -109,13 +132,7 @@ func (r *Reconciler) publishMode(ctx context.Context, mode, rulesVersion string)
 	if next == nil {
 		next = map[string]string{}
 	}
-	now := r.now().UTC().Format(time.RFC3339)
-	if next["mode"] != mode {
-		next["mode"], next["modeSince"] = mode, now
-	}
-	if next["rulesVersion"] != rulesVersion {
-		next["rulesVersion"], next["rulesSince"] = rulesVersion, now
-	}
+	change(next)
 	if exists && maps.Equal(cm.Data, next) {
 		return nil
 	}

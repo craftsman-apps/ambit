@@ -209,12 +209,12 @@ func Up(ctx context.Context, p *out.Printer, e *Env, o UpOptions) error {
 		}); err != nil {
 			return err
 		}
-		p.Line("  Using a test model that repeats your message. Add a real model later: ambit local up --openrouter-key-file <file>")
+		p.Line("  Using a test model that repeats your message. Add a real model later: ambit local up%s --openrouter-key-file <file>", nameFlag(o.Name))
 		if err := step("Rule everyone-local", func() error { return ops.Apply(ctx, accessRule("local-test")) }); err != nil {
 			return err
 		}
 		if err := step("Test call", func() error { answer, err = call(chosen); return err }); err != nil {
-			return testCallError(err)
+			return testCallError(o.Name, err)
 		}
 	} else {
 		var cands []string
@@ -273,7 +273,7 @@ func Up(ctx context.Context, p *out.Printer, e *Env, o UpOptions) error {
 			chosen = id
 			return err
 		}); err != nil {
-			return testCallError(err)
+			return testCallError(o.Name, err)
 		}
 	}
 	p.Line("  %s answered: %s", chosen, answer)
@@ -308,7 +308,7 @@ func createCluster(ctx context.Context, e *Env, o UpOptions) error {
 		e.Store.Remove(o.Name) // kind deleted the cluster whose create failed
 		if strings.Contains(err.Error(), "port is already allocated") || strings.Contains(err.Error(), "address already in use") {
 			return &out.Error{What: "a port was taken after preflight", Why: err.Error(),
-				Next: fmt.Sprintf("ambit local up --port %d --https-port %d", o.HTTPPort+10000, o.HTTPSPort+10000)}
+				Next: fmt.Sprintf("ambit local up%s --port %d --https-port %d", nameFlag(o.Name), o.HTTPPort+10000, o.HTTPSPort+10000)}
 		}
 		return err
 	}
@@ -386,7 +386,7 @@ func mustYAML(v any) []byte {
 	return b
 }
 
-func chartsError(p *out.Printer, name string, err error) error {
+func chartsError(p *out.Printer, name string, err error) *out.Error {
 	why := err.Error()
 	var nr *kube.NotReadyError
 	if errors.As(err, &nr) {
@@ -396,12 +396,12 @@ func chartsError(p *out.Printer, name string, err error) error {
 		why = fmt.Sprintf("pods not ready after %s (listed above)", nr.Timeout)
 	}
 	return &out.Error{What: "the charts did not become ready", Why: why,
-		Next: fmt.Sprintf("kubectl --context %s -n %s get pods; then run ambit local up again (it repairs)", KubeContext(name), Namespace)}
+		Next: fmt.Sprintf("kubectl --context %s -n %s get pods; then run ambit local up%s again (it repairs)", KubeContext(name), Namespace, nameFlag(name))}
 }
 
-func testCallError(err error) error {
+func testCallError(name string, err error) *out.Error {
 	return &out.Error{What: "the test call failed", Why: err.Error(),
-		Next: "run ambit local up again (it repairs), or ambit local up --no-key for the test model"}
+		Next: fmt.Sprintf("run ambit local up%[1]s again (it repairs), or ambit local up%[1]s --no-key for the test model", nameFlag(name))}
 }
 
 func summary(p *out.Printer, o UpOptions, model, pw string) {

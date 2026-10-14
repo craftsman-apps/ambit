@@ -278,7 +278,7 @@ func TestUpOpenRouterTriesNextCandidate(t *testing.T) {
 func TestUpNotFoundUntilTimeoutTriesNextCandidate(t *testing.T) {
 	port := fakeGatewayStatus(t, map[string]int{"nvidia/nemotron-3-super-120b-a12b:free": 404})
 	r := newRigOn(t, false, port)
-	r.env.CallLimit = 200 * time.Millisecond
+	r.env.CallLimit = 700 * time.Millisecond
 	r.opts.Key, r.opts.KeyGiven = "sk-or-v1-0123456789abcdef0123456789", true
 	if err := Up(context.Background(), r.p, r.env, r.opts); err != nil {
 		t.Fatalf("Up: %v\n%s", err, r.out)
@@ -365,6 +365,39 @@ func TestUpPortTakenAfterPreflight(t *testing.T) {
 	}
 	if st, _ := r.env.Store.Read("ambit"); st != nil {
 		t.Fatalf("state file left after a failed create: %+v", st)
+	}
+}
+
+// The next step keeps --name: without it the command would point at the default cluster `ambit`.
+func TestUpPortTakenKeepsName(t *testing.T) {
+	r := newRig(t, false)
+	r.opts.Name = "ambit-cli-test"
+	r.kind.createErr = errors.New("Bind for 127.0.0.1:8443 failed: port is already allocated")
+	err := Up(context.Background(), r.p, r.env, r.opts)
+	var e *out.Error
+	want := "ambit local up --name ambit-cli-test --port " + itoa(r.opts.HTTPPort+10000) + " --https-port 18443"
+	if !errors.As(err, &e) || e.Next != want {
+		t.Fatalf("err = %#v, want next %q", err, want)
+	}
+}
+
+// Every command Up suggests for a custom name carries --name.
+func TestUpSuggestionsKeepName(t *testing.T) {
+	r := newRig(t, false)
+	r.opts.Name = "ambit-cli-test"
+	r.ops.name = "ambit-cli-test"
+	if err := Up(context.Background(), r.p, r.env, r.opts); err != nil {
+		t.Fatal(err)
+	}
+	if o := r.out.String(); !strings.Contains(o, "ambit local up --name ambit-cli-test --openrouter-key-file <file>") {
+		t.Fatalf("test-model hint has no --name:\n%s", o)
+	}
+	if e := testCallError("ambit-cli-test", errors.New("x")); !strings.Contains(e.Next, "ambit local up --name ambit-cli-test again") ||
+		!strings.Contains(e.Next, "ambit local up --name ambit-cli-test --no-key") {
+		t.Fatalf("next = %q", e.Next)
+	}
+	if e := chartsError(r.p, "ambit-cli-test", errors.New("x")); !strings.Contains(e.Next, "ambit local up --name ambit-cli-test again") {
+		t.Fatalf("next = %q", e.Next)
 	}
 }
 

@@ -134,7 +134,9 @@ func TestCall(ctx context.Context, c *http.Client, llmURL, token, model string, 
 				return "", &ProviderError{Status: resp.StatusCode, Body: fmt.Sprintf("%.300s", strings.TrimSpace(string(b)))}
 			}
 		} else {
-			last, lastStatus = err.Error(), 0
+			if ctx.Err() == nil { // a request cut off by the window's own end says nothing new
+				last, lastStatus = err.Error(), 0
+			}
 		}
 		if time.Now().After(deadline) {
 			return "", &NoAnswerError{Limit: limit, LastStatus: lastStatus, Last: last}

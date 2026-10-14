@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -142,18 +143,89 @@ func (a *app) localUp(ctx context.Context, f localFlags) error {
 	o := local.UpOptions{Name: f.name, HTTPPort: f.httpPort, HTTPSPort: f.httpsPort, SkipChecks: f.skipChecks,
 		Timeout: f.timeout, Charts: charts, Key: key, KeyGiven: given, NoKey: f.noKey, Model: f.model,
 		NoPassword: f.noPassword, DevArchives: f.devArchives, DevValues: f.devValues}
+	parent := ctx
+	ctx, done := interruptContext(parent, signal.NotifyContext, func() {
+		a.printer().Line("Interrupted; stopping. Press Ctrl+C again to end the process at once.")
+	})
+	defer done()
 	if a.stdinTTY() && !given && !f.noKey {
+		fd := int(a.in.(*os.File).Fd())
 		o.Prompt = func() (string, error) {
 			fmt.Fprint(a.out, "OpenRouter API key (Enter to use a test model): ")
-			b, err := term.ReadPassword(int(a.in.(*os.File).Fd()))
-			fmt.Fprintln(a.out)
-			return string(b), err
+			old, err := term.GetState(fd)
+			if err != nil {
+				return "", err
+			}
+			return hiddenPrompt(ctx, func() ([]byte, error) { return term.ReadPassword(fd) },
+				func() { term.Restore(fd, old) }, a.out)
 		}
 	}
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
-	defer stop()
-	return local.Up(ctx, a.printer(), e, o)
+	err = local.Up(ctx, a.printer(), e, o)
+	if ctx.Err() != nil && parent.Err() == nil {
+		a.cleanupHint(e, f.name)
+	}
+	return err
 }
+
+// cleanupHint tells the user how to remove a cluster that an interrupted local up left behind. It prints the
+// command only when the cluster was created and both ownership proofs hold.
+func (a *app) cleanupHint(e *local.Env, name string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if own, err := e.Owner(ctx, name); err == nil && own.Verdict == local.Owned {
+		a.printer().Line("The cluster %s was created. To remove it: ambit local down --name %s", name, name)
+	}
+}
+
+// interruptContext is signal.NotifyContext with a second step: after the first signal it cancels the context, gives
+// the handler up (stop), so the next Ctrl+C ends the process, and calls onSignal. done must be called when the work
+// ends; onSignal is not called then.
+func interruptContext(parent context.Context, notify func(context.Context, ...os.Signal) (context.Context, context.CancelFunc), onSignal func()) (context.Context, func()) {
+	ctx, stop := notify(parent, os.Interrupt)
+	finished := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-finished:
+			return
+		}
+		select {
+		case <-finished: // the work ended and its own stop cancelled ctx
+			return
+		default:
+		}
+		stop()
+		if parent.Err() == nil {
+			onSignal()
+		}
+	}()
+	return ctx, func() { close(finished); stop() }
+}
+
+// hiddenPrompt reads a secret with read. When ctx ends first it calls restore (puts the terminal's echo back, which
+// the read had turned off) and returns an error at once; the read stays blocked until the process ends.
+func hiddenPrompt(ctx context.Context, read func() ([]byte, error), restore func(), w io.Writer) (string, error) {
+	if ctx.Err() != nil {
+		return "", errInterrupted
+	}
+	type result struct {
+		b   []byte
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() { b, err := read(); ch <- result{b, err} }()
+	select {
+	case r := <-ch:
+		fmt.Fprintln(w)
+		return string(r.b), r.err
+	case <-ctx.Done():
+		restore()
+		fmt.Fprintln(w)
+		return "", errInterrupted
+	}
+}
+
+var errInterrupted = errors.New("interrupted while waiting for the OpenRouter key")
 
 // nilIfDiscard turns io.Discard into nil, so kindx uses its no-op logger.
 func nilIfDiscard(w io.Writer) io.Writer {

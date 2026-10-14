@@ -1,8 +1,14 @@
 package checks
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -98,4 +104,72 @@ func TestLLMURL(t *testing.T) {
 	if u := LLMURL(map[string]any{"console": map[string]any{"url": "https://console.example.com"}, "llm": map[string]any{"host": "llm.example.com"}}); u != "https://llm.example.com" {
 		t.Fatalf("production = %s", u)
 	}
+}
+
+func TestH2BundleUnreadable(t *testing.T) {
+	am := crd("models.ambitproject.dev", "ambitproject.dev", true, nil, "v1alpha1")
+	r := one(t, "H2", fx{bundle: "{{{ not yaml", ctrlObjs: []runtime.Object{am}})
+	want(t, r, Fail, "cannot read the third-party CRD bundle")
+}
+
+// llmFx serves the gateway's /v1/chat/completions with h and points the values at it.
+func llmFx(t *testing.T, h http.HandlerFunc, ms ...runtime.Object) fx {
+	s := httptest.NewServer(h)
+	t.Cleanup(s.Close)
+	port := s.Listener.Addr().(*net.TCPAddr).Port
+	vals := map[string]any{"console": map[string]any{"url": fmt.Sprintf("http://console.test:%d", port)}, "llm": map[string]any{"host": "127.0.0.1"}}
+	return fx{deep: true, token: "tok-123", helm: &fakeHelm{all: vals}, ctrlObjs: ms}
+}
+
+func TestDeepCall(t *testing.T) {
+	var gotAuth, gotModel string
+	f := llmFx(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		var b map[string]any
+		json.NewDecoder(r.Body).Decode(&b)
+		gotModel, _ = b["model"].(string)
+		w.Write([]byte(`{"ok":true}`))
+	})
+	e := f.env(t)
+	_, all, _ := e.values()
+	code, body, err := deepCall(context.Background(), e, all, "gpt-x")
+	if err != nil || code != 200 || !strings.Contains(body, "ok") || gotAuth != "Bearer tok-123" || gotModel != "gpt-x" {
+		t.Fatalf("= %d %q %v auth=%q model=%q", code, body, err, gotAuth, gotModel)
+	}
+}
+
+func TestH8(t *testing.T) {
+	ready := model("m1", "OpenAI", "ambit-llm-x", true)
+	reply := func(code int, body string) http.HandlerFunc {
+		return func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(code); w.Write([]byte(body)) }
+	}
+	want(t, one(t, "H8", llmFx(t, reply(200, "{}"), ready)), Pass, "1 Models answered")
+	want(t, one(t, "H8", llmFx(t, reply(200, "{}"), model("m2", "OpenAI", "x", false))), NA, "no Ready Model")
+	for _, c := range []struct {
+		code int
+		sub  string
+	}{
+		{401, "rejected the token or a rule (HTTP 401)"},
+		{403, "rejected the token or a rule (HTTP 403)"},
+		{404, "model not found or not ready (HTTP 404)"},
+		{429, "provider error (HTTP 429)"},
+		{502, "provider error (HTTP 502)"},
+	} {
+		r := one(t, "H8", llmFx(t, reply(c.code, "upstream said no tok-123"), ready))
+		want(t, r, Fail, c.sub)
+		want(t, r, Fail, "m1 (")
+		want(t, r, Fail, "upstream said no")
+		if strings.Contains(r.Message, "tok-123") || strings.Contains(r.Message, "<nil>") {
+			t.Fatalf("message leaks the token or prints <nil>: %s", r.Message)
+		}
+	}
+	// transport error: the server is closed before the call
+	f := llmFx(t, reply(200, "{}"), ready)
+	f.helm = &fakeHelm{all: map[string]any{"console": map[string]any{"url": "http://console.test:1"}, "llm": map[string]any{"host": "127.0.0.1"}}}
+	r := one(t, "H8", f)
+	want(t, r, Fail, "no answer from the gateway")
+	if strings.Contains(r.Message, "<nil>") {
+		t.Fatalf("prints <nil>: %s", r.Message)
+	}
+	want(t, one(t, "H8", fx{}), NA, "--deep sends one test call per model")
 }

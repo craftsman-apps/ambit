@@ -62,7 +62,10 @@ func h2CRDs(ctx context.Context, e *Env) Result {
 			}
 		}
 	}
-	names, _ := kube.CRDNames(e.CRDBundle)
+	names, err := kube.CRDNames(e.CRDBundle)
+	if err != nil {
+		return res(Fail, "live objects", "cannot read the third-party CRD bundle: %v", err)
+	}
 	var bad []string
 	for _, n := range names {
 		if !have[n] {
@@ -260,14 +263,14 @@ func h8Models(ctx context.Context, e *Env) Result {
 		}
 		n++
 		if code, body, err := deepCall(ctx, e, all, m.Spec.Model); err != nil || code != http.StatusOK {
-			bad = append(bad, fmt.Sprintf("%s (%s): HTTP %d %v %.120s", m.Name, m.Spec.Model, code, err, body))
+			bad = append(bad, fmt.Sprintf("%s (%s): %s", m.Name, m.Spec.Model, deepFailure(e, code, body, err)))
 		}
 	}
 	switch {
 	case n == 0:
 		return res(NA, "live objects", "no Ready Model to call")
 	case len(bad) > 0:
-		return res(Fail, "live objects", "refused by the provider: %s", strings.Join(bad, "; "))
+		return res(Fail, "live objects", "test call failed: %s", strings.Join(bad, "; "))
 	}
 	return res(Pass, "live objects", "%d Models answered a test call (active)", n)
 }
@@ -283,6 +286,28 @@ func LLMURL(all map[string]any) string {
 		host += ":" + p
 	}
 	return u.Scheme + "://" + host
+}
+
+// deepFailure names the cause of a failed test call: no answer, our own refusal (401, 403), an unknown or not
+// ready model (404), or a provider error (429, 5xx), with a short body excerpt without the token.
+func deepFailure(e *Env, code int, body string, err error) string {
+	if err != nil {
+		return fmt.Sprintf("no answer from the gateway: %v", err)
+	}
+	var cause string
+	switch {
+	case code == http.StatusUnauthorized || code == http.StatusForbidden:
+		cause = "the gateway rejected the token or a rule"
+	case code == http.StatusNotFound:
+		cause = "model not found or not ready"
+	default:
+		cause = "provider error"
+	}
+	body = strings.Join(strings.Fields(strings.ReplaceAll(body, e.Token, "[redacted]")), " ")
+	if len(body) > 120 {
+		body = body[:120]
+	}
+	return fmt.Sprintf("%s (HTTP %d) %s", cause, code, body)
 }
 
 func deepCall(ctx context.Context, e *Env, all map[string]any, model string) (int, string, error) {

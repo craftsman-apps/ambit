@@ -17,7 +17,7 @@ async function get<T>(url: string): Promise<T> {
   if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `${url} returned ${r.status}`);
   return r.json();
 }
-const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-[13px] outline-none focus:border-accent";
+const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-body outline-none focus:border-accent";
 // A Kubernetes name from a group name: "ML Research/EU" -> "ml-research-eu".
 const nameFor = (g: string) => g.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 63) || "budget";
 
@@ -29,7 +29,7 @@ function Bar({ used, limit }: { used: number; limit: number }) {
       <span className="block h-1.5 w-32 overflow-hidden rounded-full bg-line-soft" role="meter" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${pct}% used`}>
         <span className={`block h-full ${tone}`} style={{ width: `${pct}%` }} />
       </span>
-      <span className="font-mono text-[12px] tabular-nums">{used} / {limit}</span>
+      <span className="font-mono text-small tabular-nums">{used} / {limit}</span>
     </span>
   );
 }
@@ -47,7 +47,7 @@ function Spend({ spent, limit }: { spent: number; limit: string }) {
       <span className="block h-1.5 w-32 overflow-hidden rounded-full bg-line-soft" role="meter" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${pct}% of the dollar limit spent`}>
         <span className={`block h-full ${tone}`} style={{ width: `${pct}%` }} />
       </span>
-      <span className="font-mono text-[12px] tabular-nums">${dollars(spent)} of ${limit} (estimated)</span>
+      <span className="font-mono text-small tabular-nums">${dollars(spent)} of ${limit} (estimated)</span>
     </span>
   );
 }
@@ -90,7 +90,7 @@ function BudgetForm({ editing, onDone }: { editing?: BudgetView; onDone: () => v
         <label className="block"><span className="mb-1 block text-muted">Per person dollars per day</span>
           <input id="budget-user-dollars" inputMode="decimal" className={field} value={userDollars} onChange={(e) => setUserDollars(e.target.value)} placeholder="no limit" /></label>
       </div>
-      <p className="text-[12.5px] text-muted">Set at least one. Days are UTC. Over a limit the gateway answers 429; every replica shares the same count.
+      <p className="text-small text-muted">Set at least one. Days are UTC. Over a limit the gateway answers 429; every replica shares the same count.
         Dollars are estimated from model prices. Once spending is above a limit, new requests are refused; answers already started still finish and are charged. Embeddings are not counted, and models without a price are refused to the group.</p>
       {save.isError && <p className="text-bad" role="alert">{save.error.message}</p>}
       <div className="flex gap-2">
@@ -121,7 +121,7 @@ export function BudgetsPage() {
       <section className="max-w-4xl space-y-4 p-5">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">Budgets</h1>
+            <h1 className="text-h1 font-semibold tracking-tight">Budgets</h1>
             <p className="text-muted">LLM requests per day for each group, and for each person in it. Over the limit the gateway answers 429 until the day resets (UTC).</p>
           </div>
           {admin && !form && <Button className="w-auto shrink-0" onClick={() => setForm("new")}>New budget</Button>}
@@ -134,11 +134,11 @@ export function BudgetsPage() {
         {q.data?.map((b) => (
           <div key={b.name} className="rounded-md border border-line p-4" data-testid={`budget-${b.group}`}>
             <div className="mb-2 flex items-center justify-between gap-3">
-              <h2 className="font-semibold">{b.group}{b.name !== b.group && <span className="ml-1.5 font-mono text-[12px] font-normal text-muted">{b.name}</span>}</h2>
+              <h2 className="font-semibold">{b.group}{b.name !== b.group && <span className="ml-1.5 font-mono text-small font-normal text-muted">{b.name}</span>}</h2>
               <span className="flex items-center gap-3">
                 <Status ready={b.ready} text={b.ready === "True" ? "Enforced" : undefined} />
                 {admin && (b.gitManaged && !gitops
-                  ? <span className="text-[12px] text-muted">Managed in Git</span>
+                  ? <span className="text-small text-muted">Managed in Git</span>
                   : <>
                       <Button variant="outline" className="w-auto" onClick={() => setForm(b)}>Edit</Button>
                       <Button variant="outline" className="w-auto" onClick={() => setConfirm(b.name)}>Delete</Button>
@@ -152,8 +152,8 @@ export function BudgetsPage() {
                 <Button variant="outline" className="w-auto" onClick={() => setConfirm(null)}>Keep it</Button>
               </div>
             )}
-            {b.ready === "False" && <p className="mb-2 text-[12.5px] text-bad">{b.message}</p>}
-            {b.countsMissing && <p className="mb-2 text-[12.5px] text-warn">Today's counts are unavailable (the counter store is not reachable).</p>}
+            {b.ready === "False" && <p className="mb-2 text-small text-bad">{b.message}</p>}
+            {b.countsMissing && <p className="mb-2 text-small text-warn">Today's counts are unavailable (the counter store is not reachable).</p>}
             <dl className="grid grid-cols-[150px_1fr] gap-x-3 gap-y-1.5">
               <dt className="text-muted">Whole group</dt><dd>{b.groupLimit ? <Bar used={b.groupUsed} limit={b.groupLimit} /> : <span className="text-muted">no group limit</span>}</dd>
               <dt className="text-muted">Each person</dt><dd>{b.userLimit ? `${b.userLimit} per day` : <span className="text-muted">no per-person limit</span>}</dd>
@@ -171,7 +171,7 @@ export function BudgetsPage() {
                   </li>))}
               </ul>
             )}
-            <p className="mt-2 text-[12px] text-muted">Resets {new Date(b.resetsAt).toISOString().replace("T", " ").slice(0, 16)} UTC.</p>
+            <p className="mt-2 text-small text-muted">Resets {new Date(b.resetsAt).toISOString().replace("T", " ").slice(0, 16)} UTC.</p>
           </div>
         ))}
       </section>

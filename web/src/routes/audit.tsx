@@ -14,8 +14,8 @@ async function get<T>(url: string): Promise<T> {
   if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `${url} returned ${r.status}`);
   return r.json();
 }
-const field = "rounded-md border border-line bg-surface px-2.5 py-1.5 font-mono text-[13px] outline-none focus:border-accent";
-const th = "px-3 py-2 text-left font-mono text-[10.5px] font-medium uppercase tracking-[.1em] text-muted";
+const field = "rounded-md border border-line bg-surface px-2.5 py-1.5 font-mono text-body outline-none focus:border-accent";
+const th = "px-3 py-2 text-left font-mono text-label font-medium uppercase tracking-[.1em] text-muted";
 const today = () => new Date().toISOString().slice(0, 10);
 const monthAgo = () => new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
 // A refusal by policy: no or bad token, a rule or offboarding said no, over budget, or a tool the
@@ -63,7 +63,7 @@ export function AuditPage() {
     <Shell crumb="Evidence / Audit">
       <section className="space-y-4 p-5">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Audit</h1>
+          <h1 className="text-h1 font-semibold tracking-tight">Audit</h1>
           <p className="text-muted">Every call a person made through the gateway, including the ones it refused. Kept for a year. Dates and times are UTC.</p>
         </div>
         <form className="flex flex-wrap items-end gap-2" onSubmit={search}>
@@ -75,7 +75,7 @@ export function AuditPage() {
         {res.isError && !res.isFetching && <p className="text-bad" role="alert">{res.error.message}</p>}
         {res.data && !res.isError && (
           <>
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-[12.5px] text-muted">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-small text-muted">
               <span>
                 {all.filter(isCall).length} tool and model calls: {all.filter((c) => isCall(c) && refused(c)).length} refused by policy, {all.filter((c) => isCall(c) && failed(c)).length} failed
                 {res.data.limited && " — showing the newest 1,000; narrow the period"}.
@@ -86,18 +86,18 @@ export function AuditPage() {
                 onClick={() => download(`audit-${q!.email}-${q!.from}-${q!.to}.csv`, csv(all))}>Export CSV</Button>
             </div>
             <div className="overflow-x-auto">
-              <table className="w-full border-collapse text-[13px]">
+              <table className="w-full border-collapse text-body">
                 <thead><tr className="border-b border-line"><th className={th}>Time (UTC)</th><th className={th}>What</th><th className={th}>Server / model</th><th className={th}>Outcome</th><th className={th}>Tokens</th></tr></thead>
                 <tbody>
                   {shown.map((c, i) => (
                     <tr key={i} className="border-b border-line-soft align-top">
-                      <td className="whitespace-nowrap px-3 py-2 font-mono text-[12px]">{utc(c.time)}</td>
+                      <td className="whitespace-nowrap px-3 py-2 font-mono text-small">{utc(c.time)}</td>
                       <td className="px-3 py-2 font-mono">{what(c)}</td>
-                      <td className="px-3 py-2 font-mono text-[12px]">{target(c)}</td>
+                      <td className="px-3 py-2 font-mono text-small">{target(c)}</td>
                       <td className="px-3 py-2">{refused(c) ? <Status ready="False" text={`Refused by policy (${c.status})`} />
                         : failed(c) ? <Status ready="Unknown" text={`Failed (${c.status})`} /> : <Status ready="True" text={`OK (${c.status})`} />}
-                        {c.error && <span className="block text-[12px] text-muted">{c.error}</span>}</td>
-                      <td className="px-3 py-2 font-mono text-[12px] tabular-nums">{c.inputTokens || c.outputTokens ? `${c.inputTokens} in / ${c.outputTokens} out` : ""}</td>
+                        {c.error && <span className="block text-small text-muted">{c.error}</span>}</td>
+                      <td className="px-3 py-2 font-mono text-small tabular-nums">{c.inputTokens || c.outputTokens ? `${c.inputTokens} in / ${c.outputTokens} out` : ""}</td>
                     </tr>
                   ))}
                   {shown.length === 0 && <tr><td colSpan={5} className="px-3 py-6 text-muted">No calls by {q!.email} in this period.</td></tr>}
@@ -128,15 +128,15 @@ export function UsagePage() {
     <Shell crumb="Evidence / Usage">
       <section className="max-w-4xl space-y-4 p-5">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Usage</h1>
+          <h1 className="text-h1 font-semibold tracking-tight">Usage</h1>
           <p className="text-muted">LLM requests, tokens and cost per group per day (UTC), last 30 days. Someone in two groups counts toward both. Cost comes from each model's price.</p>
-          {res.data && !tokens && <p className="text-[12.5px] text-muted">No token usage was recorded in this period.</p>}
-          {unpriced.length > 0 && <p className="text-[12.5px] text-warn">No price set for {unpriced.join(", ")}: their tokens are counted but not in the cost. Set a price on the Model.</p>}
+          {res.data && !tokens && <p className="text-small text-muted">No token usage was recorded in this period.</p>}
+          {unpriced.length > 0 && <p className="text-small text-warn">No price set for {unpriced.join(", ")}: their tokens are counted but not in the cost. Set a price on the Model.</p>}
         </div>
         {res.isLoading && <p className="text-muted">Loading…</p>}
         {res.isError && <p className="text-bad" role="alert">{res.error.message}</p>}
         {res.data && (
-          <table className="w-full border-collapse text-[13px]">
+          <table className="w-full border-collapse text-body">
             <thead><tr className="border-b border-line"><th className={th}>Day</th><th className={th}>Group</th><th className={th}>Requests</th>
               {tokens && <><th className={th}>Input tokens</th><th className={th}>Output tokens</th></>}{costs && <th className={th}>Cost (USD)</th>}</tr></thead>
             <tbody>

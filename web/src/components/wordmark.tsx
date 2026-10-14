@@ -15,8 +15,8 @@ export function Wordmark() {
     <div className="flex items-center gap-2.5">
       <Mark />
       <div className="leading-tight">
-        <div className="text-[15px] font-semibold tracking-tight">Ambit</div>
-        <div className="font-mono text-[10.5px] uppercase tracking-widest text-muted">Gateway console</div>
+        <div className="text-h2 font-semibold tracking-tight">Ambit</div>
+        <div className="font-mono text-label uppercase tracking-widest text-muted">Gateway console</div>
       </div>
     </div>
   );

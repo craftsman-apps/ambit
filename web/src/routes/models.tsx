@@ -12,7 +12,7 @@ const providerName: Record<string, string> = {
   Groq: "Groq", Huggingface: "Hugging Face", Meta: "Meta Llama API", Mistral: "Mistral AI", OpenAI: "OpenAI",
   Openrouter: "OpenRouter", TogetherAI: "Together AI", VertexAI: "Google Vertex AI", XAI: "xAI",
 };
-const field = "w-28 rounded-md border border-line bg-surface px-2 py-1 font-mono text-[12.5px] outline-none focus:border-accent";
+const field = "w-28 rounded-md border border-line bg-surface px-2 py-1 font-mono text-small outline-none focus:border-accent";
 const priceText = (p: ModelPrice) => `$${p.inputPerMillionTokens} / $${p.outputPerMillionTokens} per million`;
 // The controller appends "refused for groups …: no price" to the Ready message when a dollar budget applies.
 const refusedText = (message: string) => message.match(/refused for groups [^;]*/)?.[0];
@@ -36,24 +36,24 @@ function PriceEditor({ m, onDone }: { m: ModelView; onDone: () => void }) {
     <form className="mt-2 space-y-2 rounded-md border border-line p-2" aria-label={`Price of ${m.name}`}
       onSubmit={(e) => { e.preventDefault(); save.mutate({ inputPerMillionTokens: input.trim(), outputPerMillionTokens: output.trim() }); }}>
       <div className="flex flex-wrap items-end gap-2">
-        <label className="block"><span className="mb-1 block text-[12px] text-muted">Input $ per million</span>
+        <label className="block"><span className="mb-1 block text-small text-muted">Input $ per million</span>
           <input id={`price-in-${m.name}`} inputMode="decimal" className={field} value={input} onChange={(e) => setInput(e.target.value)} required /></label>
-        <label className="block"><span className="mb-1 block text-[12px] text-muted">Output $ per million</span>
+        <label className="block"><span className="mb-1 block text-small text-muted">Output $ per million</span>
           <input id={`price-out-${m.name}`} inputMode="decimal" className={field} value={output} onChange={(e) => setOutput(e.target.value)} required /></label>
         <Button type="submit" className="w-auto" disabled={save.isPending}>Save price</Button>
         {m.price && <Button type="button" variant="outline" className="w-auto" disabled={save.isPending} onClick={() => save.mutate({ remove: true })}>Remove price</Button>}
         <Button type="button" variant="outline" className="w-auto" onClick={onDone}>Cancel</Button>
       </div>
       {s && (
-        <p className="flex flex-wrap items-center gap-2 text-[12.5px] text-muted">
+        <p className="flex flex-wrap items-center gap-2 text-small text-muted">
           <span>Suggested: {priceText(s)} (LiteLLM list of {s.date}, {s.source})</span>
           <Button type="button" variant="outline" className="w-auto" disabled={save.isPending}
             onClick={() => save.mutate({ inputPerMillionTokens: s.inputPerMillionTokens, outputPerMillionTokens: s.outputPerMillionTokens })}>Use this price</Button>
         </p>
       )}
-      {info.data && !s && <p className="text-[12.5px] text-muted">No suggestion for this model.</p>}
-      {info.data?.listError && <p className="text-[12.5px] text-warn">The price mirror could not be read ({info.data.listError}); suggestions come from the list built into this release.</p>}
-      {save.isError && <p className="text-[12.5px] text-bad" role="alert">{save.error.message}</p>}
+      {info.data && !s && <p className="text-small text-muted">No suggestion for this model.</p>}
+      {info.data?.listError && <p className="text-small text-warn">The price mirror could not be read ({info.data.listError}); suggestions come from the list built into this release.</p>}
+      {save.isError && <p className="text-small text-bad" role="alert">{save.error.message}</p>}
     </form>
   );
 }
@@ -65,12 +65,12 @@ export function ModelsPage() {
   return (
     <Shell crumb="Govern / Models">
       <section className="p-5">
-        <h1 className="text-xl font-semibold tracking-tight">Models</h1>
+        <h1 className="text-h1 font-semibold tracking-tight">Models</h1>
         <p className="mb-4 text-muted">The model catalog. A model is closed to everyone until an access rule names it. Prices estimate cost and drive dollar budgets.</p>
         {q.isError && <p className="text-bad">{q.error.message}</p>}
         <table className="w-full border-collapse">
           <thead>
-            <tr className="border-b border-line text-left font-mono text-[10.5px] uppercase tracking-[.1em] text-muted">
+            <tr className="border-b border-line text-left font-mono text-label uppercase tracking-[.1em] text-muted">
               <th className="px-3 py-2.5 font-medium">Model</th><th className="px-3 py-2.5 font-medium">Name clients send</th>
               <th className="px-3 py-2.5 font-medium">Provider</th><th className="px-3 py-2.5 font-medium">Who can use it</th>
               <th className="px-3 py-2.5 font-medium">Price</th><th className="px-3 py-2.5 font-medium">Status</th>
@@ -79,13 +79,13 @@ export function ModelsPage() {
           <tbody>
             {q.data?.map((m) => (
               <tr key={m.name} className="border-b border-line-soft align-top" data-testid={`model-${m.name}`}>
-                <td className="px-3 py-2.5"><span className="font-mono">{m.name}</span><span className="block text-[12px] text-muted">{m.displayName}</span></td>
-                <td className="px-3 py-2.5 font-mono text-[12.5px]">{m.model}</td>
+                <td className="px-3 py-2.5"><span className="font-mono">{m.name}</span><span className="block text-small text-muted">{m.displayName}</span></td>
+                <td className="px-3 py-2.5 font-mono text-small">{m.model}</td>
                 <td className="px-3 py-2.5">{providerName[m.provider] ?? m.provider}</td>
                 <td className="px-3 py-2.5">{m.allSignedIn ? "Everyone signed in" : m.allowedGroups.length ? m.allowedGroups.join(", ") : <span className="text-muted">Nobody yet</span>}</td>
                 <td className="px-3 py-2.5">
-                  {m.price ? <span className="font-mono text-[12.5px]">{priceText(m.price)}</span> : <span className="text-muted">No price</span>}
-                  {refusedText(m.message) && <span className="block text-[12px] text-warn">{refusedText(m.message)}</span>}
+                  {m.price ? <span className="font-mono text-small">{priceText(m.price)}</span> : <span className="text-muted">No price</span>}
+                  {refusedText(m.message) && <span className="block text-small text-warn">{refusedText(m.message)}</span>}
                   {admin && editing !== m.name && <Button variant="outline" className="mt-1 block w-auto" onClick={() => setEditing(m.name)}>Edit price</Button>}
                   {editing === m.name && <PriceEditor m={m} onDone={() => setEditing(null)} />}
                 </td>
@@ -94,7 +94,7 @@ export function ModelsPage() {
             ))}
           </tbody>
         </table>
-        <p className="mt-3 text-[12px] text-muted">Price suggestions come from LiteLLM's model price list (<a className="underline" href="/api/prices/licence">LiteLLM licence</a>).</p>
+        <p className="mt-3 text-small text-muted">Price suggestions come from LiteLLM's model price list (<a className="underline" href="/api/prices/licence">LiteLLM licence</a>).</p>
       </section>
     </Shell>
   );

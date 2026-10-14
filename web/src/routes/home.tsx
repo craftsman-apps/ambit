@@ -36,7 +36,7 @@ export function HomePage() {
     <Shell crumb="Govern / Overview">
       <section className="max-w-4xl space-y-4 p-5">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Overview</h1>
+          <h1 className="text-h1 font-semibold tracking-tight">Overview</h1>
           <p className="text-muted" data-testid="signed-in-as">Signed in as {u?.bootstrap ? "admin (bootstrap)" : u?.name || u?.email}</p>
         </div>
         {admin && (
@@ -60,25 +60,25 @@ export function HomePage() {
         )}
         <div className="grid grid-cols-3 gap-3">
           <Link to="/models" className="rounded-md border border-line p-4 hover:bg-sunken">
-            <div className="font-mono text-[10.5px] uppercase tracking-[.12em] text-muted">Models</div>
+            <div className="font-mono text-label uppercase tracking-[.12em] text-muted">Models</div>
             <div className="mt-1 text-2xl font-semibold tabular-nums">{models.data?.length ?? "–"}</div>
-            <div className="text-[12.5px] text-muted">{closed} closed to everyone</div>
+            <div className="text-small text-muted">{closed} closed to everyone</div>
           </Link>
           <Link to="/access-rules" className="rounded-md border border-line p-4 hover:bg-sunken">
-            <div className="font-mono text-[10.5px] uppercase tracking-[.12em] text-muted">Access rules</div>
+            <div className="font-mono text-label uppercase tracking-[.12em] text-muted">Access rules</div>
             <div className="mt-1 text-2xl font-semibold tabular-nums">{rules.data?.length ?? "–"}</div>
-            <div className={attention ? "text-[12.5px] text-bad" : "text-[12.5px] text-muted"}>{attention} need attention</div>
+            <div className={attention ? "text-small text-bad" : "text-small text-muted"}>{attention} need attention</div>
           </Link>
           <Link to="/servers" className="rounded-md border border-line p-4 hover:bg-sunken">
-            <div className="font-mono text-[10.5px] uppercase tracking-[.12em] text-muted">MCP servers</div>
+            <div className="font-mono text-label uppercase tracking-[.12em] text-muted">MCP servers</div>
             <div className="mt-1 text-2xl font-semibold tabular-nums">{servers.data?.length ?? "–"}</div>
-            <div className={waiting ? "text-[12.5px] text-warn" : "text-[12.5px] text-muted"}>{waiting} waiting for an approver</div>
+            <div className={waiting ? "text-small text-warn" : "text-small text-muted"}>{waiting} waiting for an approver</div>
           </Link>
         </div>
         {access.data && (
           <Card data-testid="my-access">
             <h2 className="mb-1 font-semibold">What you can use</h2>
-            <p className="mb-3 text-[12.5px] text-muted">
+            <p className="mb-3 text-small text-muted">
               From the access rules that name your groups{access.data.groups.length ? <> ({access.data.groups.join(", ")})</> : " (you have none)"} or everyone signed in.
               If a tool you need is missing, ask an admin for a rule; the gateway reports tools you may not use as unknown.
             </p>
@@ -91,7 +91,7 @@ export function HomePage() {
                 {access.data.servers.map((s) => (
                   <span key={s.server} className="block">
                     <span className="font-mono">{s.server}</span>: {s.allTools ? "all tools" : s.tools.map((t) => `${s.server}_${t}`).join(", ")}
-                    <span className="text-[12px] text-muted"> · rule {s.rules.join(", ")}</span>
+                    <span className="text-small text-muted"> · rule {s.rules.join(", ")}</span>
                   </span>
                 ))}
               </dd>

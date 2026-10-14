@@ -22,7 +22,7 @@ export function OffboardingPage() {
     <Shell crumb="Settings / Offboarding">
       <section className="max-w-4xl space-y-5 p-5">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Offboarding</h1>
+          <h1 className="text-h1 font-semibold tracking-tight">Offboarding</h1>
           <p className="text-muted">When your identity provider deactivates someone, Ambit asks each app to revoke the grants they authorized, ends their console sessions, and blocks their gateway tokens at once. A revocation that an app does not confirm is listed below with its error.</p>
         </div>
         {q.isError && <p className="text-bad">{q.error.message}</p>}
@@ -35,17 +35,17 @@ export function OffboardingPage() {
               <dd>{token ? <span className="break-all font-mono">{token}</span>
                 : <Button variant="outline" className="w-auto" onClick={() => get<{ token: string }>("/api/offboarding/token").then((t) => setToken(t.token))}>Show token</Button>}</dd>
             </dl>
-            <p className="text-[12.5px] text-muted">In Okta or Entra ID, add a SCIM app with this URL and token, and turn on "Deactivate users".</p>
+            <p className="text-small text-muted">In Okta or Entra ID, add a SCIM app with this URL and token, and turn on "Deactivate users".</p>
           </div>
         )}
         <div>
-          <h2 className="mb-2 font-mono text-[10.5px] uppercase tracking-[.12em] text-muted">Records</h2>
+          <h2 className="mb-2 font-mono text-label uppercase tracking-[.12em] text-muted">Records</h2>
           {q.data?.records.length === 0 && <p className="text-muted">Nobody has been offboarded yet.</p>}
           {q.data?.records.map((r) => (
             <div key={r.email + r.at} className="mb-3 rounded-md border border-line p-3" data-testid={`record-${r.email}`}>
-              <p className="flex items-center justify-between"><span><b>{r.email}</b> · {new Date(r.at).toLocaleString()} · <span className="font-mono text-[12px]">{r.trigger}</span></span>
+              <p className="flex items-center justify-between"><span><b>{r.email}</b> · {new Date(r.at).toLocaleString()} · <span className="font-mono text-small">{r.trigger}</span></span>
                 <Status ready={r.completeSuccess ? "True" : "False"} text={r.completeSuccess ? "Complete" : "Needs attention"} /></p>
-              <ul className="mt-1 text-[13px]">
+              <ul className="mt-1 text-body">
                 {r.grants.map((g) => (
                   <li key={g.connection}>{g.connection}: {g.revokedAtProvider ? "revoked at the provider" : g.error ? <span className="text-bad">{g.error}</span> : "forgotten (the provider has no revocation endpoint)"}</li>
                 ))}

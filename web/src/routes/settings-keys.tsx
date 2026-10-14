@@ -26,7 +26,7 @@ export function SettingsKeysPage() {
   return (
     <Shell crumb="Settings / Keys">
       <section className="max-w-4xl space-y-5 p-5">
-        <h1 className="text-xl font-semibold tracking-tight">Keys</h1>
+        <h1 className="text-h1 font-semibold tracking-tight">Keys</h1>
         {s && (
           <div className="space-y-1">
             <dl className="grid grid-cols-[170px_1fr] gap-x-3 gap-y-1.5">
@@ -34,7 +34,7 @@ export function SettingsKeysPage() {
               <dt className="text-muted">Inactivity limit</dt><dd>{s.inactivityDays} days</dd>
               <dt className="text-muted">Longest end date</dt><dd>{s.maxDays} days</dd>
             </dl>
-            <p className="text-[12.5px] text-muted">Set in the Helm values (apiKeys.*)</p>
+            <p className="text-small text-muted">Set in the Helm values (apiKeys.*)</p>
           </div>
         )}
         {keys.isError && <p className="text-bad" role="alert">{keys.error.message}</p>}
@@ -48,7 +48,7 @@ export function SettingsKeysPage() {
             <tbody>
               {keys.data.keys.map((k) => (
                 <tr key={k.id} className="border-b border-line-soft">
-                  <td className="py-1.5">{k.owner}</td><td>{k.name}</td><td className="font-mono text-[12px]">{k.prefix}</td>
+                  <td className="py-1.5">{k.owner}</td><td>{k.name}</td><td className="font-mono text-small">{k.prefix}</td>
                   <td>{statusText(k)}</td><td>{day(k.until)}</td><td>{k.lastUsed ? day(k.lastUsed) : "unknown"}</td>
                   <td className="text-right">
                     {confirm === k.id ? (
@@ -71,7 +71,7 @@ export function SettingsKeysPage() {
             <tbody>
               {events.data.events.map((e, i) => (
                 <tr key={i} className="border-b border-line-soft">
-                  <td className="py-1.5 font-mono text-[12px]">{e.at.replace("T", " ").slice(0, 16)}</td><td>{e.actor}</td><td>{e.action}</td><td>{e.email}</td><td>{e.detail}</td>
+                  <td className="py-1.5 font-mono text-small">{e.at.replace("T", " ").slice(0, 16)}</td><td>{e.actor}</td><td>{e.action}</td><td>{e.email}</td><td>{e.detail}</td>
                 </tr>))}
             </tbody>
           </table>

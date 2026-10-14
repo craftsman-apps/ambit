@@ -209,3 +209,85 @@ func TestRenameRetriesOnWindows(t *testing.T) {
 		t.Fatalf("no retry outside Windows: err %v, calls %d", err, calls+10)
 	}
 }
+
+func TestWriteAllRollbackKeepsTheModeOfTheFile(t *testing.T) {
+	skipUnlessPOSIXUser(t)
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.json")
+	os.WriteFile(first, []byte("one"), 0o644)
+	os.Chmod(first, 0o644)
+	blocker := filepath.Join(dir, "blocker")
+	os.WriteFile(blocker, []byte("x"), 0o600)
+	_, err := WriteAll([]FileChange{
+		{Path: first, Before: []byte("one"), Exists: true, After: []byte("two")},
+		{Path: filepath.Join(blocker, "x.json"), After: []byte("y")},
+	})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if fi, _ := os.Stat(first); read(t, first) != "one" || fi.Mode().Perm() != 0o644 {
+		t.Fatalf("restored %q with mode %v", read(t, first), fi.Mode().Perm())
+	}
+}
+
+func TestWriteAllRollbackMakesTheRemovedDirectoriesAgain(t *testing.T) {
+	dir := t.TempDir()
+	outer := filepath.Join(dir, "a")
+	inner := filepath.Join(outer, "b")
+	p := filepath.Join(inner, "settings.json")
+	os.MkdirAll(inner, 0o700)
+	os.WriteFile(p, []byte("{}\n"), 0o600)
+	blocker := filepath.Join(dir, "blocker")
+	os.WriteFile(blocker, []byte("x"), 0o600)
+	_, err := WriteAll([]FileChange{
+		{Path: p, Before: []byte("{}\n"), Exists: true, Delete: true, RemoveDirs: []string{outer, inner}}, // outermost first, as FileResult.Dirs
+		{Path: filepath.Join(blocker, "x.json"), After: []byte("y")},
+	})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if read(t, p) != "{}\n" {
+		t.Fatalf("the deleted file was not put back: %q", read(t, p))
+	}
+}
+
+func TestWriteAllDeletesNestedDirectoriesInnermostFirst(t *testing.T) {
+	dir := t.TempDir()
+	outer := filepath.Join(dir, "a")
+	inner := filepath.Join(outer, "b")
+	p := filepath.Join(inner, "settings.json")
+	os.MkdirAll(inner, 0o700)
+	os.WriteFile(p, []byte("{}\n"), 0o600)
+	if _, err := WriteAll([]FileChange{{Path: p, Before: []byte("{}\n"), Exists: true, Delete: true, RemoveDirs: []string{outer, inner}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(outer); !os.IsNotExist(err) {
+		t.Fatal("the outer directory that connect made is still there")
+	}
+}
+
+func TestWriteAllSaysWhatItCouldNotPutBack(t *testing.T) {
+	skipUnlessPOSIXUser(t)
+	dir := t.TempDir()
+	locked := filepath.Join(dir, "locked")
+	os.Mkdir(locked, 0o700)
+	first := filepath.Join(locked, "first.json")
+	second := filepath.Join(dir, "second.json")
+	os.WriteFile(first, []byte("one"), 0o600)
+	os.WriteFile(second, []byte("s"), 0o600)
+	calls := 0
+	writeHook = func() {
+		if calls++; calls == 2 { // the second file is being checked: make the first one impossible to restore
+			os.Chmod(locked, 0o500)
+		}
+	}
+	defer func() { writeHook = nil; os.Chmod(locked, 0o700) }()
+	_, err := WriteAll([]FileChange{
+		{Path: first, Before: []byte("one"), Exists: true, After: []byte("two")},
+		{Path: second, Before: []byte("different"), Exists: true, After: []byte("y")}, // fails: it changed
+	})
+	var e *out.Error
+	if !errors.As(err, &e) || !strings.Contains(e.Why, "changed while") || !strings.Contains(e.Why, first) || !strings.Contains(e.Why, first+".ambit.bak") {
+		t.Fatalf("err = %#v", err)
+	}
+}

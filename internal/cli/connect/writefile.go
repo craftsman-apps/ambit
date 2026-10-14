@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/craftsman-apps/ambit/internal/cli/out"
@@ -26,10 +27,12 @@ type FileChange struct {
 
 // FileResult says what WriteAll did to one file.
 type FileResult struct {
-	Path    string
-	Backup  string   // the .ambit.bak file, empty when the file did not exist
-	Created bool     // the file did not exist
-	Dirs    []string // directories made for it, outermost first
+	Path        string
+	Backup      string      // the .ambit.bak file, empty when the file did not exist
+	Created     bool        // the file did not exist
+	Dirs        []string    // directories made for it, outermost first
+	Perm        os.FileMode // the mode the file had before
+	RemovedDirs []string    // with Delete: the directories that were removed, outermost first
 }
 
 // writeHook runs after the temporary file is complete and before the check; tests use it to change the file at
@@ -65,8 +68,7 @@ func WriteAll(changes []FileChange) ([]FileResult, error) {
 	for i, c := range changes {
 		r, err := writeOne(c)
 		if err != nil {
-			rollback(changes[:i], done)
-			return nil, err
+			return nil, withRollback(err, rollback(changes[:i], done))
 		}
 		done = append(done, r)
 	}
@@ -93,6 +95,7 @@ func writeOne(c FileChange) (FileResult, error) {
 			return r, writeError(c.Path, err)
 		}
 		perm = fi.Mode().Perm()
+		r.Perm = perm
 		if perm&0o200 == 0 {
 			return r, &out.Error{What: "cannot write " + c.Path, Why: "the file is read-only", Next: readOnlyNext(c.Path), Code: out.ExitFailed}
 		}
@@ -121,8 +124,10 @@ func writeOne(c FileChange) (FileResult, error) {
 		if err := os.Remove(target); err != nil {
 			return r, writeError(c.Path, err)
 		}
-		for _, d := range c.RemoveDirs {
-			os.Remove(d) // fails, and so keeps the directory, when something else is in it
+		for i := len(c.RemoveDirs) - 1; i >= 0; i-- { // innermost first
+			if os.Remove(c.RemoveDirs[i]) == nil { // fails, and so keeps the directory, when something else is in it
+				r.RemovedDirs = append([]string{c.RemoveDirs[i]}, r.RemovedDirs...)
+			}
 		}
 		return r, nil
 	}
@@ -156,13 +161,20 @@ func makeDirs(dir string) ([]string, error) {
 	return missing, nil
 }
 
-// rollback puts the files written so far back as they were.
-func rollback(changes []FileChange, done []FileResult) {
+// rollback puts the files written so far back as they were, with their mode, and says what it could not do.
+func rollback(changes []FileChange, done []FileResult) (problems []string) {
 	for i := len(done) - 1; i >= 0; i-- {
 		c, r := changes[i], done[i]
 		target := c.Path
 		if t, err := filepath.EvalSymlinks(c.Path); err == nil {
 			target = t
+		}
+		fail := func(err error) {
+			p := fmt.Sprintf("could not put %s back (%v)", c.Path, err)
+			if r.Backup != "" {
+				p += "; its previous content is in " + r.Backup
+			}
+			problems = append(problems, p)
 		}
 		switch {
 		case r.Created:
@@ -170,10 +182,32 @@ func rollback(changes []FileChange, done []FileResult) {
 			for j := len(r.Dirs) - 1; j >= 0; j-- {
 				os.Remove(r.Dirs[j])
 			}
-		default: // an updated file, or a deleted one: put the old bytes back
-			atomicWrite(target, c.Before, 0o600)
+		default: // an updated file, or a deleted one: make its directories again, put the old bytes back
+			for _, d := range r.RemovedDirs {
+				if err := os.Mkdir(d, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+					fail(err)
+				}
+			}
+			if err := atomicWrite(target, c.Before, r.Perm); err != nil {
+				fail(err)
+			}
 		}
 	}
+	return problems
+}
+
+// withRollback adds what rollback could not do to the error that stopped the write.
+func withRollback(err error, problems []string) error {
+	if len(problems) == 0 {
+		return err
+	}
+	var oe *out.Error
+	if !errors.As(err, &oe) {
+		oe = &out.Error{What: "cannot write the files", Why: err.Error(), Code: out.ExitFailed}
+	}
+	cp := *oe
+	cp.Why += "; " + strings.Join(problems, "; ")
+	return &cp
 }
 
 func readOnlyNext(path string) string {

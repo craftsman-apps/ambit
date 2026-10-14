@@ -199,3 +199,13 @@ func TestFailInJSONModeGoesToErr(t *testing.T) {
 		t.Fatalf("stderr = %q", errb.String())
 	}
 }
+
+func TestStepAndLineInJSONModeGoToErr(t *testing.T) {
+	var outb, errb bytes.Buffer
+	p := New(Options{Out: &outb, Err: &errb, JSON: true}, &Redactor{})
+	p.Step(true, "Cluster", 0)
+	p.Line("hello")
+	if outb.Len() != 0 || !strings.Contains(errb.String(), "✓ Cluster") || !strings.Contains(errb.String(), "hello") {
+		t.Fatalf("stdout %q, stderr %q", outb.String(), errb.String())
+	}
+}

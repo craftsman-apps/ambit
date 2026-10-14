@@ -131,6 +131,6 @@ func (a *app) root() *cobra.Command {
 	f.StringVar(&a.g.output, "output", "text", "output format: text or json (check and version only)")
 	f.BoolVar(&a.g.noColor, "no-color", false, "no colour in the output")
 	f.BoolVar(&a.g.verbose, "verbose", false, "print library logs (secrets are redacted)")
-	root.AddCommand(a.validateCmd(), a.versionCmd(), a.localCmd())
+	root.AddCommand(a.validateCmd(), a.versionCmd(), a.localCmd(), a.checkCmd())
 	return root
 }

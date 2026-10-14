@@ -77,24 +77,29 @@ func (p *Printer) Mark(kind string) string {
 	}
 }
 
+// text is where progress lines go: Out, or Err in JSON mode, so standard output carries only the JSON document.
+func (p *Printer) text() io.Writer {
+	if p.o.JSON {
+		return p.o.Err
+	}
+	return p.o.Out
+}
+
 // Step prints "✓ what (1.2s)" or "✗ what (1.2s)".
 func (p *Printer) Step(ok bool, what string, d time.Duration) {
 	kind := "fail"
 	if ok {
 		kind = "ok"
 	}
-	p.line(p.o.Out, fmt.Sprintf("%s %s (%s)", p.Mark(kind), what, d.Round(100*time.Millisecond)))
+	p.line(p.text(), fmt.Sprintf("%s %s (%s)", p.Mark(kind), what, d.Round(100*time.Millisecond)))
 }
 
 // Line prints one plain line.
-func (p *Printer) Line(format string, a ...any) { p.line(p.o.Out, fmt.Sprintf(format, a...)) }
+func (p *Printer) Line(format string, a ...any) { p.line(p.text(), fmt.Sprintf(format, a...)) }
 
 // Fail prints "✗ what — why" and, when next is set, "  next: next". In JSON mode it writes to Err.
 func (p *Printer) Fail(e *Error) {
-	w := p.o.Out
-	if p.o.JSON {
-		w = p.o.Err // standard output carries only the JSON document
-	}
+	w := p.text()
 	p.line(w, fmt.Sprintf("%s %s — %s", p.Mark("fail"), e.What, e.Why))
 	if e.Next != "" {
 		p.line(w, "  next: "+e.Next)

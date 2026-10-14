@@ -35,12 +35,19 @@ func main() {
 	consoleTools := flag.String("console-tools-url", "", "console tools listener (e.g. http://ambit-console.ambit-system.svc:8083); per-user servers' tools are read through it. Empty leaves them unlisted")
 	routerDep := flag.String("router-deployment", "", "ambit-router's Deployment (routers of type LLM); empty: not installed")
 	routerReplicas := flag.Int("router-replicas", 2, "ambit-router replicas while a router of type LLM exists")
+	accessMode := flag.String("access-mode", "enforce", "enforce: AccessRules decide; audit: every signed-in request is allowed and its record says whether the rules would have refused it")
+	activationTimeout := flag.Duration("activation-timeout", 2*time.Minute, "how long a mode switch or rules change waits for agentgateway to apply one step")
+	activationSettle := flag.Duration("activation-settle", 3*time.Second, "wait after agentgateway accepted a step, for the change to reach every gateway pod")
 	flag.Parse()
 	controller.RequireEmail = *requireEmail
 	ctrl.SetLogger(zap.New())
 	log := ctrl.Log.WithName("setup")
 	if ns == "" {
 		log.Info("AMBIT_NAMESPACE is required")
+		os.Exit(1)
+	}
+	if *accessMode != "enforce" && *accessMode != "audit" {
+		log.Info("--access-mode must be enforce or audit", "got", *accessMode)
 		os.Exit(1)
 	}
 	scheme := runtime.NewScheme()
@@ -84,7 +91,7 @@ func main() {
 	}
 	_ = mgr.AddHealthzCheck("healthz", healthz.Ping)
 	_ = mgr.AddReadyzCheck("readyz", healthz.Ping)
-	log.Info("starting", "namespace", ns, "llmRoute", *route)
+	log.Info("starting", "namespace", ns, "llmRoute", *route, "accessMode", *accessMode, "activationTimeout", *activationTimeout, "activationSettle", *activationSettle)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Error(err, "manager stopped")
 		os.Exit(1)

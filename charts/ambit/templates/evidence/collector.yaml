@@ -56,29 +56,33 @@ spec:
 ---
 # Every gateway request becomes one record: who (jwt.email, jwt.groups), what (MCP method, tool, server,
 # model, tokens), and the outcome (HTTP status, MCP error) — denied calls included.
-apiVersion: agentgateway.dev/v1alpha1
-kind: AgentgatewayPolicy
+# The static part of the AgentgatewayPolicy ambit-access-log. ambit-controller writes the policy from it, adding
+# ambit.accessMode, ambit.rulesVersion and, in audit-only mode, the "would be refused" fields: agentgateway uses
+# only the first access-log policy of a Gateway, so there must be exactly one.
+apiVersion: v1
+kind: ConfigMap
 metadata:
-  name: ambit-access-log
-spec:
-  targetRefs: [{ group: gateway.networking.k8s.io, kind: Gateway, name: ambit }]
-  frontend:
-    accessLog:
-      attributes:
-        add:
-          {{- $v := include "ambit.identity.validKey" . }}{{ $p := include "ambit.identity.presented" . }}
-          - { name: jwt.email, expression: {{ printf "(%s) ? apiKey.email : ((%s) ? \"\" : (has(jwt.email) ? jwt.email.trim().lowerAscii() : \"\"))" $v $p | quote }} }
-          - { name: jwt.groups, expression: {{ printf "(%s) ? apiKey.groups : ((%s) ? [] : (has(jwt.groups) ? jwt.groups : []))" $v $p | quote }} }
-          # Overrides agentgateway's built-in jwt.sub (log.rs suppresses built-ins named here): never a JWT's subject on a key request.
-          - { name: jwt.sub, expression: {{ printf "(%s) || (%s) ? \"\" : (has(jwt.sub) ? jwt.sub : \"\")" $v $p | quote }} }
-          - { name: ambit.key_id, expression: {{ printf "(%s) ? apiKey.keyId : \"\"" $v | quote }} }
-          - { name: ambit.identity, expression: {{ printf "(%s) ? \"key\" : ((%s) ? \"invalid key\" : \"jwt\")" $v $p | quote }} }
-          # The model name the client asked for (a ModelRouter such as "auto"); gen_ai.request.model is the one that answered.
-          - { name: ambit.router, expression: "metadata.agentgateway_user_model" }
-          # A classifier's label and its reason (set by ambit-router, PR 2); empty for type Rules.
-          - { name: ambit.route, expression: 'request.headers["x-ambit-route"]' }
-          - { name: ambit.routeReason, expression: 'request.headers["x-ambit-route-reason"]' }
-      otlp:
-        protocol: GRPC
-        backendRef: { name: ambit-otel-collector, port: 4317 }
+  name: ambit-access-log-base
+data:
+  spec.yaml: |
+    targetRefs: [{ group: gateway.networking.k8s.io, kind: Gateway, name: ambit }]
+    frontend:
+      accessLog:
+        attributes:
+          add:
+            {{- $v := include "ambit.identity.validKey" . }}{{ $p := include "ambit.identity.presented" . }}
+            - { name: jwt.email, expression: {{ printf "(%s) ? apiKey.email : ((%s) ? \"\" : (has(jwt.email) ? jwt.email.trim().lowerAscii() : \"\"))" $v $p | quote }} }
+            - { name: jwt.groups, expression: {{ printf "(%s) ? apiKey.groups : ((%s) ? [] : (has(jwt.groups) ? jwt.groups : []))" $v $p | quote }} }
+            # Overrides agentgateway's built-in jwt.sub (log.rs suppresses built-ins named here): never a JWT's subject on a key request.
+            - { name: jwt.sub, expression: {{ printf "(%s) || (%s) ? \"\" : (has(jwt.sub) ? jwt.sub : \"\")" $v $p | quote }} }
+            - { name: ambit.key_id, expression: {{ printf "(%s) ? apiKey.keyId : \"\"" $v | quote }} }
+            - { name: ambit.identity, expression: {{ printf "(%s) ? \"key\" : ((%s) ? \"invalid key\" : \"jwt\")" $v $p | quote }} }
+            # The model name the client asked for (a ModelRouter such as "auto"); gen_ai.request.model is the one that answered.
+            - { name: ambit.router, expression: "metadata.agentgateway_user_model" }
+            # A classifier's label and its reason (set by ambit-router, PR 2); empty for type Rules.
+            - { name: ambit.route, expression: 'request.headers["x-ambit-route"]' }
+            - { name: ambit.routeReason, expression: 'request.headers["x-ambit-route-reason"]' }
+        otlp:
+          protocol: GRPC
+          backendRef: { name: ambit-otel-collector, port: 4317 }
 {{- end }}

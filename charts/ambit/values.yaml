@@ -133,6 +133,17 @@ mcp:
     # Refuse gateway JWTs without a usable email claim. Offboarding, per-person budgets and audit are keyed by email; with false, such tokens are identified by their subject and offboarding cannot block them before they expire.
     requireEmail: true
 
+access:
+  # enforce: AccessRules decide (default).
+  # audit: every signed-in request to a model or MCP tool is allowed; each record says whether the
+  #        AccessRules in force at that moment would have refused it. Needs evidence.enabled=true.
+  mode: enforce
+  # A mode switch or a rules change waits, step by step, until agentgateway has accepted each written object
+  # (and no gateway pod rejected it), then activationSettle for the change to reach every gateway pod. After
+  # activationTimeout the change stops at that step and every AccessRule reports it.
+  activationTimeout: 120s
+  activationSettle: 3s
+
 evidence:
   # Audit trail: the gateway's access logs through an OpenTelemetry Collector into ClickHouse, searchable
   # in the console (Audit, Usage). Every call is kept, denied ones included, for `retention`.

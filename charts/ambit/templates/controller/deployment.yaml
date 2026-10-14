@@ -1,3 +1,5 @@
+{{- if not (has .Values.access.mode (list "enforce" "audit")) }}{{ fail "access.mode must be enforce or audit" }}{{ end }}
+{{- if and (eq .Values.access.mode "audit") (not .Values.evidence.enabled) }}{{ fail "access.mode=audit needs evidence.enabled=true: without the audit store, audit-only mode would allow everything and record nothing" }}{{ end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,6 +27,9 @@ spec:
             {{- end }}
             # One flag for both gateways: if either relaxes the email rule, the principal falls back to the JWT subject on both (the safe superset).
             - --require-email={{ and (ne (toString .Values.llm.jwt.requireEmail) "false") (ne (toString .Values.mcp.jwt.requireEmail) "false") }}
+            - --access-mode={{ .Values.access.mode }}
+            - --activation-timeout={{ .Values.access.activationTimeout }}
+            - --activation-settle={{ .Values.access.activationSettle }}
             - --tools-refresh={{ .Values.protection.toolsRefresh }}
             - --xds-addr={{ .Release.Name }}-agentgateway.{{ .Release.Namespace }}.svc:9978
             {{- if .Values.mcp.enabled }}

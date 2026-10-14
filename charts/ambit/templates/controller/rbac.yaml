@@ -19,6 +19,14 @@ rules:
   - apiGroups: [agentgateway.dev]
     resources: [agentgatewaymodels, agentgatewaybackends, agentgatewaypolicies]
     verbs: [get, list, watch, create, update, patch, delete]
+  # Activation gate: a mode switch or rules change waits until agentgateway reports each written object accepted
+  # (status) and no gateway pod rejected it (Warning Events with reason AgentGatewayNackError).
+  - apiGroups: [agentgateway.dev]
+    resources: [agentgatewaymodels/status, agentgatewaypolicies/status]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [get, list, watch]
   # The console's list of offboarded users (ambit-offboarded), turned into a gateway Deny rule.
   - apiGroups: [""]
     resources: [configmaps]

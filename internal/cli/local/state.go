@@ -47,7 +47,7 @@ func checkName(name string) error {
 	}
 	return out.Usage(fmt.Sprintf("%q is not a valid cluster name", name),
 		"a cluster name has lower-case letters, digits, '-' and '.', starts with a letter or digit, and has at most 63 characters",
-		"ambit local up --name ambit")
+		"pass a valid name, for example --name ambit-try")
 }
 
 func (s Store) Path(name string) string { return filepath.Join(s.Dir, name+".json") }

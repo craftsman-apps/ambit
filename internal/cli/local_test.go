@@ -130,3 +130,11 @@ func TestHiddenPromptWritesToItsWriter(t *testing.T) {
 		t.Fatalf("writer got %q", w.String())
 	}
 }
+
+// The development-build usage error keeps --name in its suggestion (final review, Minor 3).
+func TestDevBuildUsageKeepsName(t *testing.T) {
+	code, s := runCLI(t, &fakeHelm{}, "local", "up", "--name", "ambit-try")
+	if code != 2 || !strings.Contains(s, "next: ambit local up --name ambit-try --chart-dir") {
+		t.Fatalf("code %d, output\n%s", code, s)
+	}
+}

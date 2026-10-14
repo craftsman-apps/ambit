@@ -114,10 +114,18 @@ func (a *app) localEnv(f localFlags) (*local.Env, error) {
 	}, nil
 }
 
+// nameArg is " --name <name>" unless the name is the default, as in the suggestions of package local.
+func nameArg(name string) string {
+	if name == "ambit" {
+		return ""
+	}
+	return " --name " + name
+}
+
 func (a *app) localUp(ctx context.Context, f localFlags) error {
 	charts := local.Charts{Dir: f.chartDir, Repo: f.chartRepo, Version: version}
 	if version == "dev" && f.chartDir == "" {
-		return out.Usage("development build", "this ambit was built from source and has no chart version", "ambit local up --chart-dir <path to charts/ in a checkout>")
+		return out.Usage("development build", "this ambit was built from source and has no chart version", "ambit local up"+nameArg(f.name)+" --chart-dir <path to charts/ in a checkout>")
 	}
 	if f.chartDir != "" {
 		for _, c := range []string{"ambit", "ambit-crds"} {

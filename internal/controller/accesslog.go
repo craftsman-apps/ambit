@@ -31,9 +31,9 @@ const (
 	accessLogManager    = "ambit-controller"  // app.kubernetes.io/managed-by of the policy: not Helm's any more
 )
 
-// accessLogPolicy is the base spec with ambit.accessMode and ambit.rulesVersion appended, owned by the base
-// ConfigMap: evidence turned off removes the ConfigMap, and with it the policy.
-func accessLogPolicy(base *corev1.ConfigMap, mode, rulesVersion string) (*unstructured.Unstructured, error) {
+// accessLogPolicy is the base spec with ambit.accessMode, ambit.rulesVersion and the audit fields (audit mode only)
+// appended, owned by the base ConfigMap: evidence turned off removes the ConfigMap, and with it the policy.
+func accessLogPolicy(base *corev1.ConfigMap, mode, rulesVersion string, fields []any) (*unstructured.Unstructured, error) {
 	var spec map[string]any
 	if err := yaml.Unmarshal([]byte(base.Data["spec.yaml"]), &spec); err != nil {
 		return nil, fmt.Errorf("%s: spec.yaml: %w", AccessLogBase, err)
@@ -45,6 +45,7 @@ func accessLogPolicy(base *corev1.ConfigMap, mode, rulesVersion string) (*unstru
 	add = append(add,
 		map[string]any{"name": "ambit.accessMode", "expression": strconv.Quote(mode)},
 		map[string]any{"name": "ambit.rulesVersion", "expression": strconv.Quote(rulesVersion)})
+	add = append(add, fields...)
 	if err := unstructured.SetNestedSlice(spec, add, "frontend", "accessLog", "attributes", "add"); err != nil {
 		return nil, err
 	}
@@ -61,6 +62,8 @@ func RulesVersion(objs []*unstructured.Unstructured) string {
 	for _, o := range objs {
 		var path []string
 		switch {
+		case o.GetKind() == "AgentgatewayModel" && o.GetLabels()[RouterLabel] != "": // router access and lines
+			path = []string{"spec", "virtualModel"}
 		case o.GetKind() == "AgentgatewayModel":
 			path = []string{"spec", "policies", "authorization"}
 		case o.GetKind() == "AgentgatewayPolicy" && o.GetName() == MCPBackendName+"-access":
@@ -85,12 +88,12 @@ func (r *Reconciler) accessMode() string {
 
 // writeAccessLog writes ambit-access-log from the base ConfigMap, also over the chart's object of an older
 // version (Helm deletes that one after an upgrade; the watch then writes it again). No base: no policy.
-func (r *Reconciler) writeAccessLog(ctx context.Context, mode, rulesVersion string) ([]gated, error) {
+func (r *Reconciler) writeAccessLog(ctx context.Context, mode, rulesVersion string, fields []any) ([]gated, error) {
 	var base corev1.ConfigMap
 	if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: AccessLogBase}, &base); err != nil {
 		return nil, client.IgnoreNotFound(err)
 	}
-	p, err := accessLogPolicy(&base, mode, rulesVersion)
+	p, err := accessLogPolicy(&base, mode, rulesVersion, fields)
 	if err != nil {
 		return nil, err
 	}
@@ -102,12 +105,29 @@ func (r *Reconciler) writeAccessLog(ctx context.Context, mode, rulesVersion stri
 	if err := r.Patch(ctx, p, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
 		return nil, err
 	}
-	r.accessLog = &logState{mode, rulesVersion}
+	r.accessLog = &logState{mode, rulesVersion, fields}
 	return []gated{{kind: p.GetKind(), name: p.GetName(), generation: p.GetGeneration(), changed: p.GetGeneration() != current.GetGeneration()}}, nil
 }
 
+// auditRoom is how many attributes ambit.wouldRefuse may use beside the base's and the fixed ones; no base: 0.
+func (r *Reconciler) auditRoom(ctx context.Context) (int, error) {
+	var base corev1.ConfigMap
+	if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: AccessLogBase}, &base); err != nil {
+		return 0, client.IgnoreNotFound(err)
+	}
+	p, err := accessLogPolicy(&base, "", "", nil)
+	if err != nil {
+		return 0, err
+	}
+	add, _, _ := unstructured.NestedSlice(p.Object, "spec", "frontend", "accessLog", "attributes", "add")
+	return maxLogFields - (len(add) - 2) - fixedLogFields, nil
+}
+
 // logState is what ambit-access-log was last written with.
-type logState struct{ mode, rulesVersion string }
+type logState struct {
+	mode, rulesVersion string
+	fields             []any
+}
 
 // urgent applies what a change waiting for agentgateway must never hold back: the offboarding policy, from
 // ambit-offboarded as it is now, and ambit-access-log when it was deleted (with the values it was last written
@@ -129,7 +149,7 @@ func (r *Reconciler) urgent(ctx context.Context) error {
 	current.SetGroupVersionKind(AgentgatewayPolicyGVK)
 	err = r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: AccessLogPolicy}, current)
 	if apierrors.IsNotFound(err) {
-		_, err = r.writeAccessLog(ctx, r.accessLog.mode, r.accessLog.rulesVersion)
+		_, err = r.writeAccessLog(ctx, r.accessLog.mode, r.accessLog.rulesVersion, r.accessLog.fields)
 	}
 	return err
 }
@@ -246,7 +266,7 @@ func (s *AccessLogStartup) ensure(ctx context.Context) error {
 	case err != nil && !apierrors.IsNotFound(err):
 		return err
 	}
-	p, err := accessLogPolicy(&base, "enforce", RulesVersion(live))
+	p, err := accessLogPolicy(&base, "enforce", RulesVersion(live), nil)
 	if err != nil {
 		return err
 	}

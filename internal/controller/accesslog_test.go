@@ -2,8 +2,10 @@ package controller
 
 import (
 	"regexp"
+	"slices"
 	"testing"
 
+	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -28,7 +30,7 @@ func baseConfigMap(spec string) *corev1.ConfigMap {
 
 func TestAccessLogPolicyAddsModeAndRulesVersion(t *testing.T) {
 	base := baseConfigMap(testBase)
-	p, err := accessLogPolicy(base, "audit", "3f9a1c2b7d10")
+	p, err := accessLogPolicy(base, "audit", "3f9a1c2b7d10", []any{map[string]any{"name": "ambit.wouldRefuse", "expression": `"n/a"`}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +50,7 @@ func TestAccessLogPolicyAddsModeAndRulesVersion(t *testing.T) {
 		got = append(got, [2]string{m["name"].(string), m["expression"].(string)})
 	}
 	want := [][2]string{{"jwt.email", "jwt.email"}, {"ambit.router", "metadata.agentgateway_user_model"},
-		{"ambit.accessMode", `"audit"`}, {"ambit.rulesVersion", `"3f9a1c2b7d10"`}}
+		{"ambit.accessMode", `"audit"`}, {"ambit.rulesVersion", `"3f9a1c2b7d10"`}, {"ambit.wouldRefuse", `"n/a"`}}
 	if len(got) != len(want) {
 		t.Fatalf("attributes %v", got)
 	}
@@ -67,7 +69,7 @@ func TestAccessLogPolicyAddsModeAndRulesVersion(t *testing.T) {
 
 func TestAccessLogPolicyRefusesABrokenBase(t *testing.T) {
 	for name, spec := range map[string]string{"not YAML": "frontend: [", "empty": "", "no attribute list": "frontend: {accessLog: {}}"} {
-		if _, err := accessLogPolicy(baseConfigMap(spec), "enforce", "x"); err == nil {
+		if _, err := accessLogPolicy(baseConfigMap(spec), "enforce", "x", nil); err == nil {
 			t.Errorf("%s: want an error", name)
 		}
 	}
@@ -120,5 +122,17 @@ func TestRulesVersionFollowsTheAuthorizationExpressionsOnly(t *testing.T) {
 	}
 	if RulesVersion(nil) == "" {
 		t.Error("no objects: still a version")
+	}
+}
+
+// Router access and router lines are AccessRule decisions too (refuse:router, other-model).
+func TestRulesVersionFollowsRouterLines(t *testing.T) {
+	res, _ := compileWithRouters(catalog, grants, router("auto", "Rules", "gemma", v1.RouterRoute{Model: "sonnet", Keywords: []string{"Python"}}))
+	v := RulesVersion(res.Objects)
+	other := slices.Clone(grants)
+	other[0] = rule("auto-users", []string{"eng"}, false, "auto") // ml loses the router
+	res2, _ := compileWithRouters(catalog, other, router("auto", "Rules", "gemma", v1.RouterRoute{Model: "sonnet", Keywords: []string{"Python"}}))
+	if RulesVersion(res2.Objects) == v {
+		t.Error("a change of who may use the router kept the rules version")
 	}
 }

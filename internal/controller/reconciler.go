@@ -203,8 +203,23 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	routerConds, routerCfg := CompileRouters(routers.Items, models.Items, &res, r.Route, refused, ci)
 	// The rules version comes from the enforce expressions: the same rules have the same version in both modes.
 	mode, version := r.accessMode(), RulesVersion(res.Objects)
+	var fields []any // audit mode: what each access-log record says the rules in force would have done
+	var tooLarge *metav1.Condition
 	if mode == "audit" {
-		res.Objects = RelaxForAudit(res, refused, func(a *Result) { CompileRouters(routers.Items, models.Items, a, r.Route, refused, ci) })
+		room, err := r.auditRoom(ctx)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		var big *AuditTooLargeError
+		switch fields, err = AuditFields(res, room); {
+		case errors.As(err, &big): // the fields do not fit: keep enforcing, and say so on every AccessRule
+			c := cond(metav1.ConditionFalse, "AuditTooLarge", big.Error())
+			tooLarge, mode = &c, "enforce"
+		case err != nil:
+			return reconcile.Result{}, err
+		default:
+			res.Objects = RelaxForAudit(res, refused, func(a *Result) { CompileRouters(routers.Items, models.Items, a, r.Route, refused, ci) })
+		}
 	}
 	classify := dep != nil && len(routerCfg.Routers) > 0
 	if dep != nil {
@@ -253,13 +268,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			return w, err
 		}},
 		// After authorization: its rules version names the rules now written.
-		{"access log", func() ([]gated, error) { return r.writeAccessLog(ctx, mode, version) }},
+		{"access log", func() ([]gated, error) { return r.writeAccessLog(ctx, mode, version, fields) }},
 	}
 	if mode == "audit" { // the access log first: a request allowed in audit mode always finds its fields
 		steps[0], steps[1] = steps[1], steps[0]
 	}
 	if r.accessLog == nil && published.Data["mode"] != "" { // after a restart: the values in force
-		r.accessLog = &logState{published.Data["mode"], published.Data["rulesVersion"]}
+		r.accessLog = &logState{published.Data["mode"], published.Data["rulesVersion"], nil}
+		if published.Data["mode"] == "audit" { // the current rules' fields: the published ones are not kept
+			r.accessLog.fields = fields
+		}
 	}
 	stall, ran, err := r.runSteps(ctx, steps, changing, pending{Mode: mode, RulesVersion: version})
 	if err != nil {
@@ -279,6 +297,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		c := cond(metav1.ConditionFalse, reason, stall.msg)
 		stalled = &c
 		logger.Info("change not active in the gateway; stopped at this step", "step", r.stalled.step, "mode", mode, "rulesVersion", version, "error", stall.msg)
+	}
+	if stalled == nil {
+		stalled = tooLarge // replaces every AccessRule's condition, like a stall
 	}
 	// Stopped before authorization (audit order): nothing that grants access moves before the access log is active.
 	// Offboarding was applied on every poll of the gate; the deletions below still run.

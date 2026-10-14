@@ -236,8 +236,8 @@ func TestAuditOrderWritesTheAccessLogFirst(t *testing.T) {
 		}
 		return nil
 	})
-	if p, _ := accessLogOf(ctx, ns); attributes(p)["ambit.accessMode"] != `"audit"` {
-		t.Fatalf("attributes %v", attributes(p))
+	if p, _ := accessLogOf(ctx, ns); attributes(p)["ambit.accessMode"] != `"audit"` || attributes(p)["ambit.wouldRefuse"] == "" {
+		t.Fatalf("attributes %v: the audit fields must be there before authorization is relaxed", attributes(p))
 	}
 	playAgentgateway(t, ns, "AgentgatewayPolicy", AccessLogPolicy)
 	eventually(t, "authorization written", func() error { _, err := genGet(ctx, ns, "AgentgatewayModel", "gemma"); return err })
@@ -487,8 +487,12 @@ func TestAuditModeWritesTrueAndTheRuleSuffix(t *testing.T) {
 		t.Fatalf("enforce mode rule condition %+v", c)
 	}
 	m, _ := genGet(ctx, ns, "AgentgatewayModel", "gemma")
-	if e, _, _ := unstructured.NestedStringSlice(m.Object, "spec", "policies", "authorization", "policy", "matchExpressions"); len(e) != 1 || e[0] == "true" {
-		t.Fatalf("enforce mode expression %q", e)
+	enforceExpr, _, _ := unstructured.NestedStringSlice(m.Object, "spec", "policies", "authorization", "policy", "matchExpressions")
+	if len(enforceExpr) != 1 || enforceExpr[0] == "true" {
+		t.Fatalf("enforce mode expression %q", enforceExpr)
+	}
+	if p, _ := accessLogOf(ctx, ns); attributes(p)["ambit.wouldRefuse"] != "" || attributes(p)["ambit.wouldRefuseTool"] != "" {
+		t.Errorf("enforce mode access log has audit fields: %v", attributes(p))
 	}
 	r.AccessMode = "audit"
 	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
@@ -501,5 +505,49 @@ func TestAuditModeWritesTrueAndTheRuleSuffix(t *testing.T) {
 	c := ruleReady(t, ns, "eng")
 	if c.Status != metav1.ConditionTrue || c.Reason != "Compiled" || c.Message != "applied to every listed model and server; audit-only mode: recorded, not enforced" {
 		t.Errorf("audit mode rule condition %+v", c)
+	}
+	a := attributes(func() *unstructured.Unstructured { p, _ := accessLogOf(ctx, ns); return p }())
+	if a["ambit.accessMode"] != `"audit"` || !strings.Contains(a["ambit.wouldRefuse"], "("+enforceExpr[0]+")") || !strings.HasPrefix(a["ambit.wouldRefuseTool"], "has(mcp.tool)") {
+		t.Errorf("audit mode access log %v", a)
+	}
+}
+
+// The audit fields do not fit the access-log policy: the AccessRules say so (AuditTooLarge) and the rules stay
+// enforced, with no audit fields.
+func TestAuditTooLargeKeepsEnforcing(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-audit-too-large"
+	namespace(t, ns)
+	ctx := t.Context()
+	var attrs strings.Builder
+	for i := range maxLogFields - fixedLogFields { // no room left for ambit.wouldRefuse
+		fmt.Fprintf(&attrs, "        - { name: a%d, expression: \"jwt.email\" }\n", i)
+	}
+	base := baseConfigMap(strings.Replace(testBase, "      add:\n", "      add:\n"+attrs.String(), 1))
+	base.Namespace, base.UID = ns, ""
+	if err := envClient.Create(ctx, base); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range []client.Object{
+		&v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "gemma", Namespace: ns}, Spec: v1.ModelSpec{Provider: "Openrouter", Model: "google/gemma", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-k"}}},
+		&v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "eng", Namespace: ns}, Spec: v1.AccessRuleSpec{Groups: []string{"eng"}, Models: []string{"gemma"}}},
+	} {
+		if err := envClient.Create(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}, AccessMode: "audit"}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if c := ruleReady(t, ns, "eng"); c.Status != metav1.ConditionFalse || c.Reason != "AuditTooLarge" || !strings.Contains(c.Message, "the rules stay enforced") {
+		t.Errorf("rule condition %+v", c)
+	}
+	m, _ := genGet(ctx, ns, "AgentgatewayModel", "gemma")
+	if e, _, _ := unstructured.NestedStringSlice(m.Object, "spec", "policies", "authorization", "policy", "matchExpressions"); len(e) != 1 || e[0] == "true" {
+		t.Errorf("expression %q, want the enforcing one", e)
+	}
+	if p, _ := accessLogOf(ctx, ns); attributes(p)["ambit.accessMode"] != `"enforce"` {
+		t.Errorf("access log %v", attributes(p))
 	}
 }

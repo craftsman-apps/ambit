@@ -2,9 +2,13 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Shell, Status } from "@/components/shell";
+import { useConfig } from "@/api";
 import { csvRow } from "@/lib/csv";
+import { isStale, outcomeLabel, switchCheck, utcMinute, type Outcome, type WouldRefuse } from "@/lib/audit-mode";
 
-type Call = { time: string; email: string; route: string; method: string; server: string; tool: string; model: string; status: string; error: string; inputTokens: number; outputTokens: number; router: string; label: string; labelReason: string };
+type Call = { time: string; email: string; route: string; method: string; server: string; tool: string; model: string; status: string; error: string; inputTokens: number; outputTokens: number; router: string; label: string; labelReason: string;
+  // Audit-only mode: the verdict written when the request was served, the rules it was judged by, and its class.
+  accessMode?: string; mark?: string; rulesVersion?: string; outcome?: Outcome };
 // A routed call shows the router and the model that answered, e.g. "auto → mock/echo (coding)".
 const target = (c: Call) => c.router ? `${c.router} → ${c.model}${c.label || c.labelReason ? ` (${c.label || c.labelReason})` : ""}` : (c.server || c.model);
 type Usage = { day: string; group: string; requests: number; inputTokens: number; outputTokens: number; cost?: number; unpricedModels?: string[] };
@@ -29,11 +33,16 @@ const failed = (c: Call) => !refused(c) && (c.error !== "" || Number(c.status) >
 const isCall = (c: Call) => c.method === "tools/call" || c.method === "";
 const utc = (t: string) => new Date(t).toISOString().replace("T", " ").slice(0, 19);
 const what = (c: Call) => c.method ? `${c.method}${c.tool ? ` · ${c.tool}` : ""}` : c.model || /llm$/.test(c.route) ? "LLM request" : c.route;
-const outcome = (c: Call) => refused(c) ? "Refused by policy" : failed(c) ? "Failed" : "OK";
+// In audit-only mode the server classifies a record (outcome); the page's own reading applies to every other record.
+const outcome = (c: Call) => {
+  const o = outcomeLabel(c.outcome, c.status);
+  if (o) return o.text.replace(/ \(\d+\)$/, "");
+  return refused(c) ? "Refused by policy" : failed(c) ? "Failed" : "OK";
+};
 
 function csv(calls: Call[]) {
-  const rows = calls.map((c) => csvRow([utc(c.time), c.email, what(c), target(c), outcome(c), c.status, c.error, c.inputTokens, c.outputTokens]));
-  return ["time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens", ...rows].join("\n") + "\n";
+  const rows = calls.map((c) => csvRow([utc(c.time), c.email, what(c), target(c), outcome(c), c.status, c.error, c.inputTokens, c.outputTokens, c.mark ?? "", c.rulesVersion ?? ""]));
+  return ["time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version", ...rows].join("\n") + "\n";
 }
 function download(name: string, text: string) {
   const a = document.createElement("a");
@@ -48,12 +57,15 @@ export function AuditPage() {
   const [form, setForm] = useState({ email: "", from: monthAgo(), to: today() });
   const [q, setQ] = useState<typeof form | null>(null);
   const [protocol, setProtocol] = useState(false);
+  const [onlyWouldRefuse, setOnlyWouldRefuse] = useState(false);
+  const audit = useConfig().data?.accessMode === "audit";
   const res = useQuery({
     queryKey: ["audit", q], enabled: !!q, retry: false,
     queryFn: () => get<{ calls: Call[]; limited: boolean }>(`/api/audit?${new URLSearchParams({ email: q!.email, from: q!.from, to: nextDay(q!.to) })}`),
   });
   const all = res.data?.calls ?? [];
-  const shown = protocol ? all : all.filter(isCall);
+  const hasVerdicts = all.some((c) => c.outcome === "would-refuse" || c.outcome === "other-model" || c.outcome === "mark-missing");
+  const shown = (protocol ? all : all.filter(isCall)).filter((c) => !onlyWouldRefuse || c.outcome === "would-refuse");
   const search = (e: React.FormEvent) => {
     e.preventDefault();
     // The same search again must ask again (after an error, or for new calls), not reuse the answer.
@@ -72,6 +84,7 @@ export function AuditPage() {
           <label><span className="mb-1 block text-muted">To (UTC, inclusive)</span><input id="audit-to" type="date" className={field} value={form.to} onChange={(e) => setForm({ ...form, to: e.target.value })} /></label>
           <Button type="submit" className="w-auto" disabled={res.isFetching}>{res.isFetching ? "Searching…" : "Search"}</Button>
         </form>
+        <WouldRefuseSummary />
         {res.isError && !res.isFetching && <p className="text-bad" role="alert">{res.error.message}</p>}
         {res.data && !res.isError && (
           <>
@@ -80,6 +93,8 @@ export function AuditPage() {
                 {all.filter(isCall).length} tool and model calls: {all.filter((c) => isCall(c) && refused(c)).length} refused by policy, {all.filter((c) => isCall(c) && failed(c)).length} failed
                 {res.data.limited && " — showing the newest 1,000; narrow the period"}.
               </span>
+              {(audit || hasVerdicts) && <label className="inline-flex items-center gap-1.5"><input id="audit-would-refuse" type="checkbox" checked={onlyWouldRefuse} onChange={(e) => setOnlyWouldRefuse(e.target.checked)} />
+                Only calls the rules would refuse</label>}
               <label className="inline-flex items-center gap-1.5"><input id="audit-protocol" type="checkbox" checked={protocol} onChange={(e) => setProtocol(e.target.checked)} />
                 Show protocol messages ({all.length - all.filter(isCall).length})</label>
               <Button variant="outline" className="ml-auto w-auto" disabled={all.length === 0}
@@ -94,8 +109,7 @@ export function AuditPage() {
                       <td className="whitespace-nowrap px-3 py-2 font-mono text-small">{utc(c.time)}</td>
                       <td className="px-3 py-2 font-mono">{what(c)}</td>
                       <td className="px-3 py-2 font-mono text-small">{target(c)}</td>
-                      <td className="px-3 py-2">{refused(c) ? <Status ready="False" text={`Refused by policy (${c.status})`} />
-                        : failed(c) ? <Status ready="Unknown" text={`Failed (${c.status})`} /> : <Status ready="True" text={`OK (${c.status})`} />}
+                      <td className="px-3 py-2"><OutcomeCell c={c} />
                         {c.error && <span className="block text-small text-muted">{c.error}</span>}</td>
                       <td className="px-3 py-2 font-mono text-small tabular-nums">{c.inputTokens || c.outputTokens ? `${c.inputTokens} in / ${c.outputTokens} out` : ""}</td>
                     </tr>
@@ -108,6 +122,70 @@ export function AuditPage() {
         )}
       </section>
     </Shell>
+  );
+}
+
+// The Outcome cell. An audit-only verdict (would be refused, mark missing) is shown with the status the person got.
+function OutcomeCell({ c }: { c: Call }) {
+  const o = outcomeLabel(c.outcome, c.status);
+  if (o) return <>
+    <Status ready={o.tone === "bad" ? "False" : "Unknown"} text={o.text} />
+    {o.note && <span className="block text-small text-muted">{o.note}</span>}
+    {c.outcome === "would-refuse" && <span className="block text-small text-muted">Served in audit-only mode; judged when it was served ({c.mark})</span>}
+  </>;
+  return refused(c) ? <Status ready="False" text={`Refused by policy (${c.status})`} />
+    : failed(c) ? <Status ready="Unknown" text={`Failed (${c.status})`} /> : <Status ready="True" text={`OK (${c.status})`} />;
+}
+
+const num = (n: number) => n.toLocaleString("en-US");
+
+// While audit-only is on, and for 30 days after the last audit-mode record: how many requests the rules in force
+// when each was served would have refused. Every mark was computed at request time by the gateway.
+function WouldRefuseSummary() {
+  const cfg = useConfig().data;
+  const [current, setCurrent] = useState(false);
+  const now = new Date();
+  const from = new Date(now.getTime() - 7 * 864e5), to = new Date(now.getTime() + 60e3);
+  const q = useQuery({
+    queryKey: ["would-refuse", current, cfg?.rulesVersion], retry: false, refetchInterval: 60_000,
+    queryFn: () => get<WouldRefuse>(`/api/audit/would-refuse?${new URLSearchParams({ from: from.toISOString(), to: to.toISOString(), rules: current ? "current" : "all" })}`),
+  });
+  const on = cfg?.accessMode === "audit";
+  const s = q.data;
+  const recent = !!s?.newest && now.getTime() - new Date(s.newest).getTime() < 30 * 864e5;
+  if (q.isError) return on ? <p className="text-bad" role="alert">{q.error.message}</p> : null;
+  if (!s || !(on || recent)) return null;
+  const check = switchCheck(s, cfg?.rulesSince, now);
+  return (
+    <div className="space-y-2 rounded-md border border-line p-4" data-testid="would-refuse-summary">
+      <p><strong data-testid="would-refuse-headline">Requests from {utcMinute(s.from)} to {utcMinute(s.to)} (UTC): {num(s.requests)} requests from {num(s.people)} people would have been refused.</strong>{" "}
+        <span data-testid="would-refuse-newest">{s.newest ? `Newest record: ${utcMinute(s.newest)}.` : "No audit-mode record in this period."}</span>{" "}
+        Each mark was computed when the request was served, with the rules in force at that time.</p>
+      <label className="inline-flex items-center gap-1.5"><input id="would-refuse-current" type="checkbox" checked={current} onChange={(e) => setCurrent(e.target.checked)} />
+        Only since the current rules{cfg?.rulesVersion ? ` (version ${cfg.rulesVersion}${cfg.rulesSince ? `, since ${utcMinute(cfg.rulesSince)}` : ""})` : ""}</label>
+      {check && <p data-testid="switch-check">{check}</p>}
+      {on && isStale(s.newest, now) && <p className="text-warn" role="alert" data-testid="stale-warning">
+        No record in the last hour. If people used Ambit in that time, check the audit pipeline: <code className="font-mono">ambit check --production --deep</code>.</p>}
+      {s.groups.filter((g) => g.outcome === "would-refuse").length > 0 && (
+        <table className="w-full border-collapse text-body">
+          <thead><tr className="border-b border-line"><th className={th}>Group</th><th className={th}>Model or tool</th><th className={th}>Requests</th><th className={th}>People</th></tr></thead>
+          <tbody>
+            {s.groups.filter((g) => g.outcome === "would-refuse").map((g) => (
+              <tr key={g.group + g.target} className="border-b border-line-soft">
+                <td className="px-3 py-2">{g.group}</td><td className="px-3 py-2 font-mono text-small">{g.target}</td>
+                <td className="px-3 py-2 tabular-nums">{num(g.requests)}</td><td className="px-3 py-2 tabular-nums">{num(g.people)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {s.limited && <p className="text-small text-muted">Showing the first 10,000 rows.</p>}
+      <p className="text-small text-muted">A person in two groups counts in both.</p>
+      <p className={s.markMissing > 0 ? "text-warn" : "text-muted"} data-testid="mark-missing-line">
+        Call records with a missing or failed mark: {num(s.markMissing)} (not counted above).
+        {s.markMissing > 0 && " A rule expression failed, or the audit fields were not active yet; run `ambit check --production` and report the rule."}</p>
+      <p className="text-muted" data-testid="refused-line">Refused for real (sign-in, budget, unpriced model): {num(s.refused)}</p>
+    </div>
   );
 }
 

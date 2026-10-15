@@ -125,7 +125,8 @@ func TestTestModelServer(t *testing.T) {
 	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
 	url := fmt.Sprintf("http://127.0.0.1:%d/v1/chat/completions", port)
 	post := func(body string) *http.Response {
-		deadline := time.Now().Add(10 * time.Second)
+		// Python can need more than 10 s to start on a loaded Windows runner (run 38681490489: 17 s, refused).
+		deadline := time.Now().Add(60 * time.Second)
 		for {
 			r, err := (&http.Client{Timeout: 3 * time.Second}).Post(url, "application/json", strings.NewReader(body))
 			if err == nil {

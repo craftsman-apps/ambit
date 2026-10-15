@@ -226,3 +226,27 @@ func TestWouldRefuseChunks(t *testing.T) {
 		t.Errorf("err %v, want AuditTooLarge naming %d attributes", err, len(chunks))
 	}
 }
+
+// One branch alone above 16000 characters cannot be split: AuditTooLarge names the branch, its size and the limit,
+// and says what to change.
+func TestWouldRefuseOneBranchTooLarge(t *testing.T) {
+	var groups []string
+	for g := range 600 {
+		groups = append(groups, fmt.Sprintf("team-%03d-with-a-long-name", g))
+	}
+	res := Compile([]v1.Model{model("big", "vendor/big")}, nil, []v1.AccessRule{rule("r-big", groups, false, "big")}, route)
+	_, err := AuditFields(res, 50)
+	var tooLarge *AuditTooLargeError
+	if !errors.As(err, &tooLarge) {
+		t.Fatalf("err %v, want AuditTooLarge", err)
+	}
+	msg := err.Error()
+	for _, want := range []string{`model "vendor/big"`, "16000", "the rules stay enforced", "AccessRules"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message %q does not say %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, "attributes") {
+		t.Errorf("message %q counts attributes; the branch does not fit one field", msg)
+	}
+}

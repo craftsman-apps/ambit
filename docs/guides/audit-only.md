@@ -96,7 +96,7 @@ If no record arrives for an hour while audit-only mode is on, the summary shows 
 
 Use the table to decide which groups need which models and tools, and write the `AccessRule` objects as in [Different models for different teams](models-per-team.md) and [Give an agent tools and apps](mcp-apps.md). Each change of rules gets a new version, and the controller waits for agentgateway to apply it before it publishes the version. If agentgateway does not apply a rules change within 120 seconds, or the API server refuses an object, every AccessRule shows `Ready=False` with the reason `RulesNotActive` and the cause, and the old version stays published.
 
-If the rules produce more "would be refused" fields than the access-log policy has room for (64 attributes in total), every AccessRule shows `Ready=False` with the reason `AuditTooLarge`, and Ambit keeps enforcing. Reduce the number of models, or switch to enforcing.
+If the rules produce more "would be refused" fields than the access-log policy has room for (64 attributes in total), every AccessRule shows `Ready=False` with the reason `AuditTooLarge`, and Ambit keeps enforcing. Reduce the number of models, or switch to enforcing. The same happens when the rules for one model or one router are longer than one field holds (16000 characters): the message names that model or router and its size. Grant it to fewer groups and people, give a router fewer targets, or switch to enforcing.
 
 ## 4. Switch to enforcing
 

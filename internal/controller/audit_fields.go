@@ -22,10 +22,19 @@ const (
 	fixedLogFields = 4
 )
 
-// AuditTooLargeError: ambit.wouldRefuse needs more attributes than the access-log policy has room for.
-type AuditTooLargeError struct{ need, room int }
+// AuditTooLargeError: ambit.wouldRefuse needs more attributes than the access-log policy has room for, or one
+// branch (branch, of size characters) is longer than one field holds.
+type AuditTooLargeError struct {
+	need, room int
+	branch     string
+	size       int
+}
 
 func (e *AuditTooLargeError) Error() string {
+	if e.branch != "" {
+		return fmt.Sprintf("the audit-only field for %s is %d characters, and one access-log field holds at most %d; the rules stay enforced. "+
+			"To use audit-only mode, grant it in AccessRules to fewer groups and people (for a router: give it fewer targets)", e.branch, e.size, auditChunk)
+	}
 	return fmt.Sprintf("the audit-only fields need %d attributes for ambit.wouldRefuse, and the access-log policy has room for %d; the rules stay enforced", e.need, e.room)
 }
 
@@ -58,7 +67,7 @@ func AuditFields(res Result, room int) ([]any, error) {
 	}
 	// Routers first: a routed record's llm.requestModel is the model that answered, so the model branches would
 	// judge it as a direct call. The router name the client asked for is metadata.agentgateway_user_model.
-	var branches []string
+	var branches, names []string // names: what each branch is for, in AuditTooLarge
 	slices.SortFunc(routers, func(a, b *unstructured.Unstructured) int { return strings.Compare(a.GetName(), b.GetName()) })
 	for _, vm := range routers {
 		wire, _, _ := unstructured.NestedString(vm.Object, "spec", "match", "model")
@@ -76,6 +85,7 @@ func AuditFields(res Result, room int) ([]any, error) {
 		branches = append(branches, fmt.Sprintf(`has(metadata.agentgateway_user_model) && metadata.agentgateway_user_model == %s ? `+
 			`((%s) ? ((%sfalse) ? "allow" : ((%s) ? "other-model" : "refuse:model")) : "refuse:router") : `,
 			strconv.Quote(wire), CEL(res.Access[vm.GetLabels()[RouterLabel]]), answering, orFalse(final[def])))
+		names = append(names, "router "+strconv.Quote(vm.GetLabels()[RouterLabel]))
 	}
 	specs := make([]string, 0, len(bySpec))
 	for s := range bySpec {
@@ -85,21 +95,20 @@ func AuditFields(res Result, room int) ([]any, error) {
 	for _, s := range specs {
 		branches = append(branches, fmt.Sprintf(`llm.requestModel == %s ? ((%s) ? "allow" : "refuse:model") : `,
 			strconv.Quote(s), "("+strings.Join(bySpec[s], ") || (")+")"))
+		names = append(names, "model "+strconv.Quote(s))
 	}
 	var chunks []string
 	cur := ""
-	for _, b := range branches {
+	for i, b := range branches {
+		if len(b)+len(`"n/a"`) > auditChunk { // one branch alone is too long to split
+			return nil, &AuditTooLargeError{branch: names[i], size: len(b) + len(`"n/a"`)}
+		}
 		if cur != "" && len(cur)+len(b)+len(`"n/a"`) > auditChunk {
 			chunks, cur = append(chunks, cur+`"n/a"`), ""
 		}
 		cur += b
 	}
 	chunks = append(chunks, cur+`"n/a"`)
-	for _, c := range chunks {
-		if len(c) > auditChunk { // one branch alone is too long to split
-			return nil, &AuditTooLargeError{need: len(chunks) + 1, room: room}
-		}
-	}
 	if len(chunks) > room {
 		return nil, &AuditTooLargeError{need: len(chunks), room: room}
 	}

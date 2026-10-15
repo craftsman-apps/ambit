@@ -2,6 +2,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -47,12 +48,12 @@ func main() {
 		os.Exit(1)
 	}
 	if *accessMode != "enforce" && *accessMode != "audit" {
-		log.Info("--access-mode must be enforce or audit", "got", *accessMode)
+		log.Error(errors.New("--access-mode must be enforce or audit"), "bad flag", "got", *accessMode)
 		os.Exit(1)
 	}
 	activation := &controller.Activation{Timeout: *activationTimeout, Settle: *activationSettle}
 	if err := activation.Check(); err != nil {
-		log.Info(err.Error())
+		log.Error(err, "bad flag")
 		os.Exit(1)
 	}
 	scheme := runtime.NewScheme()

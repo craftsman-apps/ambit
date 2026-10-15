@@ -200,7 +200,7 @@ val=$(kubectl -n "$NS" get sa "$sa" -o jsonpath='{.metadata.annotations.ambitpro
 [[ -n "$sa" && "$val" == kind ]] || fail "12 gateway ServiceAccount '$sa' annotation ambitproject.dev/test is '$val', want 'kind'"
 cleanup12; trap 'on_exit $?' EXIT
 pass "12 Azure and Bedrock (keys and AWS identity) accepted by agentgateway; rule compiles; budget charges their prices; gateway ServiceAccount annotated"
-# 13 · Vertex AI Models (a key file that is not real, and the gateway's identity; no request reaches Google):
+# 13 · Vertex AI Models (a key file that is not real but has the fields agentgateway checks, so the activation gate sees no NACK, and the gateway's identity; no request reaches Google):
 # agentgateway accepts both, a rule names them, the dollar budget charges their prices.
 cleanup13() {
   kubectl -n "$NS" delete "models.$G" test-vertex-key test-vertex-identity --ignore-not-found >/dev/null 2>&1 || true
@@ -209,7 +209,7 @@ cleanup13() {
   kubectl -n "$NS" delete secret ambit-llm-gcp-test --ignore-not-found >/dev/null 2>&1 || true
 }
 trap 'rc=$?; cleanup13; on_exit $rc' EXIT
-kubectl -n "$NS" create secret generic ambit-llm-gcp-test --from-literal=credentials.json='{}' --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n "$NS" create secret generic ambit-llm-gcp-test --from-literal=credentials.json='{"type":"authorized_user","client_id":"test","client_secret":"test","refresh_token":"test"}' --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 kubectl -n "$NS" apply -f - >/dev/null <<YAML
 apiVersion: $G/v1alpha1
 kind: Model

@@ -2,8 +2,10 @@ import { readFileSync } from "node:fs";
 import { expect, test, type Page, type Route } from "@playwright/test";
 
 // Audit-only mode in the console. Every API answer is a mock (page.route) and the clock is fixed, so this needs no
-// cluster, no sign-in and no data: it runs against any server that serves the console page, e.g. `npm run dev`
-// with AMBIT_URL=http://localhost:5173. AMBIT_SCREENSHOTS_DIR writes the screens for review.
+// data: it runs against `npm run dev` with AMBIT_URL=http://localhost:5173. The real console sends a person without a
+// session to /login, so against a console (make test-ui) it first signs in as the bootstrap admin
+// (AMBIT_ADMIN_PASSWORD). AMBIT_SCREENSHOTS_DIR writes the screens for review.
+const password = process.env.AMBIT_ADMIN_PASSWORD ?? "";
 const NOW = new Date("2026-10-15T10:00:00Z");
 
 type Config = Record<string, unknown>;
@@ -59,6 +61,16 @@ async function search(page: Page) {
 }
 
 test.use({ viewport: { width: 1280, height: 800 }, colorScheme: "light" });
+
+test.beforeEach(async ({ page }) => {
+  if (!password) return;
+  await page.goto("/");
+  await page.getByRole("link", { name: "Sign in with bootstrap admin" }).click();
+  await page.getByLabel("Email Address").fill("admin@ambit.local");
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Login" }).click();
+  await expect(page.getByTestId("signed-in-as")).toHaveText("Signed in as admin (bootstrap)");
+});
 
 test("the banner shows only in audit-only mode, with the days", async ({ page }) => {
   await setup(page, { config: audit });

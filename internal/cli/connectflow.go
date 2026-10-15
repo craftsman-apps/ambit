@@ -323,26 +323,9 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 		return err
 	}
 
-	// 7: store the key, write the files, then write the state file once. A failed write takes a key stored in this
-	// run out again, so the key, the files and the state file agree after a failure.
-	newStore := ""
-	if !reused {
-		store, warning, err := connect.Put(d.Keychain, d.File, d.GOOS, f.keyStore, url, key)
-		if err != nil {
-			return &out.Error{What: "store the key", Why: err.Error(), Next: "unlock your keychain, or run the command again with --key-store file", Code: out.ExitFailed}
-		}
-		if warning != "" {
-			p.Line("%s %s", p.Mark("warn"), warning)
-		}
-		kr := st.Keys[url]
-		kr.Store, newStore = store, store
-		st.SetKey(url, kr)
-	}
-	if f.consoleURL != "" {
-		kr := st.Keys[url]
-		kr.ConsoleURL = strings.TrimRight(f.consoleURL, "/")
-		st.SetKey(url, kr)
-	}
+	// 7: save the plan marked pending, store the key, write the files, then save the state file again without the
+	// mark. A crash or a failed save in between leaves a record that disconnect (and connect) can finish or undo.
+	// A failed write takes a key stored in this run out again, so the key, the files and the state file agree.
 	var changes []connect.FileChange
 	var written []*job
 	for _, j := range jobs {
@@ -350,15 +333,70 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 			changes, written = append(changes, c), append(written, j)
 		}
 	}
+	newStore := ""
+	oldTool, hadTool := st.Tools[tool]
+	oldKey, hadKey := st.Keys[url]
+	if !reused {
+		newStore = f.keyStore
+		if newStore == "" {
+			newStore = connect.StoreKeychain
+		}
+		st.SetKey(url, connect.KeyRecord{Store: newStore})
+	}
+	if f.consoleURL != "" {
+		kr := st.Keys[url]
+		kr.ConsoleURL = strings.TrimRight(f.consoleURL, "/")
+		st.SetKey(url, kr)
+	}
+	st.Tools[tool] = toolRecord(st, tool, url, jobs, true)
+	if err := d.save(st); err != nil {
+		return err
+	}
+	undoPending := func() { // the plan is not on disk any more: put the state file back as it was
+		if hadTool {
+			st.Tools[tool] = oldTool
+		} else {
+			delete(st.Tools, tool)
+		}
+		if hadKey {
+			st.Keys[url] = oldKey
+		} else {
+			delete(st.Keys, url)
+		}
+		_ = d.save(st)
+	}
+	if !reused {
+		store, warning, err := connect.Put(d.Keychain, d.File, d.GOOS, f.keyStore, url, key)
+		if err != nil {
+			e := &out.Error{What: "store the key", Why: err.Error(), Next: "unlock your keychain, or run the command again with --key-store file", Code: out.ExitFailed}
+			var te *connect.TimeoutError
+			if errors.As(err, &te) {
+				e.Why += "; the key may still be stored"
+				e.Next = "run ambit disconnect " + tool + " to remove it, then run connect again (or use --key-store file)"
+				return e // the plan stays pending, so that disconnect finds the key
+			}
+			undoPending()
+			return e
+		}
+		if warning != "" {
+			p.Line("%s %s", p.Mark("warn"), warning)
+		}
+		if store != newStore {
+			kr := st.Keys[url]
+			kr.Store, newStore = store, store
+			st.SetKey(url, kr)
+		}
+	}
 	results, err := connect.WriteAll(changes)
 	if err != nil {
 		if newStore != "" {
 			if s, ok := d.store(st, url); ok {
 				if derr := s.Delete(url); derr != nil {
-					err = fmt.Errorf("%w; the key stored in this run could not be deleted again (%v)", err, derr)
+					return fmt.Errorf("%w; the key stored in this run could not be deleted again (%v); ambit disconnect %s removes it", err, derr, tool)
 				}
 			}
 		}
+		undoPending()
 		return err
 	}
 	if newStore != "" {
@@ -372,17 +410,8 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 		}
 		p.Line("%s wrote %s", p.Mark("ok"), j.path)
 	}
-	rec := connect.ToolRecord{URL: url}
-	for _, j := range jobs {
-		rec.Files = append(rec.Files, j.plan.Record)
-	}
-	for _, old := range st.Tools[tool].Files { // a file of an earlier connect that this one does not use is still Ambit's
-		if !containsPath(jobs, old.Path) {
-			rec.Files = append(rec.Files, old)
-		}
-	}
-	st.Tools[tool] = rec
-	if err := st.Save(d.StatePath); err != nil {
+	st.Tools[tool] = toolRecord(st, tool, url, jobs, false)
+	if err := d.save(st); err != nil {
 		return err
 	}
 
@@ -394,6 +423,21 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	}
 	a.nextSteps(tool, url, shell)
 	return nil
+}
+
+// toolRecord is what the state file says about tool after this connect. A file of an earlier connect that this one
+// does not use is still Ambit's.
+func toolRecord(st *connect.State, tool, url string, jobs []*job, pending bool) connect.ToolRecord {
+	rec := connect.ToolRecord{URL: url, Pending: pending}
+	for _, j := range jobs {
+		rec.Files = append(rec.Files, j.plan.Record)
+	}
+	for _, old := range st.Tools[tool].Files {
+		if !containsPath(jobs, old.Path) {
+			rec.Files = append(rec.Files, old)
+		}
+	}
+	return rec
 }
 
 func containsPath(jobs []*job, path string) bool {
@@ -652,9 +696,11 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 		}
 	}
 	urls := map[string]bool{}
+	pendingURLs := map[string]bool{} // an interrupted connect: the key may be in either store
 	for _, tj := range all {
 		if tr, ok := st.Tools[tj.tool]; ok {
 			urls[tr.URL] = true
+			pendingURLs[tr.URL] = pendingURLs[tr.URL] || tr.Pending
 			delete(st.Tools, tj.tool)
 		}
 	}
@@ -684,7 +730,14 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 		if st.UsesURL(u, "") || f.keepKey || !hasKey {
 			continue
 		}
+		stores := []connect.Store{}
 		if s, ok := d.store(st, u); ok {
+			stores = append(stores, s)
+		}
+		if pendingURLs[u] {
+			stores = append(stores, d.Keychain, d.File)
+		}
+		for _, s := range stores {
 			if err := s.Delete(u); err != nil {
 				return &out.Error{What: "delete the stored key of " + u, Why: err.Error(), Next: "unlock your keychain, then run the command again", Code: out.ExitFailed}
 			}

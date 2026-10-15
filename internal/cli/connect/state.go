@@ -26,6 +26,9 @@ type KeyRecord struct {
 type ToolRecord struct {
 	URL   string       `json:"url"`
 	Files []FileRecord `json:"files"`
+	// Pending means connect saved the plan before it stored the key and wrote the files, and did not finish. The
+	// files and the key may or may not exist; disconnect removes whatever is there.
+	Pending bool `json:"pending,omitempty"`
 }
 
 // FileRecord is one config file a tool's connect wrote. Entries is for JSON files, Blocks for text files.

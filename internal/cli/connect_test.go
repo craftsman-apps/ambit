@@ -43,7 +43,9 @@ type connectRig struct {
 	stderr    bytes.Buffer
 	tty       bool
 	stdin     string
-	lockedKC  bool // deleting from the keychain fails
+	lockedKC  bool                               // deleting from the keychain fails
+	keychain  connect.Store                      // replaces the keychain when set
+	saveState func(*connect.State, string) error // replaces saving the state file when set
 }
 
 func newRig(t *testing.T) *connectRig {
@@ -64,7 +66,10 @@ func (r *connectRig) run(args ...string) int {
 	if r.lockedKC {
 		keychain = failingDelete{r.kc}
 	}
-	d := &connectDeps{Keychain: keychain, File: r.file, StatePath: r.statePath, GOOS: "linux", Home: r.home,
+	if r.keychain != nil {
+		keychain = r.keychain
+	}
+	d := &connectDeps{Keychain: keychain, SaveState: r.saveState, File: r.file, StatePath: r.statePath, GOOS: "linux", Home: r.home,
 		Getenv:  func(k string) string { return r.env[k] },
 		Bin:     connect.BinEnv{Executable: func() (string, error) { return fakeAmbit, nil }, LookPath: func(string) (string, error) { return "", errors.New("not on PATH") }, GOOS: "linux"},
 		Profile: func() (string, error) { return "", errors.New("no PowerShell here") },

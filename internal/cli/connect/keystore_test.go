@@ -174,3 +174,14 @@ func TestPut(t *testing.T) {
 		t.Fatal("an unknown --key-store value must fail")
 	}
 }
+
+func TestKeychainSetTimeoutIsATimeoutError(t *testing.T) {
+	release := make(chan struct{})
+	defer close(release)
+	k := Keychain{WriteTimeout: 20 * time.Millisecond, set: func(string, string, string) error { <-release; return nil }}
+	err := k.Set("https://llm.example.com", testKey)
+	var te *TimeoutError
+	if !errors.As(err, &te) || !strings.Contains(err.Error(), "did not answer within 20ms") {
+		t.Fatalf("err = %v", err)
+	}
+}

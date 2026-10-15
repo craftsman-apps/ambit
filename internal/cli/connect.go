@@ -39,6 +39,14 @@ type connectDeps struct {
 	CallLimit      time.Duration                                            // how long the test call waits for a 200
 	CallEvery      time.Duration                                            // between two tries
 	ReadSecret     func(ctx context.Context, prompt string) (string, error) // nil: there is no terminal to ask in
+	SaveState      func(st *connect.State, path string) error               // nil: st.Save; tests replace it to interrupt connect
+}
+
+func (d *connectDeps) save(st *connect.State) error {
+	if d.SaveState != nil {
+		return d.SaveState(st, d.StatePath)
+	}
+	return st.Save(d.StatePath)
 }
 
 func (a *app) connectEnv(service string) (*connectDeps, error) {

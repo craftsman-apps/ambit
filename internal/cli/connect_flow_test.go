@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/craftsman-apps/ambit/internal/cli/connect"
 )
@@ -651,3 +653,139 @@ func TestDisconnectAllWithNothingRecordedSaysSo(t *testing.T) {
 		t.Fatalf("code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
 	}
 }
+
+// saveFailure makes the state save that ends a connect (the one without the pending mark) fail or crash.
+func (r *connectRig) saveFailure(crash bool) {
+	r.saveState = func(st *connect.State, path string) error {
+		for _, tr := range st.Tools {
+			if !tr.Pending {
+				if crash {
+					panic("simulated crash after the files were written")
+				}
+				return errors.New("disk full")
+			}
+		}
+		return st.Save(path)
+	}
+}
+
+// runCrashing runs a command that may panic; a panic stands for a killed process.
+func (r *connectRig) runCrashing(args ...string) (code int, crashed bool) {
+	defer func() {
+		if recover() != nil {
+			crashed = true
+		}
+	}()
+	return r.run(args...), false
+}
+
+func TestConnectInterruptedBeforeTheFinalSaveIsUndoneByDisconnect(t *testing.T) {
+	for _, crash := range []bool{false, true} {
+		for _, tool := range []string{"claude-code", "opencode"} {
+			name := tool + "/failed save"
+			if crash {
+				name = tool + "/crash"
+			}
+			t.Run(name, func(t *testing.T) {
+				g, r := newGateway(t), newRig(t)
+				claude := r.write(".claude/settings.json", seedClaude)
+				oc := r.write(".config/opencode/opencode.json", seedOpenCode)
+				zsh := r.write(".zshrc", seedZsh)
+				seeds := map[string]string{claude: seedClaude, oc: seedOpenCode, zsh: seedZsh}
+				r.saveFailure(crash)
+				code, crashed := r.runCrashing("connect", tool, "--url", g.URL, "--model", "m/free", "--key-file", r.keyFile(), "--yes", "--no-test")
+				if crash != crashed || (!crash && code == 0) {
+					t.Fatalf("code %d crashed %v\n%s%s", code, crashed, r.stdout.String(), r.stderr.String())
+				}
+				if r.kc[g.URL] == "" {
+					t.Fatal("the key should still be stored, with the state file naming it")
+				}
+				r.saveState = nil
+				if code := r.run("disconnect", tool, "--yes"); code != 0 {
+					t.Fatalf("disconnect: code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
+				}
+				for p, want := range seeds {
+					if got := r.readFile(p); got != want {
+						t.Errorf("%s is not the seed:\n%s", p, got)
+					}
+				}
+				if len(r.kc) != 0 {
+					t.Errorf("the key is still stored: %v", r.kc)
+				}
+				if st, _ := connect.LoadState(r.statePath); len(st.Tools) != 0 || len(st.Keys) != 0 {
+					t.Errorf("state after disconnect: %+v", st)
+				}
+			})
+		}
+	}
+}
+
+func TestConnectAgainAfterAnInterruptedConnectCompletesIt(t *testing.T) {
+	g, r := newGateway(t), newRig(t)
+	claude := r.write(".claude/settings.json", seedClaude)
+	r.saveFailure(false)
+	if code := r.run("connect", "claude-code", "--url", g.URL, "--model", "m/free", "--key-file", r.keyFile(), "--yes", "--no-test"); code == 0 {
+		t.Fatal("the failed save should fail connect")
+	}
+	r.saveState = nil
+	if code := r.run("connect", "claude-code", "--url", g.URL, "--model", "m/free", "--key-file", r.keyFile(), "--yes", "--no-test"); code != 0 {
+		t.Fatalf("code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
+	}
+	if st, _ := connect.LoadState(r.statePath); st.Tools["claude-code"].Pending {
+		t.Fatal("the record is still pending")
+	}
+	if code := r.run("disconnect", "claude-code", "--yes"); code != 0 {
+		t.Fatalf("disconnect: code %d", code)
+	}
+	if got := r.readFile(claude); got != seedClaude {
+		t.Fatalf("not the seed:\n%s", got)
+	}
+}
+
+// slowKeychain stores the key, then reports that it did not answer in time: the key is stored although connect saw an error.
+type slowKeychain struct{ memStore }
+
+func (s slowKeychain) Set(u, k string) error {
+	s.memStore[u] = k
+	return &connect.TimeoutError{After: time.Minute}
+}
+
+func TestConnectKeychainTimeoutNamesDisconnectAndLeavesNoUnrecordedKey(t *testing.T) {
+	g, r := newGateway(t), newRig(t)
+	claude := r.write(".claude/settings.json", seedClaude)
+	r.keychain = slowKeychain{r.kc}
+	if code := r.run("connect", "claude-code", "--url", g.URL, "--model", "m/free", "--key-file", r.keyFile(), "--yes", "--no-test"); code == 0 {
+		t.Fatal("a timed-out Set should fail connect")
+	}
+	msg := r.stdout.String() + r.stderr.String()
+	for _, want := range []string{"may still be stored", "ambit disconnect claude-code"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message lacks %q:\n%s", want, msg)
+		}
+	}
+	if got := r.readFile(claude); got != seedClaude {
+		t.Errorf("the file changed:\n%s", got)
+	}
+	if code := r.run("disconnect", "claude-code", "--yes"); code != 0 {
+		t.Fatalf("disconnect: code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
+	}
+	if len(r.kc) != 0 {
+		t.Fatalf("the key is still stored: %v", r.kc)
+	}
+}
+
+func TestConnectKeychainRefusalLeavesNoRecord(t *testing.T) {
+	g, r := newGateway(t), newRig(t)
+	r.write(".claude/settings.json", seedClaude)
+	r.keychain = refusingSet{}
+	if code := r.run("connect", "claude-code", "--url", g.URL, "--model", "m/free", "--key-file", r.keyFile(), "--yes", "--no-test"); code == 0 {
+		t.Fatal("a refused Set should fail connect")
+	}
+	if st, _ := connect.LoadState(r.statePath); len(st.Tools) != 0 || len(st.Keys) != 0 {
+		t.Fatalf("state: %+v", st)
+	}
+}
+
+type refusingSet struct{ memStore }
+
+func (refusingSet) Set(string, string) error { return errors.New("denied") }

@@ -42,6 +42,13 @@ func NewKeychain(service string) Keychain {
 	return Keychain{Service: service, Timeout: 2 * time.Second, WriteTimeout: 60 * time.Second, get: keyring.Get, set: keyring.Set, del: keyring.Delete}
 }
 
+// TimeoutError means the keychain did not answer in time. A Set that timed out may still store the key later.
+type TimeoutError struct{ After time.Duration }
+
+func (e *TimeoutError) Error() string {
+	return fmt.Sprintf("the keychain did not answer within %s", e.After)
+}
+
 // within runs f and gives up after the timeout. The call keeps running in the background; the process ends soon.
 func within[T any](timeout time.Duration, f func() (T, error)) (T, error) {
 	type result struct {
@@ -55,7 +62,7 @@ func within[T any](timeout time.Duration, f func() (T, error)) (T, error) {
 		return r.v, r.err
 	case <-time.After(timeout):
 		var zero T
-		return zero, fmt.Errorf("the keychain did not answer within %s", timeout)
+		return zero, &TimeoutError{After: timeout}
 	}
 }
 

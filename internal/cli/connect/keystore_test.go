@@ -96,6 +96,37 @@ func TestKeychainTimesOutInsteadOfHanging(t *testing.T) {
 	}
 }
 
+// A Linux desktop shows an unlock dialog on Set and Delete; 2 s is too short to answer it. Only Get (run by tools at
+// every start through `ambit key print`) keeps the short timeout.
+func TestKeychainWritesWaitLongerThanGet(t *testing.T) {
+	k := NewKeychain("ambit-test")
+	if k.Timeout != 2*time.Second {
+		t.Fatalf("Get timeout = %s, want 2s", k.Timeout)
+	}
+	if k.WriteTimeout != 60*time.Second {
+		t.Fatalf("Set and Delete timeout = %s, want 60s", k.WriteTimeout)
+	}
+	// A Set that answers after the Get timeout still succeeds.
+	k.Timeout, k.WriteTimeout = 20*time.Millisecond, 2*time.Second
+	slow := func() { time.Sleep(200 * time.Millisecond) }
+	k.set = func(string, string, string) error { slow(); return nil }
+	k.del = func(string, string) error { slow(); return nil }
+	if err := k.Set("https://llm.example.com", testKey); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := k.Delete("https://llm.example.com"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	// And a Set that never answers still gives up at the write timeout.
+	block := make(chan struct{})
+	defer close(block)
+	k.WriteTimeout = 50 * time.Millisecond
+	k.set = func(string, string, string) error { <-block; return nil }
+	if err := k.Set("https://llm.example.com", testKey); err == nil || !strings.Contains(err.Error(), "did not answer") {
+		t.Fatalf("Set err = %v", err)
+	}
+}
+
 func TestPut(t *testing.T) {
 	unavailable := errors.New(`The name org.freedesktop.secrets was not provided by any .service files`)
 	locked := errors.New("failed to unlock correct collection '/org/freedesktop/secrets/aliases/default'")

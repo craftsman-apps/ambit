@@ -29,14 +29,17 @@ type Store interface {
 // Keychain is the operating system's store: macOS Keychain, Windows Credential Manager, Secret Service.
 type Keychain struct {
 	Service string
-	Timeout time.Duration // a locked collection must not hang `key print`, which tools run at every start
+	Timeout time.Duration // Get: a locked collection must not hang `key print`, which tools run at every start
+	// WriteTimeout is for Set and Delete during connect and disconnect. On a Linux desktop they show an unlock
+	// dialog that a person has to answer.
+	WriteTimeout time.Duration
 	get     func(service, user string) (string, error)
 	set     func(service, user, password string) error
 	del     func(service, user string) error
 }
 
 func NewKeychain(service string) Keychain {
-	return Keychain{Service: service, Timeout: 2 * time.Second, get: keyring.Get, set: keyring.Set, del: keyring.Delete}
+	return Keychain{Service: service, Timeout: 2 * time.Second, WriteTimeout: 60 * time.Second, get: keyring.Get, set: keyring.Set, del: keyring.Delete}
 }
 
 // within runs f and gives up after the timeout. The call keeps running in the background; the process ends soon.
@@ -65,12 +68,12 @@ func (k Keychain) Get(url string) (string, error) {
 }
 
 func (k Keychain) Set(url, key string) error {
-	_, err := within(k.Timeout, func() (struct{}, error) { return struct{}{}, k.set(k.Service, url, key) })
+	_, err := within(k.WriteTimeout, func() (struct{}, error) { return struct{}{}, k.set(k.Service, url, key) })
 	return err
 }
 
 func (k Keychain) Delete(url string) error {
-	_, err := within(k.Timeout, func() (struct{}, error) { return struct{}{}, k.del(k.Service, url) })
+	_, err := within(k.WriteTimeout, func() (struct{}, error) { return struct{}{}, k.del(k.Service, url) })
 	if errors.Is(err, keyring.ErrNotFound) {
 		return nil
 	}

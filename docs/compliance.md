@@ -30,6 +30,8 @@ This page is not legal advice.
 
 The Audit and Usage pages and the ClickHouse records exist only with `evidence.enabled: true`. The default is `false`.
 
+**Audit-only mode.** With `access.mode: audit`, the records are of requests that were allowed. Each record carries the verdict of the access rules in force when it was served (`ambit.wouldRefuse` for a model request, `ambit.wouldRefuseTool` for an MCP tool call: `allow`, `refuse:model`, `refuse:router`, `refuse:tool`, `other-model` or `n/a`), the mode (`ambit.accessMode`) and the version of those rules (`ambit.rulesVersion`). The verdict is not recomputed later, so a rule written afterwards does not change an older record. A request refused for another reason (sign-in, a budget, an unpriced model) has its real status, 401, 403 or 429. See [Turn Ambit on without blocking anyone](guides/audit-only.md).
+
 ## SOC 2
 
 SOC 2 reports use the AICPA Trust Services Criteria (the 2017 criteria, with the points of focus revised in 2022). The table covers the criteria where Ambit has something to show. The short labels next to the IDs are descriptions in this page's own words, not AICPA titles. "Your part" is what Ambit cannot do for you.

@@ -108,6 +108,24 @@ test("a switch that is not complete is shown with its error", async ({ page }) =
   await snap(page, "banner-switch-not-complete");
 });
 
+test("a rules change that agentgateway rejected names the Model, the reason and the next step, and links the Models page", async ({ page }) => {
+  const error = "agentgateway rejected Model/mistral-x: backend mistral-x: GCP credential JSON missing `type` field. Check the provider secret of Model/mistral-x, or remove the Model.";
+  const pending = { mode: "enforce", rulesVersion: "bbbbbbbbbbbb", step: "authorization", error, objects: ["Model/mistral-x"] };
+  await setup(page, { config: { ...enforce, pending } });
+  await page.goto("/access-rules");
+  const banner = page.getByTestId("mode-pending-banner");
+  await expect(banner).toContainText(`Rules change bbbbbbbbbbbb is not complete: ${error}`);
+  await snap(page, "gate-rejected");
+  await banner.getByRole("link", { name: "Open the Models page" }).click();
+  await expect(page).toHaveURL(/\/models$/);
+  // Nothing to link to for an unnamed rejection: the text alone.
+  await page.unrouteAll();
+  await setup(page, { config: { ...enforce, pending: { ...pending, objects: undefined, error: "a gateway pod rejected the update (AgentGatewayNackError): bad. agentgateway does not say which object; check the provider secret of each Model, or remove the Model you changed last." } } });
+  await page.goto("/access-rules");
+  await expect(page.getByTestId("mode-pending-banner")).toContainText("does not say which object");
+  await expect(page.getByTestId("mode-pending-banner").getByRole("link")).toHaveCount(0);
+});
+
 test("the list tells a real refusal, a verdict and a missing mark apart", async ({ page }) => {
   await setup(page, { config: audit });
   await search(page);

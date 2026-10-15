@@ -87,6 +87,8 @@ type PendingMode struct {
 	RulesVersion string `json:"rulesVersion"`
 	Step         string `json:"step"`
 	Error        string `json:"error,omitempty"`
+	// Objects are the objects agentgateway rejected (<Kind>/<name>), when Error names them.
+	Objects []string `json:"objects,omitempty"`
 }
 
 // Proposed is the answer to a change in GitOps mode (HTTP 202): nothing changed yet.

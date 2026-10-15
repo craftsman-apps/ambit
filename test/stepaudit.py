@@ -14,7 +14,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-MARKS = {"allow", "refuse:model", "refuse:router", "refuse:tool", "other-model", "n/a"}
+# The marks of a served call; "n/a" (not a call) on one is a generator miss, counted as missing.
+MARKS = {"allow", "refuse:model", "refuse:router", "refuse:tool", "other-model"}
 
 
 def loop(out, llm, mcp, kc, u, v):
@@ -203,6 +204,9 @@ def analyze(loop_path, records_path, switch_audit, switch_enforce):
         # alice is refused by the rules: served only in audit mode, and her record says so.
         if e["who"] == "alice" and not (r["mode"] == "audit" and mark.startswith("refuse:")):
             problems.append(f"alice served without an audit-mode refuse mark: {e}")
+        # mira is allowed by the rules: in audit mode her record says allow.
+        if e["who"] == "mira" and r["mode"] == "audit" and mark != "allow":
+            problems.append(f"mira served in audit mode with mark {mark!r}, want allow: {e}")
     for e in loop:
         if e["who"] == "mira" and not served(e):
             problems.append(f"mira not served: {e}")

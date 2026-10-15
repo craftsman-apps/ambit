@@ -82,14 +82,20 @@ jobs:
         with: { go-version-file: go.mod }
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with: { distribution: goreleaser, version: v2.18.3, args: release --clean }
-        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        # The pushed tag, not the one GoReleaser would pick: a release candidate and its release can share a commit
+        # (v0.2.0-rc.1 and v0.2.0 did), and GoReleaser then took the candidate's tag for both.
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}", GORELEASER_CURRENT_TAG: "${{ github.ref_name }}" }
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with: { subject-path: "dist/ambit_*.tar.gz, dist/ambit_*.zip, dist/checksums.txt" }
       # The archives, checksums.txt and their attestations are on the release now. A prerelease is never the latest release.
       - name: Mark the release as the latest
         if: ${{ !contains(github.ref_name, '-') }}
         env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
-        run: gh release edit "$GITHUB_REF_NAME" --latest
+        # Only a release that holds every archive and checksums.txt becomes the latest; install.sh downloads from it.
+        run: |
+          n=$(gh release view "$GITHUB_REF_NAME" --json assets -q '[.assets[].name | select(test("^ambit_.*\\.(tar\\.gz|zip)$") or . == "checksums.txt")] | length')
+          [ "$n" -eq 7 ] || { echo "::error::release $GITHUB_REF_NAME has $n of the 7 CLI files; not marking it latest"; exit 1; }
+          gh release edit "$GITHUB_REF_NAME" --latest
       - name: Prerelease tags go to GitHub only
         if: ${{ contains(github.ref_name, '-') }}
         run: |

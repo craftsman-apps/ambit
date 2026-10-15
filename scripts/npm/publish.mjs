@@ -6,7 +6,7 @@
 import {createHash} from 'node:crypto';
 import {chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join, resolve} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 
@@ -121,7 +121,8 @@ export function publish(dirs, run = (cmd, args) => execFileSync(cmd, args, {stdi
       console.log(`${name}@${version} is already published`);
       continue;
     } catch { /* not published yet */ }
-    run('npm', ['publish', d, '--access', 'public', '--provenance']);
+    // An absolute path: npm reads a relative one such as npm-out/ambit-darwin-x64 as a GitHub repository.
+    run('npm', ['publish', resolve(d), '--access', 'public', '--provenance']);
   }
 }
 

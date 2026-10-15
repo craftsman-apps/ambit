@@ -1,9 +1,9 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {existsSync, mkdtempSync, readFileSync, statSync, writeFileSync} from 'node:fs';
+import {existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {isAbsolute, join} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {TARGETS, build, parseChecksums, publish} from './publish.mjs';
@@ -68,6 +68,27 @@ test('publish skips versions already on the registry and publishes the rest with
   assert.equal(published.length, 6);
   assert.ok(published.every(c => c.endsWith('--access public --provenance')));
   assert.ok(!published.some(c => c.includes('ambit-linux-x64')));
+});
+
+test('publish passes a path npm cannot read as a GitHub repository', () => {
+  // npm reads "npm-out/ambit-darwin-x64" as the GitHub repository npm-out/ambit-darwin-x64 (the v0.2.0 release failed so).
+  const cwd = process.cwd();
+  const base = mkdtempSync(join(tmpdir(), 'npm-rel-'));
+  process.chdir(base);
+  try {
+    mkdirSync(join('npm-out', 'ambit-darwin-x64'), {recursive: true});
+    writeFileSync(join('npm-out', 'ambit-darwin-x64', 'package.json'), JSON.stringify({name: '@craftsman-apps/ambit-darwin-x64', version: '0.2.0'}));
+    const calls = [];
+    publish([join('npm-out', 'ambit-darwin-x64')], (cmd, args) => {
+      calls.push(args);
+      if (args[0] === 'view') throw new Error('E404');
+    });
+    const path = calls.find(a => a[0] === 'publish')[1];
+    assert.ok(isAbsolute(path), `publish got ${path}`);
+    assert.equal(realpathSync(path), realpathSync(join(base, 'npm-out', 'ambit-darwin-x64')));
+  } finally {
+    process.chdir(cwd);
+  }
 });
 
 // The full release matrix (spec 6): every GoReleaser archive maps to one npm package whose os and cpu are what

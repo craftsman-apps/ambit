@@ -82,14 +82,20 @@ jobs:
         with: { go-version-file: go.mod }
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with: { distribution: goreleaser, version: v2.18.3, args: release --clean }
-        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        # The pushed tag, not the one GoReleaser would pick: a release candidate and its release can share a commit
+        # (v0.2.0-rc.1 and v0.2.0 did), and GoReleaser then took the candidate's tag for both.
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}", GORELEASER_CURRENT_TAG: "${{ github.ref_name }}" }
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with: { subject-path: "dist/ambit_*.tar.gz, dist/ambit_*.zip, dist/checksums.txt" }
       # The archives, checksums.txt and their attestations are on the release now. A prerelease is never the latest release.
       - name: Mark the release as the latest
         if: ${{ !contains(github.ref_name, '-') }}
         env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
-        run: gh release edit "$GITHUB_REF_NAME" --latest
+        # Only a release that holds every archive and checksums.txt becomes the latest; install.sh downloads from it.
+        run: |
+          n=$(gh release view "$GITHUB_REF_NAME" --json assets -q '[.assets[].name | select(test("^ambit_.*\\.(tar\\.gz|zip)$") or . == "checksums.txt")] | length')
+          [ "$n" -eq 7 ] || { echo "::error::release $GITHUB_REF_NAME has $n of the 7 CLI files; not marking it latest"; exit 1; }
+          gh release edit "$GITHUB_REF_NAME" --latest
       - name: Prerelease tags go to GitHub only
         if: ${{ contains(github.ref_name, '-') }}
         run: |
@@ -97,14 +103,12 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         if: ${{ !contains(github.ref_name, '-') }}
         with: { node-version: 26 }
-      # The formula installs the prebuilt binary from this release's archives, pinned by sha256 (ruling S6). It is
-      # pushed to the tap by cli-channels after approval, which holds the only tap token.
-      - name: The Homebrew formula, from this release's checksums.txt
+      # The formula installs the prebuilt binary from this release's archives, pinned by sha256 (ruling S6). This only
+      # checks that the script works on this release; cli-channels writes the formula it pushes from the published
+      # checksums.txt, so a re-run of either job cannot pair a formula with archives from another attempt.
+      - name: The Homebrew formula can be written from this release's checksums.txt
         if: ${{ !contains(github.ref_name, '-') }}
-        run: node scripts/homebrew/formula.mjs --checksums dist/checksums.txt --version "${GITHUB_REF_NAME#v}" --out formula/ambit.rb
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: ${{ !contains(github.ref_name, '-') }}
-        with: { name: homebrew-formula, path: formula/ambit.rb, retention-days: 7, if-no-files-found: error }
+        run: node scripts/homebrew/formula.mjs --checksums dist/checksums.txt --version "${GITHUB_REF_NAME#v}" --out "$RUNNER_TEMP/ambit.rb"
 
   # Homebrew (a formula) and npm. Runs in the Environment release-channels, so a maintainer approves each release first. A
   # failure here does not undo the GitHub release; both steps are safe to re-run (the job can be re-run alone).
@@ -117,8 +121,6 @@ jobs:
     permissions: { contents: read, id-token: write }  # id-token: npm trusted publishing with provenance
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with: { name: homebrew-formula, path: formula }
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: 26, registry-url: "https://registry.npmjs.org" }
       - name: The release's archives and checksums.txt, as published
@@ -132,14 +134,12 @@ jobs:
           cd rel
           [ "$(find . -name 'ambit_*' | wc -l)" -eq 6 ]
           sha256sum --check --strict checksums.txt
-      # The artifact must be the formula for the published checksums: the file is where cli wrote it, it pins four
-      # archives by sha256, and the same script run on the release's checksums.txt writes the same bytes.
-      - name: The Homebrew formula matches the published release
+      # The formula comes from the checksums.txt the previous step verified against the downloaded archives, and pins
+      # four of them by sha256. (A formula passed from the cli job was stale after a re-run of cli at v0.2.0.)
+      - name: The Homebrew formula, from the published checksums.txt
         run: |
-          test -f formula/ambit.rb
+          node scripts/homebrew/formula.mjs --checksums rel/checksums.txt --version "${GITHUB_REF_NAME#v}" --out formula/ambit.rb
           [ "$(grep -cE '^ +sha256 "[0-9a-f]{64}"$' formula/ambit.rb)" = 4 ]
-          node scripts/homebrew/formula.mjs --checksums rel/checksums.txt --version "${GITHUB_REF_NAME#v}" --out "$RUNNER_TEMP/expected.rb"
-          cmp formula/ambit.rb "$RUNNER_TEMP/expected.rb"
       - name: Homebrew tap (craftsman-apps/homebrew-tap)
         env: { TAP_TOKEN: "${{ secrets.HOMEBREW_TAP_TOKEN }}" }  # fine-grained, contents:write on that repository only
         # The token goes in an HTTP header set through environment variables, so it is never in a URL or in .git/config.

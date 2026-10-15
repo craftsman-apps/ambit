@@ -212,3 +212,46 @@ func TestLinesArePrintedAndCountedForExit(t *testing.T) {
 		t.Errorf("exit with an unknown line: %d, %d", ExitCode(rs, false), ExitCode(rs, true))
 	}
 }
+
+// A change that agentgateway has not applied: the check says which object it rejected and what to do, in either mode.
+func TestP11PendingChange(t *testing.T) {
+	withPending := func(mode, pending string) fx {
+		cm := accessMode(mode, now.Add(-72*time.Hour))
+		cm.Data["pending"] = pending
+		return fx{helm: values(mode), ctrlObjs: []runtime.Object{cm}}
+	}
+	rejected := `{"mode":"enforce","rulesVersion":"bbbbbbbbbbbb","step":"authorization","objects":["Model/mistral-x"],` +
+		`"error":"agentgateway rejected Model/mistral-x: GCP credential JSON missing type. Check the provider secret of Model/mistral-x, or remove the Model."}`
+	r := one(t, "P11", withPending("enforce", rejected))
+	want(t, r, Warn, "access.mode is enforce")
+	if len(r.Lines) != 1 || r.Lines[0].Status != Warn {
+		t.Fatalf("lines %+v", r.Lines)
+	}
+	l := r.Lines[0]
+	if l.Message != "rules change bbbbbbbbbbbb is not active (step authorization): agentgateway rejected Model/mistral-x: GCP credential JSON missing type. Check the provider secret of Model/mistral-x, or remove the Model." ||
+		!strings.Contains(l.Next, "audit-only") {
+		t.Errorf("line %+v", l)
+	}
+
+	// Audit mode keeps its own warning; a mode switch is named as one.
+	sw := strings.Replace(rejected, `"mode":"enforce"`, `"mode":"audit"`, 1)
+	r = one(t, "P11", withPending("enforce", sw))
+	if r.Status != Warn || len(r.Lines) != 1 || !strings.HasPrefix(r.Lines[0].Message, "mode switch to audit is not active (step authorization): ") {
+		t.Errorf("%+v", r)
+	}
+
+	// No error yet (waiting for the gateway): still shown. A broken entry is said, not hidden.
+	r = one(t, "P11", withPending("enforce", `{"mode":"enforce","rulesVersion":"bbbbbbbbbbbb","step":"access log"}`))
+	if r.Status != Warn || len(r.Lines) != 1 || r.Lines[0].Message != "rules change bbbbbbbbbbbb is not active (step access log): waiting for agentgateway" {
+		t.Errorf("%+v", r)
+	}
+	r = one(t, "P11", withPending("enforce", "{not json"))
+	if len(r.Lines) != 1 || r.Lines[0].Status != Unknown || !strings.Contains(r.Lines[0].Message, "not JSON") {
+		t.Errorf("%+v", r)
+	}
+
+	// Nothing pending: no line.
+	if r := one(t, "P11", fx{helm: values("enforce"), ctrlObjs: []runtime.Object{accessMode("enforce", now.Add(-72*time.Hour))}}); len(r.Lines) != 0 {
+		t.Errorf("%+v", r.Lines)
+	}
+}

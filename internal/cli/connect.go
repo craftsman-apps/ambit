@@ -35,6 +35,7 @@ type connectDeps struct {
 	Getenv         func(string) string
 	Bin            connect.BinEnv                                           // finds the ambit path that tool configs hold
 	Profile        func() (string, error)                                   // the PowerShell profile path
+	ScriptPolicy   func() (string, error)                                   // the execution policy of that PowerShell; nil: not asked
 	HTTP           func(url string) *http.Client                            // for the test call
 	CallLimit      time.Duration                                            // how long the test call waits for a 200
 	CallEvery      time.Duration                                            // between two tries
@@ -71,6 +72,9 @@ func (a *app) connectEnv(service string) (*connectDeps, error) {
 	d := &connectDeps{Keychain: connect.NewKeychain(service), File: fs, StatePath: path, GOOS: runtime.GOOS, Home: home,
 		Getenv: os.Getenv, Bin: connect.DefaultBinEnv(), Profile: connect.PowerShellProfile, HTTP: gatewayClient,
 		CallLimit: 20 * time.Second, CallEvery: time.Second}
+	if runtime.GOOS == "windows" {
+		d.ScriptPolicy = connect.PowerShellPolicy
+	}
 	if a.stdinTTY() {
 		fd := int(a.in.(*os.File).Fd())
 		d.ReadSecret = func(ctx context.Context, prompt string) (string, error) {

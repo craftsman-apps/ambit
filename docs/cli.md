@@ -87,6 +87,8 @@ Steps: read and parse the files (a file that does not parse stops the command, n
 | `--force` | Replace a conflicting entry that Ambit did not write. The old value is saved for `ambit disconnect`, except these, which stay only in the backup file and are not put back: `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY` and an old `provider.ambit` of opencode. |
 | `--no-test` | Skip the test call. |
 
+On Windows, `ambit connect opencode` asks PowerShell for its execution policy. Windows PowerShell 5.1 starts with the policy `Restricted`, and under `Restricted` or `AllSigned` it does not load the profile that holds the function. Then connect still writes the function, prints a `warn` line, and prints `next: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. Ambit never changes the policy: run that command yourself, or use `--shell none`.
+
 The key is checked for the format `ambit_` and 43 letters and digits. If the same command ran before and nothing changed, it prints `✓ <tool> is already connected to <url>` and makes only the test call. If the test call fails, the config stays; the output says what failed and ends with `to undo: ambit disconnect <tool>`.
 
 ## ambit disconnect

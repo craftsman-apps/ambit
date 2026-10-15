@@ -393,6 +393,25 @@ func TestConnectOpenCodeShellNonePrintsTheFunction(t *testing.T) {
 	}
 }
 
+func TestConnectOpenCodePowerShellWarnsWhenProfilesCannotRun(t *testing.T) {
+	for _, tt := range []struct {
+		policy string
+		err    error
+		warn   bool
+	}{{"Restricted", nil, true}, {"AllSigned", nil, true}, {"RemoteSigned", nil, false}, {"Bypass", nil, false}, {"", errors.New("no shell"), false}} {
+		g, r := newGateway(t), newRig(t)
+		r.profile = filepath.Join(r.home, "Documents", "WindowsPowerShell", "profile.ps1")
+		r.policy = func() (string, error) { return tt.policy, tt.err }
+		code := r.run("connect", "opencode", "--url", g.URL, "--model", "m", "--key-file", r.keyFile(), "--yes", "--shell", "powershell")
+		out := r.stdout.String() + r.stderr.String()
+		warn := "does not run profile scripts (execution policy " + tt.policy + ")"
+		next := "next: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned"
+		if code != 0 || !r.exists(r.profile) || strings.Contains(out, warn) != tt.warn || strings.Contains(out, next) != tt.warn {
+			t.Fatalf("%q: code %d, profile written %v\n%s", tt.policy, code, r.exists(r.profile), out)
+		}
+	}
+}
+
 func TestConnectAlreadyConnected(t *testing.T) {
 	g, r := newGateway(t), newRig(t)
 	settings := r.write(".claude/settings.json", seedClaude)

@@ -238,6 +238,32 @@ func TestPowerShellProfileFromFakeShell(t *testing.T) {
 	}
 }
 
+func TestPowerShellPolicyFromFakeShell(t *testing.T) {
+	var asked []string
+	run := func(name string, args ...string) ([]byte, error) {
+		asked = append(asked, name+" "+args[len(args)-1])
+		if name == "pwsh" {
+			return nil, errors.New("not found")
+		}
+		if args[len(args)-1] == "Get-ExecutionPolicy" {
+			return []byte("Restricted\r\n"), nil
+		}
+		return []byte(`C:\Users\a\Documents\WindowsPowerShell\profile.ps1` + "\r\n"), nil
+	}
+	got, err := powerShellPolicy(run)
+	if err != nil || got != "Restricted" || asked[len(asked)-1] != "powershell.exe Get-ExecutionPolicy" {
+		t.Fatalf("%q %v %v", got, err, asked)
+	}
+	if _, err := powerShellPolicy(func(string, ...string) ([]byte, error) { return nil, errors.New("none") }); err == nil {
+		t.Error("no PowerShell must be an error")
+	}
+	for p, want := range map[string]bool{"Restricted": true, "allsigned": true, "RemoteSigned": false, "Unrestricted": false, "Bypass": false, "": false} {
+		if PolicyBlocksProfile(p) != want {
+			t.Errorf("PolicyBlocksProfile(%q) != %v", p, want)
+		}
+	}
+}
+
 func TestWrapperLines(t *testing.T) {
 	for _, tt := range []struct {
 		sh, goos, want string

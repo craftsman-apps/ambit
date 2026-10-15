@@ -81,14 +81,37 @@ func runCommand(name string, args ...string) ([]byte, error) {
 }
 
 func powerShellProfile(run func(name string, args ...string) ([]byte, error)) (string, error) {
+	_, p, err := firstPowerShell(run)
+	return p, err
+}
+
+// firstPowerShell is the shell whose profile connect writes: pwsh if it answers, else Windows PowerShell.
+func firstPowerShell(run func(name string, args ...string) ([]byte, error)) (name, profile string, err error) {
 	for _, name := range []string{"pwsh", "powershell.exe"} {
 		if b, err := run(name, "-NoProfile", "-Command", "$PROFILE.CurrentUserAllHosts"); err == nil {
 			if p := strings.TrimSpace(string(b)); p != "" {
-				return p, nil
+				return name, p, nil
 			}
 		}
 	}
-	return "", fmt.Errorf("cannot ask PowerShell for its profile path")
+	return "", "", fmt.Errorf("cannot ask PowerShell for its profile path")
+}
+
+// PowerShellPolicy asks the shell whose profile connect writes for its effective execution policy.
+func PowerShellPolicy() (string, error) { return powerShellPolicy(runCommand) }
+
+func powerShellPolicy(run func(name string, args ...string) ([]byte, error)) (string, error) {
+	name, _, err := firstPowerShell(run)
+	if err != nil {
+		return "", err
+	}
+	b, err := run(name, "-NoProfile", "-Command", "Get-ExecutionPolicy")
+	return strings.TrimSpace(string(b)), err
+}
+
+// PolicyBlocksProfile is true for the policies under which PowerShell does not load an unsigned profile.
+func PolicyBlocksProfile(policy string) bool {
+	return strings.EqualFold(policy, "Restricted") || strings.EqualFold(policy, "AllSigned")
 }
 
 // psQuote makes s one single-quoted PowerShell string. PowerShell ends such a string at U+2018, U+2019, U+201A

@@ -309,6 +309,14 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	for _, n := range notes {
 		p.Line("%s %s", p.Mark("warn"), n)
 	}
+	if shell == connect.PowerShell && d.ScriptPolicy != nil {
+		// Windows PowerShell 5.1 starts with Restricted: it does not load the profile that holds the function.
+		// The policy is the person's to change, so connect only says how.
+		if pol, err := d.ScriptPolicy(); err == nil && connect.PolicyBlocksProfile(pol) {
+			p.Line("%s PowerShell does not run profile scripts (execution policy %s), so the opencode function will not load", p.Mark("warn"), pol)
+			p.Line("  next: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned")
+		}
+	}
 	p.Line("%s", keyLine)
 	if shell == connect.NoShell && tool == connect.OpenCode {
 		a.printWrapper(d, url, ambitPath)

@@ -46,6 +46,8 @@ type connectRig struct {
 	lockedKC  bool                               // deleting from the keychain fails
 	keychain  connect.Store                      // replaces the keychain when set
 	saveState func(*connect.State, string) error // replaces saving the state file when set
+	profile   string                             // the PowerShell profile path; "" means there is no PowerShell
+	policy    func() (string, error)             // the PowerShell execution policy; nil means it is not asked
 }
 
 func newRig(t *testing.T) *connectRig {
@@ -70,10 +72,16 @@ func (r *connectRig) run(args ...string) int {
 		keychain = r.keychain
 	}
 	d := &connectDeps{Keychain: keychain, SaveState: r.saveState, File: r.file, StatePath: r.statePath, GOOS: "linux", Home: r.home,
-		Getenv:  func(k string) string { return r.env[k] },
-		Bin:     connect.BinEnv{Executable: func() (string, error) { return fakeAmbit, nil }, LookPath: func(string) (string, error) { return "", errors.New("not on PATH") }, GOOS: "linux"},
-		Profile: func() (string, error) { return "", errors.New("no PowerShell here") },
-		HTTP:    func(string) *http.Client { return http.DefaultClient }, CallLimit: 300 * time.Millisecond, CallEvery: 20 * time.Millisecond}
+		Getenv: func(k string) string { return r.env[k] },
+		Bin:    connect.BinEnv{Executable: func() (string, error) { return fakeAmbit, nil }, LookPath: func(string) (string, error) { return "", errors.New("not on PATH") }, GOOS: "linux"},
+		Profile: func() (string, error) {
+			if r.profile == "" {
+				return "", errors.New("no PowerShell here")
+			}
+			return r.profile, nil
+		},
+		ScriptPolicy: r.policy,
+		HTTP:         func(string) *http.Client { return http.DefaultClient }, CallLimit: 300 * time.Millisecond, CallEvery: 20 * time.Millisecond}
 	if r.secret != "" {
 		d.ReadSecret = func(context.Context, string) (string, error) { return r.secret, nil }
 	}

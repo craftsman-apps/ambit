@@ -14,6 +14,7 @@ manage_landing_page
 manage_onboarding
 manage_segment
 query_crm_data
+query_segments
 read_campaign_data
 search_crm_objects
 search_intent_signals

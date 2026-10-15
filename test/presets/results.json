@@ -1,6 +1,6 @@
 {
-  "date": "2026-10-12T16:08:34.612961Z",
-  "commit": "a4ce1e0f5019ba204cbecb551bbf7bf4324699d3",
+  "date": "2026-10-15T15:48:57.950109Z",
+  "commit": "c22f6b5040385a419a232e7d512748bc88e0d91a",
   "catalogHash": "e065077b701d2762dd407e7ddb35d96f7257ba9d969399197fc0407479fde3db",
   "presets": [
     {
@@ -235,6 +235,7 @@
         "manage_agent",
         "manage_agent_knowledge",
         "manage_agent_skills",
+        "manage_agent_tools",
         "manage_agent_triggers",
         "manage_automations",
         "move_object",
@@ -477,6 +478,7 @@
         "manage_onboarding",
         "manage_segment",
         "query_crm_data",
+        "query_segments",
         "read_campaign_data",
         "search_crm_objects",
         "search_intent_signals",

@@ -44,6 +44,6 @@ Do these once, before the tag `v0.2.0` is pushed. `v0.1.0` had no CLI, so none o
 2. Open USER ACTIONs (a maintainer does them in GitHub and npm; the release workflow cannot run without them):
    - Create the repository `homebrew-tap` and the secret `HOMEBREW_TAP_TOKEN` that can push to it.
    - Create the Environment `release-channels` with the maintainer as required reviewer.
-   - Create the npm scope `@craftsman-apps`. Use trusted publishing, or create an `NPM_TOKEN` and wire it as `NODE_AUTH_TOKEN` on the npm step of the release workflow.
+   - Create the npm organization `craftsman-apps` and a granular token with read and write on `@craftsman-apps`; store it as the secret `NPM_TOKEN` in `release-channels` (the npm step passes it as `NODE_AUTH_TOKEN`). Trusted publishing can replace it after the first release.
    - Make `cli-unit`, `cli-local` and `cli-partial` required checks of `main`.
 3. At the first tag, confirm in the `cli` job log that `attest-build-provenance` attested every archive (its `subject-path` is a comma-separated list, which runs for the first time there): `gh attestation verify <archive> --repo craftsman-apps/ambit` passes for one archive of each system.

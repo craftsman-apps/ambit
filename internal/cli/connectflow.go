@@ -521,7 +521,12 @@ var testFormats = map[string]local.Format{connect.ClaudeCode: local.FormatMessag
 func (a *app) testCall(ctx context.Context, d *connectDeps, tool, url, model, key string) error {
 	p := a.printer()
 	start := time.Now()
-	ans, err := local.CallWith(ctx, d.HTTP(url), url, key, model, testFormats[tool], d.CallLimit, d.CallEvery)
+	ans, cut, err := local.CallWith(ctx, d.HTTP(url), url, key, model, testFormats[tool], d.CallLimit, d.CallEvery)
+	if err == nil && cut {
+		p.Line("%s test call: the gateway and %s answered (%s)", p.Mark("ok"), model, time.Since(start).Round(100*time.Millisecond))
+		p.Line("  note: %s", local.NoTextNote)
+		return nil
+	}
 	if err == nil {
 		p.Line("%s test call: %s (%s)", p.Mark("ok"), ans, time.Since(start).Round(100*time.Millisecond))
 		return nil

@@ -21,7 +21,8 @@ type gateway struct {
 	mu     sync.Mutex
 	paths  []string
 	header []http.Header
-	status int // 0: 200
+	status int  // 0: 200
+	cut    bool // 200 that stopped at the token limit before any text
 }
 
 func newGateway(t *testing.T) *gateway {
@@ -35,6 +36,17 @@ func newGateway(t *testing.T) *gateway {
 		if status != 0 {
 			w.WriteHeader(status)
 			w.Write([]byte(`{"error":"nope"}`))
+			return
+		}
+		if g.cut {
+			switch r.URL.Path {
+			case "/v1/messages":
+				w.Write([]byte(`{"content":[{"type":"thinking","thinking":"x"}],"stop_reason":"max_tokens"}`))
+			case "/v1/responses":
+				w.Write([]byte(`{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"reasoning"}]}`))
+			default:
+				w.Write([]byte(`{"choices":[{"message":{"content":""},"finish_reason":"length"}]}`))
+			}
 			return
 		}
 		switch r.URL.Path {
@@ -808,3 +820,20 @@ func TestConnectKeychainRefusalLeavesNoRecord(t *testing.T) {
 type refusingSet struct{ memStore }
 
 func (refusingSet) Set(string, string) error { return errors.New("denied") }
+
+// A reasoning model that uses its whole token limit before any text is a pass with a note, in every format.
+func TestConnectTestCallTokenLimitReachedPassesWithANote(t *testing.T) {
+	for _, tool := range []string{"claude-code", "codex", "opencode"} {
+		g, r := newGateway(t), newRig(t)
+		g.cut = true
+		if code := r.run("connect", tool, "--url", g.URL, "--model", "m/free", "--key-file", r.keyFile(), "--yes"); code != 0 {
+			t.Fatalf("%s: code %d\n%s%s", tool, code, r.stdout.String(), r.stderr.String())
+		}
+		out := r.stdout.String()
+		for _, want := range []string{"✓ test call: the gateway and m/free answered", "note: the model used its whole token budget for reasoning (no text shown)"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("%s: output lacks %q:\n%s", tool, want, out)
+			}
+		}
+	}
+}

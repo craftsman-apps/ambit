@@ -158,4 +158,7 @@ jobs:
       - name: npm (@craftsman-apps/ambit and one package per platform)
         # Runs even when the tap step failed (both are safe to re-run), but never from archives that failed verification.
         if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
+        # NPM_TOKEN: a granular token with read and write on the @craftsman-apps scope, stored in release-channels.
+        # The first publish of a new package needs it; trusted publishing can replace it once the packages exist.
+        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
         run: node scripts/npm/publish.mjs --dir rel --version "${GITHUB_REF_NAME#v}" --out npm-out --publish

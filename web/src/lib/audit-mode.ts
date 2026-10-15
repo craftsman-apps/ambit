@@ -19,8 +19,8 @@ export function modeBanner(since: string | undefined, now: Date): string {
 export type Pending = { mode: string; rulesVersion: string; step: string; error?: string; objects?: string[] };
 // The banner for a change that agentgateway has not applied: a mode switch, or a rules change in the same mode.
 export function pendingBanner(p: Pending, published: string): string {
-  const what = p.mode !== published ? `Mode switch to ${p.mode}` : `Rules change ${p.rulesVersion}`;
-  return `${what} is not complete: ${p.error || `waiting for agentgateway (${p.step})`}`;
+  const what = p.mode !== published ? `Mode switch to ${p.mode} is not complete` : "The latest access-rule change is not active yet";
+  return `${what}: ${p.error || `waiting for agentgateway (${p.step})`}`;
 }
 
 // The console page of the objects agentgateway rejected, when there is one: only a Model has a page (the list).

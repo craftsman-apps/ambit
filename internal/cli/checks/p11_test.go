@@ -228,8 +228,8 @@ func TestP11PendingChange(t *testing.T) {
 		t.Fatalf("lines %+v", r.Lines)
 	}
 	l := r.Lines[0]
-	if l.Message != "rules change bbbbbbbbbbbb is not active (step authorization): agentgateway rejected Model/mistral-x: GCP credential JSON missing type. Check the provider secret of Model/mistral-x, or remove the Model." ||
-		!strings.Contains(l.Next, "audit-only") {
+	if l.Message != "The latest access-rule change is not active yet: agentgateway rejected Model/mistral-x: GCP credential JSON missing type. Check the provider secret of Model/mistral-x, or remove the Model." ||
+		!strings.Contains(l.Next, "audit-only") || !strings.Contains(l.Next, "rules version bbbbbbbbbbbb, step authorization") {
 		t.Errorf("line %+v", l)
 	}
 
@@ -242,7 +242,7 @@ func TestP11PendingChange(t *testing.T) {
 
 	// No error yet (waiting for the gateway): still shown. A broken entry is said, not hidden.
 	r = one(t, "P11", withPending("enforce", `{"mode":"enforce","rulesVersion":"bbbbbbbbbbbb","step":"access log"}`))
-	if r.Status != Warn || len(r.Lines) != 1 || r.Lines[0].Message != "rules change bbbbbbbbbbbb is not active (step access log): waiting for agentgateway" {
+	if r.Status != Warn || len(r.Lines) != 1 || r.Lines[0].Message != "The latest access-rule change is not active yet: waiting for agentgateway" {
 		t.Errorf("%+v", r)
 	}
 	r = one(t, "P11", withPending("enforce", "{not json"))

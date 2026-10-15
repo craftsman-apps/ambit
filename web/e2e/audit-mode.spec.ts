@@ -114,7 +114,7 @@ test("a rules change that agentgateway rejected names the Model, the reason and 
   await setup(page, { config: { ...enforce, pending } });
   await page.goto("/access-rules");
   const banner = page.getByTestId("mode-pending-banner");
-  await expect(banner).toContainText(`Rules change bbbbbbbbbbbb is not complete: ${error}`);
+  await expect(banner).toContainText(`The latest access-rule change is not active yet: ${error}`);
   await snap(page, "gate-rejected");
   await banner.getByRole("link", { name: "Open the Models page" }).click();
   await expect(page).toHaveURL(/\/models$/);

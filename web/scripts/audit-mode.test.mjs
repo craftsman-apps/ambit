@@ -19,13 +19,13 @@ test("days since the mode started", () => {
 test("a change that agentgateway has not applied", () => {
   const p = { mode: "audit", rulesVersion: "bbbbbbbbbbbb", step: "authorization", error: "waiting for agentgateway to apply AgentgatewayModel/m generation 3" };
   assert.equal(pendingBanner(p, "enforce"), "Mode switch to audit is not complete: waiting for agentgateway to apply AgentgatewayModel/m generation 3");
-  assert.equal(pendingBanner({ ...p, mode: "enforce", error: "" }, "enforce"), "Rules change bbbbbbbbbbbb is not complete: waiting for agentgateway (authorization)");
+  assert.equal(pendingBanner({ ...p, mode: "enforce", error: "" }, "enforce"), "The latest access-rule change is not active yet: waiting for agentgateway (authorization)");
 });
 
 test("a rejected Model: the banner text names it, and the Models page is linked", () => {
   const error = "agentgateway rejected Model/mistral-x: bad key. Check the provider secret of Model/mistral-x, or remove the Model.";
   const p = { mode: "enforce", rulesVersion: "bbbbbbbbbbbb", step: "authorization", error, objects: ["Model/mistral-x"] };
-  assert.equal(pendingBanner(p, "enforce"), `Rules change bbbbbbbbbbbb is not complete: ${error}`);
+  assert.equal(pendingBanner(p, "enforce"), `The latest access-rule change is not active yet: ${error}`);
   assert.deepEqual(pendingPage(p), { to: "/models", label: "Open the Models page" });
   assert.equal(pendingPage({ ...p, objects: ["Model/a", "Model/b"] })?.to, "/models");
   assert.equal(pendingPage({ ...p, objects: ["ModelRouter/fast"] }), undefined); // no page for a router

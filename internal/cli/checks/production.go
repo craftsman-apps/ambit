@@ -484,16 +484,16 @@ func pendingLine(raw, published string) (Line, bool) {
 	if err := json.Unmarshal([]byte(raw), &p); err != nil {
 		return Line{Status: Unknown, Message: "ambit-access-mode has a pending entry that is not JSON; read the controller log"}, true
 	}
-	what := "rules change " + p.RulesVersion
-	if p.Mode != published {
-		what = "mode switch to " + p.Mode
-	}
 	cause := p.Error
 	if cause == "" {
 		cause = "waiting for agentgateway"
 	}
-	return Line{Status: Warn, Message: fmt.Sprintf("%s is not active (step %s): %s", what, p.Step, cause),
-		Next: "the old rules stay in force until agentgateway accepts the change (https://ambitproject.dev/docs/guides/audit-only)"}, true
+	next := "the old rules stay in force until agentgateway accepts the change (https://ambitproject.dev/docs/guides/audit-only)"
+	if p.Mode != published {
+		return Line{Status: Warn, Message: fmt.Sprintf("mode switch to %s is not active (step %s): %s", p.Mode, p.Step, cause), Next: next}, true
+	}
+	return Line{Status: Warn, Message: "The latest access-rule change is not active yet: " + cause,
+		Next: fmt.Sprintf("rules version %s, step %s. %s", p.RulesVersion, p.Step, next)}, true
 }
 
 // markMissingLine runs the console's classification in the chart's ClickHouse pod and counts the audit-mode call

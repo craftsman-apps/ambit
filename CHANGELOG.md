@@ -8,6 +8,22 @@ For upgrade steps in detail, read [docs/upgrading.md](docs/upgrading.md).
 
 Add a line here for each change that users can see, in the pull request that makes the change.
 
+- The `ambit` command-line tool, first released here. Install it with Homebrew (`brew install craftsman-apps/tap/ambit`),
+  npm (`npx @craftsman-apps/ambit`), `install.sh` (macOS and Linux) or `install.ps1` (Windows). Commands:
+  `ambit local up`, `local down` and `local password` (a local Ambit in a kind cluster), `ambit check` (including
+  `--production`), `ambit validate` (checks Ambit YAML files), and `ambit version`. See [docs/cli.md](docs/cli.md).
+- `ambit connect` and `ambit disconnect` set up Claude Code, Codex, opencode and Cursor to use your Ambit gateway
+  with a personal key, and put the settings back. The key is kept in the keychain of your computer, or in a file
+  with mode 0600, and never in a tool's config file. `ambit key print` prints the key for a tool that needs it
+  (it refuses on a terminal unless you pass `--reveal`). `disconnect` does not revoke the key; revoke it in the console.
+  On Windows PowerShell 5.1, `connect opencode` warns when the execution policy does not load profile scripts and
+  prints the command to run. See [docs/guides/coding-tools.md](docs/guides/coding-tools.md).
+- New guides: [Claude Desktop with Ambit's models](docs/guides/claude-desktop.md), [Claude Desktop with MCP tools](docs/guides/claude-desktop-mcp.md),
+  [Codex, opencode and Hermes](docs/guides/codex-opencode-hermes.md), [coding tools](docs/guides/coding-tools.md),
+  [Turn Ambit on without blocking anyone](docs/guides/audit-only.md), and the pages [install](docs/install.md),
+  [CLI](docs/cli.md), [concepts](docs/concepts.md) and [compliance](docs/compliance.md).
+- Known limitation: when the model router refuses a request (status 403 or 404), Ambit records the refusal but not
+  who made it (an agentgateway v1.6.0 bug). See [Known limitations](docs/index.md#known-limitations).
 - Audit-only mode (`access.mode: audit`): every signed-in request to a model or an MCP tool goes through, every tool is
   listed to everyone, and each audit record says whether the access rules in force at that moment would have refused
   it. The console shows a banner, a "would be refused" badge and filter, and a summary on the Audit page.
@@ -18,6 +34,8 @@ Add a line here for each change that users can see, in the pull request that mak
   AccessRules. `ambit local up` waits for the first rule to be Ready.
 - `ambit connect` and `ambit disconnect` wait up to 60 seconds for the keychain (the unlock dialog of a Linux
   desktop); `ambit key print` still waits 2 seconds.
+- Fix: `helm upgrade --reuse-values` from 0.1.0 works. A missing `access` value means `enforce`, an activation timeout
+  of 120 s and a settle time of 3 s.
 
 Upgrade: the AgentgatewayPolicy `ambit-access-log` is now written by `ambit-controller` (same name), so there is a
 gap of about a second without an access-log policy during the upgrade, and a rollback to an earlier chart needs four

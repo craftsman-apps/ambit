@@ -84,13 +84,40 @@ def switch(ns, mode, t0, out, *dumps):
     def dump(u):
         return urllib.request.urlopen(u, timeout=5).read().decode()
 
+    def authorization(models):
+        """Per AgentgatewayModel name: (is a router, its authorization: a Model's expressions or a router's line
+        conditions). models: the API objects, or the dump's "models"."""
+        out = {}
+        for m in models:
+            if "spec" in m:  # an API object
+                name, spec = m["metadata"]["name"], m["spec"]
+                if "virtualModel" in spec:
+                    out[name] = (True, [t.get("when") for t in spec["virtualModel"]["conditional"]["targets"]])
+                else:
+                    out[name] = (False, spec.get("policies", {}).get("authorization", {}).get("policy", {}).get("matchExpressions"))
+            else:  # the dump: key namespace/name.namespace.route.listener (a name may hold dots)
+                key, k = m["key"].split("/", 1)[1], m["kind"]
+                name = key[:key.rfind(f".{ns}.")]
+                if "virtual" in k:
+                    out[name] = (True, [c.get("when") for c in k["virtual"]["routing"]["conditional"]])
+                else:
+                    out[name] = (False, k["concrete"].get("policies", {}).get("authorization", {}).get("rules", {}).get("allow"))
+        return out
+
     def shows(step, d):
         if step == "access log":
             return ("ambit.wouldRefuse" in d) == audit
         # authorization: the time server's MCP expression is in the authorization in enforce mode; in audit mode
         # the authorization is `true` and the expression is only in the log field ambit.wouldRefuseTool.
         n = d.count('mcp.tool.target == \\"time\\"')
-        return n == 1 if audit else n == (2 if "ambit.wouldRefuseTool" in d else 1)
+        if n != (1 if audit else (2 if "ambit.wouldRefuseTool" in d else 1)):
+            return False
+        # Every Model's and router's authorization is the one written; in audit mode a Model's is `true` (or
+        # `(true) && ` the unpriced refusal).
+        want = authorization(json.loads(kubectl("-n", ns, "get", "agentgatewaymodel", "-o", "json"))["items"])
+        if authorization(json.loads(d).get("models", [])) != want:
+            return False
+        return not audit or all(e == "true" or e.startswith("(true) && ") for router, x in want.values() if not router for e in x or [])
 
     deadline, name = time.time() + 300, None
     while time.time() < deadline and not name:

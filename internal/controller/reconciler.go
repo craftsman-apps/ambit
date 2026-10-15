@@ -74,9 +74,10 @@ type Reconciler struct {
 	// Activation is the gate each step of a mode switch or rules change waits on; nil: no gate.
 	Activation *Activation
 
-	stalled   *stalledStep  // the step a change stopped at (single worker, no lock)
-	gateRetry time.Duration // the last wait before trying a stopped change again
-	accessLog *logState     // the mode and rules version ambit-access-log was last written with
+	stalled   *stalledStep                // the step a change stopped at (single worker, no lock)
+	gateRetry time.Duration               // the last wait before trying a stopped change again
+	accessLog *logState                   // the mode and rules version ambit-access-log was last written with
+	deletions func(context.Context) error // this pass's deletions of objects no longer generated; urgent runs them
 }
 
 // How often the tools of a running server are read again by default: servers may add or change tools.
@@ -279,6 +280,72 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			r.accessLog.fields = fields
 		}
 	}
+	// Deletions never wait for agentgateway: each one removes access or a restriction an admin already removed.
+	// urgent runs them before the steps and on every poll of the gate; they run once more after the steps.
+	r.deletions = func(ctx context.Context) error {
+		// Objects of refused Servers: no general prune exists, and owner references only collect on Server deletion.
+		for name := range refusedServers {
+			if err := r.deleteGenerated(ctx, "AgentgatewayPolicy", "ambit-conn-"+name); err != nil {
+				return err
+			}
+		}
+		if len(servers.Items) > 0 { // every Server refused, or none running: no shared backend (or policy) either
+			for _, o := range [][2]string{{"AgentgatewayBackend", MCPBackendName}, {"AgentgatewayPolicy", MCPBackendName + "-access"}} {
+				if generates(res.Objects, o[0], o[1]) {
+					continue
+				}
+				if err := r.deleteGenerated(ctx, o[0], o[1]); err != nil {
+					return err
+				}
+			}
+		}
+		// No budgets (or budgets off): stop asking the ratelimit service on every request. No dollar limit: stop
+		// rewriting requests for usage.
+		for name, wanted := range map[string]bool{BudgetPolicyName: budgetPolicy, UsagePolicyName: usage, ClassifyPolicyName: classify} {
+			if wanted {
+				continue
+			}
+			stale := &unstructured.Unstructured{}
+			stale.SetGroupVersionKind(AgentgatewayPolicyGVK)
+			if err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: name}, stale); err == nil && ownedByAmbit(stale) {
+				if err := r.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
+					return err
+				}
+			}
+		}
+		if dep != nil && !classify { // the policy is gone (above), then the pods; they finish held requests on SIGTERM
+			if err := r.scale(ctx, dep, 0); err != nil {
+				return err
+			}
+		}
+		// Virtual models of routers that are gone or now invalid. Read from the API server, not the cache: right after
+		// the apply loop the cache can still show a router's label on an object that a Model has just taken over (a
+		// Model named router-<name>).
+		desiredRouters := map[string]bool{}
+		for _, o := range res.Objects {
+			if o.GetLabels()[RouterLabel] != "" {
+				desiredRouters[o.GetName()] = true
+			}
+		}
+		var vms unstructured.UnstructuredList
+		vms.SetGroupVersionKind(AgentgatewayModelGVK)
+		if err := r.Live.List(ctx, &vms, client.InNamespace(r.Namespace), client.HasLabels{RouterLabel}); err != nil {
+			return err
+		}
+		for i := range vms.Items {
+			vm := &vms.Items[i]
+			if desiredRouters[vm.GetName()] || controllerOwnerKind(vm) != "ModelRouter" {
+				continue
+			}
+			uid := vm.GetUID() // delete exactly this object, not one that replaced it meanwhile
+			if err := r.Delete(ctx, vm, &client.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil &&
+				!apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
+				return err
+			}
+		}
+		return nil
+	}
+	defer func() { r.deletions = nil }()
 	stall, ran, err := r.runSteps(ctx, steps, changing, pending{Mode: mode, RulesVersion: version})
 	if err != nil {
 		return reconcile.Result{}, err
@@ -302,74 +369,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		stalled = tooLarge // replaces every AccessRule's condition, like a stall
 	}
 	// Stopped before authorization (audit order): nothing that grants access moves before the access log is active.
-	// Offboarding was applied on every poll of the gate; the deletions below still run.
+	// Offboarding and the deletions were applied on every poll of the gate, and the deletions run once more.
 	held := stall != nil && !ran["authorization"]
-	// Objects of refused Servers: no general prune exists, and owner references only collect on Server deletion.
-	for name := range refusedServers {
-		if err := r.deleteGenerated(ctx, "AgentgatewayPolicy", "ambit-conn-"+name); err != nil {
-			return reconcile.Result{}, err
-		}
-	}
-	if len(servers.Items) > 0 { // every Server refused, or none running: no shared backend (or policy) either
-		for _, o := range [][2]string{{"AgentgatewayBackend", MCPBackendName}, {"AgentgatewayPolicy", MCPBackendName + "-access"}} {
-			if generates(res.Objects, o[0], o[1]) {
-				continue
-			}
-			if err := r.deleteGenerated(ctx, o[0], o[1]); err != nil {
-				return reconcile.Result{}, err
-			}
-		}
-	}
-	// No budgets (or budgets off): stop asking the ratelimit service on every request. No dollar limit: stop
-	// rewriting requests for usage.
-	for name, wanted := range map[string]bool{BudgetPolicyName: budgetPolicy, UsagePolicyName: usage, ClassifyPolicyName: classify} {
-		if wanted {
-			continue
-		}
-		stale := &unstructured.Unstructured{}
-		stale.SetGroupVersionKind(AgentgatewayPolicyGVK)
-		if err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: name}, stale); err == nil && ownedByAmbit(stale) {
-			if err := r.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
-				return reconcile.Result{}, err
-			}
-		}
+	if err := r.deletions(ctx); err != nil {
+		return reconcile.Result{}, err
 	}
 	if dep != nil {
-		if !classify { // the policy is gone (above), then the pods; they finish held requests on SIGTERM
-			if err := r.scale(ctx, dep, 0); err != nil {
-				return reconcile.Result{}, err
-			}
-		}
 		cred, err := credentialsObject(r.Namespace, routerCfg, keys)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
 		if err := r.applyCredentials(ctx, cred); err != nil {
-			return reconcile.Result{}, err
-		}
-	}
-	// Virtual models of routers that are gone or now invalid. Read from the API server, not the cache: right after
-	// the apply loop the cache can still show a router's label on an object that a Model has just taken over (a
-	// Model named router-<name>).
-	desiredRouters := map[string]bool{}
-	for _, o := range res.Objects {
-		if o.GetLabels()[RouterLabel] != "" {
-			desiredRouters[o.GetName()] = true
-		}
-	}
-	var vms unstructured.UnstructuredList
-	vms.SetGroupVersionKind(AgentgatewayModelGVK)
-	if err := r.Live.List(ctx, &vms, client.InNamespace(r.Namespace), client.HasLabels{RouterLabel}); err != nil {
-		return reconcile.Result{}, err
-	}
-	for i := range vms.Items {
-		vm := &vms.Items[i]
-		if desiredRouters[vm.GetName()] || controllerOwnerKind(vm) != "ModelRouter" {
-			continue
-		}
-		uid := vm.GetUID() // delete exactly this object, not one that replaced it meanwhile
-		if err := r.Delete(ctx, vm, &client.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil &&
-			!apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
 			return reconcile.Result{}, err
 		}
 	}

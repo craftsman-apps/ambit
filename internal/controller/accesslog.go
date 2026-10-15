@@ -130,8 +130,8 @@ type logState struct {
 }
 
 // urgent applies what a change waiting for agentgateway must never hold back: the offboarding policy, from
-// ambit-offboarded as it is now, and ambit-access-log when it was deleted (with the values it was last written
-// with). It runs before the steps of a change and on every poll of the gate.
+// ambit-offboarded as it is now, the pass's deletions, and ambit-access-log when it was deleted (with the values
+// it was last written with). It runs before the steps of a change and on every poll of the gate.
 func (r *Reconciler) urgent(ctx context.Context) error {
 	p, err := r.offboarding(ctx)
 	if err != nil {
@@ -139,6 +139,11 @@ func (r *Reconciler) urgent(ctx context.Context) error {
 	}
 	if p != nil {
 		if _, _, err := r.applyAll(ctx, []*unstructured.Unstructured{p}, map[string]metav1.Condition{}); err != nil {
+			return err
+		}
+	}
+	if r.deletions != nil {
+		if err := r.deletions(ctx); err != nil {
 			return err
 		}
 	}

@@ -323,6 +323,42 @@ func TestWaitingChangeStillOffboardsAndKeepsTheAccessLog(t *testing.T) {
 	wait(t, done)
 }
 
+// A deletion never waits for the gate: an object no longer generated, created while a mode switch waits for
+// agentgateway, is gone before the gate times out.
+func TestWaitingChangeStillDeletes(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-gate-deletes"
+	gateFixture(t, ns)
+	ctx := t.Context()
+	// The timeout is longer than eventually waits (15 s): a deletion after the stall does not pass.
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}, AccessMode: "audit",
+		Activation: &Activation{Timeout: 30 * time.Second, Poll: 50 * time.Millisecond}}
+	done := reconcileAsync(r)
+	eventually(t, "access log written", func() error { _, err := accessLogOf(ctx, ns); return err })
+	// While the access-log step waits: a budget policy shows up that no budget generates (budgets turned off).
+	stale := generated("agentgateway.dev/v1alpha1", "AgentgatewayPolicy", BudgetPolicyName, ns, map[string]any{
+		"targetRefs": []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": "ambit-llm"}},
+		"traffic":    map[string]any{"authorization": map[string]any{"action": "Require", "policy": map[string]any{"matchExpressions": []any{"true"}}}}})
+	if err := envClient.Create(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "budget policy deleted while the change waits", func() error {
+		if _, err := genGet(ctx, ns, "AgentgatewayPolicy", BudgetPolicyName); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("still there: %v", err)
+		}
+		return nil
+	})
+	select {
+	case err := <-done:
+		t.Fatalf("the pass ended (%v) before the deletion was checked: the gate did not wait", err)
+	default:
+	}
+	playAgentgateway(t, ns, "AgentgatewayPolicy", AccessLogPolicy)
+	eventually(t, "authorization written", func() error { _, err := genGet(ctx, ns, "AgentgatewayModel", "gemma"); return err })
+	playAgentgateway(t, ns, "AgentgatewayModel", "gemma")
+	wait(t, done)
+}
+
 // Audit order, the access-log step stalled: authorization does not move, but offboarding and the deletion of
 // objects no longer generated still happen in the same pass.
 func TestStalledAuditChangeStillOffboardsAndDeletes(t *testing.T) {

@@ -599,9 +599,9 @@ func TestRejectedModelsAreNamedInTheStalledChange(t *testing.T) {
 		message string
 	}{
 		{"one", []string{"mistral-x"}, []string{"Model/mistral-x"},
-			"agentgateway rejected Model/mistral-x: backend mistral-x: GCP credential JSON missing `type` field. Check the provider secret of Model/mistral-x, or remove the Model."},
+			"agentgateway rejected Model/mistral-x: backend/ambit-gate-nack-one/mistral-x: GCP credential JSON missing `type` field. Check the provider secret of Model/mistral-x, or remove the Model."},
 		{"two", []string{"mistral-x", "gemma"}, []string{"Model/gemma", "Model/mistral-x"},
-			"agentgateway rejected Model/gemma and Model/mistral-x: backend mistral-x gemma: GCP credential JSON missing `type` field. Check the provider secret of each rejected Model, or remove the Model."},
+			"agentgateway rejected Model/gemma and Model/mistral-x: backend/ambit-gate-nack-two/mistral-x: GCP credential JSON missing `type` field; backend/ambit-gate-nack-two/gemma: GCP credential JSON missing `type` field. Check the provider secret of each rejected Model, or remove the Model."},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ns := "ambit-gate-nack-" + c.name
@@ -622,10 +622,16 @@ func TestRejectedModelsAreNamedInTheStalledChange(t *testing.T) {
 				}
 				return nil
 			})
+			var entries []map[string]string
+			for _, m := range c.models {
+				entries = append(entries, map[string]string{"key": "backend/" + ns + "/" + m, "error": "GCP credential JSON missing `type` field"})
+			}
+			nackJSON, _ := json.Marshal(entries)
+			nackText := string(nackJSON)
 			nack := &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "nack-1", Namespace: ns},
 				InvolvedObject: corev1.ObjectReference{Kind: "Gateway", Name: "ambit", Namespace: ns},
 				Type:           corev1.EventTypeWarning, Reason: nackReason,
-				Message: "backend " + strings.Join(c.models, " ") + ": GCP credential JSON missing `type` field"}
+				Message: nackText}
 			if err := envClient.Create(ctx, nack); err != nil {
 				t.Fatal(err)
 			}

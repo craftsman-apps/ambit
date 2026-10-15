@@ -1,11 +1,11 @@
 package controller
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -197,23 +197,30 @@ func (r *Reconciler) activated(ctx context.Context, objs []gated, seen nackSeen)
 	return first, nil
 }
 
-// nackStall is the stop for new NACK Events. The Event text is the proxy's error and the Event is on the Gateway, so
-// the rejected objects are the Ambit-generated AgentgatewayModels whose names the text contains. agentgateway
-// rejects the whole update, so the rejected object need not be one this change wrote.
+// reasonMax bounds the gateway's reason in the stop message: a proxy error can quote the bad input. The Event keeps
+// the whole text.
+const reasonMax = 300
+
+// nackStall is the stop for new NACK Events. The Event text is the proxy's NACK: a JSON array with one entry per
+// rejected resource (see rejectedOf), so the rejected objects are the Ambit-generated AgentgatewayModels named by an
+// entry's key. agentgateway rejects the whole update, so the rejected object need not be one this change wrote.
 func (r *Reconciler) nackStall(ctx context.Context, events []corev1.Event) *stalledError {
 	var models unstructured.UnstructuredList
 	models.SetGroupVersionKind(AgentgatewayModelGVK)
+	listed := true
 	if err := r.Live.List(ctx, &models, client.InNamespace(r.Namespace)); err != nil {
 		log.FromContext(ctx).Error(err, "list the models to name the rejected object")
+		listed = false
 	}
 	var objects, reasons []string
 	for _, e := range events {
-		if !slices.Contains(reasons, e.Message) {
-			reasons = append(reasons, e.Message)
+		names, reason := rejectedOf(e.Message, r.Namespace)
+		if reason = boundedReason(reason); !slices.Contains(reasons, reason) {
+			reasons = append(reasons, reason)
 		}
 		for _, m := range models.Items {
 			owner := controllerOwner(&m)
-			if owner == "" || !namedIn(e.Message, m.GetName()) || slices.Contains(objects, owner) {
+			if owner == "" || !slices.Contains(names, m.GetName()) || slices.Contains(objects, owner) {
 				continue
 			}
 			objects = append(objects, owner)
@@ -222,8 +229,11 @@ func (r *Reconciler) nackStall(ctx context.Context, events []corev1.Event) *stal
 	slices.Sort(objects)
 	reason := strings.Join(reasons, "; ")
 	if len(objects) == 0 {
-		return &stalledError{msg: fmt.Sprintf("a gateway pod rejected the update (%s): %s. agentgateway does not say which object; "+
-			"check the provider secret of each Model, or remove the Model you changed last.", nackReason, reason)}
+		why := "agentgateway does not say which object"
+		if !listed {
+			why = "the controller could not work out which object (listing the Models failed; see the controller log)"
+		}
+		return &stalledError{msg: fmt.Sprintf("a gateway pod rejected the update (%s): %s. %s; check the provider secret of each Model.", nackReason, reason, why)}
 	}
 	each, step := objects[0], "Check the provider secret of "+objects[0]+", or remove the Model."
 	if len(objects) > 1 {
@@ -236,9 +246,33 @@ func (r *Reconciler) nackStall(ctx context.Context, events []corev1.Event) *stal
 	return &stalledError{msg: fmt.Sprintf("agentgateway rejected %s: %s. %s", each, reason, step), objects: objects}
 }
 
-// namedIn reports whether text contains name as a whole name: not as a part of a longer one such as gpt-4o.
-func namedIn(text, name string) bool {
-	return regexp.MustCompile(`(^|[^A-Za-z0-9._-])` + regexp.QuoteMeta(name) + `($|[^A-Za-z0-9_-])`).MatchString(text)
+func boundedReason(s string) string {
+	if r := []rune(s); len(r) > reasonMax {
+		return string(r[:reasonMax]) + "…"
+	}
+	return s
+}
+
+// rejectedOf reads a NACK text. agentgateway v1.6.0 sends a JSON array of {"key", "error" or "warn"}, one entry per
+// rejected resource, the key being "<kind>/<namespace>/<name>", for example "backend/default/bad-gcp" or
+// "model/default/gpt-5-mini" (crates/xds/src/client.rs:76-82 and :715, crates/agentgateway/src/store/binds.rs:2603
+// and :2973). names are the resource names in namespace; reason is "key: text" per entry. A text in another format
+// names nothing and is the reason as it is: the caller then gives the generic message.
+func rejectedOf(text, namespace string) (names []string, reason string) {
+	var entries []struct{ Key, Error, Warn string }
+	if json.Unmarshal([]byte(text), &entries) != nil || len(entries) == 0 {
+		return nil, text
+	}
+	var parts []string
+	for _, e := range entries {
+		parts = append(parts, e.Key+": "+cmp.Or(e.Error, e.Warn))
+		if kind, rest, _ := strings.Cut(e.Key, "/"); kind == "backend" || kind == "model" {
+			if ns, name, ok := strings.Cut(rest, "/"); ok && ns == namespace && name != "" {
+				names = append(names, name)
+			}
+		}
+	}
+	return names, strings.Join(parts, "; ")
 }
 
 // activationOf checks agentgateway's verdict on one object: every entry of its controller in status.ancestors (a

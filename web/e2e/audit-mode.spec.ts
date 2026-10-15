@@ -120,7 +120,7 @@ test("a rules change that agentgateway rejected names the Model, the reason and 
   await expect(page).toHaveURL(/\/models$/);
   // Nothing to link to for an unnamed rejection: the text alone.
   await page.unrouteAll();
-  await setup(page, { config: { ...enforce, pending: { ...pending, objects: undefined, error: "a gateway pod rejected the update (AgentGatewayNackError): bad. agentgateway does not say which object; check the provider secret of each Model, or remove the Model you changed last." } } });
+  await setup(page, { config: { ...enforce, pending: { ...pending, objects: undefined, error: "a gateway pod rejected the update (AgentGatewayNackError): bad. agentgateway does not say which object; check the provider secret of each Model." } } });
   await page.goto("/access-rules");
   await expect(page.getByTestId("mode-pending-banner")).toContainText("does not say which object");
   await expect(page.getByTestId("mode-pending-banner").getByRole("link")).toHaveCount(0);

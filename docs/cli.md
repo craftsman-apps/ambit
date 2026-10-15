@@ -113,7 +113,7 @@ Removes exactly what `ambit connect` added, and keeps every other byte of the fi
 ambit key print --url <llm address> [--reveal]
 ```
 
-Prints the key that `ambit connect` stored for the address to standard output, with a line end and nothing else. The tools that `ambit connect` configures run this command each time they start. It reads the keychain or the key file only: no network and no cluster. On a terminal it refuses (exit 2) unless you add `--reveal`. If no key is stored, it exits with 1 and writes the reason to standard error. It is the only command that prints a key as it is. See [Where the Ambit CLI keeps the key](api-keys.md#where-the-ambit-cli-keeps-the-key) for what the keychain protects and what it does not.
+Prints the key that `ambit connect` stored for the address to standard output, with a line end and nothing else. The tools that `ambit connect` configures run this command each time they start. It reads the keychain or the key file only: no network and no cluster. On a terminal it refuses (exit 2) unless you add `--reveal`. If no key is stored, it exits with 1 and writes the reason to standard error. It prints the key whenever its output is not a terminal (that is how the tools read it), so do not run it where its output is logged. It is the only command that prints a key as it is. See [Where the Ambit CLI keeps the key](api-keys.md#where-the-ambit-cli-keeps-the-key) for what the keychain protects and what it does not.
 
 `connect`, `disconnect` and `key print` print text only: `--output json` is a usage error (exit 2). They use the exit codes 0, 1 and 2, and never 3. A failure, including an error text from the operating system, goes through the same redaction as the other commands.
 

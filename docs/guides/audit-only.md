@@ -16,6 +16,7 @@ Ambit refuses everything that no access rule grants. On the first day that block
 | Model access (`AccessRule` `models`) and ModelRouter lines | **Allowed**, and marked in the audit record |
 | MCP `tools/call` (`AccessRule` `servers` and `tools`) | **Allowed**, and marked in the audit record |
 | MCP `tools/list` | **Not filtered by access rules: every signed-in person sees every tool of every server.** Not marked |
+| A `ModelRouter` of type LLM with category routes | **Does not classify a person that the router's groups do not grant.** That person is served by the default model, or by a route without a category, and the record says `refuse:router`. After a grant, the person gets the routed model |
 | Sign-in (a valid token or key), the LLM path allowlist | Still enforced |
 | Offboarding | Still enforced |
 | Budgets, and the refusal of an unpriced model for a group with a dollar limit | Still enforced |

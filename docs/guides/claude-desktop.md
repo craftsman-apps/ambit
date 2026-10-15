@@ -75,7 +75,8 @@ exec '/opt/homebrew/bin/ambit' key print --url 'https://llm.example.com'
 On Windows, `C:\ProgramData\Ambit\ambit-key.cmd`, and set `inferenceCredentialHelperWindows` to it:
 
 ```bat
-@"C:\Program Files\Ambit\ambit.exe" key print --url https://llm.example.com
+REM install.ps1 puts ambit.exe here. If you installed it elsewhere, use the path that `where.exe ambit` prints.
+@"%LOCALAPPDATA%\ambit\bin\ambit.exe" key print --url https://llm.example.com
 ```
 
 The command prints only the key, and exits with 1 and an error text on standard error when no key is stored. That is what the helper must do. Run by hand in a terminal, it needs `--reveal`; Claude Desktop runs it without a terminal. **Not tested with Claude Desktop.** The command itself is covered by Ambit's tests.

@@ -161,6 +161,28 @@ func TestGateOnAModelNeedsAcceptedOnEveryParent(t *testing.T) {
 	}
 }
 
+// An object that a step wrote and that was deleted before agentgateway reported on it (deleting a Model removes its
+// AgentgatewayModel) has nothing left to apply. Waiting for it held the single worker for the whole timeout.
+func TestGateDoesNotWaitForAnObjectThatWasDeleted(t *testing.T) {
+	r, clock := gateReconciler() // the object is in neither the cache nor the API server
+	if err := r.gate(t.Context(), []gated{{kind: "AgentgatewayModel", name: "gone", generation: 3}}, nil, 120*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got := clock.Sub(gateStart); got != 3*time.Second {
+		t.Errorf("waited %v, want the settle time 3s", got)
+	}
+}
+
+// An object that the API server has but the cache has not seen yet is still waited for.
+func TestGateWaitsForAnObjectThatIsNotInTheCacheYet(t *testing.T) {
+	r, _ := gateReconciler()
+	r.Live = fake.NewClientBuilder().WithObjects(gatedModel(3)).Build()
+	err := r.gate(t.Context(), []gated{{kind: "AgentgatewayModel", name: "gpt", generation: 3}}, nil, 120*time.Second)
+	if err == nil || !strings.HasSuffix(err.Error(), "generation 3: the object is missing") {
+		t.Fatalf("error %v", err)
+	}
+}
+
 func TestGateWithNothingWrittenDoesNotWait(t *testing.T) {
 	r, clock := gateReconciler()
 	if err := r.gate(t.Context(), nil, nil, 120*time.Second); err != nil || clock.Sub(gateStart) != 0 {

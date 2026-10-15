@@ -164,6 +164,15 @@ func (r *Reconciler) activated(ctx context.Context, objs []gated, seen nackSeen)
 			if !apierrors.IsNotFound(err) {
 				return "", err
 			}
+			// Not in the cache. Gone from the API server too: deleted after the write (deleting a Model removes its
+			// AgentgatewayModel), so there is nothing left to apply. Otherwise the cache has not caught up yet.
+			live := &unstructured.Unstructured{}
+			live.SetGroupVersionKind(AgentgatewayPolicyGVK.GroupVersion().WithKind(g.kind))
+			if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: g.name}, live); apierrors.IsNotFound(err) {
+				continue
+			} else if err != nil {
+				return "", err
+			}
 			o = nil
 		}
 		waiting, invalid := activationOf(o, g)

@@ -33,9 +33,9 @@ type Keychain struct {
 	// WriteTimeout is for Set and Delete during connect and disconnect. On a Linux desktop they show an unlock
 	// dialog that a person has to answer.
 	WriteTimeout time.Duration
-	get     func(service, user string) (string, error)
-	set     func(service, user, password string) error
-	del     func(service, user string) error
+	get          func(service, user string) (string, error)
+	set          func(service, user, password string) error
+	del          func(service, user string) error
 }
 
 func NewKeychain(service string) Keychain {

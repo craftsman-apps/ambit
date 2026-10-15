@@ -174,4 +174,12 @@ assert not [x for x in r if {"pods/exec","pods/portforward"} & set(x["resources"
 audit_warn='access.mode is audit: every signed-in request to a model or MCP tool is allowed'
 ! grep -qF "$audit_warn" <<<"$(notes)" || { echo "FAIL chart: no audit warning in enforce mode"; exit 1; }
 grep -qF "$audit_warn" <<<"$(notes --set access.mode=audit)" || { echo "FAIL chart: NOTES must warn in audit mode"; exit 1; }
+# helm upgrade --reuse-values from 0.1.0 (#81): the old release's values replace the chart's defaults, so every key
+# added since 0.1.0 is missing. Render every template with the chart's own values.yaml swapped for 0.1.0's.
+old=$(mktemp -d); trap 'rm -rf "$old"' EXIT
+cp -R charts/ambit "$old/ambit"
+git show v0.1.0:charts/ambit/values.yaml >"$old/ambit/values.yaml"
+reuse=$(helm template ambit "$old/ambit" -n ambit-system -f deploy/quickstart.yaml 2>&1) || { echo "FAIL chart: render with the values of 0.1.0 only: $reuse"; exit 1; }
+grep -q -- '--access-mode=enforce' <<<"$reuse" && grep -q -- '--activation-timeout=120s' <<<"$reuse" && grep -q -- '--activation-settle=3s' <<<"$reuse" || { echo "FAIL chart: values of 0.1.0 only must give enforce and the default timings"; exit 1; }
+! grep -q 'access.mode is audit' <<<"$(helm template ambit "$old/ambit" -n ambit-system -f deploy/quickstart.yaml --show-only templates/NOTES.txt 2>&1)" || { echo "FAIL chart: no audit warning with the values of 0.1.0 only"; exit 1; }
 echo "PASS chart"

@@ -39,7 +39,7 @@ Ambit is a self-hosted gateway, built on agentgateway, ToolHive and other open-s
 | Anyone who has the key can use any model. | Access rules based on your identity provider's groups decide which models and MCP servers each team may use. |
 | AI agents connect to work apps on their own, often through one shared service account. | Every MCP call passes one gateway. People connect their own app accounts, tools are checked, and personal data in results is masked. |
 | The cost shows up on next month's bill. | Daily limits per group and per person, in requests or in dollars. |
-| Nobody can say who sent what to which model. | Every call is recorded, refusals included. Model refusals do not yet show who made them (an agentgateway bug; see Known limitations). |
+| Nobody can say who sent what to which model. | Every call is recorded, refusals included. Model refusals do not yet show who made them (an agentgateway bug; see [Known limitations](https://ambitproject.dev/docs/#known-limitations)). |
 | Someone leaves, and their keys work until someone remembers to rotate them. | The identity provider disables them, and their keys, sessions and app sign-ins stop at once. |
 
 ## Architecture

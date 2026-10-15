@@ -107,7 +107,7 @@ func WrapperLines(sh Shell, goos, ambitPath, url string) []string {
 	case Fish:
 		return []string{"function opencode; AMBIT_API_KEY=(" + Quote("linux", ambitPath) + " key print --url " + Quote("linux", url) + ") command opencode $argv; end"}
 	case PowerShell:
-		return []string{"function opencode { $env:AMBIT_API_KEY = (& " + psQuote(ambitPath) + " key print --url " + psQuote(url) + "); try { & (Get-Command opencode -CommandType Application)[0] @args } finally { Remove-Item Env:AMBIT_API_KEY -ErrorAction SilentlyContinue } }"}
+		return []string{"function opencode { $had = Test-Path Env:AMBIT_API_KEY; $old = $env:AMBIT_API_KEY; $env:AMBIT_API_KEY = (& " + psQuote(ambitPath) + " key print --url " + psQuote(url) + "); try { & (Get-Command opencode -CommandType Application)[0] @args } finally { if ($had) { $env:AMBIT_API_KEY = $old } else { Remove-Item Env:AMBIT_API_KEY -ErrorAction SilentlyContinue } } }"}
 	}
 	return []string{`opencode() { AMBIT_API_KEY="$(` + Quote("linux", ambitPath) + " key print --url " + Quote("linux", url) + `)" command opencode "$@"; }`}
 }

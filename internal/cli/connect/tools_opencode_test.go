@@ -245,7 +245,7 @@ func TestWrapperLines(t *testing.T) {
 		{"zsh", "darwin", `opencode() { AMBIT_API_KEY="$('/opt/homebrew/bin/ambit' key print --url 'https://llm.example.com')" command opencode "$@"; }`},
 		{"bash", "linux", `opencode() { AMBIT_API_KEY="$('/opt/homebrew/bin/ambit' key print --url 'https://llm.example.com')" command opencode "$@"; }`},
 		{"fish", "linux", `function opencode; AMBIT_API_KEY=('/opt/homebrew/bin/ambit' key print --url 'https://llm.example.com') command opencode $argv; end`},
-		{"powershell", "windows", `function opencode { $env:AMBIT_API_KEY = (& 'C:\Users\First Last\ambit.exe' key print --url 'https://llm.example.com'); try { & (Get-Command opencode -CommandType Application)[0] @args } finally { Remove-Item Env:AMBIT_API_KEY -ErrorAction SilentlyContinue } }`},
+		{"powershell", "windows", `function opencode { $had = Test-Path Env:AMBIT_API_KEY; $old = $env:AMBIT_API_KEY; $env:AMBIT_API_KEY = (& 'C:\Users\First Last\ambit.exe' key print --url 'https://llm.example.com'); try { & (Get-Command opencode -CommandType Application)[0] @args } finally { if ($had) { $env:AMBIT_API_KEY = $old } else { Remove-Item Env:AMBIT_API_KEY -ErrorAction SilentlyContinue } } }`},
 	} {
 		path := "/opt/homebrew/bin/ambit"
 		if tt.goos == "windows" {
@@ -379,4 +379,50 @@ func TestWrapperLinesPowerShellTypographicQuotes(t *testing.T) {
 	if !strings.Contains(got, `& 'C:\Users\O’’Brien\ambit.exe'`) || !strings.Contains(got, `'https://h/a‘‘b'`) {
 		t.Fatalf("typographic single quotes are not doubled: %s", got)
 	}
+}
+
+// The PowerShell function must give opencode the Ambit key and then put back the key the person had set.
+func TestPowerShellWrapperRestoresAMBIT_API_KEY(t *testing.T) {
+	pwsh, err := exec.LookPath("pwsh")
+	if err != nil || runtime.GOOS == "windows" {
+		t.Skip("pwsh is not on PATH (or this is Windows, where the fake programs below do not run)")
+	}
+	bin := t.TempDir()
+	for name, body := range map[string]string{"ambit": "echo ambit_wrapped", "opencode": `echo "opencode sees $AMBIT_API_KEY"`} {
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wrapper := WrapperLines(PowerShell, "linux", filepath.Join(bin, "ambit"), "https://llm.example.com")[0]
+	for name, tt := range map[string]struct{ before, want string }{
+		"set before the call":     {"mine", "opencode sees ambit_wrapped|after=mine|had=True"},
+		"not set before the call": {"", "opencode sees ambit_wrapped|after=|had=False"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			script := wrapper + `; $r = opencode; "$r|after=$env:AMBIT_API_KEY|had=$(Test-Path Env:AMBIT_API_KEY)"`
+			cmd := exec.Command(pwsh, "-NoProfile", "-Command", script)
+			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			cmd.Env = withoutEnv(cmd.Env, "AMBIT_API_KEY")
+			if tt.before != "" {
+				cmd.Env = append(cmd.Env, "AMBIT_API_KEY="+tt.before)
+			}
+			got, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("%v\n%s", err, got)
+			}
+			if strings.TrimSpace(string(got)) != tt.want {
+				t.Fatalf("got %q, want %q", strings.TrimSpace(string(got)), tt.want)
+			}
+		})
+	}
+}
+
+func withoutEnv(env []string, name string) []string {
+	var out []string
+	for _, e := range env {
+		if !strings.HasPrefix(e, name+"=") {
+			out = append(out, e)
+		}
+	}
+	return out
 }

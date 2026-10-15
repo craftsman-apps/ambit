@@ -225,3 +225,31 @@ test("in enforce mode the Audit page is as before", async ({ page }) => {
   await expect(page.getByText("Refused by policy (403)")).toBeVisible();
   await expect(page.getByLabel("Only calls the rules would refuse")).toHaveCount(0);
 });
+
+test("the pages say what happens to what no rule names, by mode", async ({ page }) => {
+  const pages: Array<[string, RegExp, RegExp]> = [
+    ["/access-rules", /Audit-only mode: anything no rule names is let through and marked as would be refused/, /Anything no rule names is closed to everyone/],
+    ["/models", /In audit-only mode a model that no access rule names is let through/, /A model is closed to everyone until an access rule names it/],
+    ["/servers", /In audit-only mode their tools are let through/, /Their tools are closed to everyone until an access rule names them/],
+    ["/", /named by no rule \(let through\)/, /closed to everyone/],
+  ];
+  const homeMocks = async () => { // the overview needs a person's access and one model that no rule names
+    await page.route("**/api/me/access", (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify({ groups: [], models: [], servers: [] }) }));
+    await page.route("**/api/models", (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify(r.request().headers()["referer"]?.endsWith("/") ? [{ name: "gpt-4o", allSignedIn: false, allowedGroups: [] }] : []) }));
+  };
+  await setup(page, { config: audit });
+  await homeMocks();
+  for (const [path, inAudit] of pages) {
+    await page.goto(path);
+    await expect(page.locator("main")).toContainText(inAudit);
+    await expect(page.locator("main")).not.toContainText(/closed to everyone|no model can be used/);
+    await snap(page, `no-rule-wording-audit-${path === "/" ? "home" : path.slice(1)}`);
+  }
+  await page.unrouteAll();
+  await setup(page, { config: enforce });
+  await homeMocks();
+  for (const [path, , inEnforce] of pages) {
+    await page.goto(path);
+    await expect(page.locator("main")).toContainText(inEnforce);
+  }
+});

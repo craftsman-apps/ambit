@@ -45,3 +45,19 @@ test("the switch check needs 7 days of the current rules and nothing counted", (
   assert.equal(switchCheck({ ...s, rules: "all" }, "2026-10-08T10:00:00Z", now), undefined);
   assert.equal(switchCheck(s, undefined, now), undefined);
 });
+
+test("the pages say who is let through, by mode", async () => {
+  const { closedWording } = await import("../src/lib/audit-mode.ts");
+  const enforce = closedWording(false), audit = closedWording(true);
+  assert.equal(enforce.rules, "Who may use which models and MCP tools. Anything no rule names is closed to everyone.");
+  assert.equal(enforce.noRules, "No access rules yet, so no model can be used.");
+  assert.equal(enforce.count(4), "4 closed to everyone");
+  assert.equal(enforce.noServerRule, "None: closed to everyone");
+  assert.match(audit.rules, /^Who may use which models and MCP tools\. Audit-only mode: anything no rule names is let through and marked as would be refused\.$/);
+  assert.equal(audit.count(4), "4 named by no rule (let through)");
+  for (const k of ["rules", "noRules", "models", "servers", "noServerRule"]) {
+    assert.doesNotMatch(audit[k], /closed to everyone|no model can be used/, k);
+    assert.match(audit[k], /let through|would be refused/, k);
+  }
+  assert.doesNotMatch(audit.count(1), /closed to everyone/);
+});

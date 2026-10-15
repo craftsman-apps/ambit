@@ -4,6 +4,7 @@ import { getJSON, isProposed, sendJSON, useConfig, useMe, useModels, type ModelP
 import { Button } from "@/components/ui/button";
 import { PullRequestNotice } from "@/components/pull-request";
 import { Shell, Status } from "@/components/shell";
+import { closedWording } from "@/lib/audit-mode";
 
 // The Model API spells providers as agentgateway does; people read the vendors' own names.
 const providerName: Record<string, string> = {
@@ -61,12 +62,13 @@ function PriceEditor({ m, onDone }: { m: ModelView; onDone: () => void }) {
 export function ModelsPage() {
   const q = useModels();
   const admin = useMe().data?.role === "admin";
+  const audit = useConfig().data?.accessMode === "audit";
   const [editing, setEditing] = useState<string | null>(null);
   return (
     <Shell crumb="Govern / Models">
       <section className="p-5">
         <h1 className="text-h1 font-semibold tracking-tight">Models</h1>
-        <p className="mb-4 text-muted">The model catalog. A model is closed to everyone until an access rule names it. Prices estimate cost and drive dollar budgets.</p>
+        <p className="mb-4 text-muted">{closedWording(audit).models}</p>
         {q.isError && <p className="text-bad">{q.error.message}</p>}
         <table className="w-full border-collapse">
           <thead>

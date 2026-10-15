@@ -52,3 +52,24 @@ export function switchCheck(s: WouldRefuse, rulesSince: string | undefined, now:
   if (s.requests === 0 && s.markMissing === 0) return `Switching to enforcing now would refuse nothing seen since ${rulesSince.slice(0, 16).replace("T", " ")} UTC.`;
   return undefined;
 }
+
+// What the pages say about a model or a tool that no access rule names: closed in enforcing mode, let through (and
+// marked) in audit-only mode.
+export function closedWording(audit: boolean) {
+  if (audit) return {
+    rules: "Who may use which models and MCP tools. Audit-only mode: anything no rule names is let through and marked as would be refused.",
+    noRules: "No access rules yet. In audit-only mode every model is let through and marked as would be refused.",
+    models: "The model catalog. In audit-only mode a model that no access rule names is let through and marked as would be refused. Prices estimate cost and drive dollar budgets.",
+    servers: "Servers run in their own pods, or elsewhere and are reached by URL; either way, only through the gateway. In audit-only mode their tools are let through, and a tool that no access rule names is marked as would be refused.",
+    noServerRule: "None: would be refused",
+    count: (n: number) => `${n} named by no rule (let through)`,
+  };
+  return {
+    rules: "Who may use which models and MCP tools. Anything no rule names is closed to everyone.",
+    noRules: "No access rules yet, so no model can be used.",
+    models: "The model catalog. A model is closed to everyone until an access rule names it. Prices estimate cost and drive dollar budgets.",
+    servers: "Servers run in their own pods, or elsewhere and are reached by URL; either way, only through the gateway. Their tools are closed to everyone until an access rule names them.",
+    noServerRule: "None: closed to everyone",
+    count: (n: number) => `${n} closed to everyone`,
+  };
+}

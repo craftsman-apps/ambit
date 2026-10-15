@@ -11,7 +11,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/portforward"
+	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/client-go/transport/spdy"
 )
 
@@ -67,4 +69,31 @@ func pickPod(pods []corev1.Pod) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no ready pod")
+}
+
+// Exec runs cmd in the first ready pod that matches selector and returns what it wrote to standard output. It
+// needs `create` on pods/exec. Standard error goes into the error. The caller passes only read-only commands.
+func Exec(ctx context.Context, c *Clients, ns, selector string, cmd []string) (string, error) {
+	pods, err := c.Kube.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return "", err
+	}
+	pod, err := pickPod(pods.Items)
+	if err != nil {
+		return "", fmt.Errorf("%s: %w", selector, err)
+	}
+	req := c.Kube.CoreV1().RESTClient().Post().Resource("pods").Namespace(ns).Name(pod).SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{Command: cmd, Stdout: true, Stderr: true}, scheme.ParameterCodec)
+	ex, err := remotecommand.NewSPDYExecutor(c.Config, http.MethodPost, req.URL())
+	if err != nil {
+		return "", err
+	}
+	var stdout, stderr strings.Builder
+	if err := ex.StreamWithContext(ctx, remotecommand.StreamOptions{Stdout: &stdout, Stderr: &stderr}); err != nil {
+		if msg := strings.TrimSpace(stderr.String()); msg != "" {
+			return "", fmt.Errorf("%w: %s", err, msg)
+		}
+		return "", err
+	}
+	return stdout.String(), nil
 }

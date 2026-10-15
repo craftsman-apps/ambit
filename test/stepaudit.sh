@@ -11,6 +11,8 @@
 #   gateway pod's /config_dump when the controller says it is active. In audit mode alice is served and her records
 #   say refuse:model / refuse:tool; every call served in audit mode has a mark; nothing else changes. Then a rules
 #   change the API server refuses stops at its step (RulesNotActive). Python parts: test/stepaudit.py.
+# Step 9 · `ambit check --production --deep` in audit mode: P11 warns (with the days) and the mark-missing line is 0;
+#   after the switch back, P11 passes and the line is still there (audit mode was on in the last 24 h).
 # Reinstalls Ambit: run under the shared kind lock. Needs this checkout's image in the cluster (make image).
 #   AUDIT_STEPS             "0", "1" (steps 1-8) or "0 1" (default)
 #   MCP, KEYCLOAK           the gateway's MCP URL and Keycloak as the host reaches them (defaults: port 8080)
@@ -248,7 +250,9 @@ ch_json "SELECT toUnixTimestamp64Nano(Timestamp)/1e9 AS t, LogAttributes['jwt.em
   LogAttributes['ambit.wouldRefuseTool'] AS toolmark, LogAttributes['http.response.status_code'] AS status FROM otel.otel_logs
   WHERE Timestamp BETWEEN '$first' AND '$last' AND (
     (LogAttributes['jwt.email'] IN ('alice@acme.test', 'mira@acme.test')
-      AND (LogAttributes['gen_ai.request.model'] = 'mock/echo' OR LogAttributes['mcp.method.name'] = 'tools/call'))
+      AND (LogAttributes['gen_ai.request.model'] = 'mock/echo' OR LogAttributes['mcp.method.name'] = 'tools/call')
+      -- step 4's routed calls (router auto) are not loop calls; one that falls within 100 ms of a loop call would be matched to it
+      AND LogAttributes['ambit.router'] != 'auto')
     -- agentgateway answers a model refusal before it takes the request snapshot: no identity, no model in the record
     OR (LogAttributes['protocol'] = 'llm' AND LogAttributes['jwt.email'] = '' AND LogAttributes['http.response.status_code'] = '403'))
   ORDER BY t" > "$W/records.json"
@@ -274,5 +278,29 @@ msg=$(kubectl -n "$NS" get accessrule audit-ml-time -o jsonpath='{.status.condit
 pass "8 a refused rules change: RulesNotActive (${msg:0:200}), the old rules version $v1 kept, results unchanged"
 kubectl -n "$NS" delete accessrule audit-too-long >/dev/null
 wait_for 120 '[[ $(ready_reason) == Compiled ]]' || fail "8 the rules did not come back after the refused rule was deleted"
+
+# 9 · ambit check --production --deep (P4's test call needs a Ready Model; mira may use it in both modes). The CLI
+#     runs the console's query in the ClickHouse pod: pods/exec, with the pod's own credentials.
+go build -o "$W/ambit" ./cmd/ambit || fail "9 go build ./cmd/ambit"
+# P4 --deep calls the first Ready Model by name, and an OpenRouter model answers 429 on the free tier, which says nothing
+# about the audit pipeline. Keep only the mock models for this step (objects.yaml brings the others back at the end).
+others=$(kubectl -n "$NS" get models.ambitproject.dev -o name | grep -v '/mock-' || true)
+if [[ -n "$others" ]]; then
+  kubectl -n "$NS" delete $others >/dev/null
+  wait_for 120 '[[ -z $(published pending) && $(published rulesVersion) != "$v1" ]]' || fail "9 the rules change of removing the other models was not published"
+fi
+check_p11() { AMBIT_TOKEN=$(token $V) command "$W/ambit" check --production --deep -n "$NS" > "$W/check.out" 2>&1 || true; grep -A4 -E '^[^ ]+ P11 ' "$W/check.out"; }
+switch audit 9
+out=$(check_p11)
+[[ $out == "! P11 access.mode is audit for 0 days (since "*"): AccessRules are recorded, not enforced; audit pipeline: the collector sent records to ClickHouse after the test call"* ]] ||
+  fail "9 P11 in audit mode: $out (whole output: $(cat "$W/check.out"))"
+grep -q 'audit-mode call records with a missing or failed mark (last 24 h): 0$' <<<"$out" || fail "9 no mark-missing line at 0 in audit mode: $out"
+pass "9 audit mode: $(sed -n 1p <<<"$out" | cut -c1-150) / mark-missing line at 0"
+switch enforce 9
+out=$(check_p11)
+[[ $out == "✓ P11 access.mode is enforce: AccessRules decide"* ]] || fail "9 P11 after the switch back: $out"
+grep -q 'audit-mode call records with a missing or failed mark (last 24 h): 0$' <<<"$out" || fail "9 no mark-missing line after the switch back: $out"
+pass "9 enforce again: P11 passes and the mark-missing line (audit mode was on in the last 24 h) is 0"
+kubectl -n "$NS" apply -f test/llm/objects.yaml >/dev/null
 fi
 done_step audit

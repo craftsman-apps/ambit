@@ -3,49 +3,16 @@ package console
 import (
 	"context"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/craftsman-apps/ambit/internal/auditsql"
 )
 
 // Audit-only mode (spec 4.2): the gateway writes a verdict into each access-log record when it serves the
-// request, from the rules in force at that moment. The console only reads it. Four outcomes, never mixed:
-//
-//	refused       the request got 401, 403 or 429 (sign-in, offboarding, unpriced model, budget): a real refusal
-//	would-refuse  served (2xx) and the mark is refuse:model, refuse:router or refuse:tool
-//	allow, other-model  served and the mark says so
-//	mark-missing  a call (an LLM request with a model, or an MCP tools/call), served, and its field is absent or
-//	              holds another value: the rule expression failed, or the fields were not active yet. A defect, never
-//	              counted as "would be refused"
-//	n/a           everything else: tools/list, initialize, a mark of n/a, an enforce-mode or older record
-//
-// classifySQL is the one definition; the per-person list and the summary both use it.
-const classifySQL = `WITH {status} AS c_status,
-     LogAttributes['mcp.method.name'] AS c_method,
-     LogAttributes['gen_ai.request.model'] AS c_model,
-     if(c_method != '',
-        [LogAttributes['ambit.wouldRefuseTool']],
-        arrayMap(k -> LogAttributes[k], arrayFilter(k -> startsWith(k, 'ambit.wouldRefuse') AND k != 'ambit.wouldRefuseTool', mapKeys(LogAttributes)))) AS c_marks,
-     arrayFirst(x -> x NOT IN ('', 'n/a'), c_marks) AS c_first,
-     multiIf(c_first != '', c_first, has(c_marks, 'n/a'), 'n/a', '') AS c_mark,
-     if(c_method != '', c_method = 'tools/call', c_model != '') AS c_is_call,
-     multiIf(
-       LogAttributes['ambit.accessMode'] != 'audit', 'n/a',
-       c_status IN ('401', '403', '429'), 'refused',
-       NOT startsWith(c_status, '2'), 'n/a',
-       c_mark IN ('refuse:model', 'refuse:router', 'refuse:tool'), 'would-refuse',
-       c_mark = 'allow', 'allow',
-       c_mark = 'other-model', 'other-model',
-       c_mark = 'n/a' OR NOT c_is_call, 'n/a',
-       'mark-missing') AS c_outcome,
-     if(c_method != '', concat(LogAttributes['mcp.target'], ' · ', LogAttributes['gen_ai.tool.name']), c_model) AS c_target,
-     if(LogAttributes['jwt.email'] != '', LogAttributes['jwt.email'], LogAttributes['jwt.sub']) AS c_person,
-     JSONExtract(LogAttributes['jwt.groups'], 'Array(String)') AS c_groups`
-
-func withClassify(q string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(q, "{classify}", classifySQL), "{status}", status)
-}
+// request, from the rules in force at that moment. The console only reads it; auditsql holds the one definition
+// of the outcome, which `ambit check` uses too.
+func withClassify(q string) string { return auditsql.With(q) }
 
 // In the summary, every record of audit mode in the window counts toward newest; rules narrows to one rules version.
 const auditWindow = `WHERE Timestamp >= {from:DateTime64(9)} AND Timestamp < {to:DateTime64(9)}

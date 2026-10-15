@@ -14,6 +14,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/auditsql"
 )
 
 // Audit answers from the gateway's access logs in ClickHouse (journey A5: "every call Alice made in
@@ -91,9 +92,7 @@ func routerOf(requested, model string) string {
 	return requested
 }
 
-// status reads the HTTP status under both names agentgateway has used: http.status (v1.5) and the
-// OpenTelemetry name http.response.status_code (v1.6), so an upgrade does not blank the Audit page.
-const status = "if(LogAttributes['http.response.status_code'] != '', LogAttributes['http.response.status_code'], LogAttributes['http.status'])"
+const status = auditsql.Status
 
 var callsSQL = withClassify(`{classify}
 SELECT Timestamp,

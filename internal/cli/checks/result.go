@@ -29,4 +29,14 @@ type Result struct {
 	Message string `json:"message"`
 	Next    string `json:"next,omitempty"`
 	Source  string `json:"source,omitempty"` // "values", "live objects", "values and live objects", "docker", "host"
+	// Lines are findings printed under the check that are not checks of their own, so the number of checks
+	// stays fixed (P11's count of records with a missing mark).
+	Lines []Line `json:"lines,omitempty"`
+}
+
+// Line is one finding under a check.
+type Line struct {
+	Status  Status `json:"status"`
+	Message string `json:"message"`
+	Next    string `json:"next,omitempty"`
 }

@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -10,6 +12,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -129,7 +133,11 @@ func TestGateFailsAtOnceOnANackAfterTheWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = r.gate(t.Context(), objs, seen, 120*time.Second)
-	if err == nil || err.Error() != "a gateway pod rejected the update (AgentGatewayNackError): proxy rejected the update: bad CEL" {
+	// The message names no object: say so, and give the general next step.
+	want := "a gateway pod rejected the update (AgentGatewayNackError): proxy rejected the update: bad CEL. " +
+		"agentgateway does not say which object; check the provider secret of each Model."
+	var st *stalledError
+	if !errors.As(err, &st) || st.msg != want || len(st.objects) != 0 {
 		t.Fatalf("error %v", err)
 	}
 	if clock.Sub(gateStart) > 0 {
@@ -147,6 +155,141 @@ func TestGateFailsAtOnceOnANackAfterTheWrite(t *testing.T) {
 	if err := r.gate(t.Context(), objs, seen, 120*time.Second); err == nil {
 		t.Fatal("a NACK repeated after the write (count 2 -> 3) did not fail the gate")
 	}
+}
+
+// ownedAgentgatewayModel is what Ambit generates for a Model (or, with ownerKind ModelRouter, for a router): the
+// AgentgatewayModel has the Model's name and is owned by it.
+func ownedAgentgatewayModel(name, ownerKind string) *unstructured.Unstructured {
+	o := gatedModel(1)
+	o.SetName(name)
+	o.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "ambit.dev/v1", Kind: ownerKind, Name: name, UID: "u-" + types.UID(name), Controller: ptr.To(true)}})
+	return o
+}
+
+// nackJSON is the text agentgateway sends in a NACK: a JSON array with one {key, error} entry per rejected resource,
+// the key being "<kind>/<namespace>/<name>" (crates/xds/src/client.rs:76-82 and :715; keys such as
+// "backend/default/bad-gcp" in crates/agentgateway/src/store/binds.rs:2603).
+func nackJSON(entries ...[2]string) string {
+	var out []map[string]string
+	for _, e := range entries {
+		out = append(out, map[string]string{"key": e[0], "error": e[1]})
+	}
+	b, _ := json.Marshal(out)
+	return string(b)
+}
+
+func nackAbout(name, message string) *corev1.Event {
+	e := nack(gateStart.Truncate(time.Second))
+	e.Name, e.Message = name, message
+	return e
+}
+
+// stallOf runs the gate against one NACK text and the given AgentgatewayModels, and returns the stop.
+func stallOf(t *testing.T, text string, models ...*unstructured.Unstructured) *stalledError {
+	t.Helper()
+	ok := gatedPolicy(1, ancestor(agentgatewayController, agwCond("Accepted", "True", "Valid", 1), agwCond("Attached", "True", "Attached", 1)))
+	objs := []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 1}}
+	r, _ := gateReconciler(append([]client.Object{ok}, toObjects(models)...)...)
+	seen, _ := r.nacksSeen(t.Context())
+	if err := r.Create(t.Context(), nackAbout("nack-1", text)); err != nil {
+		t.Fatal(err)
+	}
+	var st *stalledError
+	if err := r.gate(t.Context(), objs, seen, 120*time.Second); !errors.As(err, &st) {
+		t.Fatalf("error %v", err)
+	}
+	return st
+}
+
+func toObjects(in []*unstructured.Unstructured) []client.Object {
+	out := make([]client.Object, len(in))
+	for i, o := range in {
+		out[i] = o
+	}
+	return out
+}
+
+// A stalled change names the rejected Model, the gateway's reason, and what to do.
+func TestGateNamesTheRejectedModel(t *testing.T) {
+	text := nackJSON([2]string{"backend/ambit-system/mistral-x", "GCP credential JSON missing `type` field"})
+	st := stallOf(t, text, ownedAgentgatewayModel("gpt", "Model"), ownedAgentgatewayModel("mistral-x", "Model"))
+	want := "agentgateway rejected Model/mistral-x: backend/ambit-system/mistral-x: GCP credential JSON missing `type` field. Check the provider secret of Model/mistral-x, or remove the Model."
+	if st.msg != want || fmt.Sprint(st.objects) != "[Model/mistral-x]" {
+		t.Errorf("message %q objects %v\nwant %q", st.msg, st.objects, want)
+	}
+}
+
+func TestGateNamesTwoRejectedObjects(t *testing.T) {
+	text := nackJSON([2]string{"backend/ambit-system/mistral-x", "bad key"}, [2]string{"model/ambit-system/gpt", "bad key"})
+	st := stallOf(t, text, ownedAgentgatewayModel("gpt", "Model"), ownedAgentgatewayModel("mistral-x", "Model"),
+		ownedAgentgatewayModel("fast", "ModelRouter"), ownedAgentgatewayModel("llama", "Model"))
+	want := "agentgateway rejected Model/gpt and Model/mistral-x: backend/ambit-system/mistral-x: bad key; model/ambit-system/gpt: bad key. Check the provider secret of each rejected Model, or remove the Model."
+	if st.msg != want || fmt.Sprint(st.objects) != "[Model/gpt Model/mistral-x]" {
+		t.Errorf("message %q objects %v\nwant %q", st.msg, st.objects, want)
+	}
+}
+
+// Only the key of a rejected resource names an object. A name that is part of a longer one, or a word in the
+// reason, never does.
+func TestGateNeverNamesTheWrongObject(t *testing.T) {
+	for _, c := range []struct{ name, text, want string }{
+		{"gpt-4 is not gpt-4.1", nackJSON([2]string{"backend/ambit-system/gpt-4.1", "bad key"}), "[Model/gpt-4.1]"},
+		{"gpt-4.1 is not gpt-4", nackJSON([2]string{"backend/ambit-system/gpt-4", "bad key"}), "[Model/gpt-4]"},
+		{"words of the reason", nackJSON([2]string{"backend/ambit-system/mistral-x", "GCP credential JSON missing `type` field of backend"}), "[Model/mistral-x]"},
+		{"a file name in the reason", nackJSON([2]string{"backend/ambit-system/gpt", "cannot read mistral-x.json"}), "[Model/gpt]"},
+		{"another namespace", nackJSON([2]string{"backend/other/gpt", "bad key"}), "[]"},
+		{"not JSON", "invalid backend for gpt-4 and gpt-4.1", "[]"},
+		{"a key without a name", nackJSON([2]string{"backend/ambit-system", "bad key"}), "[]"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var models []*unstructured.Unstructured
+			for _, n := range []string{"gpt", "gpt-4", "gpt-4.1", "mistral-x", "type", "credential", "field", "backend", "json"} {
+				models = append(models, ownedAgentgatewayModel(n, "Model"))
+			}
+			st := stallOf(t, c.text, models...)
+			if fmt.Sprint(st.objects) != c.want {
+				t.Errorf("objects %v, want %s", st.objects, c.want)
+			}
+			if c.want == "[]" && !strings.Contains(st.msg, "does not say which object") {
+				t.Errorf("no generic message: %q", st.msg)
+			}
+		})
+	}
+}
+
+// The reason is cut to 300 characters in the message; the Event keeps the whole text.
+func TestGateBoundsTheReason(t *testing.T) {
+	long := strings.Repeat("é", 1000)
+	st := stallOf(t, nackJSON([2]string{"backend/ambit-system/gpt", long}), ownedAgentgatewayModel("gpt", "Model"))
+	if n := len([]rune(st.msg)); n > 500 || !strings.Contains(st.msg, "…") {
+		t.Errorf("message of %d characters: %q", n, st.msg)
+	}
+	if !strings.HasPrefix(st.msg, "agentgateway rejected Model/gpt: ") {
+		t.Errorf("message %q", st.msg)
+	}
+}
+
+// When the Models cannot be listed the text says so, instead of blaming the gateway.
+func TestGateSaysWhenTheModelsCannotBeListed(t *testing.T) {
+	ok := gatedPolicy(1, ancestor(agentgatewayController, agwCond("Accepted", "True", "Valid", 1), agwCond("Attached", "True", "Attached", 1)))
+	r, _ := gateReconciler(ok)
+	r.Live = failingList{r.Live}
+	seen, _ := r.nacksSeen(t.Context())
+	_ = r.Create(t.Context(), nackAbout("nack-1", nackJSON([2]string{"backend/ambit-system/gpt", "bad key"})))
+	var st *stalledError
+	err := r.gate(t.Context(), []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 1}}, seen, 120*time.Second)
+	if !errors.As(err, &st) || !strings.Contains(st.msg, "could not work out which object") || strings.Contains(st.msg, "does not say") {
+		t.Errorf("message %v", err)
+	}
+}
+
+type failingList struct{ client.Reader }
+
+func (f failingList) List(ctx context.Context, l client.ObjectList, o ...client.ListOption) error {
+	if _, isModels := l.(*unstructured.UnstructuredList); !isModels {
+		return f.Reader.List(ctx, l, o...)
+	}
+	return errors.New("list failed")
 }
 
 func TestGateOnAModelNeedsAcceptedOnEveryParent(t *testing.T) {

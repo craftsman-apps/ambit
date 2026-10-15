@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"net/http"
@@ -455,6 +456,12 @@ func p11AuditMode(ctx context.Context, e *Env) Result {
 			}
 		}
 	}
+	if l, ok := pendingLine(cm.Data["pending"], mode); ok {
+		r.Lines = append(r.Lines, l)
+		if r.Status == Pass {
+			r.Status = Warn
+		}
+	}
 	// The mark-missing line: while audit mode is on, and for 24 h after it was on.
 	if mode == "audit" || (!since.IsZero() && e.Now().Sub(since) < 24*time.Hour) {
 		l := markMissingLine(ctx, e, all, verr)
@@ -464,6 +471,29 @@ func p11AuditMode(ctx context.Context, e *Env) Result {
 		}
 	}
 	return r
+}
+
+// pendingLine reports a change that agentgateway has not applied (the controller's "pending" entry of
+// ambit-access-mode). The controller's error already names the rejected object, the gateway's reason and the next
+// step, so the line shows it as it is, the same text as the console banner and the AccessRule condition.
+func pendingLine(raw, published string) (Line, bool) {
+	if raw == "" {
+		return Line{}, false
+	}
+	var p struct{ Mode, RulesVersion, Step, Error string }
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		return Line{Status: Unknown, Message: "ambit-access-mode has a pending entry that is not JSON; read the controller log"}, true
+	}
+	cause := p.Error
+	if cause == "" {
+		cause = "waiting for agentgateway"
+	}
+	next := "the old rules stay in force until agentgateway accepts the change (https://ambitproject.dev/docs/guides/audit-only)"
+	if p.Mode != published {
+		return Line{Status: Warn, Message: fmt.Sprintf("mode switch to %s is not active (step %s): %s", p.Mode, p.Step, cause), Next: next}, true
+	}
+	return Line{Status: Warn, Message: "The latest access-rule change is not active yet: " + cause,
+		Next: fmt.Sprintf("rules version %s, step %s. %s", p.RulesVersion, p.Step, next)}, true
 }
 
 // markMissingLine runs the console's classification in the chart's ClickHouse pod and counts the audit-mode call

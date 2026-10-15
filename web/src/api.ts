@@ -80,7 +80,7 @@ export type Config = {
   mode: "direct" | "gitops"; repository?: string; branch?: string;
   // The access mode as the controller published it; pending is a change agentgateway has not applied (admins only).
   accessMode: "enforce" | "audit"; modeSince?: string; rulesVersion?: string; rulesSince?: string;
-  pending?: { mode: string; rulesVersion: string; step: string; error?: string };
+  pending?: { mode: string; rulesVersion: string; step: string; error?: string; objects?: string[] };
 };
 export type RequestInput = { serverName: string; displayName: string; image: string; url: string; connection: string; transport: string; reason: string };
 export type MyAccess = {

@@ -67,6 +67,16 @@ func TestConfigPendingIsForAdmins(t *testing.T) {
 	}
 }
 
+// The rejected objects the controller names reach the admin.
+func TestConfigPendingNamesTheRejectedObjects(t *testing.T) {
+	h, a := modeFixture(t, "", map[string]string{"mode": "enforce",
+		"pending": `{"mode":"enforce","rulesVersion":"bbbbbbbbbbbb","step":"authorization","error":"agentgateway rejected Model/mistral-x: bad key. Check the provider secret of Model/mistral-x, or remove the Model.","objects":["Model/mistral-x"]}`})
+	cfg := decodeAs[Config](t, do(t, h, "GET", "/api/config", user(a, "priya@acme.test", RoleAdmin), nil).Body.String())
+	if cfg.Pending == nil || len(cfg.Pending.Objects) != 1 || cfg.Pending.Objects[0] != "Model/mistral-x" {
+		t.Fatalf("%+v", cfg.Pending)
+	}
+}
+
 // A broken pending entry never hides the published mode.
 func TestConfigBrokenPendingIsIgnored(t *testing.T) {
 	h, a := modeFixture(t, "", map[string]string{"mode": "audit", "pending": "{not json"})

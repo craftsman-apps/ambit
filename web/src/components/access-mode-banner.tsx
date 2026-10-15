@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { useConfig } from "@/api";
-import { modeBanner, pendingBanner } from "@/lib/audit-mode";
+import { modeBanner, pendingBanner, pendingPage } from "@/lib/audit-mode";
 
 // While audit-only mode is on, every page says so to everyone signed in: nothing is refused by an access rule.
 // A mode switch or a rules change that agentgateway has not applied yet is shown to admins (the server sends
@@ -8,6 +8,7 @@ import { modeBanner, pendingBanner } from "@/lib/audit-mode";
 export function AccessModeBanner({ admin }: { admin: boolean }) {
   const cfg = useConfig().data;
   if (!cfg) return null;
+  const page = cfg.pending && pendingPage(cfg.pending);
   return (
     <>
       {cfg.accessMode === "audit" && (
@@ -20,6 +21,7 @@ export function AccessModeBanner({ admin }: { admin: boolean }) {
       {cfg.pending && (
         <p className="border-b border-line bg-warn-soft px-4 py-1.5" role="alert" data-testid="mode-pending-banner">
           {pendingBanner(cfg.pending, cfg.accessMode)}
+          {page && <> <Link to={page.to} className="underline">{page.label}</Link></>}
         </p>
       )}
     </>

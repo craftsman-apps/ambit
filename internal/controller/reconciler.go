@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 	"strings"
@@ -68,6 +69,15 @@ type Reconciler struct {
 	Classifier Classifier
 	// Now is the clock (nil: time.Now); tests move it.
 	Now func() time.Time
+	// AccessMode is "enforce" (or "") or "audit" (--access-mode).
+	AccessMode string
+	// Activation is the gate each step of a mode switch or rules change waits on; nil: no gate.
+	Activation *Activation
+
+	stalled   *stalledStep                // the step a change stopped at (single worker, no lock)
+	gateRetry time.Duration               // the last wait before trying a stopped change again
+	accessLog *logState                   // the mode and rules version ambit-access-log was last written with
+	deletions func(context.Context) error // this pass's deletions of objects no longer generated; urgent runs them
 }
 
 // How often the tools of a running server are read again by default: servers may add or change tools.
@@ -117,7 +127,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	all := handler.EnqueueRequestsFromMapFunc(func(context.Context, client.Object) []reconcile.Request {
 		return []reconcile.Request{{NamespacedName: types.NamespacedName{Namespace: r.Namespace, Name: "all"}}}
 	})
-	offboarded := predicate.NewPredicateFuncs(func(o client.Object) bool { return o.GetName() == OffboardedConfigMap })
+	offboarded := predicate.NewPredicateFuncs(func(o client.Object) bool { return o.GetName() == OffboardedConfigMap || o.GetName() == AccessLogBase })
 	b := ctrl.NewControllerManagedBy(mgr).Named("ambit").
 		Watches(&corev1.ConfigMap{}, all, builder.WithPredicates(offboarded)).
 		// Only spec changes of Ambit objects: our own status writes must not trigger another pass.
@@ -190,7 +200,28 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		return reconcile.Result{}, err
 	}
 	// After RefuseUnpriced: each router line repeats its target's final access expression.
-	routerConds, routerCfg := CompileRouters(routers.Items, models.Items, &res, r.Route, refused, ClassifierInput{Installed: dep != nil, HasKey: hasKeys(keys)})
+	ci := ClassifierInput{Installed: dep != nil, HasKey: hasKeys(keys)}
+	routerConds, routerCfg := CompileRouters(routers.Items, models.Items, &res, r.Route, refused, ci)
+	// The rules version comes from the enforce expressions: the same rules have the same version in both modes.
+	mode, version := r.accessMode(), RulesVersion(res.Objects)
+	var fields []any // audit mode: what each access-log record says the rules in force would have done
+	var tooLarge *metav1.Condition
+	if mode == "audit" {
+		room, err := r.auditRoom(ctx)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		var big *AuditTooLargeError
+		switch fields, err = AuditFields(res, room); {
+		case errors.As(err, &big): // the fields do not fit: keep enforcing, and say so on every AccessRule
+			c := cond(metav1.ConditionFalse, "AuditTooLarge", big.Error())
+			tooLarge, mode = &c, "enforce"
+		case err != nil:
+			return reconcile.Result{}, err
+		default:
+			res.Objects = RelaxForAudit(res, refused, func(a *Result) { CompileRouters(routers.Items, models.Items, a, r.Route, refused, ci) })
+		}
+	}
 	classify := dep != nil && len(routerCfg.Routers) > 0
 	if dep != nil {
 		res.Objects = append(res.Objects, configMapObject(r.Namespace, routerCfg))
@@ -214,92 +245,136 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			usage = true
 		}
 	}
-	var cm corev1.ConfigMap
-	switch err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: OffboardedConfigMap}, &cm); {
-	case err == nil:
-		emails, rejected := OffboardedEmails(&cm)
-		if len(rejected) > 0 {
-			logger.Error(nil, "offboarded list has entries that are not plain emails; they are not blocked", "entries", rejected)
-		}
-		res.Objects = append(res.Objects, offboardedPolicy(&cm, emails, []string{"ambit-mcp", r.Route.Name}))
-	case !apierrors.IsNotFound(err):
+	switch p, err := r.offboarding(ctx); {
+	case err != nil:
 		return reconcile.Result{}, err
+	case p != nil:
+		res.Objects = append(res.Objects, p)
 	}
 
 	// Ready condition per Ambit object that controls a generated object, keyed "Kind/name".
 	conds := map[string]metav1.Condition{}
 	applyFailed := false
-	for _, desired := range res.Objects {
-		name, kind := desired.GetName(), desired.GetKind()
-		owner := controllerOwner(desired) // "" for the shared MCP backend and policy
-		current := &unstructured.Unstructured{}
-		current.SetGroupVersionKind(desired.GroupVersionKind())
-		err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: name}, current)
-		switch {
-		case err == nil && !ownedByAmbit(current):
-			msg := fmt.Sprintf("a %s named %q already exists and was not created by Ambit", kind, name)
-			if owner == "" {
-				logger.Error(nil, msg+"; MCP traffic stays on the existing object until it is removed")
+	var published corev1.ConfigMap // the mode and rules version in force; empty before the first change is active
+	if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: AccessModeConfigMap}, &published); client.IgnoreNotFound(err) != nil {
+		return reconcile.Result{}, err
+	}
+	changing := r.Activation != nil && (published.Data["mode"] != mode || published.Data["rulesVersion"] != version)
+	steps := []step{
+		{"authorization", func() (w []gated, err error) {
+			applyFailed, w, err = r.applyAll(ctx, res.Objects, conds)
+			if err == nil && applyFailed && changing { // the new rules are not all written: not active
+				return w, &stalledError{notApplied(conds)}
+			}
+			return w, err
+		}},
+		// After authorization: its rules version names the rules now written.
+		{"access log", func() ([]gated, error) { return r.writeAccessLog(ctx, mode, version, fields) }},
+	}
+	if mode == "audit" { // the access log first: a request allowed in audit mode always finds its fields
+		steps[0], steps[1] = steps[1], steps[0]
+	}
+	if r.accessLog == nil && published.Data["mode"] != "" { // after a restart: the values in force
+		r.accessLog = &logState{published.Data["mode"], published.Data["rulesVersion"], nil}
+		if published.Data["mode"] == "audit" { // the current rules' fields: the published ones are not kept
+			r.accessLog.fields = fields
+		}
+	}
+	// Deletions never wait for agentgateway: each one removes access or a restriction an admin already removed.
+	// urgent runs them before the steps and on every poll of the gate; they run once more after the steps.
+	r.deletions = func(ctx context.Context) error {
+		// Objects of refused Servers: no general prune exists, and owner references only collect on Server deletion.
+		for name := range refusedServers {
+			if err := r.deleteGenerated(ctx, "AgentgatewayPolicy", "ambit-conn-"+name); err != nil {
+				return err
+			}
+		}
+		if len(servers.Items) > 0 { // every Server refused, or none running: no shared backend (or policy) either
+			for _, o := range [][2]string{{"AgentgatewayBackend", MCPBackendName}, {"AgentgatewayPolicy", MCPBackendName + "-access"}} {
+				if generates(res.Objects, o[0], o[1]) {
+					continue
+				}
+				if err := r.deleteGenerated(ctx, o[0], o[1]); err != nil {
+					return err
+				}
+			}
+		}
+		// No budgets (or budgets off): stop asking the ratelimit service on every request. No dollar limit: stop
+		// rewriting requests for usage.
+		for name, wanted := range map[string]bool{BudgetPolicyName: budgetPolicy, UsagePolicyName: usage, ClassifyPolicyName: classify} {
+			if wanted {
 				continue
 			}
-			conds[owner] = cond(metav1.ConditionFalse, "NameConflict", msg+"; rename the "+strings.Split(owner, "/")[0])
-			continue
-		case err != nil && !apierrors.IsNotFound(err):
-			return reconcile.Result{}, err
-		}
-		// Server-side apply keeps the generated object exactly as compiled; a manual edit is overwritten.
-		if err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
-			logger.Error(err, "apply generated object", "kind", kind, "name", name)
-			if owner == "" {
-				return reconcile.Result{}, err
+			stale := &unstructured.Unstructured{}
+			stale.SetGroupVersionKind(AgentgatewayPolicyGVK)
+			if err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: name}, stale); err == nil && ownedByAmbit(stale) {
+				if err := r.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
+					return err
+				}
 			}
-			conds[owner] = cond(metav1.ConditionFalse, "ApplyFailed", err.Error())
-			applyFailed = true
-			continue
 		}
-		switch kind {
-		case "AgentgatewayModel":
-			conds[owner] = acceptedCondition(current)
-		case "MCPServer":
-			conds[owner] = mcpServerCondition(current)
+		if dep != nil && !classify { // the policy is gone (above), then the pods; they finish held requests on SIGTERM
+			if err := r.scale(ctx, dep, 0); err != nil {
+				return err
+			}
 		}
-	}
-	// Objects of refused Servers: no general prune exists, and owner references only collect on Server deletion.
-	for name := range refusedServers {
-		if err := r.deleteGenerated(ctx, "AgentgatewayPolicy", "ambit-conn-"+name); err != nil {
-			return reconcile.Result{}, err
+		// Virtual models of routers that are gone or now invalid. Read from the API server, not the cache: right after
+		// the apply loop the cache can still show a router's label on an object that a Model has just taken over (a
+		// Model named router-<name>).
+		desiredRouters := map[string]bool{}
+		for _, o := range res.Objects {
+			if o.GetLabels()[RouterLabel] != "" {
+				desiredRouters[o.GetName()] = true
+			}
 		}
-	}
-	if len(servers.Items) > 0 { // every Server refused, or none running: no shared backend (or policy) either
-		for _, o := range [][2]string{{"AgentgatewayBackend", MCPBackendName}, {"AgentgatewayPolicy", MCPBackendName + "-access"}} {
-			if generates(res.Objects, o[0], o[1]) {
+		var vms unstructured.UnstructuredList
+		vms.SetGroupVersionKind(AgentgatewayModelGVK)
+		if err := r.Live.List(ctx, &vms, client.InNamespace(r.Namespace), client.HasLabels{RouterLabel}); err != nil {
+			return err
+		}
+		for i := range vms.Items {
+			vm := &vms.Items[i]
+			if desiredRouters[vm.GetName()] || controllerOwnerKind(vm) != "ModelRouter" {
 				continue
 			}
-			if err := r.deleteGenerated(ctx, o[0], o[1]); err != nil {
-				return reconcile.Result{}, err
+			uid := vm.GetUID() // delete exactly this object, not one that replaced it meanwhile
+			if err := r.Delete(ctx, vm, &client.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil &&
+				!apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
+				return err
 			}
 		}
+		return nil
 	}
-	// No budgets (or budgets off): stop asking the ratelimit service on every request. No dollar limit: stop
-	// rewriting requests for usage.
-	for name, wanted := range map[string]bool{BudgetPolicyName: budgetPolicy, UsagePolicyName: usage, ClassifyPolicyName: classify} {
-		if wanted {
-			continue
+	defer func() { r.deletions = nil }()
+	stall, ran, err := r.runSteps(ctx, steps, changing, pending{Mode: mode, RulesVersion: version})
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	var stalled *metav1.Condition
+	if stall == nil {
+		r.gateRetry = 0
+		if err := r.publishMode(ctx, mode, version); err != nil {
+			return reconcile.Result{}, err
 		}
-		stale := &unstructured.Unstructured{}
-		stale.SetGroupVersionKind(AgentgatewayPolicyGVK)
-		if err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: name}, stale); err == nil && ownedByAmbit(stale) {
-			if err := r.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
-				return reconcile.Result{}, err
-			}
+	} else {
+		reason := "RulesNotActive"
+		if published.Data["mode"] != "" && published.Data["mode"] != mode {
+			reason = "ModeSwitchStalled"
 		}
+		c := cond(metav1.ConditionFalse, reason, stall.msg)
+		stalled = &c
+		logger.Info("change not active in the gateway; stopped at this step", "step", r.stalled.step, "mode", mode, "rulesVersion", version, "error", stall.msg)
+	}
+	if stalled == nil {
+		stalled = tooLarge // replaces every AccessRule's condition, like a stall
+	}
+	// Stopped before authorization (audit order): nothing that grants access moves before the access log is active.
+	// Offboarding and the deletions were applied on every poll of the gate, and the deletions run once more.
+	held := stall != nil && !ran["authorization"]
+	if err := r.deletions(ctx); err != nil {
+		return reconcile.Result{}, err
 	}
 	if dep != nil {
-		if !classify { // the policy is gone (above), then the pods; they finish held requests on SIGTERM
-			if err := r.scale(ctx, dep, 0); err != nil {
-				return reconcile.Result{}, err
-			}
-		}
 		cred, err := credentialsObject(r.Namespace, routerCfg, keys)
 		if err != nil {
 			return reconcile.Result{}, err
@@ -308,30 +383,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			return reconcile.Result{}, err
 		}
 	}
-	// Virtual models of routers that are gone or now invalid. Read from the API server, not the cache: right after
-	// the apply loop the cache can still show a router's label on an object that a Model has just taken over (a
-	// Model named router-<name>).
-	desiredRouters := map[string]bool{}
-	for _, o := range res.Objects {
-		if o.GetLabels()[RouterLabel] != "" {
-			desiredRouters[o.GetName()] = true
-		}
-	}
-	var vms unstructured.UnstructuredList
-	vms.SetGroupVersionKind(AgentgatewayModelGVK)
-	if err := r.Live.List(ctx, &vms, client.InNamespace(r.Namespace), client.HasLabels{RouterLabel}); err != nil {
-		return reconcile.Result{}, err
-	}
-	for i := range vms.Items {
-		vm := &vms.Items[i]
-		if desiredRouters[vm.GetName()] || controllerOwnerKind(vm) != "ModelRouter" {
-			continue
-		}
-		uid := vm.GetUID() // delete exactly this object, not one that replaced it meanwhile
-		if err := r.Delete(ctx, vm, &client.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil &&
-			!apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
-			return reconcile.Result{}, err
-		}
+	if held {
+		return reconcile.Result{RequeueAfter: r.retryStalled()}, r.writeRuleStatuses(ctx, rules.Items, res.RuleConditions, stalled)
 	}
 	// Look again while agentgateway or ToolHive has not decided yet: their status events can race
 	// with our own apply (seen when the route's listener changed), and a missed one would leave
@@ -475,15 +528,102 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			return reconcile.Result{}, err
 		}
 	}
-	for i := range rules.Items {
-		ar := &rules.Items[i]
-		next := ar.DeepCopy()
-		meta.SetStatusCondition(&next.Status.Conditions, res.RuleConditions[ar.Name])
-		if err := r.updateStatus(ctx, ar.Status, next.Status, next); err != nil {
-			return reconcile.Result{}, err
+	if stall != nil {
+		if retry := r.retryStalled(); result.RequeueAfter == 0 || result.RequeueAfter > retry {
+			result.RequeueAfter = retry
 		}
 	}
-	return result, nil
+	return result, r.writeRuleStatuses(ctx, rules.Items, res.RuleConditions, stalled)
+}
+
+const auditSuffix = "audit-only mode: recorded, not enforced"
+
+// writeRuleStatuses sets each AccessRule's Ready condition; a change that is not active in the gateway replaces
+// it on every rule.
+func (r *Reconciler) writeRuleStatuses(ctx context.Context, rules []v1.AccessRule, compiled map[string]metav1.Condition, stalled *metav1.Condition) error {
+	for i := range rules {
+		ar := &rules[i]
+		next := ar.DeepCopy()
+		c := compiled[ar.Name]
+		if stalled != nil {
+			c = *stalled
+			c.ObservedGeneration = ar.Generation
+		} else if r.accessMode() == "audit" { // the reason stays, so GitOps health checks stay green
+			c.Message += "; " + auditSuffix
+		}
+		meta.SetStatusCondition(&next.Status.Conditions, c)
+		if err := r.updateStatus(ctx, ar.Status, next.Status, next); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// notApplied names the first object (by owner) the API server refused in this pass.
+func notApplied(conds map[string]metav1.Condition) string {
+	for _, k := range slices.Sorted(maps.Keys(conds)) {
+		if c := conds[k]; c.Reason == "ApplyFailed" {
+			return k + " was not applied: " + c.Message
+		}
+	}
+	return ""
+}
+
+// offboarding is the policy that refuses deactivated users, from ambit-offboarded as it is now; nil without it.
+func (r *Reconciler) offboarding(ctx context.Context) (*unstructured.Unstructured, error) {
+	var cm corev1.ConfigMap
+	if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: OffboardedConfigMap}, &cm); err != nil {
+		return nil, client.IgnoreNotFound(err)
+	}
+	emails, rejected := OffboardedEmails(&cm)
+	if len(rejected) > 0 {
+		log.FromContext(ctx).Error(nil, "offboarded list has entries that are not plain emails; they are not blocked", "entries", rejected)
+	}
+	return offboardedPolicy(&cm, emails, []string{"ambit-mcp", r.Route.Name}), nil
+}
+
+// applyAll applies every generated object. It returns the agentgateway Models and Policies it wrote, with the
+// generation each write returned, for the activation gate.
+func (r *Reconciler) applyAll(ctx context.Context, objs []*unstructured.Unstructured, conds map[string]metav1.Condition) (applyFailed bool, written []gated, err error) {
+	for _, desired := range objs {
+		name, kind := desired.GetName(), desired.GetKind()
+		owner := controllerOwner(desired) // "" for the shared MCP backend and policy
+		current := &unstructured.Unstructured{}
+		current.SetGroupVersionKind(desired.GroupVersionKind())
+		err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: name}, current)
+		switch {
+		case err == nil && !ownedByAmbit(current):
+			msg := fmt.Sprintf("a %s named %q already exists and was not created by Ambit", kind, name)
+			if owner == "" {
+				log.FromContext(ctx).Error(nil, msg+"; MCP traffic stays on the existing object until it is removed")
+				continue
+			}
+			conds[owner] = cond(metav1.ConditionFalse, "NameConflict", msg+"; rename the "+strings.Split(owner, "/")[0])
+			continue
+		case err != nil && !apierrors.IsNotFound(err):
+			return applyFailed, written, err
+		}
+		// Server-side apply keeps the generated object exactly as compiled; a manual edit is overwritten.
+		if err := r.Patch(ctx, desired, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
+			log.FromContext(ctx).Error(err, "apply generated object", "kind", kind, "name", name)
+			if owner == "" {
+				return applyFailed, written, err
+			}
+			conds[owner] = cond(metav1.ConditionFalse, "ApplyFailed", err.Error())
+			applyFailed = true
+			continue
+		}
+		if kind == "AgentgatewayModel" || kind == "AgentgatewayPolicy" {
+			written = append(written, gated{kind: kind, name: name, generation: desired.GetGeneration(), changed: desired.GetGeneration() != current.GetGeneration()})
+		}
+		switch kind {
+		case "AgentgatewayModel":
+			conds[owner] = acceptedCondition(current)
+		case "MCPServer":
+			conds[owner] = mcpServerCondition(current)
+		}
+	}
+	return applyFailed, written, nil
 }
 
 // readTools returns the server's tools, reading them again when they are older than toolsRefresh.

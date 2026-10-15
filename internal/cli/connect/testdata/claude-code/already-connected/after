@@ -1,0 +1,11 @@
+{
+  "theme": "dark",
+  "apiKeyHelper": "'/opt/homebrew/bin/ambit' key print --url 'https://llm.example.com'",
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://llm.example.com",
+    "ANTHROPIC_MODEL": "m",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "m",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "m",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "m"
+  }
+}

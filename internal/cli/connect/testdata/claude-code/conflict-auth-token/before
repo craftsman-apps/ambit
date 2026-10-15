@@ -1,0 +1,5 @@
+{
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "sk-ant-secret-1234567890"
+  }
+}

@@ -1,0 +1,10 @@
+notice = """
+[not a table]
+still the string
+"""
+other = '''
+[also not]
+'''
+
+[real]
+x = 1

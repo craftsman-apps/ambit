@@ -7,6 +7,7 @@ import { PullRequestNotice } from "@/components/pull-request";
 import { Button } from "@/components/ui/button";
 import { Shell, Status } from "@/components/shell";
 import { cn } from "@/lib/utils";
+import { closedWording } from "@/lib/audit-mode";
 
 // TanStack Table v9: features are declared up front; only sorting is used here.
 const features = tableFeatures({ rowSortingFeature, sortedRowModel: createSortedRowModel(), sortFns: { text: sortFn_text } });
@@ -25,6 +26,7 @@ export function AccessRulesPage() {
   const me = useMe();
   const rules = useRules();
   const config = useConfig();
+  const words = closedWording(config.data?.accessMode === "audit");
   const gitops = config.data?.mode === "gitops";
   const changes = useChanges(gitops);
   const [filter, setFilter] = useState<"all" | "attention">("all");
@@ -52,7 +54,7 @@ export function AccessRulesPage() {
           <div className="mb-4 flex items-end justify-between gap-3">
             <div>
               <h1 className="text-h1 font-semibold tracking-tight">Access rules</h1>
-              <p className="text-muted">Who may use which models and MCP tools. Anything no rule names is closed to everyone.</p>
+              <p className="text-muted">{words.rules}</p>
               {gitops && <p className="text-small text-muted">GitOps mode: changes open pull requests in <span className="font-mono">{config.data?.repository}</span>.</p>}
             </div>
             {isAdmin && <Button className="w-auto" onClick={() => navigate({ search: { edit: "new" } })}>New rule</Button>}
@@ -98,7 +100,7 @@ export function AccessRulesPage() {
                 </tr>
               ))}
               {rules.data?.length === 0 && (
-                <tr><td colSpan={5} className="px-3 py-6 text-muted">No access rules yet, so no model can be used. {isAdmin && "Create one with New rule."}</td></tr>
+                <tr><td colSpan={5} className="px-3 py-6 text-muted">{words.noRules} {isAdmin && "Create one with New rule."}</td></tr>
               )}
             </tbody>
           </table>

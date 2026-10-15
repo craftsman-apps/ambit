@@ -46,6 +46,7 @@ spec:
             {{- $opts = append $opts (dict "id" .id "name" (.name | default .id)) }}
             {{- end }}
             - { name: AMBIT_SSO_CONNECTORS, value: {{ $opts | toJson | quote }} }
+            - { name: AMBIT_ACCESS_MODE, value: {{ (.Values.access | default dict).mode | default "enforce" | quote }} }
             - { name: AMBIT_KEYS_ENABLED, value: {{ .Values.apiKeys.enabled | quote }} }
             - { name: AMBIT_KEYS_INACTIVITY_DAYS, value: {{ .Values.apiKeys.inactivityDays | quote }} }
             - { name: AMBIT_KEYS_MAX_DAYS, value: {{ .Values.apiKeys.maxDays | quote }} }

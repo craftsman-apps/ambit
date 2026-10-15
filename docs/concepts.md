@@ -30,6 +30,8 @@ In this documentation, **MCP server** means a `Server`. **App** means a `Connect
 
 A rule names its people with `groups` (groups from the `groups` claim of the identity provider) or with `allSignedIn: true` (everyone with a valid token). You set one of the two, never both. A rule names `models`, `servers`, or both. Each entry in `servers` has a `name` and, optionally, `tools`: the tools of that server the people may call. Without `tools`, every tool of the server is allowed, including tools it adds later. A server entry can also carry `arguments`, which limit the values a tool may be called with. That needs `protection.enabled` (see [Install on your cluster](install.md)).
 
+Rules are deny by default, except in audit-only mode (`access.mode: audit`, see [Turn Ambit on without blocking anyone](guides/audit-only.md)). In that mode every signed-in request to a model or an MCP tool is allowed, and every tool is listed to everyone; each audit record says whether the rules in force at that moment would have refused the request. Still enforced in that mode: sign-in, the LLM path allowlist, offboarding, budgets and the refusal of an unpriced model for a group with a dollar limit, and argument limits and tool approval.
+
 ### Server
 
 A `Server` is either a remote MCP server (`url`) or a container image that ToolHive runs inside your cluster (`image`, pinned by digest). A server with `connection` must be a remote server, because a per-person token cannot reach a container that speaks `stdio`. Ambit also keeps the definition of each tool when it first sees it (tool pinning). A tool whose definition changes later, and a new tool, is hidden and refused until an admin approves it again. See [MCP servers and apps](presets.md).
@@ -67,7 +69,7 @@ Models and MCP servers use two separate paths. Both start at the same gateway (b
 Clients call `https://<llm host>/v1/chat/completions` (and the other OpenAI-compatible and Anthropic-compatible paths).
 
 1. **Identity.** The gateway checks the token or the personal API key. A request without valid credentials is refused.
-2. **Model access.** An `AccessRule` must allow the requested model for this person. Otherwise the answer is 403.
+2. **Model access.** An `AccessRule` must allow the requested model for this person. Otherwise the answer is 403. (In audit-only mode the request goes on, and the record says whether it would have been refused.)
 3. **Budget.** The ratelimit service and Valkey count the request against the `Budget` of the person's group and against the person's own limit. Over the limit, the answer is 429.
 4. **Router (optional).** If the requested name is a `ModelRouter`, Ambit picks one `Model` the person may use.
 5. **Provider.** The gateway adds the provider credentials from the Secret and forwards the request.
@@ -78,7 +80,7 @@ Clients call `https://<llm host>/v1/chat/completions` (and the other OpenAI-comp
 Clients call `https://<mcp host>/mcp`.
 
 1. **Identity.** The same three identity sources as above.
-2. **Server and tool access.** An `AccessRule` must allow the `Server` and the tool.
+2. **Server and tool access.** An `AccessRule` must allow the `Server` and the tool. (In audit-only mode the call goes on, and the record says whether it would have been refused.)
 3. **Guard.** With `protection.enabled`, `ambit-guard` refuses a tool whose definition changed (tool pinning), checks the `arguments` limits of the rule, and masks personal data in tool results (for example card numbers and national ID numbers).
 4. **Token broker.** For a `Server` that has a `connection`, Ambit adds the calling person's own app token. The console refreshes the token when it expires.
 5. **MCP server.** The call reaches the remote server, or the server that ToolHive runs in your cluster. Only the gateway can reach ToolHive's pods.

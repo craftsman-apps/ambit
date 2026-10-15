@@ -22,18 +22,23 @@ The website, the Helm charts, the image and the CLI are all released from one ta
 deploys nothing.
 
 1. Merge every pull request for the release into `main`, including its docs.
+   In `CHANGELOG.md`, rename "Unreleased" to the version and the date (for example "0.2.0 (2026-10-20)"), and add a new empty "Unreleased" section.
 2. Push the tag on that commit: `git tag v0.2.0 <commit>` then `git push origin v0.2.0`. The `release` workflow
    publishes the image, the charts and the CLI; the `site` workflow deploys ambitproject.dev from the same commit.
    A prerelease tag (`v0.2.0-rc.1`) publishes to GitHub only and does not deploy the site.
 3. Approve the `cli-channels` job (Homebrew and npm) after the checksum check passes.
 
+If the `cli` job fails, the release stays not-latest (the `cli` job uploads the CLI archives, attests them, and only then marks
+the release as the latest), and `install.sh` and `install.ps1` keep installing the previous release. Re-run the job.
+If you fixed the cause by hand instead, run `gh release edit <tag> --latest`.
+
 To publish a homepage or docs fix between releases, push a site tag: `git tag site-2026-10-20 <commit>` then
 `git push origin site-2026-10-20`. The site tag publishes every page on that commit, so pick a commit whose docs do
 not describe unreleased features (for example a branch made from the last `v*` tag with only the fix on it).
 
-## Before the first `v*` tag
+## Before the first release with the CLI (v0.2.0)
 
-Do these once, before the first release tag is pushed.
+Do these once, before the tag `v0.2.0` is pushed. `v0.1.0` had no CLI, so none of this has been done for it.
 
 1. Check P1 on a real install with 2 replicas (`gateway.replicas: 2`). The PodDisruptionBudget label comes from agentgateway's controller, so only a real install shows that P1 finds the budget: `ambit check --production` must print `✓ P1`.
 2. Open USER ACTIONs (a maintainer does them in GitHub and npm; the release workflow cannot run without them):

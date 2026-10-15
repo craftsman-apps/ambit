@@ -36,6 +36,10 @@ type app struct {
 	newHelm func(helmx.Options) (helmx.Client, error)
 	// testLocalEnv replaces the Docker- and kind-backed environment of the local commands in tests.
 	testLocalEnv *local.Env
+	// testConnect replaces the key stores and the state file of connect, disconnect and key print in tests.
+	testConnect *connectDeps
+	// cmd is the path of the command that runs, e.g. "ambit key print". Known from before its flags are checked.
+	cmd string
 }
 
 // exitCode ends a command with a code after it printed its own result (e.g. check with a failed check).
@@ -59,7 +63,11 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 func (a *app) printer() *out.Printer {
 	if a.p == nil {
-		a.p = out.New(out.Options{Out: a.out, Err: a.errw, TTY: a.tty, NoColor: a.g.noColor,
+		w := a.out
+		if a.cmd == keyPrintPath {
+			w = a.errw // standard output carries only the key, so a tool that reads it never gets an error text
+		}
+		a.p = out.New(out.Options{Out: w, Err: a.errw, TTY: a.tty, NoColor: a.g.noColor,
 			JSON: a.g.output == "json", Verbose: a.g.verbose}, &out.Redactor{})
 	}
 	return a.p
@@ -108,6 +116,7 @@ func (a *app) root() *cobra.Command {
 		SilenceErrors: true,
 		Version:       version,
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			a.cmd = cmd.CommandPath()
 			switch a.g.output {
 			case "text":
 			case "json":
@@ -121,6 +130,7 @@ func (a *app) root() *cobra.Command {
 		},
 	}
 	root.SetFlagErrorFunc(func(cmd *cobra.Command, err error) error {
+		a.cmd = cmd.CommandPath()
 		return out.Usage("usage", err.Error(), cmd.CommandPath()+" --help")
 	})
 	f := root.PersistentFlags()
@@ -131,6 +141,6 @@ func (a *app) root() *cobra.Command {
 	f.StringVar(&a.g.output, "output", "text", "output format: text or json (check and version only)")
 	f.BoolVar(&a.g.noColor, "no-color", false, "no colour in the output")
 	f.BoolVar(&a.g.verbose, "verbose", false, "print library logs (secrets are redacted)")
-	root.AddCommand(a.validateCmd(), a.versionCmd(), a.localCmd(), a.checkCmd())
+	root.AddCommand(a.validateCmd(), a.versionCmd(), a.localCmd(), a.checkCmd(), a.keyCmd(), a.connectCmd(), a.disconnectCmd())
 	return root
 }

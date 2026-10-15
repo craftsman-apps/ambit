@@ -114,6 +114,9 @@ func (a *app) check(ctx context.Context, f checkFlags) error {
 		Now: time.Now,
 		Forward: func(ctx context.Context, sel string, port int) (int, func(), error) {
 			return kube.Forward(ctx, c, a.g.namespace, sel, port)
+		},
+		Exec: func(ctx context.Context, sel string, cmd []string) (string, error) {
+			return kube.Exec(ctx, c, a.g.namespace, sel, cmd)
 		}}
 
 	installed, consoleURL := false, ""

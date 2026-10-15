@@ -76,7 +76,12 @@ export type Proposed = { pullRequest: PullRequest };
 export type ChangeStep = { name: string; state: "done" | "waiting" | "failed" | "skipped"; detail?: string };
 export type Change = PullRequest & { merged: boolean; closed: boolean; verb: string; kind: string; name: string; steps: ChangeStep[] };
 export const isProposed = (v: unknown): v is Proposed => !!v && typeof v === "object" && "pullRequest" in v;
-export type Config = { mode: "direct" | "gitops"; repository?: string; branch?: string };
+export type Config = {
+  mode: "direct" | "gitops"; repository?: string; branch?: string;
+  // The access mode as the controller published it; pending is a change agentgateway has not applied (admins only).
+  accessMode: "enforce" | "audit"; modeSince?: string; rulesVersion?: string; rulesSince?: string;
+  pending?: { mode: string; rulesVersion: string; step: string; error?: string };
+};
 export type RequestInput = { serverName: string; displayName: string; image: string; url: string; connection: string; transport: string; reason: string };
 export type MyAccess = {
   groups: string[]; models: string[];
@@ -107,7 +112,7 @@ export const useRule = (name?: string) =>
 export const useServers = () => useQuery({ queryKey: ["servers"], queryFn: () => getJSON<ServerView[]>("/api/servers") });
 export const useRequests = () => useQuery({ queryKey: ["server-requests"], queryFn: () => getJSON<RequestView[]>("/api/server-requests") });
 export const useMyAccess = () => useQuery({ queryKey: ["my-access"], queryFn: () => getJSON<MyAccess>("/api/me/access") });
-export const useConfig = () => useQuery({ queryKey: ["config"], staleTime: Infinity, queryFn: () => getJSON<Config>("/api/config") });
+export const useConfig = () => useQuery({ queryKey: ["config"], staleTime: 60_000, refetchInterval: 60_000, queryFn: () => getJSON<Config>("/api/config") });
 export const useChanges = (enabled: boolean) =>
   useQuery({ queryKey: ["changes"], enabled, queryFn: () => getJSON<PullRequest[]>("/api/changes") });
 export type ConnectionView = {

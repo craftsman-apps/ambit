@@ -18,6 +18,7 @@ import (
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/controller"
 	"github.com/craftsman-apps/ambit/internal/presets"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -61,6 +62,9 @@ type Catalog struct {
 	Tools *ToolReader
 	// Presets is the app preset catalog (presets.All, plus the test presets when enabled).
 	Presets []presets.Preset
+	// AccessMode is the --access-mode value of this install ("enforce" or "audit"); /api/config uses it only
+	// until the controller has published ambit-access-mode.
+	AccessMode string
 }
 
 // Config tells the console UI how changes are applied.
@@ -68,6 +72,21 @@ type Config struct {
 	Mode       string `json:"mode"` // "direct" or "gitops"
 	Repository string `json:"repository,omitempty"`
 	Branch     string `json:"branch,omitempty"`
+	// AccessMode is "enforce" or "audit" as the controller published it; the Since times are RFC 3339. Pending is
+	// a change that agentgateway has not applied yet, shown to admins only.
+	AccessMode   string       `json:"accessMode"`
+	ModeSince    string       `json:"modeSince,omitempty"`
+	RulesVersion string       `json:"rulesVersion,omitempty"`
+	RulesSince   string       `json:"rulesSince,omitempty"`
+	Pending      *PendingMode `json:"pending,omitempty"`
+}
+
+// PendingMode is the controller's "pending" entry of ambit-access-mode.
+type PendingMode struct {
+	Mode         string `json:"mode"`
+	RulesVersion string `json:"rulesVersion"`
+	Step         string `json:"step"`
+	Error        string `json:"error,omitempty"`
 }
 
 // Proposed is the answer to a change in GitOps mode (HTTP 202): nothing changed yet.
@@ -254,6 +273,7 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	}
 	if c.Audit != nil {
 		c.Audit.register(mux, admin)
+		mux.HandleFunc("GET /api/audit/would-refuse", admin(c.wouldRefuse))
 	}
 	if c.Budgets != nil {
 		c.Budgets.register(mux, admin)
@@ -284,12 +304,46 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	}
 }
 
-func (c *Catalog) config(w http.ResponseWriter, _ *http.Request, _ Session) {
-	if c.GitOps == nil {
-		writeJSON(w, http.StatusOK, Config{Mode: "direct"})
-		return
+func (c *Catalog) config(w http.ResponseWriter, r *http.Request, s Session) {
+	cfg := Config{Mode: "direct"}
+	if c.GitOps != nil {
+		cfg = Config{Mode: "gitops", Repository: c.GitOps.Repository, Branch: c.GitOps.Branch}
 	}
-	writeJSON(w, http.StatusOK, Config{Mode: "gitops", Repository: c.GitOps.Repository, Branch: c.GitOps.Branch})
+	cm := c.accessModeData(r)
+	cfg.AccessMode = cm.Data["mode"]
+	if cfg.AccessMode == "" {
+		cfg.AccessMode = c.AccessMode
+	}
+	if cfg.AccessMode == "" {
+		cfg.AccessMode = "enforce"
+	}
+	cfg.ModeSince, cfg.RulesVersion, cfg.RulesSince = cm.Data["modeSince"], cm.Data["rulesVersion"], cm.Data["rulesSince"]
+	if p := cm.Data["pending"]; p != "" && s.Role == RoleAdmin {
+		var pm PendingMode
+		if err := json.Unmarshal([]byte(p), &pm); err != nil {
+			slog.Warn("ambit-access-mode has a pending entry that is not JSON", "err", err)
+		} else {
+			cfg.Pending = &pm
+		}
+	}
+	writeJSON(w, http.StatusOK, cfg)
+}
+
+// accessModeData is the data of ambit-access-mode. /api/config loads with every page and the flag still tells the
+// mode, so a failed read is logged and gives no data, not an error page.
+func (c *Catalog) accessModeData(r *http.Request) corev1.ConfigMap {
+	var cm corev1.ConfigMap
+	err := c.Client.Get(r.Context(), client.ObjectKey{Namespace: c.Namespace, Name: controller.AccessModeConfigMap}, &cm)
+	if err != nil && !apierrors.IsNotFound(err) {
+		slog.Error("read the published access mode; using the install's flag", "err", err)
+		return corev1.ConfigMap{}
+	}
+	return cm
+}
+
+// publishedRulesVersion is the rules version the controller published; empty before it has.
+func (c *Catalog) publishedRulesVersion(r *http.Request) string {
+	return c.accessModeData(r).Data["rulesVersion"]
 }
 
 // changes lists the console's open pull requests, so admins see what is waiting for review.

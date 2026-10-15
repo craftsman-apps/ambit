@@ -14,6 +14,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/auditsql"
 )
 
 // Audit answers from the gateway's access logs in ClickHouse (journey A5: "every call Alice made in
@@ -74,6 +75,13 @@ type Call struct {
 	KeyID    string `json:"keyId"`
 	Identity string `json:"identity"`
 	Subject  string `json:"subject"`
+	// AccessMode is ambit.accessMode, Mark the verdict written when the request was served (empty when absent),
+	// RulesVersion the rules it was judged by, and Outcome the class of auditmode.go: refused, would-refuse,
+	// allow, other-model, mark-missing or n/a.
+	AccessMode   string `json:"accessMode"`
+	Mark         string `json:"mark"`
+	RulesVersion string `json:"rulesVersion"`
+	Outcome      string `json:"outcome"`
 }
 
 // routerOf is the router a call went through: the requested name when it differs from the answering model.
@@ -84,17 +92,16 @@ func routerOf(requested, model string) string {
 	return requested
 }
 
-// status reads the HTTP status under both names agentgateway has used: http.status (v1.5) and the
-// OpenTelemetry name http.response.status_code (v1.6), so an upgrade does not blank the Audit page.
-const status = "if(LogAttributes['http.response.status_code'] != '', LogAttributes['http.response.status_code'], LogAttributes['http.status'])"
+const status = auditsql.Status
 
-var callsSQL = strings.Replace(`
+var callsSQL = withClassify(`{classify}
 SELECT Timestamp,
        {email:String}, LogAttributes['route'], LogAttributes['mcp.method.name'], LogAttributes['mcp.target'],
        LogAttributes['gen_ai.tool.name'], LogAttributes['gen_ai.request.model'], {status}, LogAttributes['error'],
        toInt64OrZero(LogAttributes['gen_ai.usage.input_tokens']), toInt64OrZero(LogAttributes['gen_ai.usage.output_tokens']),
        LogAttributes['ambit.router'], LogAttributes['ambit.route'], LogAttributes['ambit.routeReason'],
-       LogAttributes['ambit.key_id'], LogAttributes['ambit.identity'], LogAttributes['jwt.sub']
+       LogAttributes['ambit.key_id'], LogAttributes['ambit.identity'], LogAttributes['jwt.sub'],
+       LogAttributes['ambit.accessMode'], c_mark, LogAttributes['ambit.rulesVersion'], c_outcome
 FROM otel_logs
 WHERE (LogAttributes['jwt.email'] = {email:String}
        -- Some refusals (e.g. a model the user may not use) are logged with the token's subject but
@@ -102,7 +109,7 @@ WHERE (LogAttributes['jwt.email'] = {email:String}
        OR (LogAttributes['jwt.email'] = '' AND has({subs:Array(String)}, LogAttributes['jwt.sub'])))
   AND Timestamp >= {from:DateTime64(9)} AND Timestamp < {to:DateTime64(9)}
 ORDER BY Timestamp DESC
-LIMIT {limit:UInt32}`, "{status}", status, 1)
+LIMIT {limit:UInt32}`)
 
 const subsSQL = `SELECT DISTINCT LogAttributes['jwt.sub'] FROM otel_logs
 WHERE LogAttributes['jwt.email'] = {email:String} AND LogAttributes['jwt.sub'] != '' LIMIT 100`
@@ -138,7 +145,7 @@ func (a *Audit) Calls(ctx context.Context, email string, from, to time.Time, lim
 		var c Call
 		var requested string
 		if err := rows.Scan(&c.Time, &c.Email, &c.Route, &c.Method, &c.Server, &c.Tool, &c.Model, &c.Status, &c.Error, &c.InputTokens, &c.OutputTokens,
-			&requested, &c.Label, &c.LabelReason, &c.KeyID, &c.Identity, &c.Subject); err != nil {
+			&requested, &c.Label, &c.LabelReason, &c.KeyID, &c.Identity, &c.Subject, &c.AccessMode, &c.Mark, &c.RulesVersion, &c.Outcome); err != nil {
 			return nil, err
 		}
 		c.Router = routerOf(requested, c.Model)

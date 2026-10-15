@@ -197,6 +197,19 @@ helm upgrade ambit oci://ghcr.io/craftsman-apps/charts/ambit --version <new vers
 
 To remove Ambit, run `helm uninstall ambit -n ambit-system`, then `helm uninstall ambit-crds -n ambit-system`. The CRDs carry `helm.sh/resource-policy: keep`, so Helm leaves them, and your objects, in the cluster.
 
+## Audit-only mode: start before the rules are complete
+
+Ambit refuses everything that no access rule grants. To install first and write the rules afterwards, set `access.mode: audit`. Every signed-in request to a model or an MCP tool then goes through, and each record in the audit store says whether the access rules in force at that moment would have refused it. Every tool is listed to every signed-in person. Sign-in, offboarding, budgets, argument limits and tool approval stay enforced.
+
+```yaml
+access:
+  mode: audit   # enforce (the default) or audit. audit needs evidence.enabled: true
+  # activationTimeout: 120s   # how long the controller waits for agentgateway to apply each step of a change
+  # activationSettle: 3s      # the wait after agentgateway reports a step as applied, for the push to every proxy
+```
+
+Helm refuses `audit` when `evidence.enabled` is `false`. Only a change of this value (by `helm upgrade` or in Git) switches the mode. See [Turn Ambit on without blocking anyone](guides/audit-only.md).
+
 ## Production checklist
 
 - `gateway.replicas` is 2 or more. With two replicas the chart also adds a PodDisruptionBudget. A rolling update starts one extra pod first, so the nodes need room for one more.
@@ -209,3 +222,4 @@ To remove Ambit, run `helm uninstall ambit -n ambit-system`, then `helm uninstal
 - Turn on `alerts.enabled` if you run the Prometheus Operator. See [Alerts](alerts.md).
 - The console runs as one replica (`console.replicas` must be 1). It is briefly unavailable during an upgrade. LLM and MCP requests keep working.
 - Provider credentials are in Secrets. `Model` objects hold only the Secret name, so they are safe in Git.
+- `access.mode` is `enforce`. `ambit check --production` (P11) warns while audit-only mode is on, with the number of days, and with `--deep` it fails when the audit records do not reach the store.

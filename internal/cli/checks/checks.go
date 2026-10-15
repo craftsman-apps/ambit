@@ -29,16 +29,20 @@ type Env struct {
 	CRDBundle  []byte
 	// Forward opens a port-forward to a pod that matches selector and returns the local port (kube.Forward).
 	Forward func(ctx context.Context, selector string, port int) (int, func(), error)
-	Deep    bool
-	Token   string // AMBIT_TOKEN, for --deep (ruling S4)
-	HTTP    *http.Client
-	Now     func() time.Time
+	// Exec runs a read-only command in the first Ready pod that matches selector and returns its standard output
+	// (kube.Exec); it needs `create` on pods/exec. The command runs with the pod's own credentials.
+	Exec  func(ctx context.Context, selector string, cmd []string) (string, error)
+	Deep  bool
+	Token string // AMBIT_TOKEN, for --deep (ruling S4)
+	HTTP  *http.Client
+	Now   func() time.Time
 	// DeepWait is how long P4 --deep waits for the collector to send the test call's record (0: 60 s).
 	DeepWait time.Duration
 
 	loaded            bool
 	userVals, allVals map[string]any
 	valsErr           error
+	records           *Result // the --deep test call and its audit record, made once for P4 and P11
 }
 
 // Check is one entry of the catalogue.
@@ -57,7 +61,7 @@ var Catalogue = []Check{
 	{"P1", GroupProduction, p1Gateway}, {"P2", GroupProduction, p2Bootstrap}, {"P3", GroupProduction, p3TLS},
 	{"P4", GroupProduction, p4Evidence}, {"P5", GroupProduction, p5Limits}, {"P6", GroupProduction, p6Valkey},
 	{"P7", GroupProduction, p7Protection}, {"P8", GroupProduction, p8Alerts}, {"P9", GroupProduction, p9Console},
-	{"P10", GroupProduction, p10Credentials},
+	{"P10", GroupProduction, p10Credentials}, {"P11", GroupProduction, p11AuditMode},
 }
 
 // Run runs the checks of the given groups. A check that panics becomes an unknown result, so `ambit check`
@@ -119,6 +123,12 @@ func Print(p *out.Printer, rs []Result) {
 		if r.Next != "" && r.Status != Pass && r.Status != NA {
 			p.Line("      next: %s", r.Next)
 		}
+		for _, l := range r.Lines {
+			p.Line("      %s %s", map[Status]string{Pass: p.Mark("ok"), Warn: p.Mark("warn"), Fail: p.Mark("fail"), Unknown: "?", NA: "-"}[l.Status], l.Message)
+			if l.Next != "" && l.Status != Pass && l.Status != NA {
+				p.Line("          next: %s", l.Next)
+			}
+		}
 	}
 	p.Line("%s", Summary(rs))
 }
@@ -128,6 +138,11 @@ func ExitCode(rs []Result, failOnUnknown bool) int {
 	for _, r := range rs {
 		if r.Status == Fail || (failOnUnknown && r.Status == Unknown) {
 			return out.ExitFailed
+		}
+		for _, l := range r.Lines {
+			if l.Status == Fail || (failOnUnknown && l.Status == Unknown) {
+				return out.ExitFailed
+			}
 		}
 	}
 	return out.ExitOK

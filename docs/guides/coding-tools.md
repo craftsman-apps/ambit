@@ -28,6 +28,35 @@ Treat the key like a password. A key carries the access of its owner and never m
 
 ## 2. Configure your tool
 
+### With the Ambit CLI
+
+`ambit connect` changes the config file of your tool, stores the key in the keychain of your computer, and ends with one test call in the tool's own format. It needs the `ambit` CLI, version 0.2.0 or later ([install it](../quick-start.md#1-install-the-cli)). Use the LLM address and the model name from "Before you start":
+
+```sh
+ambit connect claude-code --url http://llm.localtest.me:8080 --model nvidia/nemotron-3-super-120b-a12b:free
+```
+
+The command asks for the key you created in step 1. It does not show what you type. Then it prints, for each file, what it will change (a diff) and asks `Write these changes? [y/N]`. After you answer `y` it stores the key, copies each file to `<file>.ambit.bak`, writes the change, and makes the test call. To see the diff and change nothing, add `--dry-run`. In a script, give the key with `--key-file <path>` or the variable `AMBIT_API_KEY`, and add `--yes`.
+
+| Tool | Command | What it changes |
+|---|---|---|
+| Claude Code | `ambit connect claude-code --url <llm> --model <model>` | `~/.claude/settings.json`: `apiKeyHelper` and five `env` entries (the base URL and the four model names). With `CLAUDE_CONFIG_DIR` set, that folder is used. |
+| Codex | `ambit connect codex --url <llm> --model <model>` | `~/.codex/config.toml`: two blocks between `# >>> ambit` and `# <<< ambit <<<` lines. With `CODEX_HOME` set, that folder is used. |
+| opencode | `ambit connect opencode --url <llm> --model <model>` | `~/.config/opencode/opencode.json` (or `.jsonc`) and a function in your shell profile. See [Connect Codex, opencode and Hermes Agent](codex-opencode-hermes.md#opencode). |
+| Cursor | `ambit connect cursor --url <llm> --model <model>` | Nothing. Cursor has no config file for this, so the command prints the steps below. |
+
+The key is never written to a config file. Each tool runs a command that reads it when it starts: `ambit key print --url <llm>`. Claude Code runs it as `apiKeyHelper`. The key is stored in the macOS Keychain, the Windows Credential Manager, or the Secret Service of Linux. [Where the Ambit CLI keeps the key](../api-keys.md#where-the-ambit-cli-keeps-the-key) says what this protects and what it does not.
+
+Only your user-level files change, never a project file. A second `ambit connect` for the same LLM address reuses the stored key. If your file already has an entry that would defeat Ambit's (for example another `apiKeyHelper`, a different `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, or a setting for Bedrock, Vertex or Foundry), the command stops and lists them. Run it again with `--force` to replace them. `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, the Bedrock, Vertex and Foundry switches, and an old `provider.ambit` of opencode are not saved by Ambit and not put back by `ambit disconnect`: they stay only in the backup file. Ambit keeps one backup per file, so a second `--force` that would remove another one of these values stops and asks you to remove it by hand.
+
+Claude Code reads `apiKeyHelper` in the terminal tool and in the VS Code extension. The Claude Desktop app and cloud sessions do not run it; for Claude Desktop see [Claude Desktop with Ambit's models](claude-desktop.md).
+
+**Cursor.** The command prints the three steps of the Cursor tab in the console, the address `<llm>/v1` and the model name. If the LLM address is not public HTTPS it prints the warning below. If a key is stored for the address, it also prints `ambit key print --url <llm> --reveal`, the command that shows the key so that you can paste it into Cursor.
+
+### Without the Ambit CLI
+
+The steps below do the same by hand. They are the steps that were tested against a live Ambit.
+
 **Claude Code.** Open `~/.claude/settings.json` (on Windows, `%USERPROFILE%\.claude\settings.json`) and merge these values into its `"env"` object. Do not replace the file. Claude Code needs the model names too, because its default model names are not models at your provider.
 
 ```json
@@ -123,6 +152,12 @@ export ANTHROPIC_BASE_URL=http://llm.localtest.me:8080
 export ANTHROPIC_API_KEY=ambit_...
 ```
 
+## Disconnect and revoke
+
+`ambit disconnect claude-code` (or `codex`, `opencode`, `cursor`, or `--all`) removes exactly the entries and blocks that `ambit connect` added, and keeps everything else in the file. If nothing changed in between, the file is the same as before, byte for byte. For Codex and opencode this needs the state file `connect.json`; without it, the blank line that connect added before a block stays. If you changed an Ambit entry after connect, it stays, and the command says so. If a tool rewrote its file in between (for example with other indentation), the entries are removed by their meaning and the file keeps the tool's formatting. A secret that `--force` removed is not put back: its old value is in the `.ambit.bak` file, and the command prints the path.
+
+When no other tool uses the same LLM address, `ambit disconnect` also deletes the stored key (keep it with `--keep-key`). **This does not revoke the key.** The key keeps working until you revoke it: sign in to the console, open **Keys** and revoke it there. The command prints this as its last line. See [Personal API keys](../api-keys.md#revoke-a-key).
+
 ## Check it works
 
 Put the key in a shell variable. The first command reads it without showing it on the screen.
@@ -159,6 +194,8 @@ Then restart Claude Code with the settings above, run `/status`, and ask it a qu
 ## Related
 
 - [Connect Codex, opencode and Hermes Agent](codex-opencode-hermes.md) and [Other coding agents](other-agents.md): more tools.
+- [Claude Desktop with Ambit's models](claude-desktop.md): the Claude Desktop app with third-party inference and a personal key.
+- [Claude Desktop with MCP tools](claude-desktop-mcp.md): the `mcp-remote` bridge and a personal key, for the Claude Desktop app.
 - [Personal API keys](../api-keys.md): scope, end dates, limits, revoking, and how the gateway checks a key.
 - [Models and providers](../providers.md): other providers and models.
 - [Someone leaves](someone-leaves.md): what happens to a person's keys when they are offboarded.

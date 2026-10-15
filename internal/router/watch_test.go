@@ -39,13 +39,27 @@ func eventually(t *testing.T, f func() bool) {
 	t.Fatal("condition not reached in 3 s")
 }
 
+// countWatches counts the watches a fake client has opened. Watch returns when the lists are cached, before the
+// informers open their watches, and the fake replays nothing for that gap (a real API server replays from the
+// list's resourceVersion). A test that changes an object right after Watch must wait for the watches first.
+func countWatches(cs *fake.Clientset) *atomic.Int32 {
+	var n atomic.Int32
+	cs.PrependWatchReactor("*", func(k8stesting.Action) (bool, watch.Interface, error) {
+		n.Add(1)
+		return false, nil, nil
+	})
+	return &n
+}
+
 func TestWatchLoadsUpdatesAndSurvivesBadConfig(t *testing.T) {
 	cfg := cfgOf(auto)
 	cs := fake.NewSimpleClientset(cmObj(cfg), secObj(map[string]string{"local": "sk-1"}))
+	watches := countWatches(cs)
 	s := &Store{}
 	if err := Watch(t.Context(), cs, "ambit-system", s); err != nil {
 		t.Fatal(err)
 	}
+	eventually(t, func() bool { return watches.Load() >= 2 }) // the ConfigMap and the Secret
 	if s.Snapshot().Config.Hash != cfg.Hash || s.Snapshot().keys["local"] != "sk-1" {
 		t.Fatal("initial load")
 	}
@@ -104,6 +118,8 @@ func TestWatchRelistsAfterServerClosesWatch(t *testing.T) {
 	if err := Watch(t.Context(), cs, "ambit-system", s); err != nil {
 		t.Fatal(err)
 	}
+	// Watch returns before the informer opens its watch.
+	eventually(t, func() bool { return first.Load() != nil })
 	first.Load().Stop() // the API server closed the watch
 	changed := auto
 	changed.TimeoutMillis = 999

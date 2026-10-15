@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { Link, Navigate } from "@tanstack/react-router";
 import { useMe, useModels, useRequests, useRules, useServers } from "@/api";
 import { Button } from "@/components/ui/button";
+import { AccessModeBanner } from "@/components/access-mode-banner";
 import { KeyBanner } from "@/components/key-banner";
 import { ThemeSwitch } from "@/components/theme-switch";
 import { Mark } from "@/components/wordmark";
@@ -68,6 +69,7 @@ export function Shell({ crumb, children }: { crumb: string; children: ReactNode 
             </form>
           </div>
         </header>
+        <AccessModeBanner admin={u.role === "admin"} />
         <KeyBanner />
         <main className="min-w-0 flex-1 bg-surface">{children}</main>
       </div>

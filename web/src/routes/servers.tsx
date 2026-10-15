@@ -1,9 +1,10 @@
 import { Fragment, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { sendJSON, useConnections, useMe, useRequests, useServers, type RequestInput, type RequestView, type ServerView } from "@/api";
+import { sendJSON, useConfig, useConnections, useMe, useRequests, useServers, type RequestInput, type RequestView, type ServerView } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Shell, Status } from "@/components/shell";
 import { cn } from "@/lib/utils";
+import { closedWording } from "@/lib/audit-mode";
 
 const th = "px-3 py-2.5 text-left font-mono text-label font-medium uppercase tracking-[.1em] text-muted";
 const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 font-mono text-body outline-none focus:border-accent";
@@ -17,6 +18,7 @@ const shortImage = (image: string) => {
 const runs = (x: { image: string; url: string }) => x.url ? new URL(x.url).host : shortImage(x.image);
 
 export function ServersPage() {
+  const words = closedWording(useConfig().data?.accessMode === "audit");
   const me = useMe();
   const servers = useServers();
   const requests = useRequests();
@@ -33,7 +35,7 @@ export function ServersPage() {
           <div className="flex items-end justify-between gap-3">
             <div>
               <h1 className="text-h1 font-semibold tracking-tight">MCP servers</h1>
-              <p className="text-muted">Servers run in their own pods, or elsewhere and are reached by URL; either way, only through the gateway. Their tools are closed to everyone until an access rule names them.</p>
+              <p className="text-muted">{words.servers}</p>
             </div>
             <Button className="w-auto whitespace-nowrap" onClick={() => setAsking(true)}>Request a server</Button>
           </div>
@@ -89,6 +91,7 @@ export function ServersPage() {
 }
 
 function ServerRow({ s, open, onToggle }: { s: ServerView; open: boolean; onToggle: () => void }) {
+  const noRule = closedWording(useConfig().data?.accessMode === "audit").noServerRule;
   const me = useMe();
   const qc = useQueryClient();
   const approve = useMutation({
@@ -110,7 +113,7 @@ function ServerRow({ s, open, onToggle }: { s: ServerView; open: boolean; onTogg
         <td className="min-w-[8.5rem] px-3 py-2.5 font-mono text-small [overflow-wrap:anywhere]" title={s.image || s.url}>{runs(s)}
           {s.connection && <span className="block font-sans text-small text-muted">each user's own {s.connection} account</span>}</td>
         <td className="px-3 py-2.5 tabular-nums">{s.tools.length || <span className="text-muted">–</span>}</td>
-        <td className="px-3 py-2.5">{s.rules.length ? s.rules.map((r, i) => <Fragment key={r}><span className="whitespace-nowrap">{r}{i < s.rules.length - 1 && ","}</span> </Fragment>) : <span className="text-muted">None: closed to everyone</span>}</td>
+        <td className="px-3 py-2.5">{s.rules.length ? s.rules.map((r, i) => <Fragment key={r}><span className="whitespace-nowrap">{r}{i < s.rules.length - 1 && ","}</span> </Fragment>) : <span className="text-muted">{noRule}</span>}</td>
         <td className="whitespace-nowrap px-3 py-2.5">{s.approvedBy || <span className="text-muted">{s.gitManaged ? "pull request" : "added directly"}</span>}</td>
         <td className="whitespace-nowrap px-3 py-2.5"><Status ready={s.ready} text={s.ready === "True" ? "Running" : undefined} />
           {s.changedTools.length > 0 && <span className="block text-small text-bad">{s.changedTools.length} tool(s) changed</span>}</td>

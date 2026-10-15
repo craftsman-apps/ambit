@@ -1,3 +1,13 @@
+{{- /* .Values.access is missing after helm upgrade --reuse-values from 0.1.0 */ -}}
+{{- $access := .Values.access | default dict }}
+{{- $mode := $access.mode | default "enforce" }}
+{{- if not (has $mode (list "enforce" "audit")) }}{{ fail "access.mode must be enforce or audit" }}{{ end }}
+{{- if and (eq $mode "audit") (not .Values.evidence.enabled) }}{{ fail "access.mode=audit needs evidence.enabled=true: without the audit store, audit-only mode would allow everything and record nothing" }}{{ end }}
+{{- $duration := "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$" }}
+{{- $timeout := toString (ternary $access.activationTimeout "120s" (hasKey $access "activationTimeout")) }}
+{{- if or (not (regexMatch $duration $timeout)) (regexMatch "^([0.]+(ns|us|µs|ms|s|m|h))+$" $timeout) }}{{ fail (printf "access.activationTimeout must be a duration above 0, such as 120s (got %q): 0 would turn the activation gate off, not remove its limit" $timeout) }}{{ end }}
+{{- $settle := toString (ternary $access.activationSettle "3s" (hasKey $access "activationSettle")) }}
+{{- if not (or (eq $settle "0") (regexMatch $duration $settle)) }}{{ fail (printf "access.activationSettle must be a duration of 0 or more, such as 3s (got %q)" $settle) }}{{ end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,6 +35,9 @@ spec:
             {{- end }}
             # One flag for both gateways: if either relaxes the email rule, the principal falls back to the JWT subject on both (the safe superset).
             - --require-email={{ and (ne (toString .Values.llm.jwt.requireEmail) "false") (ne (toString .Values.mcp.jwt.requireEmail) "false") }}
+            - --access-mode={{ $mode }}
+            - --activation-timeout={{ $timeout }}
+            - --activation-settle={{ $settle }}
             - --tools-refresh={{ .Values.protection.toolsRefresh }}
             - --xds-addr={{ .Release.Name }}-agentgateway.{{ .Release.Namespace }}.svc:9978
             {{- if .Values.mcp.enabled }}

@@ -29,6 +29,7 @@ type Result struct {
 	Objects        []*unstructured.Unstructured
 	Access         map[string]Access           // by Model name
 	RuleConditions map[string]metav1.Condition // "Ready" condition by AccessRule name
+	Audit          bool                        // audit mode: CompileRouters writes lines without the access part
 }
 
 // Compile is a pure function: the same inputs in any order give the same output.

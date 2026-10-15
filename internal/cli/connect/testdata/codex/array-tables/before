@@ -1,0 +1,7 @@
+model_reasoning_effort = "high"
+
+[[mcp_servers_list]]
+name = "a"
+
+[[mcp_servers_list]]
+name = "b"

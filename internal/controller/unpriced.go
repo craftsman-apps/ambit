@@ -15,11 +15,7 @@ func RefuseUnpriced(res *Result, models []v1.Model, prices map[string]v1.ModelPr
 	if len(dollarGroups) == 0 {
 		return nil
 	}
-	q := make([]string, len(dollarGroups))
-	for i, g := range dollarGroups {
-		q[i] = strconv.Quote(g)
-	}
-	deny := "!" + principalGroups + ".exists(g, g in [" + strings.Join(q, ", ") + "])"
+	deny := unpricedDeny(dollarGroups)
 	unpriced := map[string]bool{}
 	for _, m := range models {
 		if _, ok := prices[m.Spec.Model]; !ok {
@@ -41,6 +37,15 @@ func RefuseUnpriced(res *Result, models []v1.Model, prices map[string]v1.ModelPr
 		refused[o.GetName()] = append([]string(nil), dollarGroups...)
 	}
 	return refused
+}
+
+// unpricedDeny refuses members of the groups.
+func unpricedDeny(groups []string) string {
+	q := make([]string, len(groups))
+	for i, g := range groups {
+		q[i] = strconv.Quote(g)
+	}
+	return "!" + principalGroups + ".exists(g, g in [" + strings.Join(q, ", ") + "])"
 }
 
 func unpricedMessage(groups []string) string {

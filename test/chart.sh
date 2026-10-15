@@ -66,7 +66,7 @@ a=p['authorization']; assert a['action']=='Require', a
 r=one('HTTPRoute','ambit-$g')['spec']['rules'][0]['filters'][0]['requestHeaderModifier']['remove']
 assert set(r)=={'X-Ambit-User','x-api-key','authorization'}, r" "$g gateway: keys + JWT, Require, credential headers removed"
 done
-check_qs "a=one('AgentgatewayPolicy','ambit-access-log')['spec']['frontend']['accessLog']['attributes']['add']
+check_qs "a=yaml.safe_load(one('ConfigMap','ambit-access-log-base')['data']['spec.yaml'])['frontend']['accessLog']['attributes']['add']
 n={x['name']:x['expression'] for x in a}
 assert set(['jwt.email','jwt.groups','jwt.sub','ambit.key_id','ambit.identity'])<=set(n), n
 assert n['ambit.identity'].endswith(': \"jwt\")'), n['ambit.identity']" "audit records one identity, the key id and how it was decided"
@@ -139,4 +139,47 @@ assert d["readinessProbe"]["httpGet"]["port"]=="health" and {"name":"health","co
 c=yaml.safe_load(one("ConfigMap","ambit-otel-collector")["data"]["config.yaml"])
 assert c["extensions"]["health_check"]["endpoint"]=="0.0.0.0:13133", c.get("extensions")
 assert "health_check" in c["service"]["extensions"], c["service"]' "collector is ready only when its pipelines run"
+# Audit-only mode (#81): one value, refused unless enforce or audit, and audit only with the audit store.
+! helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set access.mode=Audit >/dev/null 2>&1 || { echo "FAIL chart: access.mode must be enforce or audit"; exit 1; }
+! helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set access.mode=audit --set evidence.enabled=false >/dev/null 2>&1 || { echo "FAIL chart: access.mode=audit needs evidence.enabled=true"; exit 1; }
+# The gate's timeout must be a positive duration: 0 would mean "no gate", not "no limit".
+for v in 0s 0 0m0s -5s 2 abc; do
+  ! helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set-string access.activationTimeout=$v >/dev/null 2>&1 || { echo "FAIL chart: access.activationTimeout=$v must be refused"; exit 1; }
+done
+for v in -1s abc; do
+  ! helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set-string access.activationSettle=$v >/dev/null 2>&1 || { echo "FAIL chart: access.activationSettle=$v must be refused"; exit 1; }
+done
+helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set-string access.activationTimeout=1m30s --set-string access.activationSettle=0s >/dev/null || { echo "FAIL chart: activationTimeout 1m30s with activationSettle 0s must render"; exit 1; }
+check_qs 'c=one("Deployment","ambit-controller")["spec"]["template"]["spec"]["containers"][0]["command"]
+assert "--access-mode=enforce" in c and "--activation-timeout=120s" in c and "--activation-settle=3s" in c, c
+e=one("Deployment","ambit-console")["spec"]["template"]["spec"]["containers"][0]["env"]
+assert {"name":"AMBIT_ACCESS_MODE","value":"enforce"} in e, e' "enforce by default: controller flags and console setting"
+qs=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set access.mode=audit) check_qs 'c=one("Deployment","ambit-controller")["spec"]["template"]["spec"]["containers"][0]["command"]
+assert "--access-mode=audit" in c, c
+e=one("Deployment","ambit-console")["spec"]["template"]["spec"]["containers"][0]["env"]
+assert {"name":"AMBIT_ACCESS_MODE","value":"audit"} in e, e' "access.mode=audit reaches the controller and the console"
+# The controller writes the access-log policy (same name); the chart renders only its static part, unchanged.
+check_qs 'assert not [x for x in docs if x["kind"]=="AgentgatewayPolicy" and x["metadata"]["name"]=="ambit-access-log"]
+s=yaml.safe_load(one("ConfigMap","ambit-access-log-base")["data"]["spec.yaml"])
+assert s["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"Gateway","name":"ambit"}], s
+assert [x["name"] for x in s["frontend"]["accessLog"]["attributes"]["add"]]==["jwt.email","jwt.groups","jwt.sub","ambit.key_id","ambit.identity","ambit.router","ambit.route","ambit.routeReason"], s
+assert s["frontend"]["accessLog"]["otlp"]=={"protocol":"GRPC","backendRef":{"name":"ambit-otel-collector","port":4317}}, s' "access-log base ConfigMap, no chart AgentgatewayPolicy ambit-access-log"
+noev=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set evidence.enabled=false)
+! grep -q 'name: ambit-access-log-base' <<<"$noev" || { echo "FAIL chart: no access-log base without evidence"; exit 1; }
+check_qs 'r=one("Role","ambit-controller")["rules"]
+def can(g,res,verbs): return any(g in x["apiGroups"] and res in x["resources"] and set(verbs)<=set(x["verbs"]) and not x.get("resourceNames") for x in r)
+assert can("","events",["get","list","watch"]), r
+assert can("agentgateway.dev","agentgatewaypolicies/status",["get","list","watch"]) and can("agentgateway.dev","agentgatewaymodels/status",["get","list","watch"]), r
+assert not [x for x in r if {"pods/exec","pods/portforward"} & set(x["resources"])], r' "controller reads Events and agentgateway status, no pod exec or port-forward"
+audit_warn='access.mode is audit: every signed-in request to a model or MCP tool is allowed'
+! grep -qF "$audit_warn" <<<"$(notes)" || { echo "FAIL chart: no audit warning in enforce mode"; exit 1; }
+grep -qF "$audit_warn" <<<"$(notes --set access.mode=audit)" || { echo "FAIL chart: NOTES must warn in audit mode"; exit 1; }
+# helm upgrade --reuse-values from 0.1.0 (#81): the old release's values replace the chart's defaults, so every key
+# added since 0.1.0 is missing. Render every template with the chart's own values.yaml swapped for 0.1.0's.
+old=$(mktemp -d); trap 'rm -rf "$old"' EXIT
+cp -R charts/ambit "$old/ambit"
+git show v0.1.0:charts/ambit/values.yaml >"$old/ambit/values.yaml"
+reuse=$(helm template ambit "$old/ambit" -n ambit-system -f deploy/quickstart.yaml 2>&1) || { echo "FAIL chart: render with the values of 0.1.0 only: $reuse"; exit 1; }
+grep -q -- '--access-mode=enforce' <<<"$reuse" && grep -q -- '--activation-timeout=120s' <<<"$reuse" && grep -q -- '--activation-settle=3s' <<<"$reuse" || { echo "FAIL chart: values of 0.1.0 only must give enforce and the default timings"; exit 1; }
+! grep -q 'access.mode is audit' <<<"$(helm template ambit "$old/ambit" -n ambit-system -f deploy/quickstart.yaml --show-only templates/NOTES.txt 2>&1)" || { echo "FAIL chart: no audit warning with the values of 0.1.0 only"; exit 1; }
 echo "PASS chart"

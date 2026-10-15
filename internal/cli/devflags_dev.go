@@ -11,3 +11,9 @@ func addDevFlags(up *cobra.Command, f *localFlags) {
 	up.Flags().StringArrayVar(&f.devArchives, "dev-load-archive", nil, "development builds only: load this image archive (docker save output) into the kind node")
 	up.Flags().StringArrayVar(&f.devValues, "dev-values", nil, "development builds only: values file merged after the quick-start values")
 }
+
+// addKeyringFlag adds --dev-keyring-service, so end-to-end runs and developers never touch the keychain item of
+// the real ambit. Release builds do not have it.
+func addKeyringFlag(c *cobra.Command, service *string) {
+	c.Flags().StringVar(service, "dev-keyring-service", "", "development builds only: keychain service name to use instead of \"ambit\"")
+}

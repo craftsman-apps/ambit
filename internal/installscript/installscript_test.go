@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -39,8 +40,8 @@ func zipped(t *testing.T, name, body string) []byte {
 	return b.Bytes()
 }
 
-// release serves /download/v0.2.0/<files> and /latest/download/<files>. With badSum the checksum is wrong.
-func release(t *testing.T, files map[string][]byte, badSum bool) string {
+// addRelease serves /download/<tag>/<files>. With badSum the checksum is wrong.
+func addRelease(mux *http.ServeMux, tag string, files map[string][]byte, badSum bool) {
 	var sums strings.Builder
 	for name, b := range files {
 		sum := sha256.Sum256(b)
@@ -49,19 +50,73 @@ func release(t *testing.T, files map[string][]byte, badSum bool) string {
 		}
 		fmt.Fprintf(&sums, "%x  %s\n", sum, name)
 	}
-	mux := http.NewServeMux()
-	serve := func(prefix string) {
-		mux.HandleFunc(prefix+"checksums.txt", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte(sums.String())) })
-		for name, b := range files {
-			b := b
-			mux.HandleFunc(prefix+name, func(w http.ResponseWriter, _ *http.Request) { w.Write(b) })
-		}
+	prefix := "/download/" + tag + "/"
+	mux.HandleFunc(prefix+"checksums.txt", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte(sums.String())) })
+	for name, b := range files {
+		b := b
+		mux.HandleFunc(prefix+name, func(w http.ResponseWriter, _ *http.Request) { w.Write(b) })
 	}
-	serve("/download/v0.2.0/")
-	serve("/latest/download/")
+}
+
+// release plays GitHub: /download/v0.2.0/<files>, and /latest, which redirects to /tag/v0.2.0 (404 when there is
+// no file, that is no release). The scripts must not use /latest/download: a second request there can reach a
+// newer release than the first.
+func release(t *testing.T, files map[string][]byte, badSum bool) string {
+	mux := http.NewServeMux()
+	addRelease(mux, "v0.2.0", files, badSum)
+	mux.HandleFunc("/latest", func(w http.ResponseWriter, r *http.Request) {
+		if len(files) == 0 {
+			http.NotFound(w, r)
+			return
+		}
+		http.Redirect(w, r, "/tag/v0.2.0", http.StatusFound)
+	})
 	s := httptest.NewServer(mux)
 	t.Cleanup(s.Close)
 	return s.URL
+}
+
+// racingRelease is a repository where v0.3.0 becomes the latest release right after the first request about
+// "latest". It returns the base URL and the paths requested.
+func racingRelease(t *testing.T, v2, v3 map[string][]byte) (string, func() []string) {
+	var mu sync.Mutex
+	var paths []string
+	latest := "v0.2.0"
+	mux := http.NewServeMux()
+	addRelease(mux, "v0.2.0", v2, false)
+	addRelease(mux, "v0.3.0", v3, false)
+	mux.HandleFunc("/latest/download/", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		tag := latest
+		latest = "v0.3.0"
+		mu.Unlock()
+		http.Redirect(w, r, "/download/"+tag+strings.TrimPrefix(r.URL.Path, "/latest/download"), http.StatusFound)
+	})
+	mux.HandleFunc("/latest", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		tag := latest
+		latest = "v0.3.0"
+		mu.Unlock()
+		http.Redirect(w, r, "/tag/"+tag, http.StatusFound)
+	})
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		mux.ServeHTTP(w, r)
+	}))
+	t.Cleanup(s.Close)
+	return s.URL, func() []string { mu.Lock(); defer mu.Unlock(); return append([]string(nil), paths...) }
+}
+
+// onlyTag fails when a script asked for a path outside /latest and /download/<tag>/.
+func onlyTag(t *testing.T, paths []string, tag string) {
+	t.Helper()
+	for _, p := range paths {
+		if p != "/latest" && !strings.HasPrefix(p, "/download/"+tag+"/") {
+			t.Errorf("request %s: the script must read /latest once and then only /download/%s/", p, tag)
+		}
+	}
 }
 
 func need(t *testing.T, tool string) string {
@@ -110,6 +165,22 @@ func TestInstallShLatest(t *testing.T) {
 	}
 }
 
+// A release that becomes the latest between the two downloads must not give a false checksum failure: the
+// script resolves the tag once and reads the archive and checksums.txt from that tag.
+func TestInstallShLatestIsResolvedOnce(t *testing.T) {
+	v2 := map[string][]byte{unixArchive(): targz(t, "ambit", fakeBinary)}
+	v3 := map[string][]byte{unixArchive(): targz(t, "ambit", "#!/bin/sh\necho newer ambit\n")}
+	base, paths := racingRelease(t, v2, v3)
+	out, dir, err := runSh(t, base)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "ambit")); string(b) != fakeBinary {
+		t.Fatalf("installed %q, want the binary of v0.2.0", b)
+	}
+	onlyTag(t, paths(), "v0.2.0")
+}
+
 func TestInstallShChecksumMismatch(t *testing.T) {
 	base := release(t, map[string][]byte{unixArchive(): targz(t, "ambit", fakeBinary)}, true)
 	out, dir, err := runSh(t, base, "AMBIT_VERSION=0.2.0")
@@ -150,6 +221,20 @@ func TestInstallPs1(t *testing.T) {
 	}
 }
 
+func TestInstallPs1LatestIsResolvedOnce(t *testing.T) {
+	v2 := map[string][]byte{"ambit_windows_amd64.zip": zipped(t, "ambit.exe", "MZ v2")}
+	v3 := map[string][]byte{"ambit_windows_amd64.zip": zipped(t, "ambit.exe", "MZ v3")}
+	base, paths := racingRelease(t, v2, v3)
+	out, dir, err := runPS(t, base)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dir, "ambit.exe")); string(b) != "MZ v2" {
+		t.Fatalf("installed %q, want the binary of v0.2.0", b)
+	}
+	onlyTag(t, paths(), "v0.2.0")
+}
+
 func TestInstallPs1ChecksumMismatch(t *testing.T) {
 	base := release(t, map[string][]byte{"ambit_windows_amd64.zip": zipped(t, "ambit.exe", "MZ fake")}, true)
 	out, dir, err := runPS(t, base)
@@ -174,6 +259,13 @@ func TestInstallShNoReleaseYet(t *testing.T) {
 	}
 }
 
+func TestInstallShLatestUnreachable(t *testing.T) {
+	out, _, err := runSh(t, "http://127.0.0.1:1")
+	if err == nil || !strings.Contains(out, "cannot reach http://127.0.0.1:1/latest") || strings.Contains(out, "No Ambit CLI release") {
+		t.Fatalf("err %v, output:\n%s", err, out)
+	}
+}
+
 func TestInstallPs1NoReleaseYet(t *testing.T) {
 	base := release(t, map[string][]byte{}, false)
 	out, dir, err := runPS(t, base)
@@ -182,5 +274,66 @@ func TestInstallPs1NoReleaseYet(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "ambit.exe")); err == nil {
 		t.Fatal("a binary was installed")
+	}
+}
+
+const noAnswer = "GitHub did not answer; try again"
+
+// githubDown plays GitHub when it fails: /latest answers with status, or never answers when status is 0.
+func githubDown(t *testing.T, status int) string {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if status == 0 {
+			<-r.Context().Done()
+			return
+		}
+		w.WriteHeader(status)
+	}))
+	t.Cleanup(s.Close)
+	return s.URL
+}
+
+func TestInstallShGitHubServerError(t *testing.T) {
+	for _, status := range []int{500, 502, 503, 429, 403} {
+		out, dir, err := runSh(t, githubDown(t, status))
+		if err == nil || !strings.Contains(out, noAnswer) || strings.Contains(out, "No Ambit CLI release") {
+			t.Fatalf("HTTP %d: err %v, output:\n%s", status, err, out)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "ambit")); err == nil {
+			t.Fatal("a binary was installed")
+		}
+	}
+}
+
+func TestInstallShGitHubTimeout(t *testing.T) {
+	out, _, err := runSh(t, githubDown(t, 0), "AMBIT_LATEST_TIMEOUT=1")
+	if err == nil || !strings.Contains(out, noAnswer) || strings.Contains(out, "No Ambit CLI release") {
+		t.Fatalf("err %v, output:\n%s", err, out)
+	}
+}
+
+func TestInstallPs1GitHubServerError(t *testing.T) {
+	for _, status := range []int{503, 429, 403} {
+		out, _, err := runPS(t, githubDown(t, status))
+		if err == nil || !strings.Contains(out, noAnswer) || strings.Contains(out, "No Ambit CLI release") {
+			t.Fatalf("HTTP %d: err %v, output:\n%s", status, err, out)
+		}
+	}
+}
+
+// A refused connection is an HttpRequestException inside PowerShell's MethodInvocationException: "cannot reach", not a timeout.
+func TestInstallPs1GitHubUnreachable(t *testing.T) {
+	s := httptest.NewServer(http.NotFoundHandler())
+	base := s.URL
+	s.Close()
+	out, _, err := runPS(t, base)
+	if err == nil || !strings.Contains(out, "cannot reach") || strings.Contains(out, noAnswer) {
+		t.Fatalf("err %v, output:\n%s", err, out)
+	}
+}
+
+func TestInstallPs1GitHubTimeout(t *testing.T) {
+	out, _, err := runPS(t, githubDown(t, 0), "AMBIT_LATEST_TIMEOUT=1")
+	if err == nil || !strings.Contains(out, noAnswer) || strings.Contains(out, "No Ambit CLI release") {
+		t.Fatalf("err %v, output:\n%s", err, out)
 	}
 }

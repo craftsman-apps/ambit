@@ -1,0 +1,19 @@
+# >>> ambit: written by `ambit connect codex`; `ambit disconnect codex` removes it >>>
+# ambit-replaced: model = "gpt-5.5"
+model = "nvidia/nemotron-3-super-120b-a12b:free"
+# <<< ambit <<<
+# >>> ambit: written by `ambit connect codex`; `ambit disconnect codex` removes it >>>
+# ambit-replaced: model_provider = "openai"
+model_provider = "ambit"
+# <<< ambit <<<
+
+# >>> ambit: written by `ambit connect codex`; `ambit disconnect codex` removes it >>>
+[model_providers.ambit]
+name = "Ambit"
+base_url = "https://llm.example.com/v1"
+wire_api = "responses"
+
+[model_providers.ambit.auth]
+command = "/opt/homebrew/bin/ambit"
+args = ["key", "print", "--url", "https://llm.example.com"]
+# <<< ambit <<<

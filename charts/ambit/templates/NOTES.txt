@@ -8,6 +8,12 @@ Password (created by the console at first start):
 {{- else }}
 Bootstrap admin: turned off. Sign in with: {{ range .Values.sso.connectors }}{{ .name | default .id }} {{ end }}
 {{- end }}
+{{- if eq ((.Values.access | default dict).mode | default "enforce") "audit" }}
+
+WARNING: access.mode is audit: every signed-in request to a model or MCP tool is allowed, and every tool is listed to everyone.
+AccessRules are recorded, not enforced. Each audit record says whether the rules would have refused the request.
+To enforce: set access.mode: enforce and upgrade.
+{{- end }}
 {{- range $g := list "llm" "mcp" }}
 {{- if eq (toString (index $.Values $g).jwt.requireEmail) "false" }}
 

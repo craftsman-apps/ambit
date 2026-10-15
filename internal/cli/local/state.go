@@ -132,7 +132,10 @@ const (
 type Ownership struct {
 	Verdict Verdict
 	Reason  string // for NotOwned: what the CLI found
-	State   *State
+	// Unreachable: the state file names a container, but a proof cannot be read (Docker is down or the node
+	// container is stopped). The CLI cannot prove ownership; it has not found a foreign cluster.
+	Unreachable bool
+	State       *State
 }
 
 // CheckOwnership is the one function that decides whether the CLI may repair, delete or read a local cluster
@@ -183,20 +186,25 @@ func CheckOwnership(ctx context.Context, store Store, c Cluster, name string) (O
 		}
 		st.ContainerID, recovered = cs[0].ID, true
 	}
+	unreachable := func(format string, a ...any) (Ownership, error) {
+		o, _ := notOwned(format, a...)
+		o.Unreachable = true
+		return o, nil
+	}
 	cp, err := c.ControlPlane(name)
 	if err != nil {
-		return notOwned("its control-plane node cannot be read: %v", err)
+		return unreachable("its control-plane node cannot be read: %v", err)
 	}
 	id, err := c.ContainerID(cp)
 	if err != nil {
-		return notOwned("its control-plane container cannot be read: %v", err)
+		return unreachable("its control-plane container cannot be read: %v", err)
 	}
 	if id != st.ContainerID {
 		return notOwned("its control-plane container is %s, but the state file %s names %s", short(id), store.Path(name), short(st.ContainerID))
 	}
 	labels, err := c.NodeLabels(ctx, name)
 	if err != nil {
-		return notOwned("its Kubernetes API does not answer, so the node label cannot be read (state file %s, container %s)", store.Path(name), short(id))
+		return unreachable("its Kubernetes API does not answer, so the node label cannot be read (state file %s, container %s)", store.Path(name), short(id))
 	}
 	if labels[cp][kindx.Label] != kindx.LabelValue {
 		return notOwned("node %s has no label %s=%s", cp, kindx.Label, kindx.LabelValue)
@@ -215,6 +223,14 @@ func (o Ownership) Refusal(name string) *out.Error {
 	other := "ambit-try"
 	if name == other {
 		other = "ambit-try-2"
+	}
+	if o.Unreachable {
+		return &out.Error{
+			What: fmt.Sprintf("a kind cluster named %q exists, and ambit cannot prove that ambit local up created it", name),
+			Why:  o.Reason,
+			Next: "start Docker and the cluster's node container (docker start " + name + "-control-plane), then run the command again",
+			Code: out.ExitFailed,
+		}
 	}
 	return &out.Error{
 		What: fmt.Sprintf("a kind cluster named %q exists and was not created by ambit local up", name),

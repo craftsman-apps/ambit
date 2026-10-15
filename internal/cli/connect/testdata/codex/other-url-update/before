@@ -1,0 +1,10 @@
+# Codex configuration
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+# Trusted projects
+[projects."/Users/a/code/app"]
+trust_level = "trusted"
+
+[tui]
+notifications = true

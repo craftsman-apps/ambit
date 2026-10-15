@@ -20,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	ambitv1alpha1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/auditsql"
 	"github.com/craftsman-apps/ambit/internal/cli/kube"
 )
 
@@ -159,7 +160,16 @@ func p4Evidence(ctx context.Context, e *Env) Result {
 	if e.Token == "" {
 		return res(Unknown, src, "evidence pods are Ready; no gateway token — set AMBIT_TOKEN to a token for the gateway")
 	}
-	return p4Records(ctx, e, all)
+	return *e.deepRecords(ctx, all)
+}
+
+// deepRecords runs the --deep test call and the wait for its audit record once; P4 and P11 read the same result.
+func (e *Env) deepRecords(ctx context.Context, all map[string]any) *Result {
+	if e.records == nil {
+		r := p4Records(ctx, e, all)
+		e.records = &r
+	}
+	return e.records
 }
 
 // collectorMetricsPort is the port of the collector's own Prometheus metrics (charts/ambit/files/otel-collector.yaml,
@@ -334,6 +344,9 @@ func p9Console(ctx context.Context, e *Env) Result {
 		return res(Fail, "values, Deployment", "console.replicas is %d; it must be 1", r)
 	}
 	d, err := e.Kube.AppsV1().Deployments(e.Namespace).Get(ctx, "ambit-console", metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return res(Fail, "values, Deployment", "there is no ambit-console Deployment in namespace %s", e.Namespace).next(installDocs)
+	}
 	if err != nil {
 		return unknownFor(err, "get", "deployments", e.Namespace, "values, Deployment")
 	}
@@ -387,4 +400,100 @@ func p10Credentials(ctx context.Context, e *Env) Result {
 		return res(Warn, src, "%s", strings.Join(warns, "; ")).next("https://ambitproject.dev/docs/providers")
 	}
 	return res(Pass, src, "%d Models use Secrets or cloud identity", len(models.Items))
+}
+
+// P11: audit-only mode (access.mode: audit) is a trial, not a way to run in production: AccessRules are recorded,
+// not enforced. The check states the mode, how long it has been on, and (with --deep) that the records reach the
+// audit store; it never judges marks. A line under it counts the records of the last 24 h with a missing or failed
+// mark.
+func p11AuditMode(ctx context.Context, e *Env) Result {
+	src := "values, ambit-access-mode"
+	var cm corev1.ConfigMap
+	err := e.Ctrl.Get(ctx, client.ObjectKey{Namespace: e.Namespace, Name: "ambit-access-mode"}, &cm)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return unknownFor(err, "get", "configmaps", e.Namespace, src)
+	}
+	published := err == nil
+	mode := cm.Data["mode"]
+	_, all, verr := e.values()
+	if mode == "" {
+		if verr != nil {
+			return e.valuesUnknown(src)
+		}
+		mode = str(all, "access.mode")
+	}
+	var since time.Time
+	if t, err := time.Parse(time.RFC3339, cm.Data["modeSince"]); err == nil {
+		since = t
+	}
+	var r Result
+	if mode != "audit" {
+		r = res(Pass, src, "access.mode is enforce: AccessRules decide")
+	} else {
+		msg := "access.mode is audit (the controller has not published ambit-access-mode yet): AccessRules are recorded, not enforced"
+		if published && !since.IsZero() {
+			msg = fmt.Sprintf("access.mode is audit for %d days (since %s): AccessRules are recorded, not enforced",
+				int(e.Now().Sub(since).Hours()/24), since.UTC().Format(time.RFC3339))
+		}
+		r = res(Warn, src, "%s", msg).next("set access.mode: enforce and run helm upgrade (https://ambitproject.dev/docs/guides/audit-only)")
+		switch {
+		case !e.Deep:
+			r.Message += "; records not checked; --deep checks them"
+		case e.Token == "":
+			r = res(Unknown, src, "access.mode is audit; no gateway token — set AMBIT_TOKEN to a token for the gateway")
+		case verr != nil:
+			r = e.valuesUnknown(src)
+		default:
+			// Audit-only allows every request, so a record that does not reach the store leaves no evidence at all.
+			switch rec := e.deepRecords(ctx, all); rec.Status {
+			case Pass:
+				r.Message += "; " + rec.Message
+			case Fail:
+				r = res(Fail, src, "access.mode is audit and its records do not reach the audit store: %s", rec.Message).next(rec.Next)
+			default:
+				r = res(Unknown, src, "access.mode is audit; delivery of records not checked: %s", rec.Message).next(rec.Next)
+			}
+		}
+	}
+	// The mark-missing line: while audit mode is on, and for 24 h after it was on.
+	if mode == "audit" || (!since.IsZero() && e.Now().Sub(since) < 24*time.Hour) {
+		l := markMissingLine(ctx, e, all, verr)
+		r.Lines = append(r.Lines, l)
+		if l.Status == Warn && r.Status == Pass {
+			r.Status = Warn
+		}
+	}
+	return r
+}
+
+// markMissingLine runs the console's classification in the chart's ClickHouse pod and counts the audit-mode call
+// records of the last 24 h whose mark is missing or failed. The pod's own credentials are used: the CLI never
+// reads the ClickHouse password.
+func markMissingLine(ctx context.Context, e *Env, all map[string]any, verr error) Line {
+	const what = "audit-mode call records with a missing or failed mark (last 24 h)"
+	if verr == nil {
+		if h := str(all, "evidence.clickhouse.external.host"); h != "" {
+			return Line{Status: Unknown, Message: fmt.Sprintf("%s: external ClickHouse %s is not reached by the CLI; the Audit page shows the count", what, h)}
+		}
+	}
+	if e.Exec == nil {
+		return Line{Status: Unknown, Message: what + ": the CLI cannot run a query here"}
+	}
+	cmd := []string{"sh", "-c", `clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --database "$CLICKHOUSE_DB" --query "$1"`, "sh", auditsql.MarkMissingLast24h}
+	outp, err := e.Exec(ctx, "app.kubernetes.io/name=ambit-clickhouse", cmd)
+	if err != nil {
+		if denied(err) {
+			return Line{Status: Unknown, Message: fmt.Sprintf("%s: cannot create pods/exec in %s", what, e.Namespace), Next: "ask for access to run a query in the ClickHouse pod, or read the count on the Audit page"}
+		}
+		return Line{Status: Unknown, Message: fmt.Sprintf("%s: ClickHouse did not answer: %v", what, err)}
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(outp))
+	if err != nil {
+		return Line{Status: Unknown, Message: fmt.Sprintf("%s: ClickHouse answered %q", what, strings.TrimSpace(outp))}
+	}
+	if n > 0 {
+		return Line{Status: Warn, Message: fmt.Sprintf("%s: %d", what, n),
+			Next: "a rule expression failed or the audit fields were not active yet; run ambit check --production again in a few minutes, and report the rule if the count stays above zero"}
+	}
+	return Line{Status: Pass, Message: fmt.Sprintf("%s: 0", what)}
 }

@@ -14,3 +14,10 @@ func TestDevBuildAcceptsDevFlags(t *testing.T) {
 		t.Fatalf("code %d, output %q", code, s)
 	}
 }
+
+func TestDevBuildAcceptsKeyringServiceFlag(t *testing.T) {
+	r := newRig(t)
+	if code := r.run("key", "print", "--url", "https://llm.example.com", "--dev-keyring-service", "ambit-test"); code != 1 || strings.Contains(r.stderr.String(), "unknown flag") {
+		t.Fatalf("code %d, stderr %q", code, r.stderr.String())
+	}
+}

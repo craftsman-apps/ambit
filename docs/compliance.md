@@ -25,10 +25,12 @@ This page is not legal advice.
 | **Kubernetes objects** (`AccessRule`, `Model`, `Server`, `Budget`, `ModelRouter`, `Connection`) | Who may use what. With GitOps mode, every change is a pull request with its author, reviewer and time. | `kubectl get`, or your configuration repository. |
 | **Settings → Keys** (admins only) | All personal API keys, and the history of key changes: who created or revoked which key, settings changes, sign-ins that changed groups (newest 500). | Console. |
 | **Settings → Offboarding** (admins only) | One record per person who left: trigger, sessions ended, gateway block, keys deleted, and each app vendor's answer to the revocation request. | Console. |
-| **Servers** page | Requests to add an MCP server: who asked, who decided, the decision and the image digest. A person cannot approve their own request. | Console. This flow is in the console but not yet described in these docs; see `internal/console/servers.go` in the repository. |
+| **Servers** page | Requests to add an MCP server: who asked, who decided, the decision and the image digest. A person cannot approve their own request. | Console. The flow is described in [Ask for an MCP app and approve it](guides/request-an-app.md). |
 | **Helm values** | The settings that matter to an auditor: token issuers, TLS, `bootstrapAdmin.enabled`, `apiKeys.*`, `evidence.*`, `limits.*`, `protection.enabled`. | `helm get values ambit -n ambit-system`, or your values file in Git. |
 
 The Audit and Usage pages and the ClickHouse records exist only with `evidence.enabled: true`. The default is `false`.
+
+**Audit-only mode.** With `access.mode: audit`, the records are of requests that were allowed. Each record carries the verdict of the access rules in force when it was served (`ambit.wouldRefuse` for a model request, `ambit.wouldRefuseTool` for an MCP tool call: `allow`, `refuse:model`, `refuse:router`, `refuse:tool`, `other-model` or `n/a`), the mode (`ambit.accessMode`) and the version of those rules (`ambit.rulesVersion`). The verdict is not recomputed later, so a rule written afterwards does not change an older record. A request refused for another reason (sign-in, a budget, an unpriced model) has its real status, 401, 403 or 429. See [Turn Ambit on without blocking anyone](guides/audit-only.md).
 
 ## SOC 2
 

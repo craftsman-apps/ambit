@@ -1,2 +1,4 @@
 # The CLI embeds YAML and shell files and its tests split them on "\n"; a Windows checkout must keep LF.
 * text=auto eol=lf
+# Golden files of ambit connect keep their own line endings (CRLF cases) and byte order marks.
+internal/cli/connect/testdata/** -text

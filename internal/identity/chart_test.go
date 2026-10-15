@@ -66,8 +66,12 @@ func contains(list any, want string) bool {
 
 func attr(t *testing.T, docs []doc, name string) string {
 	t.Helper()
-	p := find(t, docs, "AgentgatewayPolicy", "ambit-access-log")
-	for _, a := range get(t, p, "spec", "frontend", "accessLog", "attributes", "add").([]any) {
+	// The chart renders the access log's static part; ambit-controller writes the policy from it.
+	var spec doc
+	if err := yaml.Unmarshal([]byte(get(t, find(t, docs, "ConfigMap", "ambit-access-log-base"), "data", "spec.yaml").(string)), &spec); err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range get(t, spec, "frontend", "accessLog", "attributes", "add").([]any) {
 		if get(t, a, "name") == name {
 			return get(t, a, "expression").(string)
 		}

@@ -1,0 +1,336 @@
+package connect
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+const ambitBin = "/opt/homebrew/bin/ambit"
+
+func claudeInput(c goldenCase, s goldenStep, cur []byte, exists bool, prev *FileRecord) Input {
+	return Input{Path: "/home/a/.claude/settings.json", File: cur, Exists: exists, URL: s.URL, Model: s.Model, AmbitPath: ambitBin,
+		GOOS: "darwin", Force: s.Force, Getenv: func(k string) string { return s.Env[k] }, Prev: prev}
+}
+
+func TestClaudeCodeGolden(t *testing.T) {
+	for _, c := range loadGolden(t, "claude-code") {
+		t.Run(filepath.Base(c.dir), func(t *testing.T) {
+			cur, exists := c.before, c.exists
+			var prev *FileRecord
+			var last *Plan
+			for _, s := range c.steps {
+				p, err := PlanClaudeCode(claudeInput(c, s, cur, exists, prev))
+				if err != nil {
+					t.Fatal(err)
+				}
+				last = p
+				if p.After == nil {
+					break
+				}
+				cur, exists, prev = p.After, true, &p.Record
+			}
+			c.check(t, "conflicts", conflictLines(last.Conflicts))
+			if last.After == nil {
+				c.check(t, "after", nil)
+				return
+			}
+			c.check(t, "after", strp(string(last.After)))
+			// connect then disconnect gives the file back.
+			d, err := UnplanJSON(*prev, cur, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, wantExists := c.before, c.exists
+			if len(prev.RemovedSecrets) > 0 {
+				c.check(t, "roundtrip", strp(string(d.After)))
+				return
+			}
+			switch {
+			case !wantExists:
+				if !d.Delete {
+					t.Fatalf("a file connect created must be deleted, got %q", d.After)
+				}
+			case d.Delete || string(d.After) != string(want):
+				t.Fatalf("disconnect did not restore the file\n got  %q\n want %q", d.After, want)
+			}
+		})
+	}
+}
+
+// Section 14 item 9, for this tool: the key is never in a file, and the state record holds no secret.
+func TestClaudeCodeNeverWritesAKey(t *testing.T) {
+	const token = "ambit_0123456789abcdefghijklmnopqrstuvwxyzABCDEFG"
+	before := `{"env": {"ANTHROPIC_AUTH_TOKEN": "` + token + `", "FOO": "1"}}` + "\n"
+	in := claudeInput(goldenCase{}, goldenStep{URL: "https://llm.example.com", Model: "m", Force: true}, []byte(before), true, nil)
+	p, err := PlanClaudeCode(in)
+	if err != nil || p.After == nil {
+		t.Fatalf("plan: %v, %+v", err, p)
+	}
+	rec, _ := json.Marshal(p.Record)
+	for name, s := range map[string]string{"the new file": string(p.After), "the state record": string(rec)} {
+		if strings.Contains(s, token) || strings.Contains(s, "ambit_") {
+			t.Errorf("%s holds a key: %s", name, s)
+		}
+	}
+	if len(p.Record.RemovedSecrets) != 1 || p.Record.RemovedSecrets[0] != "/env/ANTHROPIC_AUTH_TOKEN" {
+		t.Fatalf("RemovedSecrets = %v", p.Record.RemovedSecrets)
+	}
+	// Disconnect says where the old value is, and does not put it back.
+	p.Record.Backup = "/home/a/.claude/settings.json.ambit.bak"
+	d, err := UnplanJSON(p.Record, p.After, true)
+	if err != nil || strings.Contains(string(d.After), token) {
+		t.Fatalf("disconnect: %v %q", err, d.After)
+	}
+	if len(d.Notes) != 1 || d.Notes[0] != "env.ANTHROPIC_AUTH_TOKEN was removed at connect; its old value is in /home/a/.claude/settings.json.ambit.bak" {
+		t.Fatalf("notes = %q", d.Notes)
+	}
+}
+
+func TestClaudeCodeShellEnvWarning(t *testing.T) {
+	in := claudeInput(goldenCase{}, goldenStep{URL: "https://llm.example.com", Model: "m", Env: map[string]string{"ANTHROPIC_AUTH_TOKEN": "x"}}, nil, false, nil)
+	p, _ := PlanClaudeCode(in)
+	if len(p.Warnings) != 1 || p.Warnings[0] != "ANTHROPIC_AUTH_TOKEN is set in your shell and outranks Ambit's key; remove it from your shell profile" {
+		t.Fatalf("warnings = %q", p.Warnings)
+	}
+}
+
+func TestClaudeCodeWindowsQuoting(t *testing.T) {
+	in := claudeInput(goldenCase{}, goldenStep{URL: "https://llm.example.com", Model: "m"}, nil, false, nil)
+	in.GOOS, in.AmbitPath = "windows", `C:\Users\First Last\bin\ambit.exe`
+	p, _ := PlanClaudeCode(in)
+	want := `"apiKeyHelper": "\"C:\\Users\\First Last\\bin\\ambit.exe\" key print --url \"https://llm.example.com\""`
+	if !strings.Contains(string(p.After), want) {
+		t.Fatalf("got %s", p.After)
+	}
+}
+
+func TestClaudeCodeInvalidJSONChangesNothing(t *testing.T) {
+	in := claudeInput(goldenCase{}, goldenStep{URL: "https://llm.example.com", Model: "m"}, []byte("{\n  \"env\": {\n    \"A\": \n}\n"), true, nil)
+	_, err := PlanClaudeCode(in)
+	if err == nil || !strings.Contains(err.Error(), "settings.json is not valid JSON") || !strings.Contains(err.Error(), "line") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestClaudeSettingsPath(t *testing.T) {
+	get := func(m map[string]string) func(string) string { return func(k string) string { return m[k] } }
+	if got := ClaudeSettingsPath(get(nil), "/home/a"); got != filepath.FromSlash("/home/a/.claude/settings.json") {
+		t.Fatal(got)
+	}
+	if got := ClaudeSettingsPath(get(map[string]string{"CLAUDE_CONFIG_DIR": "/cfg"}), "/home/a"); got != filepath.FromSlash("/cfg/settings.json") {
+		t.Fatal(got)
+	}
+}
+
+func TestClaudeCodeDisconnectLeavesAnEditedEntry(t *testing.T) {
+	in := claudeInput(goldenCase{}, goldenStep{URL: "https://llm.example.com", Model: "m"}, []byte("{\n  \"theme\": \"dark\"\n}\n"), true, nil)
+	p, _ := PlanClaudeCode(in)
+	edited := strings.Replace(string(p.After), `"ANTHROPIC_MODEL": "m"`, `"ANTHROPIC_MODEL": "mine"`, 1)
+	d, err := UnplanJSON(p.Record, []byte(edited), true)
+	if err != nil || len(d.Notes) != 1 || d.Notes[0] != "env.ANTHROPIC_MODEL was changed after connect; left as it is" || !strings.Contains(string(d.After), "mine") {
+		t.Fatalf("%v %q %s", err, d.Notes, d.After)
+	}
+}
+
+func TestClaudeCodeFileGoneAtDisconnect(t *testing.T) {
+	d, err := UnplanJSON(FileRecord{Path: "/x"}, nil, false)
+	if err != nil || d.After != nil || d.Delete {
+		t.Fatalf("%v %+v", err, d)
+	}
+}
+
+// A second connect (another --url) keeps what the first one recorded, so a disconnect restores the first state.
+func TestClaudeCodeReconnectKeepsTheFirstRecord(t *testing.T) {
+	in := claudeInput(goldenCase{}, goldenStep{URL: "https://a.example.com", Model: "m", Force: true},
+		[]byte(`{"env": {"ANTHROPIC_AUTH_TOKEN": "sk-ant-x"}}`+"\n"), true, nil)
+	first, err := PlanClaudeCode(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Record.Dirs = []string{"/home/a/.claude"}
+	in2 := claudeInput(goldenCase{}, goldenStep{URL: "https://b.example.com", Model: "m"}, first.After, true, &first.Record)
+	second, err := PlanClaudeCode(in2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := second.Record; len(r.RemovedSecrets) != 1 || r.Dirs[0] != "/home/a/.claude" {
+		t.Fatalf("record = %+v", r)
+	}
+	second.Record.Backup = "/home/a/.claude/settings.json.ambit.bak"
+	d, err := UnplanJSON(second.Record, second.After, true)
+	if err != nil || len(d.Notes) != 1 || !strings.Contains(d.Notes[0], "env.ANTHROPIC_AUTH_TOKEN was removed at connect") {
+		t.Fatalf("%v %q", err, d.Notes)
+	}
+}
+
+// The URL is part of a command that a shell runs at every start of Claude Code: it is quoted like the path.
+func TestClaudeCodeQuotesTheURLInTheHelper(t *testing.T) {
+	in := claudeInput(goldenCase{}, goldenStep{URL: "https://llm.example.com/a;touch$%7BIFS%7D/x&b", Model: "m"}, nil, false, nil)
+	p, err := PlanClaudeCode(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `"apiKeyHelper": "'/opt/homebrew/bin/ambit' key print --url 'https://llm.example.com/a;touch$%7BIFS%7D/x&b'"`
+	if !strings.Contains(string(p.After), want) {
+		t.Fatalf("got %s", p.After)
+	}
+}
+
+// A conflict line names the key, never the value: a helper such as `echo sk-ant-...` is a secret.
+func TestClaudeCodeConflictLinesNeverPrintAValue(t *testing.T) {
+	before := `{"apiKeyHelper": "echo sk-ant-api03-SECRETSECRET", "env": {"ANTHROPIC_BASE_URL": "https://sk-ant-SECRETSECRET.example", "ANTHROPIC_API_KEY": "sk-ant-SECRETSECRET"}}` + "\n"
+	p, err := PlanClaudeCode(claudeInput(goldenCase{}, goldenStep{URL: "https://llm.example.com", Model: "m"}, []byte(before), true, nil))
+	if err != nil || len(p.Conflicts) != 3 {
+		t.Fatalf("%v %+v", err, p)
+	}
+	for _, c := range p.Conflicts {
+		if strings.Contains(c.String(), "SECRET") || strings.Contains(c.String(), "echo") {
+			t.Errorf("conflict line prints a value: %s", c)
+		}
+	}
+}
+
+// Cloud provider settings outrank apiKeyHelper (Claude Code authentication order): Bedrock, Vertex and Foundry.
+func TestClaudeCodeCloudProviderVariables(t *testing.T) {
+	for _, v := range []string{"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"} {
+		before := `{"env": {"` + v + `": "1"}}` + "\n"
+		p, err := PlanClaudeCode(claudeInput(goldenCase{}, goldenStep{URL: "https://llm.example.com", Model: "m"}, []byte(before), true, nil))
+		if err != nil || len(p.Conflicts) != 1 || p.After != nil || !strings.HasPrefix(p.Conflicts[0].What, "env."+v+" is set") {
+			t.Fatalf("%s: %v %+v", v, err, p)
+		}
+		p, _ = PlanClaudeCode(claudeInput(goldenCase{}, goldenStep{URL: "https://llm.example.com", Model: "m", Force: true}, []byte(before), true, nil))
+		if len(p.Record.RemovedSecrets) != 1 || strings.Contains(string(p.After), v) {
+			t.Fatalf("%s with --force: %+v %s", v, p.Record, p.After)
+		}
+		w, _ := PlanClaudeCode(claudeInput(goldenCase{}, goldenStep{URL: "https://llm.example.com", Model: "m", Env: map[string]string{v: "true"}}, nil, false, nil))
+		if len(w.Warnings) != 1 || !strings.HasPrefix(w.Warnings[0], v+" is set in your shell and outranks") {
+			t.Fatalf("%s in the shell: %q", v, w.Warnings)
+		}
+		off, _ := PlanClaudeCode(claudeInput(goldenCase{}, goldenStep{URL: "https://llm.example.com", Model: "m", Env: map[string]string{v: "0"}}, nil, false, nil))
+		if len(off.Warnings) != 0 {
+			t.Fatalf("%s=0 is off, got warnings %q", v, off.Warnings)
+		}
+	}
+}
+
+// A second --force connect that would remove another secret is refused: the only backup holds the first one.
+func TestClaudeCodeSecondRemovedSecretIsNeverLost(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(path, []byte(`{"env":{"ANTHROPIC_AUTH_TOKEN":"FIRST-TOKEN"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stateOf *FileRecord
+	connectOnce := func(url string) (*Plan, error) {
+		b, _ := os.ReadFile(path)
+		in := Input{Path: path, File: b, Exists: true, URL: url, Model: "m", AmbitPath: ambitBin, GOOS: "darwin", Force: true}
+		in.Prev = stateOf
+		p, err := PlanClaudeCode(in)
+		if err != nil || p.After == nil || p.Already {
+			return p, err
+		}
+		c := FileChange{Path: path, Before: b, Exists: true, After: p.After, KeepBackup: in.Prev != nil && len(in.Prev.RemovedSecrets) > 0}
+		if _, err := WriteAll([]FileChange{c}); err != nil {
+			t.Fatal(err)
+		}
+		p.Record.Backup = path + ".ambit.bak"
+		stateOf = &p.Record
+		return p, nil
+	}
+	if _, err := connectOnce("https://a.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	// The person adds a second token and connects again with --force.
+	b, _ := os.ReadFile(path)
+	withToken := strings.Replace(string(b), `"env":{`, `"env":{"ANTHROPIC_AUTH_TOKEN":"SECOND-TOKEN",`, 1)
+	if withToken == string(b) {
+		t.Fatalf("test setup: no env object in %s", b)
+	}
+	if err := os.WriteFile(path, []byte(withToken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := connectOnce("https://b.example.com")
+	if err == nil {
+		t.Fatal("a connect that removes a second secret must be refused")
+	}
+	if after, _ := os.ReadFile(path); string(after) != withToken {
+		t.Fatalf("the file changed although the connect was refused:\n%s", after)
+	}
+	if bak, _ := os.ReadFile(path + ".ambit.bak"); !strings.Contains(string(bak), "FIRST-TOKEN") {
+		t.Fatalf("the first backup lost FIRST-TOKEN: %s", bak)
+	}
+	if !strings.Contains(err.Error(), "ANTHROPIC_AUTH_TOKEN") {
+		t.Fatalf("the error does not name the entry: %v", err)
+	}
+}
+
+func TestClaudeCodeReconnectKeepsRemovedSecretsOnceEach(t *testing.T) {
+	first, err := PlanClaudeCode(Input{Path: "/c/settings.json", File: []byte(`{"env":{"ANTHROPIC_AUTH_TOKEN":"T"}}`), Exists: true,
+		URL: "https://a.example.com", Model: "m", AmbitPath: ambitBin, GOOS: "darwin", Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := PlanClaudeCode(Input{Path: "/c/settings.json", File: first.After, Exists: true, URL: "https://b.example.com", Model: "m",
+		AmbitPath: ambitBin, GOOS: "darwin", Force: true, Prev: &first.Record})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := second.Record.RemovedSecrets; len(got) != 1 || got[0] != "/env/ANTHROPIC_AUTH_TOKEN" {
+		t.Fatalf("RemovedSecrets = %v", got)
+	}
+}
+
+// A re-run that finds Ambit's entries unchanged still checks for a secret that outranks Ambit's key.
+func TestClaudeCodeAlreadyConnectedStillChecksConflictsAndShell(t *testing.T) {
+	base := Input{Path: "/c/settings.json", File: []byte(`{}`), Exists: true, URL: "https://a.example.com", Model: "m", AmbitPath: ambitBin, GOOS: "darwin"}
+	first, err := PlanClaudeCode(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again := base
+	again.File, again.Prev = first.After, &first.Record
+
+	// Nothing changed, but the shell holds a token: still "already", now with a warning.
+	again.Getenv = func(k string) string { return map[string]string{"ANTHROPIC_AUTH_TOKEN": "x"}[k] }
+	p, err := PlanClaudeCode(again)
+	if err != nil || !p.Already || len(p.Warnings) != 1 {
+		t.Fatalf("already = %v, warnings = %v, err = %v", p != nil && p.Already, p.Warnings, err)
+	}
+
+	// The person adds a token to settings.json.
+	again.Getenv = nil
+	again.File = []byte(strings.Replace(string(first.After), `"env": {`, `"env": {"ANTHROPIC_AUTH_TOKEN":"T",`, 1))
+	if string(again.File) == string(first.After) {
+		t.Fatalf("test setup: no env object in %s", first.After)
+	}
+	p, err = PlanClaudeCode(again)
+	if err != nil || p.Already || p.After != nil || len(p.Conflicts) != 1 {
+		t.Fatalf("file %s\nwithout --force: already = %v, conflicts = %v, err = %v", again.File, p.Already, p.Conflicts, err)
+	}
+	again.Force = true
+	p, err = PlanClaudeCode(again)
+	if err != nil || p.Already || strings.Contains(string(p.After), `"T"`) || len(p.Record.RemovedSecrets) != 1 {
+		t.Fatalf("with --force: %+v, err = %v", p, err)
+	}
+}
+
+// Connect into `{}` writes apiKeyHelper and env. If the person adds an env entry afterwards, disconnect must still
+// leave valid JSON.
+func TestClaudeCodeDisconnectKeepsValidJSONWhenEnvHoldsAnotherEntry(t *testing.T) {
+	p, err := PlanClaudeCode(Input{Path: "/c/settings.json", File: []byte(`{}`), Exists: true, URL: "https://a.example.com", Model: "m", AmbitPath: ambitBin, GOOS: "darwin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := strings.Replace(string(p.After), `"ANTHROPIC_BASE_URL"`, `"FOO":"1","ANTHROPIC_BASE_URL"`, 1)
+	d, err := UnplanJSON(p.Record, []byte(edited), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var v map[string]any
+	if err := json.Unmarshal(d.After, &v); err != nil || v["env"].(map[string]any)["FOO"] != "1" {
+		t.Fatalf("not valid JSON or FOO lost (%v): %s", err, d.After)
+	}
+}

@@ -1,0 +1,1 @@
+env.CLAUDE_CODE_USE_BEDROCK is set — it makes Claude Code use a cloud provider's credentials, which outrank Ambit's key helper

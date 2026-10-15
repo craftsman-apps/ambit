@@ -29,6 +29,10 @@ Clients can send the key as `Authorization: Bearer <key>` or as `x-api-key: <key
 gateways. Clients send the **provider's model ID** (for example `google/gemma-4-31b-it:free`), not the name of
 the Model object.
 
+With the `ambit` CLI you do not need to copy the snippets: `ambit connect <tool> --url <llm> --model <model>`
+writes the settings for Claude Code, Codex and opencode, and keeps the key in the keychain of your computer
+(see [Where the Ambit CLI keeps the key](#where-the-ambit-cli-keeps-the-key)).
+
 The console writes these snippets for you. `<llm>` is the LLM address (for example `https://llm.example.com`),
 `<mcp>` is the MCP address (for example `https://mcp.example.com/mcp`) and `<model>` is the provider's model ID.
 [Connect Claude Code and Cursor](guides/coding-tools.md) has the same snippets for Codex and opencode.
@@ -78,6 +82,41 @@ opencode and Cursor. The model list on the screen shows only the models your acc
 key, the console shows "Waiting for the first request with this key…" and then "First request seen at HH:MM". This
 uses the same last-use data as the **Last used** column. Without the audit trail the console shows no line. After 5
 minutes without a request it says "No request seen yet. Check the steps above, or see Audit."
+
+## Where the Ambit CLI keeps the key
+
+`ambit connect` asks for the key once and stores it. It never writes the key into a tool's config file. The tool runs
+`ambit key print --url <llm>` to read it.
+
+| System | Where the key is stored |
+|---|---|
+| macOS | the login keychain, item with the service `ambit` and the LLM address as the account |
+| Windows | the Credential Manager, a generic credential with the target `ambit:<LLM address>` |
+| Linux | the Secret Service over D-Bus (GNOME Keyring, KWallet, KeePassXC); it needs a D-Bus session and an unlocked keyring |
+
+There is one key for each LLM address, and all tools connected to that address use it. If there is no Secret Service on
+Linux (an SSH session, WSL without a desktop, a container), ambit stores the key in a file instead and prints a warning:
+`<config folder>/ambit/keys/<16 hex digits>`, readable by your user only (mode `0600`, on Windows an access list for your
+user only). On macOS and Windows a keychain error stops the command; it does not fall back to a file. `--key-store file`
+chooses the file on purpose. The state file `connect.json` in the same `ambit` folder says which store holds the key and
+what ambit wrote into which file. It never holds a key.
+
+`ambit key print --url <llm>` prints the stored key and a line end, and nothing else. It reads only the keychain or the
+file, so it needs no network and no cluster. On a terminal it refuses unless you add `--reveal`, so that the key does not
+stay in the scrollback by accident; a tool runs it without a terminal. If no key is stored it exits with 1 and says which
+`ambit connect` command stores one.
+
+**What the keychain protects, and what it does not.** It keeps the key from other users of the computer, and out of
+plain-text config files, backups and shell history. It does **not** keep the key from programs that run as your user:
+`ambit key print` gives the key to any such program, because the tools need exactly that.
+
+**Disconnecting does not revoke.** `ambit disconnect` deletes the stored key when no other tool uses it. The key itself
+stays valid at the gateway until you revoke it (next section).
+
+## Revoke a key
+
+In the console, open **Keys** and revoke the key. The gateway then refuses it. Do this when you disconnect for good,
+when a computer is lost, or when you think someone else has the key. The CLI does not revoke keys.
 
 ## Scope, end date and limits
 

@@ -130,6 +130,7 @@ Each person who uses the app then connects their own account. A call without a c
 
 ## Related
 
+- [Ask for an MCP app and approve it](request-an-app.md): how a person asks for an MCP app and how an approver decides.
 - [App presets](../presets.md): the screens, limits and the tool reader.
 - [Offboarding](../offboarding.md): which vendors truly revoke a person's access.
 - [Concepts](../concepts.md): how Ambit checks an MCP request.

@@ -2,7 +2,9 @@
 # Installs the ambit CLI on macOS or Linux. https://ambitproject.dev/docs/quick-start
 #   curl -fsSL https://ambitproject.dev/install.sh | sh
 # AMBIT_VERSION=0.2.0 pins a version (default: the latest release). AMBIT_INSTALL_DIR sets the directory
-# (default: ~/.local/bin). AMBIT_DOWNLOAD_BASE replaces https://github.com/craftsman-apps/ambit/releases (for a mirror).
+# (default: ~/.local/bin). AMBIT_DOWNLOAD_BASE replaces https://github.com/craftsman-apps/ambit/releases (for a mirror;
+# $AMBIT_DOWNLOAD_BASE/latest must redirect to $AMBIT_DOWNLOAD_BASE/tag/<tag>, as GitHub does). AMBIT_LATEST_TIMEOUT sets
+# the seconds to wait for that answer (default: 30).
 set -eu
 
 fail() {
@@ -12,11 +14,6 @@ fail() {
 }
 
 base=${AMBIT_DOWNLOAD_BASE:-https://github.com/craftsman-apps/ambit/releases}
-if [ -n "${AMBIT_VERSION:-}" ]; then
-  url="$base/download/v${AMBIT_VERSION#v}"
-else
-  url="$base/latest/download"
-fi
 dir=${AMBIT_INSTALL_DIR:-$HOME/.local/bin}
 
 case $(uname -s) in
@@ -44,6 +41,30 @@ fetch() {
   [ "$status" = 200 ]
 }
 
+# latest_tag: asks once which release is the latest and sets $tag. The archive and checksums.txt are then both read
+# from that tag; two requests to "latest" could reach two different releases.
+latest_tag() {
+  t=${AMBIT_LATEST_TIMEOUT:-30}
+  if command -v curl >/dev/null 2>&1; then
+    code=0
+    reply=$(curl -sS --connect-timeout 10 --max-time "$t" -o /dev/null -w '%{http_code} %{redirect_url}' "$base/latest") || code=$?
+    # curl exit 28: the time ran out. The status is 000 then, as for any other failure.
+    [ "$code" = 28 ] && reply="timeout "
+    [ "$code" = 0 ] || [ "$code" = 28 ] || reply="000 "
+  elif command -v wget >/dev/null 2>&1; then
+    reply=$(wget -S -q -T "$t" -t 1 -O /dev/null --max-redirect=0 "$base/latest" 2>&1 | tr -d '\r' |
+      awk '/^ *HTTP\// { c = $2 } tolower($1) == "location:" { l = $2 } END { print c " " l }')
+  else
+    fail "neither curl nor wget is installed" "install curl"
+  fi
+  case $reply in
+    *"/tag/"*) tag=${reply##*/tag/} ;;
+    "timeout "* | 403" "* | 429" "* | 5??" "*) fail "GitHub did not answer; try again" "run the command again in a few minutes" ;;
+    "000 "* | " "*) fail "cannot reach $base/latest" "check your network" ;;
+    *) fail "No Ambit CLI release is published yet (the latest release has no ambit_<os>_<arch> file). See https://github.com/craftsman-apps/ambit/releases" ;;
+  esac
+}
+
 # missing URL: a 404 on a latest download means that no CLI release exists yet.
 missing() {
   if [ "$status" = 404 ] && [ -z "${AMBIT_VERSION:-}" ]; then
@@ -51,6 +72,13 @@ missing() {
   fi
   fail "cannot download $1 (HTTP $status)" "check AMBIT_VERSION and your network"
 }
+
+if [ -n "${AMBIT_VERSION:-}" ]; then
+  tag="v${AMBIT_VERSION#v}"
+else
+  latest_tag
+fi
+url="$base/download/$tag"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

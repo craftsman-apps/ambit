@@ -2,6 +2,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -35,12 +36,24 @@ func main() {
 	consoleTools := flag.String("console-tools-url", "", "console tools listener (e.g. http://ambit-console.ambit-system.svc:8083); per-user servers' tools are read through it. Empty leaves them unlisted")
 	routerDep := flag.String("router-deployment", "", "ambit-router's Deployment (routers of type LLM); empty: not installed")
 	routerReplicas := flag.Int("router-replicas", 2, "ambit-router replicas while a router of type LLM exists")
+	accessMode := flag.String("access-mode", "enforce", "enforce: AccessRules decide; audit: every signed-in request is allowed and its record says whether the rules would have refused it")
+	activationTimeout := flag.Duration("activation-timeout", 2*time.Minute, "how long a mode switch or rules change waits for agentgateway to apply one step")
+	activationSettle := flag.Duration("activation-settle", 3*time.Second, "wait after agentgateway accepted a step, for the change to reach every gateway pod")
 	flag.Parse()
 	controller.RequireEmail = *requireEmail
 	ctrl.SetLogger(zap.New())
 	log := ctrl.Log.WithName("setup")
 	if ns == "" {
 		log.Info("AMBIT_NAMESPACE is required")
+		os.Exit(1)
+	}
+	if *accessMode != "enforce" && *accessMode != "audit" {
+		log.Error(errors.New("--access-mode must be enforce or audit"), "bad flag", "got", *accessMode)
+		os.Exit(1)
+	}
+	activation := &controller.Activation{Timeout: *activationTimeout, Settle: *activationSettle}
+	if err := activation.Check(); err != nil {
+		log.Error(err, "bad flag")
 		os.Exit(1)
 	}
 	scheme := runtime.NewScheme()
@@ -72,7 +85,8 @@ func main() {
 	}
 	if err := (&controller.Reconciler{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), ListTools: listTools, Namespace: ns, Route: controller.RouteRef{Name: *route},
 		RateLimit: controller.RateLimit{Service: *rlService, Port: *rlPort, FailureMode: *rlFailure}, ToolsRefresh: *toolsRefresh, ArgumentLimits: *argLimits,
-		Classifier: controller.Classifier{Deployment: *routerDep, Replicas: int32(*routerReplicas)}}).SetupWithManager(mgr); err != nil {
+		Classifier: controller.Classifier{Deployment: *routerDep, Replicas: int32(*routerReplicas)}, AccessMode: *accessMode,
+		Activation: activation}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "set up controller")
 		os.Exit(1)
 	}
@@ -82,9 +96,15 @@ func main() {
 			os.Exit(1)
 		}
 	}
+	// Ready only once ambit-access-log exists: an upgrade from a chart that rendered it leaves no gap unnoticed.
+	accessLog := &controller.AccessLogStartup{Client: mgr.GetClient(), Namespace: ns}
+	if err := mgr.Add(accessLog); err != nil {
+		log.Error(err, "add access-log start")
+		os.Exit(1)
+	}
 	_ = mgr.AddHealthzCheck("healthz", healthz.Ping)
-	_ = mgr.AddReadyzCheck("readyz", healthz.Ping)
-	log.Info("starting", "namespace", ns, "llmRoute", *route)
+	_ = mgr.AddReadyzCheck("readyz", accessLog.Ready)
+	log.Info("starting", "namespace", ns, "llmRoute", *route, "accessMode", *accessMode)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		log.Error(err, "manager stopped")
 		os.Exit(1)

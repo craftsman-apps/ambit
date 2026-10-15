@@ -76,6 +76,7 @@ type fx struct {
 	token              string
 	deepWait           time.Duration
 	bundle             string
+	exec               func(selector string, cmd []string) (string, error) // pods/exec in a pod that matches selector
 }
 
 func (f fx) env(t *testing.T) *Env {
@@ -110,6 +111,9 @@ func (f fx) env(t *testing.T) *Env {
 	}
 	e := &Env{Kube: cs, Ctrl: b.Build(), Helm: h, Namespace: ns, ValuesFile: f.values, CRDBundle: []byte(f.bundle),
 		Deep: f.deep, Token: f.token, HTTP: http.DefaultClient, Now: func() time.Time { return now }, DeepWait: f.deepWait}
+	if f.exec != nil {
+		e.Exec = func(_ context.Context, selector string, cmd []string) (string, error) { return f.exec(selector, cmd) }
+	}
 	e.Forward = func(context.Context, string, int) (int, func(), error) {
 		if f.forwardErr != nil {
 			return 0, nil, f.forwardErr

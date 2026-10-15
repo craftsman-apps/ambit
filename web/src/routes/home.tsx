@@ -1,13 +1,15 @@
 import { Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { useConnections, useMe, useModels, useMyAccess, useRequests, useRules, useServers } from "@/api";
+import { useConfig, useConnections, useMe, useModels, useMyAccess, useRequests, useRules, useServers } from "@/api";
 import { Card } from "@/components/ui/card";
 import { Shell } from "@/components/shell";
+import { closedWording } from "@/lib/audit-mode";
 
 export function HomePage() {
   const me = useMe();
   const rules = useRules();
   const models = useModels();
+  const config = useConfig();
   const servers = useServers();
   const requests = useRequests();
   const access = useMyAccess();
@@ -62,7 +64,7 @@ export function HomePage() {
           <Link to="/models" className="rounded-md border border-line p-4 hover:bg-sunken">
             <div className="font-mono text-label uppercase tracking-[.12em] text-muted">Models</div>
             <div className="mt-1 text-2xl font-semibold tabular-nums">{models.data?.length ?? "–"}</div>
-            <div className="text-small text-muted">{closed} closed to everyone</div>
+            <div className="text-small text-muted">{closedWording(config.data?.accessMode === "audit").count(closed)}</div>
           </Link>
           <Link to="/access-rules" className="rounded-md border border-line p-4 hover:bg-sunken">
             <div className="font-mono text-label uppercase tracking-[.12em] text-muted">Access rules</div>

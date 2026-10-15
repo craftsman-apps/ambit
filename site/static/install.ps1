@@ -2,14 +2,15 @@
 #   irm https://ambitproject.dev/install.ps1 | iex
 # $env:AMBIT_VERSION pins a version (default: the latest release). $env:AMBIT_INSTALL_DIR sets the directory
 # (default: %LOCALAPPDATA%\ambit\bin). $env:AMBIT_DOWNLOAD_BASE replaces
-# https://github.com/craftsman-apps/ambit/releases (for a mirror).
+# https://github.com/craftsman-apps/ambit/releases (for a mirror; $env:AMBIT_DOWNLOAD_BASE/latest must redirect to
+# $env:AMBIT_DOWNLOAD_BASE/tag/<tag>, as GitHub does). $env:AMBIT_LATEST_TIMEOUT sets the seconds to wait for that answer
+# (default: 30).
 # Output is ASCII only: Windows PowerShell 5.1 can show other characters wrongly when the script comes through iex.
 
 function Install-Ambit {
   $ErrorActionPreference = 'Stop'
   $ProgressPreference = 'SilentlyContinue'
   $base = if ($env:AMBIT_DOWNLOAD_BASE) { $env:AMBIT_DOWNLOAD_BASE } else { 'https://github.com/craftsman-apps/ambit/releases' }
-  $url = if ($env:AMBIT_VERSION) { "$base/download/v$($env:AMBIT_VERSION.TrimStart('v'))" } else { "$base/latest/download" }
   $dir = if ($env:AMBIT_INSTALL_DIR) { $env:AMBIT_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'ambit\bin' }
   $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
     'AMD64' { 'amd64' }
@@ -17,6 +18,39 @@ function Install-Ambit {
     default { throw "there is no ambit build for the processor '$($env:PROCESSOR_ARCHITECTURE)'" }
   }
   $archive = "ambit_windows_$arch.zip"
+  # "latest" is resolved once to a tag: the archive and checksums.txt are then both read from that tag. Two requests
+  # to "latest" could reach two different releases.
+  if ($env:AMBIT_VERSION) {
+    $tag = "v$($env:AMBIT_VERSION.TrimStart('v'))"
+  } else {
+    Add-Type -AssemblyName System.Net.Http
+    $handler = New-Object System.Net.Http.HttpClientHandler
+    $handler.AllowAutoRedirect = $false
+    $client = New-Object System.Net.Http.HttpClient($handler)
+    # One limit for connecting and answering: HttpClient.Timeout. Windows PowerShell 5.1 has no separate connect timeout.
+    $client.Timeout = [TimeSpan]::FromSeconds($(if ($env:AMBIT_LATEST_TIMEOUT) { [int]$env:AMBIT_LATEST_TIMEOUT } else { 30 }))
+    try {
+      $reply = $client.GetAsync("$base/latest").GetAwaiter().GetResult()
+    } catch {
+      # PowerShell wraps the .NET exception of a method call in a MethodInvocationException, so look at the whole chain.
+      # A timeout is a TaskCanceledException (PowerShell 7 adds a TimeoutException inside it); a refused or failed
+      # connection is an HttpRequestException.
+      for ($e = $_.Exception; $e; $e = $e.InnerException) {
+        if ($e -is [System.OperationCanceledException] -or $e -is [TimeoutException]) { throw 'GitHub did not answer; try again' }
+      }
+      throw "cannot reach $base/latest"
+    } finally {
+      $client.Dispose()
+    }
+    if ([int]$reply.StatusCode -ge 500 -or [int]$reply.StatusCode -in 403, 429) { throw 'GitHub did not answer; try again' }
+    $location = if ($reply.Headers.Location) { $reply.Headers.Location.ToString() } else { '' }
+    if ($location -match '/tag/([^/]+)$') {
+      $tag = $Matches[1]
+    } else {
+      throw 'No Ambit CLI release is published yet (the latest release has no ambit_<os>_<arch> file). See https://github.com/craftsman-apps/ambit/releases'
+    }
+  }
+  $url = "$base/download/$tag"
   $tmp = Join-Path ([IO.Path]::GetTempPath()) ('ambit-' + [Guid]::NewGuid())
   New-Item -ItemType Directory -Path $tmp | Out-Null
   try {

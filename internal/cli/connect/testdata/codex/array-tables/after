@@ -1,0 +1,22 @@
+model_reasoning_effort = "high"
+
+# >>> ambit: written by `ambit connect codex`; `ambit disconnect codex` removes it >>>
+model = "nvidia/nemotron-3-super-120b-a12b:free"
+model_provider = "ambit"
+# <<< ambit <<<
+[[mcp_servers_list]]
+name = "a"
+
+[[mcp_servers_list]]
+name = "b"
+
+# >>> ambit: written by `ambit connect codex`; `ambit disconnect codex` removes it >>>
+[model_providers.ambit]
+name = "Ambit"
+base_url = "https://llm.example.com/v1"
+wire_api = "responses"
+
+[model_providers.ambit.auth]
+command = "/opt/homebrew/bin/ambit"
+args = ["key", "print", "--url", "https://llm.example.com"]
+# <<< ambit <<<

@@ -210,6 +210,7 @@ func TestP9Console(t *testing.T) {
 	want(t, one(t, "P9", fx{helm: vals(map[string]any{"console": map[string]any{"replicas": 2}})}), Fail, "console.replicas is 2")
 	want(t, one(t, "P9", fx{helm: vals(one1), kubeObjs: []runtime.Object{deploy("ambit-console", nil, 1)}}), Pass, "one console replica")
 	want(t, one(t, "P9", fx{helm: vals(one1), kubeObjs: []runtime.Object{deploy("ambit-console", nil, 0)}}), Fail, "0 Ready replicas")
+	want(t, one(t, "P9", fx{helm: vals(one1)}), Fail, "no ambit-console Deployment") // missing is a failure, not unknown
 }
 
 func TestP10Credentials(t *testing.T) {

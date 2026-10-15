@@ -375,3 +375,59 @@ func TestCloudModelsAsRouteTargets(t *testing.T) {
 		t.Fatalf("auto2 lines %q", ts)
 	}
 }
+
+// Audit mode (#81): every AccessRule decision is allowed. Models get `true` (the unpriced refusal stays: it guards a
+// Budget), the MCP access policy gets `true`, router lines keep only their route condition and the target's
+// unpriced refusal. The enforce objects the caller compiled are not changed.
+func TestAuditModeAuthorization(t *testing.T) {
+	models := []v1.Model{model("gemma", "google/gemma"), model("sonnet", "anthropic/sonnet"), model("pro", "google/pro")}
+	models[0].Spec.Price = &v1.ModelPrice{InputPerMillionTokens: "1", OutputPerMillionTokens: "1"}
+	models[1].Spec.Price = models[0].Spec.Price // pro has no price: refused to the dollar-capped group
+	rules := append(slices.Clone(grants), toolRule("mcp", []string{"ml"}, false, v1.ServerAccess{Name: "time"}))
+	routers := []v1.ModelRouter{router("auto", "Rules", "gemma",
+		v1.RouterRoute{Model: "sonnet", Keywords: []string{"Python"}}, v1.RouterRoute{Model: "pro", Keywords: []string{"Go"}})}
+	res := Compile(models, []v1.Server{server("time", "stdio")}, rules, route, "auto")
+	refused := RefuseUnpriced(&res, models, pricingByModel(models), []string{"capped"})
+	CompileRouters(routers, models, &res, route, refused, ClassifierInput{})
+	enforce := make([]string, len(res.Objects))
+	for i, o := range res.Objects {
+		b, _ := o.MarshalJSON()
+		enforce[i] = string(b)
+	}
+
+	audit := RelaxForAudit(res, refused, func(a *Result) { CompileRouters(routers, models, a, route, refused, ClassifierInput{}) })
+
+	for i, o := range res.Objects {
+		if b, _ := o.MarshalJSON(); string(b) != enforce[i] {
+			t.Fatalf("RelaxForAudit changed the enforce object %s", o.GetName())
+		}
+	}
+	if len(audit) != len(res.Objects) {
+		t.Fatalf("%d objects in audit mode, %d in enforce mode", len(audit), len(res.Objects))
+	}
+	deny := "!" + identity.PrincipalGroups + `.exists(g, g in ["capped"])`
+	objs := byName(audit)
+	exprOf := func(name string) []string {
+		e, _, _ := unstructured.NestedStringSlice(objs[name].Object, "spec", "policies", "authorization", "policy", "matchExpressions")
+		return e
+	}
+	if got := exprOf("gemma"); !slices.Equal(got, []string{"true"}) {
+		t.Errorf("gemma %q, want [true]", got)
+	}
+	if got := exprOf("pro"); !slices.Equal(got, []string{"(true) && " + deny}) {
+		t.Errorf("pro %q, want the unpriced refusal kept", got)
+	}
+	p := objs[MCPBackendName+"-access"]
+	if e, _, _ := unstructured.NestedStringSlice(p.Object, "spec", "backend", "mcp", "authorization", "policy", "matchExpressions"); !slices.Equal(e, []string{"true"}) {
+		t.Errorf("MCP access %q, want [true]", e)
+	}
+	cond := func(i int) string { return routeCondition(routers[0].Spec.Routes[i], "") }
+	want := [][2]string{
+		{pathOK + ` && (` + cond(0) + `)`, "sonnet"},
+		{pathOK + ` && (` + cond(1) + `) && ((true) && ` + deny + `)`, "pro"},
+		{"true", "gemma"},
+	}
+	if got := targets(t, objs["router-auto"]); !slices.Equal(got, want) {
+		t.Errorf("router lines\n got %q\nwant %q", got, want)
+	}
+}

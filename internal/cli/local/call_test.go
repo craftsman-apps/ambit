@@ -147,15 +147,15 @@ func TestCallWithEachFormat(t *testing.T) {
 			func(r *http.Request) bool {
 				return r.Header.Get("x-api-key") == "ambit_k" && r.Header.Get("anthropic-version") == "2023-06-01" && r.Header.Get("Authorization") == ""
 			},
-			map[string]any{"model": "m", "max_tokens": float64(16)}, "Hello messages"},
+			map[string]any{"model": "m", "max_tokens": float64(256)}, "Hello messages"},
 		{"responses", FormatResponses, `{"output":[{"type":"reasoning"},{"type":"message","content":[{"type":"output_text","text":"Hello responses"}]}]}`, "/v1/responses",
 			func(r *http.Request) bool { return r.Header.Get("Authorization") == "Bearer ambit_k" },
-			map[string]any{"model": "m", "max_output_tokens": float64(16), "input": Prompt}, "Hello responses"},
+			map[string]any{"model": "m", "max_output_tokens": float64(256), "input": Prompt}, "Hello responses"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			port, req, body := recorder(t, tt.answer)
-			got, err := CallWith(context.Background(), HTTPClient(port), LLMURL(port), "ambit_k", "m", tt.format, 5*time.Second, 10*time.Millisecond)
-			if err != nil || got != tt.wantOut {
+			got, cut, err := CallWith(context.Background(), HTTPClient(port), LLMURL(port), "ambit_k", "m", tt.format, 5*time.Second, 10*time.Millisecond)
+			if err != nil || cut || got != tt.wantOut {
 				t.Fatalf("= %q, %v", got, err)
 			}
 			if req.URL.Path != tt.path || req.Method != "POST" || !tt.auth(req) || req.Header.Get("Content-Type") != "application/json" {
@@ -180,7 +180,7 @@ func TestCallWithEachFormat(t *testing.T) {
 func TestCallWithAnswerWithoutTextIsAnError(t *testing.T) {
 	for _, f := range []Format{FormatChat, FormatMessages, FormatResponses} {
 		port, _, _ := recorder(t, `{"unexpected":true}`)
-		if _, err := CallWith(context.Background(), HTTPClient(port), LLMURL(port), "k", "m", f, time.Second, 10*time.Millisecond); err == nil || !strings.Contains(err.Error(), "HTTP 200 without an answer") {
+		if _, _, err := CallWith(context.Background(), HTTPClient(port), LLMURL(port), "k", "m", f, time.Second, 10*time.Millisecond); err == nil || !strings.Contains(err.Error(), "HTTP 200 without an answer") {
 			t.Errorf("format %d: err = %v", f, err)
 		}
 	}
@@ -190,14 +190,14 @@ func TestCallWithAnswerWithoutTextIsAnError(t *testing.T) {
 // last status, and a gateway that is not there is a NoAnswerError with status 0.
 func TestCallWithErrorsCarryTheStatus(t *testing.T) {
 	port := gateway(t, sequence(401))
-	_, err := CallWith(context.Background(), HTTPClient(port), LLMURL(port), "k", "m", FormatMessages, time.Second, 10*time.Millisecond)
+	_, _, err := CallWith(context.Background(), HTTPClient(port), LLMURL(port), "k", "m", FormatMessages, time.Second, 10*time.Millisecond)
 	var re *RefusedError
 	if !errors.As(err, &re) || re.Status != 401 {
 		t.Fatalf("401: %v", err)
 	}
 	for _, code := range []int{403, 404} {
 		port := gateway(t, sequence(code))
-		_, err := CallWith(context.Background(), HTTPClient(port), LLMURL(port), "k", "m", FormatResponses, 50*time.Millisecond, 10*time.Millisecond)
+		_, _, err := CallWith(context.Background(), HTTPClient(port), LLMURL(port), "k", "m", FormatResponses, 50*time.Millisecond, 10*time.Millisecond)
 		var na *NoAnswerError
 		if !errors.As(err, &na) || na.LastStatus != code {
 			t.Fatalf("%d: %v", code, err)
@@ -206,9 +206,60 @@ func TestCallWithErrorsCarryTheStatus(t *testing.T) {
 	s := httptest.NewServer(http.NotFoundHandler())
 	url := s.URL
 	s.Close()
-	_, err = CallWith(context.Background(), http.DefaultClient, url, "k", "m", FormatChat, 50*time.Millisecond, 10*time.Millisecond)
+	_, _, err = CallWith(context.Background(), http.DefaultClient, url, "k", "m", FormatChat, 50*time.Millisecond, 10*time.Millisecond)
 	var na *NoAnswerError
 	if !errors.As(err, &na) || na.LastStatus != 0 {
 		t.Fatalf("connection refused: %v", err)
+	}
+}
+
+// A reasoning model can use the whole token limit before it writes text. The gateway, the key and the model all
+// answered, so that is a pass; an empty 200 for any other reason is still a failure.
+func TestCallWithTokenLimitReachedIsAPassWithoutText(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		format Format
+		cut    string
+		other  string
+	}{
+		{"chat", FormatChat,
+			`{"choices":[{"message":{"content":""},"finish_reason":"length"}]}`,
+			`{"choices":[{"message":{"content":""},"finish_reason":"content_filter"}]}`},
+		{"messages", FormatMessages,
+			`{"content":[{"type":"thinking","thinking":"x"}],"stop_reason":"max_tokens"}`,
+			`{"content":[],"stop_reason":"end_turn"}`},
+		{"responses", FormatResponses,
+			`{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"type":"reasoning"}]}`,
+			`{"status":"incomplete","incomplete_details":{"reason":"content_filter"},"output":[{"type":"reasoning"}]}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			port, _, _ := recorder(t, tt.cut)
+			got, cut, err := CallWith(context.Background(), HTTPClient(port), LLMURL(port), "k", "m", tt.format, time.Second, 10*time.Millisecond)
+			if err != nil || !cut || got != "" {
+				t.Fatalf("token limit: = %q, %v, %v", got, cut, err)
+			}
+			port, _, _ = recorder(t, tt.other)
+			if _, _, err := CallWith(context.Background(), HTTPClient(port), LLMURL(port), "k", "m", tt.format, time.Second, 10*time.Millisecond); err == nil || !strings.Contains(err.Error(), "HTTP 200 without an answer") {
+				t.Fatalf("other reason: err = %v", err)
+			}
+		})
+	}
+}
+
+// A model that stops at the token limit after some text has an answer; it is not reported as cut off.
+func TestCallWithTextBeforeTheLimitIsAnAnswer(t *testing.T) {
+	port, _, _ := recorder(t, `{"content":[{"type":"text","text":"Hello the"}],"stop_reason":"max_tokens"}`)
+	got, cut, err := CallWith(context.Background(), HTTPClient(port), LLMURL(port), "k", "m", FormatMessages, time.Second, 10*time.Millisecond)
+	if err != nil || cut || got != "Hello the" {
+		t.Fatalf("= %q, %v, %v", got, cut, err)
+	}
+}
+
+// local up's test call (Chat format) passes on a cut-off answer too, and shows the note instead of text.
+func TestTestCallTokenLimitReached(t *testing.T) {
+	port, _, _ := recorder(t, `{"choices":[{"message":{"content":""},"finish_reason":"length"}]}`)
+	got, err := TestCall(context.Background(), HTTPClient(port), LLMURL(port), "k", "m", time.Second, 10*time.Millisecond)
+	if err != nil || got != NoTextNote {
+		t.Fatalf("= %q, %v", got, err)
 	}
 }

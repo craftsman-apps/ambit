@@ -105,17 +105,20 @@ const (
 	FormatResponses
 )
 
+// NoTextNote is shown in place of the answer when the model used its whole token limit before it wrote any text.
+const NoTextNote = "the model used its whole token budget for reasoning (no text shown)"
+
 // request is the path, the JSON body and the headers of the test call in this format.
 func (f Format) request(model, token string) (path string, body []byte, header http.Header) {
 	header = http.Header{"Content-Type": {"application/json"}}
 	var v map[string]any
 	switch f {
 	case FormatMessages:
-		path, v = "/v1/messages", map[string]any{"model": model, "max_tokens": 16, "messages": []map[string]string{{"role": "user", "content": Prompt}}}
+		path, v = "/v1/messages", map[string]any{"model": model, "max_tokens": 256, "messages": []map[string]string{{"role": "user", "content": Prompt}}}
 		header.Set("x-api-key", token)
 		header.Set("anthropic-version", "2023-06-01")
 	case FormatResponses:
-		path, v = "/v1/responses", map[string]any{"model": model, "max_output_tokens": 16, "input": Prompt}
+		path, v = "/v1/responses", map[string]any{"model": model, "max_output_tokens": 256, "input": Prompt}
 		header.Set("Authorization", "Bearer "+token)
 	default:
 		path, v = "/v1/chat/completions", map[string]any{"model": model, "messages": []map[string]string{{"role": "user", "content": Prompt}}}
@@ -166,6 +169,32 @@ func (f Format) answer(b []byte) (string, bool) {
 	return first, len(text) > 0
 }
 
+// hitTokenLimit reports that a 200 answer stopped because of the token limit of the request: Chat finish_reason
+// "length", Messages stop_reason "max_tokens", Responses status "incomplete" for "max_output_tokens". A reasoning
+// model can use the whole limit before it writes text.
+func (f Format) hitTokenLimit(b []byte) bool {
+	switch f {
+	case FormatMessages:
+		var r struct {
+			StopReason string `json:"stop_reason"`
+		}
+		return json.Unmarshal(b, &r) == nil && r.StopReason == "max_tokens"
+	case FormatResponses:
+		var r struct {
+			Status            string
+			IncompleteDetails struct{ Reason string } `json:"incomplete_details"`
+		}
+		return json.Unmarshal(b, &r) == nil && r.Status == "incomplete" && r.IncompleteDetails.Reason == "max_output_tokens"
+	default:
+		var r struct {
+			Choices []struct {
+				FinishReason string `json:"finish_reason"`
+			}
+		}
+		return json.Unmarshal(b, &r) == nil && len(r.Choices) > 0 && r.Choices[0].FinishReason == "length"
+	}
+}
+
 // RefusedError is the gateway's own refusal of the key (HTTP 401).
 type RefusedError struct {
 	Status int
@@ -176,14 +205,18 @@ func (e *RefusedError) Error() string {
 	return fmt.Sprintf("the test call was refused: HTTP %d — the token or access rule is wrong: %.200s", e.Status, e.Body)
 }
 
-// TestCall is CallWith in the Chat Completions format.
+// TestCall is CallWith in the Chat Completions format; an answer cut off by the token limit comes back as NoTextNote.
 func TestCall(ctx context.Context, c *http.Client, llmURL, token, model string, limit, every time.Duration) (string, error) {
-	return CallWith(ctx, c, llmURL, token, model, FormatChat, limit, every)
+	ans, cut, err := CallWith(ctx, c, llmURL, token, model, FormatChat, limit, every)
+	if cut {
+		ans = NoTextNote
+	}
+	return ans, err
 }
 
 // CallWith calls the gateway in the format until it answers 200 or limit passes, and returns the first line of the
-// answer.
-func CallWith(ctx context.Context, c *http.Client, llmURL, token, model string, f Format, limit, every time.Duration) (string, error) {
+// answer. A 200 that stopped at the token limit before any text is a pass: it returns cut true and no text.
+func CallWith(ctx context.Context, c *http.Client, llmURL, token, model string, f Format, limit, every time.Duration) (answer string, cut bool, err error) {
 	path, body, header := f.request(model, token)
 	deadline := time.Now().Add(limit)
 	parent := ctx
@@ -193,7 +226,7 @@ func CallWith(ctx context.Context, c *http.Client, llmURL, token, model string, 
 	for {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, llmURL+path, bytes.NewReader(body))
 		if err != nil {
-			return "", err
+			return "", false, err
 		}
 		req.Header = header.Clone()
 		resp, err := c.Do(req)
@@ -203,18 +236,21 @@ func CallWith(ctx context.Context, c *http.Client, llmURL, token, model string, 
 			switch {
 			case resp.StatusCode == http.StatusOK:
 				first, ok := f.answer(b)
-				if !ok {
-					return "", fmt.Errorf("HTTP 200 without an answer: %.200s", b)
+				if first == "" && f.hitTokenLimit(b) {
+					return "", true, nil
 				}
-				return first, nil
+				if !ok || first == "" {
+					return "", false, fmt.Errorf("HTTP 200 without an answer: %.200s", b)
+				}
+				return first, false, nil
 			case settling[resp.StatusCode]:
 				last, lastStatus = fmt.Sprintf("HTTP %d: %.200s", resp.StatusCode, strings.TrimSpace(string(b))), resp.StatusCode
 			case resp.StatusCode == http.StatusUnauthorized:
-				return "", &RefusedError{Status: resp.StatusCode, Body: strings.TrimSpace(string(b))}
+				return "", false, &RefusedError{Status: resp.StatusCode, Body: strings.TrimSpace(string(b))}
 			case resp.StatusCode == http.StatusBadRequest:
-				return "", fmt.Errorf("the test call failed: HTTP %d — the request was rejected: %.200s", resp.StatusCode, strings.TrimSpace(string(b)))
+				return "", false, fmt.Errorf("the test call failed: HTTP %d — the request was rejected: %.200s", resp.StatusCode, strings.TrimSpace(string(b)))
 			default:
-				return "", &ProviderError{Status: resp.StatusCode, Body: fmt.Sprintf("%.300s", strings.TrimSpace(string(b)))}
+				return "", false, &ProviderError{Status: resp.StatusCode, Body: fmt.Sprintf("%.300s", strings.TrimSpace(string(b)))}
 			}
 		} else {
 			if ctx.Err() == nil { // a request cut off by the window's own end says nothing new
@@ -222,14 +258,14 @@ func CallWith(ctx context.Context, c *http.Client, llmURL, token, model string, 
 			}
 		}
 		if time.Now().After(deadline) {
-			return "", &NoAnswerError{Limit: limit, LastStatus: lastStatus, Last: last}
+			return "", false, &NoAnswerError{Limit: limit, LastStatus: lastStatus, Last: last}
 		}
 		select {
 		case <-ctx.Done():
 			if parent.Err() != nil {
-				return "", parent.Err()
+				return "", false, parent.Err()
 			}
-			return "", &NoAnswerError{Limit: limit, LastStatus: lastStatus, Last: last}
+			return "", false, &NoAnswerError{Limit: limit, LastStatus: lastStatus, Last: last}
 		case <-time.After(every):
 		}
 	}

@@ -264,7 +264,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		{"authorization", func() (w []gated, err error) {
 			applyFailed, w, err = r.applyAll(ctx, res.Objects, conds)
 			if err == nil && applyFailed && changing { // the new rules are not all written: not active
-				return w, &stalledError{notApplied(conds)}
+				return w, &stalledError{msg: notApplied(conds)}
 			}
 			return w, err
 		}},

@@ -587,3 +587,64 @@ func TestAuditTooLargeKeepsEnforcing(t *testing.T) {
 		t.Errorf("access log %v", attributes(p))
 	}
 }
+
+// agentgateway rejects an object of the change (a NACK Event on the Gateway): the stop names the object, the
+// gateway's reason and the next step, in the AccessRule condition and in the pending entry of ambit-access-mode.
+func TestRejectedModelsAreNamedInTheStalledChange(t *testing.T) {
+	needEnv(t)
+	for _, c := range []struct {
+		name    string
+		models  []string // Models the NACK is about
+		objects []string
+		message string
+	}{
+		{"one", []string{"mistral-x"}, []string{"Model/mistral-x"},
+			"agentgateway rejected Model/mistral-x: backend mistral-x: GCP credential JSON missing `type` field. Check the provider secret of Model/mistral-x, or remove the Model."},
+		{"two", []string{"mistral-x", "gemma"}, []string{"Model/gemma", "Model/mistral-x"},
+			"agentgateway rejected Model/gemma and Model/mistral-x: backend mistral-x gemma: GCP credential JSON missing `type` field. Check the provider secret of each rejected Model, or remove the Model."},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ns := "ambit-gate-nack-" + c.name
+			gateFixture(t, ns)
+			ctx := t.Context()
+			second := &v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "mistral-x", Namespace: ns}, Spec: v1.ModelSpec{Provider: "Openrouter", Model: "mistral/x", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-k"}}}
+			if err := envClient.Create(ctx, second); err != nil {
+				t.Fatal(err)
+			}
+			r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
+				Activation: &Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond}}
+			done := reconcileAsync(r)
+			eventually(t, "authorization written", func() error {
+				for _, m := range []string{"gemma", "mistral-x"} {
+					if _, err := genGet(ctx, ns, "AgentgatewayModel", m); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+			nack := &corev1.Event{ObjectMeta: metav1.ObjectMeta{Name: "nack-1", Namespace: ns},
+				InvolvedObject: corev1.ObjectReference{Kind: "Gateway", Name: "ambit", Namespace: ns},
+				Type:           corev1.EventTypeWarning, Reason: nackReason,
+				Message: "backend " + strings.Join(c.models, " ") + ": GCP credential JSON missing `type` field"}
+			if err := envClient.Create(ctx, nack); err != nil {
+				t.Fatal(err)
+			}
+			wait(t, done)
+			rc := ruleReady(t, ns, "eng")
+			if rc.Status != metav1.ConditionFalse || rc.Reason != "RulesNotActive" || rc.Message != c.message {
+				t.Errorf("rule condition %+v\nwant message %q", rc, c.message)
+			}
+			var p struct {
+				Error   string   `json:"error"`
+				Objects []string `json:"objects"`
+			}
+			d, _ := accessMode(ctx, ns)
+			if err := json.Unmarshal([]byte(d["pending"]), &p); err != nil {
+				t.Fatalf("pending %q: %v", d["pending"], err)
+			}
+			if p.Error != c.message || strings.Join(p.Objects, ",") != strings.Join(c.objects, ",") {
+				t.Errorf("pending %+v, want error %q objects %v", p, c.message, c.objects)
+			}
+		})
+	}
+}

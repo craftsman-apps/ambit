@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"slices"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -57,8 +60,12 @@ type gated struct {
 	changed    bool // the write created it or changed its spec
 }
 
-// stalledError is a step that agentgateway did not apply: the change stops there.
-type stalledError struct{ msg string }
+// stalledError is a step that agentgateway did not apply: the change stops there. objects are the objects that
+// agentgateway rejected (<Kind>/<name>, Ambit's kinds), when the NACK names any.
+type stalledError struct {
+	msg     string
+	objects []string
+}
 
 func (e *stalledError) Error() string { return e.msg }
 
@@ -136,7 +143,7 @@ func (r *Reconciler) gate(ctx context.Context, objs []gated, seen nackSeen, time
 			return r.sleep(ctx, r.Activation.Settle)
 		}
 		if !r.now().Before(deadline) {
-			return &stalledError{waiting}
+			return &stalledError{msg: waiting}
 		}
 		if err := r.sleep(ctx, poll); err != nil {
 			return err
@@ -151,10 +158,14 @@ func (r *Reconciler) activated(ctx context.Context, objs []gated, seen nackSeen)
 	if err != nil {
 		return "", err
 	}
+	var fresh []corev1.Event
 	for _, e := range nacks {
 		if n, ok := seen[e.Name]; !ok || e.Count > n {
-			return "", &stalledError{fmt.Sprintf("a gateway pod rejected the update (%s): %s", nackReason, e.Message)}
+			fresh = append(fresh, e)
 		}
+	}
+	if len(fresh) > 0 {
+		return "", r.nackStall(ctx, fresh)
 	}
 	first := ""
 	for _, g := range objs {
@@ -177,13 +188,57 @@ func (r *Reconciler) activated(ctx context.Context, objs []gated, seen nackSeen)
 		}
 		waiting, invalid := activationOf(o, g)
 		if invalid {
-			return "", &stalledError{waiting}
+			return "", &stalledError{msg: waiting}
 		}
 		if first == "" {
 			first = waiting
 		}
 	}
 	return first, nil
+}
+
+// nackStall is the stop for new NACK Events. The Event text is the proxy's error and the Event is on the Gateway, so
+// the rejected objects are the Ambit-generated AgentgatewayModels whose names the text contains. agentgateway
+// rejects the whole update, so the rejected object need not be one this change wrote.
+func (r *Reconciler) nackStall(ctx context.Context, events []corev1.Event) *stalledError {
+	var models unstructured.UnstructuredList
+	models.SetGroupVersionKind(AgentgatewayModelGVK)
+	if err := r.Live.List(ctx, &models, client.InNamespace(r.Namespace)); err != nil {
+		log.FromContext(ctx).Error(err, "list the models to name the rejected object")
+	}
+	var objects, reasons []string
+	for _, e := range events {
+		if !slices.Contains(reasons, e.Message) {
+			reasons = append(reasons, e.Message)
+		}
+		for _, m := range models.Items {
+			owner := controllerOwner(&m)
+			if owner == "" || !namedIn(e.Message, m.GetName()) || slices.Contains(objects, owner) {
+				continue
+			}
+			objects = append(objects, owner)
+		}
+	}
+	slices.Sort(objects)
+	reason := strings.Join(reasons, "; ")
+	if len(objects) == 0 {
+		return &stalledError{msg: fmt.Sprintf("a gateway pod rejected the update (%s): %s. agentgateway does not say which object; "+
+			"check the provider secret of each Model, or remove the Model you changed last.", nackReason, reason)}
+	}
+	each, step := objects[0], "Check the provider secret of "+objects[0]+", or remove the Model."
+	if len(objects) > 1 {
+		each = strings.Join(objects[:len(objects)-1], ", ") + " and " + objects[len(objects)-1]
+		step = "Check the provider secret of each rejected Model, or remove the Model."
+	}
+	if slices.ContainsFunc(objects, func(o string) bool { return strings.HasPrefix(o, "ModelRouter/") }) {
+		step = "Check the lines of each rejected ModelRouter and the provider secret of each rejected Model, or remove the object."
+	}
+	return &stalledError{msg: fmt.Sprintf("agentgateway rejected %s: %s. %s", each, reason, step), objects: objects}
+}
+
+// namedIn reports whether text contains name as a whole name: not as a part of a longer one such as gpt-4o.
+func namedIn(text, name string) bool {
+	return regexp.MustCompile(`(^|[^A-Za-z0-9._-])` + regexp.QuoteMeta(name) + `($|[^A-Za-z0-9_-])`).MatchString(text)
 }
 
 // activationOf checks agentgateway's verdict on one object: every entry of its controller in status.ancestors (a
@@ -291,6 +346,8 @@ type pending struct {
 	RulesVersion string `json:"rulesVersion"`
 	Step         string `json:"step"`
 	Error        string `json:"error,omitempty"`
+	// Objects are the objects agentgateway rejected (<Kind>/<name>), when Error is a rejection that names them.
+	Objects []string `json:"objects,omitempty"`
 }
 
 // runSteps writes each step in order. When changing (the mode or the rules version differs from the published
@@ -347,7 +404,7 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 			// A retry checks once: waiting the whole timeout again on every pass would hold up the rest of the pass.
 			timeout = 0
 		}
-		target.Step, target.Error = s.name, ""
+		target.Step, target.Error, target.Objects = s.name, "", nil
 		if err := r.setPending(ctx, &target); err != nil {
 			return nil, ran, err
 		}
@@ -363,7 +420,7 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 				return nil, ran, err
 			}
 			r.stalled = &stalledStep{step: s.name, seen: seen, objs: wait}
-			target.Error = st.msg
+			target.Error, target.Objects = st.msg, st.objects
 			if err := r.setPending(ctx, &target); err != nil {
 				return nil, ran, err
 			}

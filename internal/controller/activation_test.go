@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -10,6 +11,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -129,7 +132,11 @@ func TestGateFailsAtOnceOnANackAfterTheWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = r.gate(t.Context(), objs, seen, 120*time.Second)
-	if err == nil || err.Error() != "a gateway pod rejected the update (AgentGatewayNackError): proxy rejected the update: bad CEL" {
+	// The message names no object: say so, and give the general next step.
+	want := "a gateway pod rejected the update (AgentGatewayNackError): proxy rejected the update: bad CEL. " +
+		"agentgateway does not say which object; check the provider secret of each Model, or remove the Model you changed last."
+	var st *stalledError
+	if !errors.As(err, &st) || st.msg != want || len(st.objects) != 0 {
 		t.Fatalf("error %v", err)
 	}
 	if clock.Sub(gateStart) > 0 {
@@ -146,6 +153,70 @@ func TestGateFailsAtOnceOnANackAfterTheWrite(t *testing.T) {
 	}
 	if err := r.gate(t.Context(), objs, seen, 120*time.Second); err == nil {
 		t.Fatal("a NACK repeated after the write (count 2 -> 3) did not fail the gate")
+	}
+}
+
+// ownedAgentgatewayModel is what Ambit generates for a Model (or, with ownerKind ModelRouter, for a router): the
+// AgentgatewayModel has the Model's name and is owned by it.
+func ownedAgentgatewayModel(name, ownerKind string) *unstructured.Unstructured {
+	o := gatedModel(1)
+	o.SetName(name)
+	o.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "ambit.dev/v1", Kind: ownerKind, Name: name, UID: "u-" + types.UID(name), Controller: ptr.To(true)}})
+	return o
+}
+
+func nackAbout(name, message string) *corev1.Event {
+	e := nack(gateStart.Truncate(time.Second))
+	e.Name, e.Message = name, message
+	return e
+}
+
+// A stalled change names the rejected Model, the gateway's reason, and what to do.
+func TestGateNamesTheRejectedModel(t *testing.T) {
+	ok := gatedPolicy(1, ancestor(agentgatewayController, agwCond("Accepted", "True", "Valid", 1), agwCond("Attached", "True", "Attached", 1)))
+	objs := []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 1}}
+	r, _ := gateReconciler(ok, ownedAgentgatewayModel("gpt", "Model"), ownedAgentgatewayModel("mistral-x", "Model"))
+	seen, _ := r.nacksSeen(t.Context())
+	if err := r.Create(t.Context(), nackAbout("nack-1", "model mistral-x: GCP credential JSON missing `type` field")); err != nil {
+		t.Fatal(err)
+	}
+	err := r.gate(t.Context(), objs, seen, 120*time.Second)
+	var st *stalledError
+	if !errors.As(err, &st) {
+		t.Fatalf("error %v", err)
+	}
+	want := "agentgateway rejected Model/mistral-x: model mistral-x: GCP credential JSON missing `type` field. " +
+		"Check the provider secret of Model/mistral-x, or remove the Model."
+	if st.msg != want || fmt.Sprint(st.objects) != "[Model/mistral-x]" {
+		t.Errorf("message %q objects %v\nwant %q", st.msg, st.objects, want)
+	}
+}
+
+func TestGateNamesTwoRejectedObjects(t *testing.T) {
+	ok := gatedPolicy(1, ancestor(agentgatewayController, agwCond("Accepted", "True", "Valid", 1), agwCond("Attached", "True", "Attached", 1)))
+	objs := []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 1}}
+	r, _ := gateReconciler(ok, ownedAgentgatewayModel("gpt", "Model"), ownedAgentgatewayModel("mistral-x", "Model"),
+		ownedAgentgatewayModel("fast", "ModelRouter"), ownedAgentgatewayModel("llama", "Model"))
+	seen, _ := r.nacksSeen(t.Context())
+	if err := r.Create(t.Context(), nackAbout("nack-1", "invalid backend for mistral-x and gpt: bad key")); err != nil {
+		t.Fatal(err)
+	}
+	err := r.gate(t.Context(), objs, seen, 120*time.Second)
+	var st *stalledError
+	if !errors.As(err, &st) {
+		t.Fatalf("error %v", err)
+	}
+	want := "agentgateway rejected Model/gpt and Model/mistral-x: invalid backend for mistral-x and gpt: bad key. " +
+		"Check the provider secret of each rejected Model, or remove the Model."
+	if st.msg != want || fmt.Sprint(st.objects) != "[Model/gpt Model/mistral-x]" {
+		t.Errorf("message %q objects %v\nwant %q", st.msg, st.objects, want)
+	}
+	// A name that is only part of a longer one does not count: "gpt" is not "gpt-4o".
+	r, _ = gateReconciler(ok, ownedAgentgatewayModel("gpt", "Model"))
+	seen, _ = r.nacksSeen(t.Context())
+	_ = r.Create(t.Context(), nackAbout("nack-1", "invalid backend for gpt-4o"))
+	if err := r.gate(t.Context(), objs, seen, 120*time.Second); !errors.As(err, &st) || len(st.objects) != 0 {
+		t.Errorf("a longer name matched: %v", err)
 	}
 }
 

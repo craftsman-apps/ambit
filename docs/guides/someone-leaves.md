@@ -19,7 +19,7 @@ You need:
   kubectl -n ambit-system delete budgets.ambitproject.dev engineering sales
   ```
 
-- two personal API keys for Dan, made in the console as in [Connect Claude Code and Cursor](coding-tools.md): one with the scope **LLM**, in `DAN_KEY`, and one with the scope **MCP**, in `DAN_MCP_KEY`. Keep Dan signed in to the console in a browser. Alice also needs a key, in `ALICE_KEY`.
+- two personal API keys for Dan, made in the console as in [Connect Claude Code, Codex, opencode, Cursor and SDKs](coding-tools.md): one with the scope **LLM**, in `DAN_KEY`, and one with the scope **MCP**, in `DAN_MCP_KEY`. Keep Dan signed in to the console in a browser. Alice also needs a key, in `ALICE_KEY`.
 
 In real use, your identity provider (Okta, Entra ID) sends the SCIM requests. In this guide you send them yourself with `curl`, so you can see each step.
 

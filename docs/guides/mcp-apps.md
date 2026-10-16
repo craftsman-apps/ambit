@@ -11,7 +11,7 @@ description: Make an MCP server available, allow chosen tools to chosen groups, 
 
 ## Before you start
 
-You need the cluster from the [Quick start](../quick-start.md), the groups and people of [Different models for different teams](models-per-team.md) (Alice in `engineering`, Bob in `sales`), and a personal API key with the scope **MCP** or **LLM and MCP** for each of them. The key is made in the console, as described in [Connect Claude Code and Cursor](coding-tools.md). Save Alice's key in `ALICE_KEY` and Bob's key in `BOB_KEY`.
+You need the cluster from the [Quick start](../quick-start.md), the groups and people of [Different models for different teams](models-per-team.md) (Alice in `engineering`, Bob in `sales`), and a personal API key with the scope **MCP** or **LLM and MCP** for each of them. The key is made in the console, as described in [Connect Claude Code, Codex, opencode, Cursor and SDKs](coding-tools.md). Save Alice's key in `ALICE_KEY` and Bob's key in `BOB_KEY`.
 
 ## 1. Add the server and allow one tool
 

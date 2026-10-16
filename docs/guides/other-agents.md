@@ -7,7 +7,7 @@ description: Settings that should connect other coding agents to Ambit. Ambit ha
 
 **Status: not tested by Ambit yet.** The agents in the table below should work with Ambit, because they speak a format that the Ambit LLM gateway serves. The settings come from each vendor's documentation, read on 2026-10-14. Nobody has run these agents against Ambit. A vendor can change its settings at any time, so check the vendor link first.
 
-Ambit tested Claude Code, Codex, opencode and Hermes Agent; see [Claude Code and Cursor](coding-tools.md) and [Codex, opencode and Hermes Agent](codex-opencode-hermes.md).
+Ambit tested Claude Code, Codex, opencode and Hermes Agent; see [Claude Code, Codex, opencode, Cursor and SDKs](coding-tools.md) and [Codex, opencode and Hermes Agent](codex-opencode-hermes.md).
 
 ## What Ambit serves
 
@@ -45,5 +45,5 @@ For the MCP gateway, some of these agents may take a URL and a header. Use `<mcp
 
 ## Related
 
-- [Connect Claude Code and Cursor](coding-tools.md): create a key and use it.
+- [Connect Claude Code, Codex, opencode, Cursor and SDKs](coding-tools.md): create a key and use it.
 - [Personal API keys](../api-keys.md): scope, end dates and revoking.

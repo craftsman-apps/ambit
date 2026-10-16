@@ -8,6 +8,9 @@ For upgrade steps in detail, read [docs/upgrading.md](docs/upgrading.md).
 
 Add a line here for each change that users can see, in the pull request that makes the change.
 
+- The console box "Connect a tool" (Keys page) shows the `ambit connect` command first for Claude Code, Codex, opencode and Cursor; the manual steps are shorter and come second.
+- The guide "Connect Claude Code, Codex, opencode, Cursor and SDKs" (`guides/coding-tools`, same URL) is about half as long.
+
 ## 0.2.1
 
 - The `ambit` command-line tool is now on Homebrew and npm for the first time: `brew install craftsman-apps/tap/ambit`

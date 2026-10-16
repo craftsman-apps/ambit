@@ -5,7 +5,7 @@ description: Point OpenAI Codex CLI, opencode or Hermes Agent at Ambit with a pe
 
 # Connect Codex, opencode and Hermes Agent
 
-**What you get:** three more coding agents use your company's models through Ambit, with the same personal API key, access rules, budgets and audit log as [Claude Code and Cursor](coding-tools.md).
+**What you get:** three more coding agents use your company's models through Ambit, with the same personal API key, access rules, budgets and audit log as [Claude Code, Codex, opencode, Cursor and SDKs](coding-tools.md).
 
 Every snippet on this page was run against a real Ambit install, with a real model, except the Hermes MCP note, which comes from the vendor page and was not run. The list of what was not tested is at the end of the page.
 
@@ -21,7 +21,7 @@ Test setup: Ambit from the [Quick start](../quick-start.md) on kind, the model `
 
 ## Before you start
 
-You need the cluster from the [Quick start](../quick-start.md), the model, a rule that allows it, and a personal API key (see [Connect Claude Code and Cursor](coding-tools.md), step 1). The addresses below are the quick-start addresses. On your own cluster, use your own.
+You need the cluster from the [Quick start](../quick-start.md), the model, a rule that allows it, and a personal API key (see [Connect Claude Code, Codex, opencode, Cursor and SDKs](coding-tools.md), step 1). The addresses below are the quick-start addresses. On your own cluster, use your own.
 
 - LLM address: `http://llm.localtest.me:8080`
 - MCP address: `http://mcp.localtest.me:8080/mcp`
@@ -175,6 +175,6 @@ Open **Audit** and search for your email address. Every call of the three tools 
 
 ## Related
 
-- [Connect Claude Code and Cursor](coding-tools.md): the key, Claude Code and Cursor.
+- [Connect Claude Code, Codex, opencode, Cursor and SDKs](coding-tools.md): the key, and the other tools.
 - [Other coding agents](other-agents.md): snippets for agents that Ambit has not tested yet.
 - [Give an agent tools and apps](mcp-apps.md): servers, tools and access rules for MCP.

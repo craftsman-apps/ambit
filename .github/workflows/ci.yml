@@ -252,25 +252,32 @@ jobs:
 
   # Spec 9.2: the CLI is built and unit-tested on all three systems, so Windows-only code (paths, the PowerShell
   # example, the install script) is compiled and tested on Windows. arm64 builds ship untested (docs say so).
+  # Required checks name each system. A matrix job skipped by a job-level `if:` reports only as "cli-unit", so the
+  # three required checks never arrive and the PR cannot merge (PR #153). The job always runs; without CLI changes
+  # its steps are skipped and it runs on Ubuntu (macOS and Windows minutes cost more), still named for its system.
   cli-unit:
     needs: changes
-    if: needs.changes.outputs.cli_unit == 'true'
     strategy:
       fail-fast: false
       matrix: { os: [ubuntu-latest, macos-latest, windows-latest] }
-    runs-on: ${{ matrix.os }}
-    env: { CGO_ENABLED: "0" }
+    runs-on: ${{ needs.changes.outputs.cli_unit == 'true' && matrix.os || 'ubuntu-latest' }}
+    env: { CGO_ENABLED: "0", RUN: "${{ needs.changes.outputs.cli_unit }}" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: env.RUN == 'true'
         with: { go-version-file: go.mod }
       - name: Build the CLI
+        if: env.RUN == 'true'
         shell: bash
         run: go build -o bin/ambit ./cmd/ambit
       - name: CLI unit tests
+        if: env.RUN == 'true'
         shell: bash
         run: go test -count=1 ./cmd/ambit/... ./internal/cli/... ./internal/validate/... ./internal/installscript/... ./deploy/... ./kind/...
       - name: The development flags exist only in the dev build (ruling S9)
+        if: env.RUN == 'true'
         shell: bash
         run: go test -count=1 -tags dev ./internal/cli/
 

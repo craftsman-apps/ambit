@@ -17,12 +17,15 @@ Add a line here for each change that users can see, in the pull request that mak
   all of its command-line files are present.
 - The Homebrew formula is written from the verified `checksums.txt` of the release.
 - The npm packages are published by their absolute paths.
+- Offboarding now applies while the controller waits for agentgateway to settle after a rule or mode change (see Security).
 - A test of the key leader (`TestLeaderStartsTheTermAfterRepair`) failed now and then because it checked its result
-  before the code under test had recorded it. The test now waits. The product code did not change.
+  before the code under test had recorded it. The test now waits; the key leader did not change.
 
-Upgrade: nothing to do. The chart and the container image have the same behavior as 0.2.0.
+Upgrade: nothing to do. The chart is unchanged; the controller image has the offboarding fix.
 
-Security: this release fixes no publicly known vulnerability.
+Security: since 0.2.0, an offboarded person's sign-in token could keep working for up to about 3 seconds when an
+access-rule change was being applied at the same moment; now offboarding applies at once. No security advisory was
+published for this defect.
 
 ## 0.2.0 (2026-10-16)
 

@@ -323,6 +323,34 @@ func TestWaitingChangeStillOffboardsAndKeepsTheAccessLog(t *testing.T) {
 	wait(t, done)
 }
 
+// Offboarding written while a step waits its settle time applies at once, not when the settle time ends.
+func TestOffboardingAppliesDuringTheSettleWait(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-gate-settle"
+	gateFixture(t, ns)
+	ctx := t.Context()
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}, AccessMode: "audit",
+		Activation: &Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond, Settle: 3 * time.Second}}
+	done := reconcileAsync(r)
+	eventually(t, "access log written", func() error { _, err := accessLogOf(ctx, ns); return err })
+	playAgentgateway(t, ns, "AgentgatewayPolicy", AccessLogPolicy)
+	time.Sleep(300 * time.Millisecond) // the gate has seen the step active and is in the settle wait
+	start := time.Now()
+	offboard(t, ns, `["leaver@example.com"]`)
+	for !strings.Contains(offboardedExpr(ctx, ns), `"leaver@example.com"`) {
+		if time.Since(start) > 8*time.Second {
+			t.Fatal("offboarding never applied")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if d := time.Since(start); d > 500*time.Millisecond {
+		t.Errorf("offboarding applied %v after the write; want within 500ms (settle time 3s)", d)
+	}
+	eventually(t, "authorization written", func() error { _, err := genGet(ctx, ns, "AgentgatewayModel", "gemma"); return err })
+	playAgentgateway(t, ns, "AgentgatewayModel", "gemma")
+	wait(t, done)
+}
+
 // A deletion never waits for the gate: an object no longer generated, created while a mode switch waits for
 // agentgateway, is gone before the gate times out.
 func TestWaitingChangeStillDeletes(t *testing.T) {

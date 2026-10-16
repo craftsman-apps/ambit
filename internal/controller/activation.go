@@ -140,7 +140,16 @@ func (r *Reconciler) gate(ctx context.Context, objs []gated, seen nackSeen, time
 		}
 		if waiting == "" {
 			log.FromContext(ctx).Info("agentgateway accepted the step; waiting the settle time", "settle", r.Activation.Settle.String())
-			return r.sleep(ctx, r.Activation.Settle)
+			// Offboarding and deletions must not wait for the settle time: apply them on every poll.
+			for end := r.now().Add(r.Activation.Settle); r.now().Before(end); {
+				if err := r.sleep(ctx, min(poll, end.Sub(r.now()))); err != nil {
+					return err
+				}
+				if err := r.urgent(ctx); err != nil {
+					return err
+				}
+			}
+			return nil
 		}
 		if !r.now().Before(deadline) {
 			return &stalledError{msg: waiting}

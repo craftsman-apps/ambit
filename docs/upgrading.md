@@ -1,5 +1,7 @@
 # Upgrading
 
+For what each release changes, read the [changelog](changelog.md).
+
 ## To the release with audit-only mode
 
 - **The controller now writes the access-log policy.** The AgentgatewayPolicy `ambit-access-log` has the same name as

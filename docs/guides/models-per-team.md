@@ -149,7 +149,7 @@ Open <http://console.localtest.me:8080>. The sign-in page now offers **Acme dire
 
 </details>
 
-Both ways need one more step. Each person signs in to the console and creates a personal API key, as described in [Connect Claude Code and Cursor](coding-tools.md). A key carries the groups its owner had at their last console sign-in. Save Alice's key in the shell variable `ALICE_KEY` and Bob's key in `BOB_KEY`.
+Both ways need one more step. Each person signs in to the console and creates a personal API key, as described in [Connect your coding agents](coding-tools.md). A key carries the groups its owner had at their last console sign-in. Save Alice's key in the shell variable `ALICE_KEY` and Bob's key in `BOB_KEY`.
 
 ## 1. Add a second model
 

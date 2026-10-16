@@ -170,3 +170,26 @@ test("first-use line: hidden, waiting, seen, timeout", () => {
   // while the first answer is still loading, show waiting
   assert.equal(firstUseLine({ available: undefined, lastUsed: null, waitedMs: 0 }).kind, "waiting");
 });
+
+test("ambit connect: shown for Claude Code, Codex, opencode and Cursor with the real command shape; not for SDK or MCP", () => {
+  const tools = { claudeCode: "claude-code", codex: "codex", opencode: "opencode", cursor: "cursor" };
+  for (const [id, name] of Object.entries(tools)) {
+    assert.equal(tab(id).cli.command, `ambit connect ${name} --url https://llm.example.com --model acme/model-1`, id);
+  }
+  assert.equal(tab("sdk").cli, undefined);
+  assert.equal(tab("mcp").cli, undefined);
+});
+
+test("ambit connect: the key is never in the command, and the manual steps stay at 3 or fewer for the CLI tools", () => {
+  for (const id of ["claudeCode", "codex", "opencode", "cursor"]) {
+    assert.ok(!tab(id).cli.command.includes(setup.key), id);
+    assert.ok(tab(id).steps.length <= 3, `${id}: ${tab(id).steps.length} steps`);
+  }
+  assert.match(tab("claudeCode").cli.note, /asks for the key/);
+  assert.match(tab("cursor").cli.note, /writes nothing/);
+});
+
+test("ambit connect: without a model the command shows the placeholder", () => {
+  const t = toolTabs({ ...setup, model: "" }, "llm").find((x) => x.id === "claudeCode");
+  assert.match(t.cli.command, /--model <model-id>$/);
+});

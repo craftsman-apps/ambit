@@ -101,6 +101,11 @@ function KeyCreated({ created, onDone }: { created: Created; onDone: () => void 
       </div>
       <div role="tabpanel" id="tool-panel" aria-labelledby={`tab-${tab.id}`} tabIndex={0} className="space-y-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
         {tab.warning && <p role="alert" data-testid="tab-warning" className="rounded-md bg-warn-soft p-2 text-warn">{tab.warning}</p>}
+        {tab.cli && <div className="space-y-1" data-testid={`cli-${tab.id}`}>
+          <p className="font-medium">Fastest: run this in a terminal (needs the ambit CLI)</p>
+          <CopyBlock text={tab.cli.command} testId={`cli-command-${tab.id}`} label="Command" />
+          <p className="text-small text-muted">{tab.cli.note}</p></div>}
+        {tab.cli && <h4 className="pt-1 font-medium text-muted">Or set it up by hand</h4>}
         <ol className="list-decimal space-y-1 pl-5">{tab.steps.map((s) => <li key={s}>{s}</li>)}</ol>
         {tab.blocks.map(block)}
       </div>

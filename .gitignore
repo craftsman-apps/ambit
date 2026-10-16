@@ -12,3 +12,4 @@ site/build/
 site/.docusaurus/
 .vercel/
 dist/
+docs/changelog.md

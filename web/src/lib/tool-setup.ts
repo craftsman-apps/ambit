@@ -5,7 +5,8 @@ export type Shell = "bash" | "fish" | "powershell";
 export type Setup = { llm: string; mcp: string; key: string; model: string };
 // A block is plain text, or the same environment variables written for each shell.
 export type Block = { label: string; text: string; shells?: undefined } | { label: string; shells: Record<Shell, string>; text?: undefined };
-export type ToolTab = { id: string; title: string; steps: string[]; blocks: Block[]; warning?: string };
+// cli: the ambit connect command for the tools it supports (claude-code, codex, opencode, cursor), shown before the manual steps.
+export type ToolTab = { id: string; title: string; steps: string[]; blocks: Block[]; warning?: string; cli?: { command: string; note: string } };
 
 export const shellNames: Record<Shell, string> = { bash: "bash / zsh", fish: "fish", powershell: "PowerShell" };
 
@@ -30,6 +31,8 @@ const vars = (pairs: [string, string][]): Record<Shell, string> => ({
   powershell: pairs.map(([k, v]) => `$env:${k} = "${v}"`).join("\n"),
 });
 const keepShell = "The variables last until you close the terminal. To keep them, add the same lines to your shell profile.";
+const askKey = "It asks for the key (the input is hidden), shows what it will change, and asks before it writes. The key goes to your keychain, not to a config file.";
+const connectCmd = (tool: string, llm: string, m: string) => ({ command: `ambit connect ${tool} --url ${llm} --model ${m}`, note: askKey });
 
 export function toolTabs({ llm, mcp, key, model }: Setup, scope: Scope): ToolTab[] {
   const m = model || "<model-id>";
@@ -37,32 +40,28 @@ export function toolTabs({ llm, mcp, key, model }: Setup, scope: Scope): ToolTab
   if (scope !== "mcp") {
     const claudeEnv = { env: { ANTHROPIC_BASE_URL: llm, ANTHROPIC_AUTH_TOKEN: key, ANTHROPIC_MODEL: m,
       ANTHROPIC_DEFAULT_OPUS_MODEL: m, ANTHROPIC_DEFAULT_SONNET_MODEL: m, ANTHROPIC_DEFAULT_HAIKU_MODEL: m } };
-    tabs.push({ id: "claudeCode", title: "Claude Code", blocks: [{ label: "Claude Code settings", text: JSON.stringify(claudeEnv, null, 2) }], steps: [
-      "Open ~/.claude/settings.json. On Windows it is %USERPROFILE%\\.claude\\settings.json. Create it if it does not exist.",
-      "Merge these values into the \"env\" object. Do not replace the whole file.",
-      "Do not put the key in a project's .claude/settings.json. That file is committed and shared with everyone who clones the project.",
-      "Restart Claude Code, then run /status. The line \"Anthropic base URL\" must show your gateway address.",
-      "The model variables are required: Claude Code's default model names do not exist at your provider. Claude Code may print a notice that it does not know this model. The notice is harmless.",
+    tabs.push({ id: "claudeCode", title: "Claude Code", cli: connectCmd("claude-code", llm, m), blocks: [{ label: "Claude Code settings", text: JSON.stringify(claudeEnv, null, 2) }], steps: [
+      "Merge these values into the \"env\" object of ~/.claude/settings.json (Windows: %USERPROFILE%\\.claude\\settings.json). Do not replace the file. Never put the key in a project's .claude/settings.json: it is shared.",
+      "The model variables are required: Claude Code's default model names do not exist at your provider.",
+      "Restart Claude Code and run /status. \"Anthropic base URL\" must show your gateway address.",
     ] });
-    tabs.push({ id: "codex", title: "Codex", blocks: [
+    tabs.push({ id: "codex", title: "Codex", cli: connectCmd("codex", llm, m), blocks: [
       { label: "~/.codex/config.toml", text: `model = "${m}"\nmodel_provider = "ambit"\n\n[model_providers.ambit]\nname = "Ambit"\nbase_url = "${llm}/v1"\nenv_key = "AMBIT_API_KEY"\nwire_api = "responses"` },
       { label: "Key, in your terminal", shells: vars([["AMBIT_API_KEY", key]]) },
     ], steps: [
-      "Add the settings to ~/.codex/config.toml. Put model and model_provider above the first [table] line, and keep your other settings.",
-      "The key is not written to the file. Codex reads it from the variable AMBIT_API_KEY, which you set in your terminal. " + keepShell,
-      "Start Codex from that terminal.",
+      "Add the settings to ~/.codex/config.toml. Put model and model_provider above the first [table] line.",
+      "Set AMBIT_API_KEY in your terminal: Codex reads the key from it. " + keepShell + " Start Codex from that terminal.",
     ] });
-    tabs.push({ id: "opencode", title: "opencode", blocks: [
+    tabs.push({ id: "opencode", title: "opencode", cli: connectCmd("opencode", llm, m), blocks: [
       { label: "~/.config/opencode/opencode.json", text: JSON.stringify({ $schema: "https://opencode.ai/config.json", model: `ambit/${m}`,
         provider: { ambit: { npm: "@ai-sdk/openai-compatible", name: "Ambit", options: { baseURL: `${llm}/v1`, apiKey: "{env:AMBIT_API_KEY}" },
           models: { [m]: { name: m } } } } }, null, 2) },
       { label: "Key, in your terminal", shells: vars([["AMBIT_API_KEY", key]]) },
     ], steps: [
       "Merge the provider into ~/.config/opencode/opencode.json. Keep your other settings.",
-      "The key is not written to the file. opencode reads it from the variable AMBIT_API_KEY, which you set in your terminal. " + keepShell,
-      "Start opencode from that terminal.",
+      "Set AMBIT_API_KEY in your terminal: opencode reads the key from it. " + keepShell + " Start opencode from that terminal.",
     ] });
-    const cursor: ToolTab = { id: "cursor", title: "Cursor", blocks: [
+    const cursor: ToolTab = { id: "cursor", title: "Cursor", cli: { command: `ambit connect cursor --url ${llm} --model ${m}`, note: "Cursor has no config file for this: the command prints these steps with your address and writes nothing." }, blocks: [
       { label: "OpenAI API Key", text: key },
       { label: "Override OpenAI Base URL", text: `${llm}/v1` },
       { label: "Model name", text: m },

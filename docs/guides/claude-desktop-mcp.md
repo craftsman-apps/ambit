@@ -33,7 +33,7 @@ In the local file `claude_desktop_config.json`, Claude Desktop starts local prog
 ## Before you start
 
 1. An Ambit install, and an access rule that gives your group at least one tool. If you followed [Give an agent tools and apps](mcp-apps.md), Alice has the tool `time_get_current_time`.
-2. A personal API key with the scope **MCP** or **LLM and MCP**. Make it in the console under **Keys**, as in [Connect Claude Code and Cursor](coding-tools.md). The console shows the key once.
+2. A personal API key with the scope **MCP** or **LLM and MCP**. Make it in the console under **Keys**, as in [Connect your coding agents](coding-tools.md). The console shows the key once.
 3. The MCP address of the gateway. On the quick-start cluster it is `http://mcp.localtest.me:8080/mcp`. On a production install it is the `https` address that the **MCP** tab of the console shows. These examples use the quick-start address.
 4. Node.js, as above.
 
@@ -175,6 +175,6 @@ To test the key without Claude Desktop, use the `mcp` function in [Give an agent
 ## Related
 
 - [Claude Desktop with Ambit's models](claude-desktop.md): send the model calls of Claude Desktop through Ambit.
-- [Connect Claude Code and Cursor](coding-tools.md): personal keys, and the same key in other tools.
+- [Connect your coding agents](coding-tools.md): personal keys, and the same key in other tools.
 - [Give an agent tools and apps](mcp-apps.md): the access rules that decide which tools you see.
 - [Personal API keys](../api-keys.md): scopes, end dates and revoking a key.

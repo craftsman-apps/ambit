@@ -1,6 +1,6 @@
 # Upgrading
 
-For what each release changes, read the [changelog](changelog.md).
+For what each release changes, read the [changelog](https://ambitproject.dev/docs/changelog).
 
 ## To the release with audit-only mode
 

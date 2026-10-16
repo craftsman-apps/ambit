@@ -27,3 +27,8 @@ test('every released heading in CHANGELOG.md has a date', () => {
   assert.ok(heads.length >= 3);
   for (const h of heads) assert.match(h, /^\S+ \(\d{4}-\d{2}-\d{2}\)$/);
 });
+
+test('Unreleased is removed when it is the last section', () => {
+  const out = changelogPage('# Changelog\n\n## 0.2.1 (2026-10-16)\n\n- Fixed.\n\n## Unreleased\n\nAdd a line here.\n');
+  assert.equal(body(out), '# Changelog\n\n## 0.2.1 (2026-10-16)\n\n- Fixed.\n\n');
+});

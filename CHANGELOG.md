@@ -43,7 +43,7 @@ published for this defect.
   On Windows PowerShell 5.1, `connect opencode` warns when the execution policy does not load profile scripts and
   prints the command to run. See [docs/guides/coding-tools.md](docs/guides/coding-tools.md).
 - New guides: [Claude Desktop with Ambit's models](docs/guides/claude-desktop.md), [Claude Desktop with MCP tools](docs/guides/claude-desktop-mcp.md),
-  [Codex, opencode and Hermes](docs/guides/codex-opencode-hermes.md), [coding tools](docs/guides/coding-tools.md),
+  [connect your coding agents](docs/guides/coding-tools.md),
   [Turn Ambit on without blocking anyone](docs/guides/audit-only.md), and the pages [install](docs/install.md),
   [CLI](docs/cli.md), [concepts](docs/concepts.md) and [compliance](docs/compliance.md).
 - Known limitation: when the model router refuses a request (status 403 or 404), Ambit records the refusal but not

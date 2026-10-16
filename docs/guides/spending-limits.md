@@ -15,7 +15,7 @@ You need:
 
 - the cluster from the [Quick start](../quick-start.md), installed with budgets on (`limits.enabled: true`). [Different models for different teams](models-per-team.md) shows the upgrade command;
 - the groups and people of that guide: Alice and Dan in `engineering`, Bob in `sales`;
-- the models of that guide, `free-model` for engineering and `sales-model` for sales, and a personal API key for each person ([Connect Claude Code, Codex, opencode, Cursor and SDKs](coding-tools.md)). Save the keys in `ALICE_KEY`, `DAN_KEY` and `BOB_KEY`.
+- the models of that guide, `free-model` for engineering and `sales-model` for sales, and a personal API key for each person ([Connect your coding agents](coding-tools.md)). Save the keys in `ALICE_KEY`, `DAN_KEY` and `BOB_KEY`.
 
 Budgets count requests and dollars once a day, in UTC. If you repeat this guide on the same day, the counters keep their values until midnight UTC. Use new limits or wait.
 

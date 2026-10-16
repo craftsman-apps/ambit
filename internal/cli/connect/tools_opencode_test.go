@@ -102,7 +102,7 @@ func TestOpenCodeRefusesV2(t *testing.T) {
 			p, err := PlanOpenCode(opencodeInput(goldenStep{URL: "https://llm.example.com", Model: "m"}, []byte(file), true, nil))
 			var e *out.Error
 			if p != nil || !errors.As(err, &e) || e.Code != out.ExitFailed || !strings.Contains(e.What, "opencode v2 config format") || !strings.Contains(e.Why, "writes the v1 format") ||
-				e.Next != "add the Ambit provider by hand (see docs/guides/codex-opencode-hermes.md), or wait for a newer ambit" {
+				e.Next != "add the Ambit provider by hand (see docs/guides/coding-tools.md), or wait for a newer ambit" {
 				t.Fatalf("p = %v, err = %#v", p, err)
 			}
 		})

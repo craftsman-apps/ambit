@@ -35,7 +35,7 @@ writes the settings for Claude Code, Codex and opencode, and keeps the key in th
 
 The console writes these snippets for you. `<llm>` is the LLM address (for example `https://llm.example.com`),
 `<mcp>` is the MCP address (for example `https://mcp.example.com/mcp`) and `<model>` is the provider's model ID.
-[Connect Claude Code, Codex, opencode, Cursor and SDKs](guides/coding-tools.md) has the snippets for each tool.
+[Connect your coding agents](guides/coding-tools.md) has the snippets for each tool.
 
 **Claude Code**, merged into the `"env"` object of `~/.claude/settings.json` (never a project's
 `.claude/settings.json`). Restart Claude Code and run `/status` to check the base URL:

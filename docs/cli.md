@@ -70,7 +70,7 @@ Prints the password of `admin@ambit.local` of the local cluster. Flag: `--name`.
 ambit connect <claude-code|codex|opencode|cursor> --url <llm address> --model <model id> [flags]
 ```
 
-Adds Ambit's entries to the user-level config file of a coding tool, stores the key in the keychain of your computer, and ends with one test call in the tool's own request format. It never writes the key to a config file, and it never changes a project file. For what it writes for each tool, see [Connect Claude Code, Codex, opencode, Cursor and SDKs](guides/coding-tools.md#with-the-ambit-cli) and [Connect Codex, opencode and Hermes Agent](guides/codex-opencode-hermes.md). For `cursor` it prints the steps and writes nothing.
+Adds Ambit's entries to the user-level config file of a coding tool, stores the key in the keychain of your computer, and ends with one test call in the tool's own request format. It never writes the key to a config file, and it never changes a project file. For what it writes for each tool, see [Connect your coding agents](guides/coding-tools.md#before-you-start). For `cursor` it prints the steps and writes nothing.
 
 Steps: read and parse the files (a file that does not parse stops the command, nothing is changed), find conflicts, get the key, print the diff of every file, ask `Write these changes? [y/N]`, store the key, write the files (each existing file is first copied to `<file>.ambit.bak`, mode `0600`, only the latest copy is kept), write the state file, make the test call. If a write fails after another file was written, the written files are put back.
 

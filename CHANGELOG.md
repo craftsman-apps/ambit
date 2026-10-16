@@ -11,7 +11,7 @@ Add a line here for each change that users can see, in the pull request that mak
 - The console box "Connect a tool" (Keys page) shows the `ambit connect` command first for Claude Code, Codex, opencode and Cursor; the manual steps are shorter and come second.
 - The three guides (coding tools; Codex, opencode and Hermes; other agents) are now one shorter page, "Connect your coding agents", at `guides/coding-tools`. The two old addresses redirect to it.
 
-## 0.2.1
+## 0.2.1 (2026-10-16)
 
 - The `ambit` command-line tool is now on Homebrew and npm for the first time: `brew install craftsman-apps/tap/ambit`
   and `npm install -g @craftsman-apps/ambit`. These two ways to install start with 0.2.1; for 0.2.0 use `install.sh`

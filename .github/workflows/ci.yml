@@ -1,7 +1,8 @@
 name: ci
 # Cost: a pull request runs the full check; a merge to main does not run it again (the merge script merges only a
-# PR that already contains the current main). Draft PRs skip the e2e job; documentation-only changes (docs/, *.md,
-# LICENSE, NOTICE) skip build and e2e, so the PR still gets a green check in seconds.
+# PR that already contains the current main). Draft PRs skip quickstart and e2e. Each job runs only when a file it
+# builds or tests changes (.github/scripts/changes.sh; a file no rule names runs everything), so a documentation-only
+# change still gets a green check in seconds: a job skipped by its `if:` reports success.
 on:
   push: { branches: ["step-*"] }
   pull_request: { types: [opened, synchronize, reopened, ready_for_review] }
@@ -14,23 +15,36 @@ jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      code: ${{ steps.changes.outputs.code }}
+      build: ${{ steps.changes.outputs.build }}
+      cli_unit: ${{ steps.changes.outputs.cli_unit }}
+      interop: ${{ steps.changes.outputs.interop }}
+      snapshot: ${{ steps.changes.outputs.snapshot }}
+      cli_kind: ${{ steps.changes.outputs.cli_kind }}
+      quickstart: ${{ steps.changes.outputs.quickstart }}
+      e2e: ${{ steps.changes.outputs.e2e }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0 }
-      - name: Does the change touch more than documentation?
+      # No base (a push), or a diff that fails: an empty list, which runs every job.
+      - name: Which jobs does the change need?
         id: changes
         env: { BASE: "${{ github.event.pull_request.base.sha }}", HEAD: "${{ github.event.pull_request.head.sha }}" }
         run: |
-          code=true
-          if [ -n "$BASE" ] && ! git diff --name-only "$BASE...$HEAD" | grep -qvE '^docs/|^site/|\.md$|^LICENSE$|^NOTICE$|^\.github/workflows/site\.yml$'; then code=false; fi
-          # The install scripts served from site/static are code: their tests run in cli-unit.
-          if [ -n "$BASE" ] && git diff --name-only "$BASE...$HEAD" | grep -qE '^site/static/install\.(sh|ps1)$'; then code=true; fi
-          echo "code=$code" | tee -a "$GITHUB_OUTPUT"
+          : > "$RUNNER_TEMP/files"
+          if [ -n "$BASE" ]; then git diff --name-only "$BASE...$HEAD" > "$RUNNER_TEMP/files" || : > "$RUNNER_TEMP/files"; fi
+          .github/scripts/changes.sh < "$RUNNER_TEMP/files" | tee -a "$GITHUB_OUTPUT"
+
+  # Its own job: a failure here must not skip the jobs that need `changes` (a skipped required job reports success).
+  changes-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: The path rules in .github/scripts/changes.sh pass their tests
+        run: .github/scripts/changes_test.sh
 
   build:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-latest
     # The image binaries are static (cgo off). The tests use the same setting, so the image build below reuses
     # everything they compiled instead of compiling all dependencies again (3.2 of 4.5 min, 2026-10-10).
@@ -104,7 +118,7 @@ jobs:
   # SDK must upgrade again over Helm 3's revision. This job decided the SDK version (Helm v4) and stays as a guard.
   cli-helm-interop:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.interop == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -121,8 +135,8 @@ jobs:
   # The quick start as the docs give it: deploy/quickstart.yaml on a fresh kind cluster, without the CoreDNS
   # rewrite or Keycloak the other parts use. Sign-in, a token from Dex, a first call, the audit record.
   quickstart:
-    needs: build  # skipped with build for documentation-only changes
-    if: ${{ !github.event.pull_request.draft }}
+    needs: [changes, build]
+    if: ${{ !github.event.pull_request.draft && needs.changes.outputs.quickstart == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -152,8 +166,8 @@ jobs:
   # 21.4 min and part b 13.4 (2026-10-10).
   e2e:
     name: e2e (${{ matrix.part.name }})
-    needs: build  # skipped with build for documentation-only changes
-    if: ${{ !github.event.pull_request.draft }}
+    needs: [changes, build]
+    if: ${{ !github.event.pull_request.draft && needs.changes.outputs.e2e == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -238,32 +252,40 @@ jobs:
 
   # Spec 9.2: the CLI is built and unit-tested on all three systems, so Windows-only code (paths, the PowerShell
   # example, the install script) is compiled and tested on Windows. arm64 builds ship untested (docs say so).
+  # Required checks name each system. A matrix job skipped by a job-level `if:` reports only as "cli-unit", so the
+  # three required checks never arrive and the PR cannot merge (PR #153). The job always runs; without CLI changes
+  # its steps are skipped and it runs on Ubuntu (macOS and Windows minutes cost more), still named for its system.
   cli-unit:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix: { os: [ubuntu-latest, macos-latest, windows-latest] }
-    runs-on: ${{ matrix.os }}
-    env: { CGO_ENABLED: "0" }
+    runs-on: ${{ needs.changes.outputs.cli_unit == 'true' && matrix.os || 'ubuntu-latest' }}
+    env: { CGO_ENABLED: "0", RUN: "${{ needs.changes.outputs.cli_unit }}" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.RUN == 'true'
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: env.RUN == 'true'
         with: { go-version-file: go.mod }
       - name: Build the CLI
+        if: env.RUN == 'true'
         shell: bash
         run: go build -o bin/ambit ./cmd/ambit
       - name: CLI unit tests
+        if: env.RUN == 'true'
         shell: bash
         run: go test -count=1 ./cmd/ambit/... ./internal/cli/... ./internal/validate/... ./internal/installscript/... ./deploy/... ./kind/...
       - name: The development flags exist only in the dev build (ruling S9)
+        if: env.RUN == 'true'
         shell: bash
         run: go test -count=1 -tags dev ./internal/cli/
 
   # Spec 9.2 cli-local and the redaction and restricted-permission gates of 9.2a, on the branch image.
   # Unlike e2e, this job also runs on draft PRs: it is the proof for changes to the CLI.
   cli-local:
-    needs: build  # skipped with build for documentation-only changes
+    needs: [changes, build]
+    if: needs.changes.outputs.cli_kind == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -295,7 +317,8 @@ jobs:
   # Spec 9.2a: an interrupted local up is repaired, and a cluster ambit did not create is refused.
   # Also runs on draft PRs (see cli-local).
   cli-partial:
-    needs: build
+    needs: [changes, build]
+    if: needs.changes.outputs.cli_kind == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
@@ -324,7 +347,7 @@ jobs:
   # binary runs and reports the snapshot version.
   cli-snapshot:
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.snapshot == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

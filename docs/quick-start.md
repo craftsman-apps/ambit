@@ -5,7 +5,12 @@ description: Install the ambit CLI and start a local Ambit with one command, amb
 
 # Quick start
 
-In this guide you install the `ambit` command and start Ambit on your laptop with one command. `ambit local up` creates a local Kubernetes cluster (kind) inside Docker, installs Ambit, adds a model and an access rule, and makes a first call through the gateway. It takes from 3 to 20 minutes, depending on your network, because Ambit pulls about 1 GB of images.
+`ambit local up` starts Ambit on your computer with one command. It takes from 3 to 20 minutes, because Ambit pulls about 1 GB of images.
+
+- **You need:** Docker, running. Nothing else to install.
+- **It uses:** Docker on your computer.
+- **It creates:** a kind cluster named `ambit` (kubectl context `kind-ambit`). It installs the CRDs and the Ambit Helm charts into it, sets up a model and an access rule, and makes a test call.
+- **To remove it:** `ambit local down`.
 
 This install is for testing only: plain HTTP, one gateway replica, and sign-in tokens from Ambit's own Dex. To install on a real cluster, see [Install on your cluster](install.md). To see each object that `ambit local up` creates, or to do the steps by hand, see [What ambit local up does](local-up.md).
 
@@ -62,7 +67,8 @@ The [release page](https://github.com/craftsman-apps/ambit/releases) also has an
 ambit local up
 ```
 
-It asks for an OpenRouter API key and does not show what you type. The question goes to stderr, so it stays on the terminal if you redirect the output to a file. Press Enter to use the test model. Without a terminal, or to skip the question, pass `--no-key`, or give the key in `OPENROUTER_API_KEY` or in a file with `--openrouter-key-file <file>`. Each step prints one line with its duration:
+Each step prints one line with its duration:
+
 
 ```text
 ✓ Preflight (0.4s)
@@ -90,13 +96,43 @@ Call the model from your shell:
     -d '{"model":"local/echo","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-Without a terminal, or with `--no-password`, the password line reads ``Password: run `ambit local password` ``. On Windows the call command is for PowerShell. With an OpenRouter key, the model in the summary is the one that answered.
+### Which key does it use?
 
-If a step fails, the line says what is wrong, and the next line starts with `next:` and gives the command to run. Every failure of `ambit local up` has a `next:` line. For example, if Docker is not running, the command stops at once with `✗ Docker is not running` and `next: start Docker Desktop` (on Linux, `next: start Docker: sudo systemctl start docker`). Run `ambit local up` again at any time: it repairs the cluster it created, and it never changes a kind cluster that it did not create. Press Ctrl+C once to stop `ambit local up`: it stops and says how to remove the cluster if it was created. Press Ctrl+C a second time to end it at once.
+Ambit uses the first of these that it finds:
 
-To use another cluster name, pass `--name <name>` to `ambit local up`, `ambit local down` and `ambit local password`. The kubectl context is then `kind-<name>`.
+1. `--no-key`: no key. It uses the test model.
+2. `--openrouter-key-file <file>`: the key in the file.
+3. The `OPENROUTER_API_KEY` environment variable.
+4. A key already in the cluster (the Secret `ambit-llm-openrouter`).
+5. Otherwise it asks for a key. The input is hidden. Press Enter to use the test model. Without a terminal it does not ask and uses the test model.
 
-With an OpenRouter key, `ambit local up` reads OpenRouter's list of free models and uses the first one that answers, trying at most three. `--model <id>` chooses the model.
+A key from 2 or 3 replaces the key in the cluster. `--no-key` with `--openrouter-key-file` is an error.
+
+### Other options
+
+| Flag | What it does |
+|---|---|
+| `--model <id>` | Use this OpenRouter model. |
+| `--no-password` | Do not print the password in the summary. |
+| `--name <name>` | Use another cluster name (kubectl context `kind-<name>`). Pass it to `ambit local down` and `ambit local password` too. |
+
+### The summary
+
+- The password line shows the password on a terminal. Without a terminal, or with `--no-password`, it reads ``Password: run `ambit local password` ``.
+- On Windows, the call command is for PowerShell.
+- With an OpenRouter key, the model in the summary is the one that answered.
+
+### OpenRouter free models
+
+- Ambit uses the first free model on OpenRouter's list that answers. It tries at most three.
+- `--model <id>` chooses the model.
+
+### If something fails
+
+- The failed step prints the reason. The next line starts with `next:` and gives the command to run.
+- If Docker is not running, the command stops at once: `✗ Docker is not running`, then `next: start Docker Desktop` (on Linux, `next: start Docker: sudo systemctl start docker`).
+- Run `ambit local up` again at any time. It repairs the cluster it created. It never changes a kind cluster that it did not create.
+- Press Ctrl+C once to stop. If the cluster was created, the command says how to remove it. Press Ctrl+C a second time to end at once.
 
 ## 3. Sign in and see the call
 
@@ -164,7 +200,7 @@ On Windows, `ambit local up` needs Docker Desktop with WSL 2. It is tested by ha
 
 ## Next
 
-- Connect your coding tool: `ambit connect claude-code --url http://llm.localtest.me:8080 --model local/echo` (or `codex`, `opencode`, `cursor`). Create the key in the console first; see [Connect Claude Code and Cursor](guides/coding-tools.md).
+- Connect your coding tool: `ambit connect claude-code --url http://llm.localtest.me:8080 --model local/echo` (or `codex`, `opencode`, `cursor`). Create the key in the console first; see [Connect your coding agents](guides/coding-tools.md).
 - [Concepts](concepts.md): what each object does, and how Ambit checks a request.
 - [Install on your cluster](install.md): company sign-in, HTTPS, your own ClickHouse and Valkey.
 - [Models and providers](providers.md) and [Personal API keys](api-keys.md): other providers, and keys for Claude Code and Cursor.

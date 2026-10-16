@@ -5,10 +5,10 @@ description: The steps of ambit local up done by hand with kind, kubectl and Hel
 
 # What `ambit local up` does
 
-`ambit local up` ([Quick start](quick-start.md)) runs the steps on this page for you. Do them by hand when you want to see each object, or when you cannot use the CLI. The CLI differs from this page in four ways:
+`ambit local up` ([Quick start](quick-start.md)) runs the steps on this page for you. It uses Docker on your computer and creates a kind cluster named `ambit` (kubectl context `kind-ambit`). `ambit local down` removes it. Do them by hand when you want to see each object, or when you cannot use the CLI. The CLI differs from this page in four ways:
 
 - It marks the cluster as its own: the node gets the label `ambitproject.dev/created-by: ambit-cli`, and the CLI writes a state file. It never changes or deletes a cluster without both (see [A cluster that ambit did not create](#a-cluster-that-ambit-did-not-create)).
-- Without an OpenRouter key it adds a test model that repeats your message (`deploy/local/test-model.yaml` in the repository), instead of asking for a key.
+- Without an OpenRouter key it adds a test model that repeats your message (`deploy/local/test-model.yaml` in the repository). See [Which key does it use?](quick-start.md#which-key-does-it-use).
 - Its access rule is named `everyone-local`, and its OpenRouter model `free-model`.
 - It installs the charts and files of its own version, and gives back your previous kubectl context after kind creates the cluster.
 

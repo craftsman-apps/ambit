@@ -17,7 +17,7 @@ test('clean URLs: every .html file is served without its extension', () => {
   assert.deepEqual(c.overrides['docs/guides/mcp-apps.html'], {path: 'docs/guides/mcp-apps'});
   assert.equal(c.overrides['index.html'], undefined, 'the home page keeps index.html');
   assert.ok('cleanUrls' in c === false && 'trailingSlash' in c === false, 'vercel.json-only keys are not used');
-  const slash = c.routes.find(r => r.status === 308);
+  const slash = c.routes.find(r => r.src === '^/(.+)/$');
   assert.ok(slash && slash.headers.Location === '/$1', 'a trailing slash redirects to the address without it');
 });
 
@@ -38,4 +38,16 @@ test('copies the build and writes config v3 with headers', () => {
 test('refuses an empty build directory', () => {
   const b = mkdtempSync(join(tmpdir(), 'b-'));
   assert.throws(() => writeVercelOutput(b, join(b, 'o')), /index.html/);
+});
+
+test('the two merged guide pages redirect to their section, before the trailing-slash rule', () => {
+  const b = mkdtempSync(join(tmpdir(), 'b-')); writeFileSync(join(b, 'index.html'), 'home');
+  const o = join(mkdtempSync(join(tmpdir(), 'o-')), 'output');
+  writeVercelOutput(b, o);
+  const {routes} = JSON.parse(readFileSync(join(o, 'config.json'), 'utf8'));
+  const go = path => routes.find(r => r.status === 308 && new RegExp(r.src).test(path));
+  for (const [from, to] of [['codex-opencode-hermes', 'coding-tools#codex'], ['other-agents', 'coding-tools#other-agents']])
+    for (const p of [`/docs/guides/${from}`, `/docs/guides/${from}/`])
+      assert.equal(go(p).headers.Location, `/docs/guides/${to}`, p);
+  assert.equal(go('/docs/guides/coding-tools'), undefined, 'the new page does not redirect');
 });

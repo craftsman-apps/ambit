@@ -3,7 +3,7 @@ import Link from '@docusaurus/Link';
 import styles from '../pages/index.module.css';
 
 const CASES = [
-  {title: 'Coding tools', to: '/docs/guides/coding-tools', text: 'Give Claude Code and Cursor a personal API key instead of a shared provider key.'},
+  {title: 'Coding tools', to: '/docs/guides/coding-tools', text: 'Give Claude Code, Codex, opencode and Cursor a personal API key instead of a shared provider key.'},
   {title: 'Models per team', to: '/docs/guides/models-per-team', text: 'Allow each identity-provider group only the models it needs.'},
   {title: 'MCP servers for work apps', to: '/docs/guides/mcp-apps', text: 'Let people connect their own app accounts, and allow only the tools you choose.'},
   {title: 'Spending limits', to: '/docs/guides/spending-limits', text: 'Set a daily limit per group and per person, in requests or in dollars.'},

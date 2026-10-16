@@ -73,7 +73,7 @@ func PlanOpenCode(in Input) (*Plan, error) {
 	}
 	if opencodeV2(d) {
 		return nil, &out.Error{What: in.Path + " uses the opencode v2 config format", Why: "this version of ambit writes the v1 format",
-			Next: "add the Ambit provider by hand (see docs/guides/codex-opencode-hermes.md), or wait for a newer ambit", Code: out.ExitFailed}
+			Next: "add the Ambit provider by hand (see docs/guides/coding-tools.md), or wait for a newer ambit", Code: out.ExitFailed}
 	}
 	sets := opencodeSets(in)
 	decidedModel := false

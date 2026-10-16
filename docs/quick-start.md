@@ -164,7 +164,7 @@ On Windows, `ambit local up` needs Docker Desktop with WSL 2. It is tested by ha
 
 ## Next
 
-- Connect your coding tool: `ambit connect claude-code --url http://llm.localtest.me:8080 --model local/echo` (or `codex`, `opencode`, `cursor`). Create the key in the console first; see [Connect Claude Code and Cursor](guides/coding-tools.md).
+- Connect your coding tool: `ambit connect claude-code --url http://llm.localtest.me:8080 --model local/echo` (or `codex`, `opencode`, `cursor`). Create the key in the console first; see [Connect your coding agents](guides/coding-tools.md).
 - [Concepts](concepts.md): what each object does, and how Ambit checks a request.
 - [Install on your cluster](install.md): company sign-in, HTTPS, your own ClickHouse and Valkey.
 - [Models and providers](providers.md) and [Personal API keys](api-keys.md): other providers, and keys for Claude Code and Cursor.

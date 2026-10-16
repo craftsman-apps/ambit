@@ -35,6 +35,9 @@ test("create a key, see it once, revoke it", async ({ page }) => {
     expect(key).toMatch(/^ambit_[0-9A-Za-z]{43}$/);
     await expect(page.getByText("This is the only time the key is shown")).toBeVisible();
     await expect(page.getByTestId("snippet-claudeCode-0")).toContainText(key!);
+    await expect(page.getByTestId("cli-command-claudeCode")).toContainText("ambit connect claude-code --url ");
+    await page.getByRole("tab", { name: "SDK" }).click();
+    await expect(page.getByTestId("cli-sdk")).toHaveCount(0); // the CLI does not support the SDK tab
     await page.getByRole("button", { name: "Done" }).click();
     await expect(page.getByTestId("new-key")).toHaveCount(0);
     const row = page.getByRole("row", { name: /e2e laptop/ });

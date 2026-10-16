@@ -22,6 +22,12 @@ function cleanUrlOverrides(dir, base = '') {
   return out;
 }
 
+// Two guide pages were merged into docs/guides/coding-tools; the old addresses go to the matching section.
+const MOVED = {
+  'codex-opencode-hermes': 'coding-tools#codex',
+  'other-agents': 'coding-tools#other-agents',
+};
+
 export function writeVercelOutput(buildDir, outDir) {
   if (!existsSync(join(buildDir, 'index.html'))) throw new Error(`no index.html in ${buildDir}`);
   mkdirSync(outDir, {recursive: true});
@@ -29,6 +35,7 @@ export function writeVercelOutput(buildDir, outDir) {
   const config = {
     version: 3,
     routes: [
+      ...Object.entries(MOVED).map(([from, to]) => ({src: `^/docs/guides/${from}/?$`, status: 308, headers: {Location: `/docs/guides/${to}`}})),
       {src: '^/(.+)/$', status: 308, headers: {Location: '/$1'}},
       {src: '/(.*)', headers: HEADERS, continue: true},
       {handle: 'filesystem'},

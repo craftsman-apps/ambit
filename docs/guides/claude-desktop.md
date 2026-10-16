@@ -27,13 +27,13 @@ What to know before you start:
 - **Models are the provider's names.** Claude Desktop must send the model name that your `Model` object has in `spec.model`, for example `nvidia/nemotron-3-super-120b-a12b:free`. A request for `claude-sonnet-5` gets `404 model_not_found` unless a `Model` object has that name. Ambit has no alias from a Claude name to another model. See "Models".
 - **The base address should have no `/v1`. Not tested in Claude Desktop.** Use `http://llm.localtest.me:8080` (your LLM address). Anthropic's page shows an address without `/v1` in the console table and an address with `/v1` in its Linux file example, and does not say what Claude Desktop appends. Ambit answers `403 authorization failed` for `/v1/v1/messages`, so a wrong choice looks like a key error. After the first request, look at the first row in **Audit**: its route must be `/v1/messages`.
 - **Claude Desktop must reach the gateway.** The address must work from the computer that runs Claude Desktop. The quick-start address `localtest.me` works only on the same computer.
-- **Token counts are estimates.** Ambit does not serve `/v1/messages/count_tokens` and answers 403. Claude Code goes on with estimates ([Connect Claude Code and Cursor](coding-tools.md)). Whether Claude Desktop does the same was not checked.
+- **Token counts are estimates.** Ambit does not serve `/v1/messages/count_tokens` and answers 403. Claude Code goes on with estimates ([Connect your coding agents](coding-tools.md)). Whether Claude Desktop does the same was not checked.
 - **A model that is not a Claude model can act differently.** Tool use, thinking fields and long contexts depend on the model. Test the model you choose with the work you plan to do.
 
 ## Before you start
 
 1. An Ambit install with a model and an access rule that allows the person's group, as in the [Quick start](../quick-start.md) or [Different models for different teams](models-per-team.md).
-2. A personal API key with the scope **LLM** (or **LLM and MCP**). Make it in the console under **Keys**, as in [Connect Claude Code and Cursor](coding-tools.md#1-create-a-key). The console shows the key once.
+2. A personal API key with the scope **LLM** (or **LLM and MCP**). Make it in the console under **Keys**, as in [Connect your coding agents](coding-tools.md#before-you-start). The console shows the key once.
 3. The LLM address of your install. These examples use the quick-start address `http://llm.localtest.me:8080` and the model `nvidia/nemotron-3-super-120b-a12b:free`. Replace both.
 4. Claude Desktop, installed from [claude.com/download](https://claude.com/download). Third-party mode needs a version that has the keys below; the keys were added in versions 1.2581.0 to 2.110.0 ([configuration reference](https://claude.com/docs/third-party/claude-desktop/configuration)).
 
@@ -60,7 +60,7 @@ The helper is a program that prints the key to standard output and exits with 0.
 
 The console shows a key only once, so the key must be stored on the computer of each person. There are two ways:
 
-- **With the Ambit CLI.** `ambit key print --url <llm address>` prints the key that `ambit connect` stored for that address, and nothing else. A person who connected a coding tool with `ambit connect` (see [Connect Claude Code and Cursor](coding-tools.md#with-the-ambit-cli)) has the key stored already, and the helper only has to run this command. Claude Desktop starts a program from a path, so the helper is a two-line script that runs the command (below). There is no command that stores a key without connecting a tool, so this way fits people who also use `ambit connect`.
+- **With the Ambit CLI.** `ambit key print --url <llm address>` prints the key that `ambit connect` stored for that address, and nothing else. A person who connected a coding tool with `ambit connect` (see [Connect your coding agents](coding-tools.md#before-you-start)) has the key stored already, and the helper only has to run this command. Claude Desktop starts a program from a path, so the helper is a two-line script that runs the command (below). There is no command that stores a key without connecting a tool, so this way fits people who also use `ambit connect`.
 - **Without the Ambit CLI.** Each person stores the key once in the keychain of their computer with the system's own command, and a small script reads it. The scripts for macOS, Linux and Windows follow.
 
 Install the script in a folder that only administrators can write, for example `/usr/local/bin`, because Claude Desktop runs it as the person. Anyone who can change the script can steal the key.
@@ -265,7 +265,7 @@ Date: 2026-10-15. Ambit built from this branch on a local kind cluster, a person
 ## Related
 
 - [Claude Desktop with MCP tools](claude-desktop-mcp.md): the tools of Ambit in Claude Desktop, with the `mcp-remote` bridge, or the managed option for a managed Claude Desktop.
-- [Connect Claude Code and Cursor](coding-tools.md): personal keys, and the same key in other tools.
+- [Connect your coding agents](coding-tools.md): personal keys, and the same key in other tools.
 - [Different models for different teams](models-per-team.md): which group may use which model.
 - [Personal API keys](../api-keys.md): scope, end dates, revoking, and how the gateway checks a key or a token.
 - [Install on your cluster](../install.md): the identity provider and the Helm values for tokens.

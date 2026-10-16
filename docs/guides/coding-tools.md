@@ -1,63 +1,43 @@
 ---
-title: Connect Claude Code and Cursor
-description: Give a person a personal API key and point Claude Code, Cursor or an SDK at Ambit, so every call is checked, counted and recorded under that person.
+title: Connect your coding agents
+sidebar_label: Connect your coding agents
+description: Point Claude Code, Cursor, Codex, opencode, Hermes Agent and any agent that speaks the OpenAI or Anthropic API at Ambit with a personal API key, so every call is checked, counted and recorded under that person.
 ---
 
-# Connect Claude Code and Cursor
+# Connect your coding agents
 
-**What you get:** a coding tool uses your company's models through Ambit with a personal API key. Ambit checks the person's access, counts the use and records every call. The provider's own key stays inside the cluster.
+Works with Claude Code, Cursor, Codex, opencode, Hermes and any agent that speaks the OpenAI or Anthropic API.
+
+Each person uses a personal API key. Ambit checks the person's access, counts the use and records every call. The provider's own key stays inside the cluster.
+
+| Tool | `ambit connect` | Section |
+|---|---|---|
+| Claude Code | yes | [Claude Code](#claude-code) |
+| Codex | yes | [Codex](#codex) |
+| opencode | yes | [opencode](#opencode) |
+| Cursor | yes, but it only prints the steps and writes nothing | [Cursor](#cursor) |
+| Hermes Agent | no | [Hermes Agent](#hermes-agent) |
+| Any other agent | no | [Other agents](#other-agents) |
 
 ## Before you start
 
-You need the cluster from the [Quick start](../quick-start.md), with a model and a rule that allows everyone. `ambit local up` makes the rule `everyone-local`; the [by-hand steps](../local-up.md) make `everyone-free-model`. The addresses below are the quick-start addresses. On your own cluster, use your own LLM address.
+You need the cluster from the [Quick start](../quick-start.md), with a model and a rule that allows everyone. The examples use the quick-start addresses. On your own cluster, use your own.
 
-- LLM address: `http://llm.localtest.me:8080`
-- Console: `http://console.localtest.me:8080`
-- Model name for clients: the provider's model name, not the name of the `Model` object. `ambit local up` prints it in the summary (the `"model"` value of the call command) and on the line `<model> answered:`; it is `local/echo` for the test model. The console page **Models** shows it too. The by-hand steps use `nvidia/nemotron-3-super-120b-a12b:free`. The examples below use that name: replace it with yours.
+- LLM address: `http://llm.localtest.me:8080`. MCP address: `http://mcp.localtest.me:8080/mcp`.
+- Model name: the provider's model name, not the name of the `Model` object. The console page **Models** shows it. The examples use `nvidia/nemotron-3-super-120b-a12b:free`.
+- A key: in the console, open **Keys**, choose **New key**, choose the scope **LLM** (**MCP** or **LLM and MCP** for MCP) and an end date. The key starts with `ambit_`. The console shows it once. Treat it like a password.
 
-## 1. Create a key
+`ambit connect <tool> --url <llm> --model <model>` needs the `ambit` CLI 0.2.0 or later ([install it](../quick-start.md#1-install-the-cli)). It asks for the key (hidden), shows a diff, and asks `Write these changes? [y/N]`. Then it stores the key in your system keychain, saves `<file>.ambit.bak`, writes the change, and makes one test call. It never writes the key to a file and never changes a project file. Options: `--dry-run` shows the diff and changes nothing; `--yes` with `--key-file <path>` or `AMBIT_API_KEY` is for scripts. If the file has an entry that defeats Ambit's, the command stops and lists it; `--force` replaces it. See [Where the Ambit CLI keeps the key](../api-keys.md#where-the-ambit-cli-keeps-the-key).
 
-1. Sign in to the console. On the quick-start cluster, sign in as `admin@ambit.local`. Every person who can sign in can create keys.
-2. Open **Keys** and choose **New key**.
-3. Enter a name, for example `laptop`. Choose the scope **LLM** and an end date. Choose **Create**.
-4. Copy the key. It starts with `ambit_`. The console shows it once. It stores only a hash. If you lose the key, revoke it and create a new one.
+Tested on 2026-10-14 with Nemotron at OpenRouter: Claude Code 2.1.299, Codex 0.159.3, opencode 1.18.34, Hermes Agent v0.13.0.
 
-The console then shows one tab for each tool (Claude Code, Codex, opencode, Cursor, SDK, MCP) with your addresses and the model name filled in. The snippets below are the same. Under the snippets, the console shows "Waiting for the first request with this key…" and changes it to "First request seen at HH:MM" when the first call arrives. It reads this from the audit trail: without the audit trail the line is not shown, and after 5 minutes without a request it changes to "No request seen yet. Check the steps above, or see Audit."
+## Claude Code
 
-Treat the key like a password. A key carries the access of its owner and never more.
-
-## 2. Configure your tool
-
-### With the Ambit CLI
-
-`ambit connect` changes the config file of your tool, stores the key in the keychain of your computer, and ends with one test call in the tool's own format. It needs the `ambit` CLI, version 0.2.0 or later ([install it](../quick-start.md#1-install-the-cli)). Use the LLM address and the model name from "Before you start":
-
-```sh
-ambit connect claude-code --url http://llm.localtest.me:8080 --model nvidia/nemotron-3-super-120b-a12b:free
-```
-
-The command asks for the key you created in step 1. It does not show what you type. Then it prints, for each file, what it will change (a diff) and asks `Write these changes? [y/N]`. After you answer `y` it stores the key, copies each file to `<file>.ambit.bak`, writes the change, and makes the test call. To see the diff and change nothing, add `--dry-run`. In a script, give the key with `--key-file <path>` or the variable `AMBIT_API_KEY`, and add `--yes`.
-
-| Tool | Command | What it changes |
-|---|---|---|
-| Claude Code | `ambit connect claude-code --url <llm> --model <model>` | `~/.claude/settings.json`: `apiKeyHelper` and five `env` entries (the base URL and the four model names). With `CLAUDE_CONFIG_DIR` set, that folder is used. |
-| Codex | `ambit connect codex --url <llm> --model <model>` | `~/.codex/config.toml`: two blocks between `# >>> ambit` and `# <<< ambit <<<` lines. With `CODEX_HOME` set, that folder is used. |
-| opencode | `ambit connect opencode --url <llm> --model <model>` | `~/.config/opencode/opencode.json` (or `.jsonc`) and a function in your shell profile. See [Connect Codex, opencode and Hermes Agent](codex-opencode-hermes.md#opencode). |
-| Cursor | `ambit connect cursor --url <llm> --model <model>` | Nothing. Cursor has no config file for this, so the command prints the steps below. |
-
-The key is never written to a config file. Each tool runs a command that reads it when it starts: `ambit key print --url <llm>`. Claude Code runs it as `apiKeyHelper`. The key is stored in the macOS Keychain, the Windows Credential Manager, or the Secret Service of Linux. [Where the Ambit CLI keeps the key](../api-keys.md#where-the-ambit-cli-keeps-the-key) says what this protects and what it does not.
-
-Only your user-level files change, never a project file. A second `ambit connect` for the same LLM address reuses the stored key. If your file already has an entry that would defeat Ambit's (for example another `apiKeyHelper`, a different `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, or a setting for Bedrock, Vertex or Foundry), the command stops and lists them. Run it again with `--force` to replace them. `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, the Bedrock, Vertex and Foundry switches, and an old `provider.ambit` of opencode are not saved by Ambit and not put back by `ambit disconnect`: they stay only in the backup file. Ambit keeps one backup per file, so a second `--force` that would remove another one of these values stops and asks you to remove it by hand.
-
-Claude Code reads `apiKeyHelper` in the terminal tool and in the VS Code extension. The Claude Desktop app and cloud sessions do not run it; for Claude Desktop see [Claude Desktop with Ambit's models](claude-desktop.md).
-
-**Cursor.** The command prints the three steps of the Cursor tab in the console, the address `<llm>/v1` and the model name. If the LLM address is not public HTTPS it prints the warning below. If a key is stored for the address, it also prints `ambit key print --url <llm> --reveal`, the command that shows the key so that you can paste it into Cursor.
-
-### Without the Ambit CLI
-
-The steps below do the same by hand. They are the steps that were tested against a live Ambit.
-
-**Claude Code.** Open `~/.claude/settings.json` (on Windows, `%USERPROFILE%\.claude\settings.json`) and merge these values into its `"env"` object. Do not replace the file. Claude Code needs the model names too, because its default model names are not models at your provider.
+- `ambit connect claude-code` writes `apiKeyHelper` and five `env` entries into `~/.claude/settings.json`. Claude Desktop does not run `apiKeyHelper`; see [Claude Desktop with Ambit's models](claude-desktop.md).
+- By hand: merge this into `"env"` of `~/.claude/settings.json`, never into a project file. Restart and run `/status`: `Anthropic base URL` must show your address.
+- With a model that is not a Claude model, if the provider refuses the request, add `"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"`. "Unknown model" warnings are harmless.
+- Ambit answers 403 for `/v1/messages/count_tokens`. Claude Code shows estimates. These 403 entries in **Audit** are not an attack.
+- MCP: `claude mcp add --transport http ambit http://mcp.localtest.me:8080/mcp --header "Authorization: Bearer ambit_..."`
 
 ```json
 {
@@ -72,28 +52,13 @@ The steps below do the same by hand. They are the steps that were tested against
 }
 ```
 
-Do not put the key in a project's `.claude/settings.json`: that file is committed and shared with everyone who clones the project. Restart Claude Code, then run `/status`. The line `Anthropic base URL` must show your gateway address. Claude Code prints a notice that it does not know this model. The notice is harmless. The variables are described in the Claude Code pages [Connect to an LLM gateway](https://code.claude.com/docs/en/llm-gateway-connect) and [Model configuration](https://code.claude.com/docs/en/model-config).
+## Codex
 
-**Claude Code with a model that is not a Claude model.** Claude Code was tested (version 2.1.299, 2026-10-14) with `nvidia/nemotron-3-super-120b-a12b:free` at OpenRouter, through `/v1/messages`. A prompt that needs one tool call worked, with and without the switch below. What to know:
-
-- *Model variables.* The snippet above sets `ANTHROPIC_MODEL` and the three `ANTHROPIC_DEFAULT_*_MODEL` variables, as the Claude Code page [Model configuration](https://code.claude.com/docs/en/model-config) describes them (`ANTHROPIC_DEFAULT_HAIKU_MODEL` also covers Claude Code's background work). The older `ANTHROPIC_SMALL_FAST_MODEL` is deprecated in favor of `ANTHROPIC_DEFAULT_HAIKU_MODEL`. Our test used `ANTHROPIC_MODEL` and `ANTHROPIC_SMALL_FAST_MODEL`, not the three `ANTHROPIC_DEFAULT_*_MODEL` variables, so those three are documented by Claude Code but not tested by Ambit.
-- *Experimental beta fields.* By default, Claude Code sends the fields `context_management` and `safeguards` in each request, and also `thinking` and `output_config`. A provider that does not know them can refuse the request. With `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`, Claude Code does not send `context_management` and `safeguards`. It still sends `thinking` and `output_config`, and `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1` did not remove them in our test. Nemotron accepted all of it, so we cannot say which provider needs the switch. If a model refuses Claude Code's requests, set it first. Put it in the same `env` block:
-
-  ```json
-  "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"
-  ```
-
-- *Token counts are estimates.* Claude Code asks `/v1/messages/count_tokens` for exact counts, for example when you run `/context`. Ambit does not serve that path and answers 403 `authorization failed`. Claude Code goes on and shows estimated numbers; `/context` printed "Estimated usage by category". Each refused call is listed in **Audit** with status 403, under your email address, also for people who never see an error, so a count of 403 entries in Audit can look like an attack. A short prompt with a tool call does not call this path.
-
-**MCP with Claude Code.** Add the MCP gateway with a personal key that has the scope **MCP** (or **LLM and MCP**):
-
-```sh
-claude mcp add --transport http ambit http://mcp.localtest.me:8080/mcp --header "Authorization: Bearer ambit_..."
-```
-
-`claude mcp list` shows `ambit ... Connected`. In the test, Claude Code called `time_get_current_time` of the `time` server (see the [Quick start](../quick-start.md), step 9).
-
-**Codex.** Add this to `~/.codex/config.toml`. Put `model` and `model_provider` above the first `[table]` line. The key stays out of the file: Codex reads it from the variable `AMBIT_API_KEY`.
+- Codex speaks only the OpenAI Responses format (`/v1/responses`). It worked with an OpenRouter model. Try your own provider with one prompt first.
+- `ambit connect codex` writes two blocks, between `# >>> ambit` and `# <<< ambit <<<`, into `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`). Codex reads the key with `ambit key print`, so the file has no key.
+- By hand, Codex reads the key from `AMBIT_API_KEY`: `export AMBIT_API_KEY=ambit_...`. Codex does not allow `env_key` and the `auth` command together.
+- Put `model` and `model_provider` above the first `[table]` line. The warning "Model metadata not found" is harmless. In a script, add `< /dev/null` to `codex exec`.
+- MCP: add the block below. The gateway serves tools only, so Codex's request for MCP resources gets `Method not found`.
 
 ```toml
 model = "nvidia/nemotron-3-super-120b-a12b:free"
@@ -104,9 +69,19 @@ name = "Ambit"
 base_url = "http://llm.localtest.me:8080/v1"
 env_key = "AMBIT_API_KEY"
 wire_api = "responses"
+
+[mcp_servers.ambit]
+url = "http://mcp.localtest.me:8080/mcp"
+bearer_token_env_var = "AMBIT_API_KEY"
 ```
 
-**opencode.** Merge this provider into `~/.config/opencode/opencode.json`. The key is read from the variable `AMBIT_API_KEY`.
+## opencode
+
+- `ambit connect opencode` adds the provider `ambit` and the `model` to `~/.config/opencode/opencode.json`. opencode cannot run a command to read a key, so the command also adds a shell function `opencode` to your shell profile. It sets `AMBIT_API_KEY` for that one process. Choose the shell with `--shell bash|zsh|fish|powershell`, or `--shell none` to write no function.
+- Open a new terminal after `connect`. An editor or launcher that starts opencode itself does not see the function.
+- If your file uses the opencode v2 format (a top-level `providers`), the command stops. Add the provider by hand.
+- By hand: merge this into `opencode.json` and run `export AMBIT_API_KEY=ambit_...`. The first start in a new data directory once hung for 5 minutes; stop it and start again.
+- MCP: add a `mcp` block with `"type": "remote"`, `"url": "http://mcp.localtest.me:8080/mcp"`, `"headers": { "Authorization": "Bearer {env:AMBIT_API_KEY}" }` and `"oauth": false`.
 
 ```json
 {
@@ -123,79 +98,87 @@ wire_api = "responses"
 }
 ```
 
-Set the variable in the terminal where you start Codex or opencode. The console shows the line for bash or zsh, fish and PowerShell:
+## Cursor
 
-```sh
-export AMBIT_API_KEY="ambit_..."
-```
-
-**Cursor.** Open Settings, then Models. Turn on **OpenAI API Key** and **Override OpenAI Base URL**, enter the values below, and add the model name with **Add model**:
+- `ambit connect cursor` prints the steps and writes nothing.
+- Open Settings, then Models. Turn on **OpenAI API Key** and **Override OpenAI Base URL**, enter the values below, and add the model name.
+- Cursor sends requests from its own servers. The LLM address must be public HTTPS: `localhost` and `localtest.me` do not work. If the gateway is open to the internet, only keys and tokens protect it.
 
 ```text
 OpenAI API Key: ambit_...
 Override OpenAI Base URL: http://llm.localtest.me:8080/v1
 ```
 
-Cursor sends its requests from Cursor's servers, not from your computer. The LLM address must therefore be reachable from the internet over HTTPS. The console shows a warning on the Cursor tab when the LLM address is not public HTTPS. Cursor does not work with `localhost`, with a `localtest.me` address, or with a cluster that has no public address. This applies to your real install, not to the quick-start laptop cluster. Opening the LLM gateway to the internet means that only keys and tokens protect it.
+## Hermes Agent
 
-**OpenAI SDK and other OpenAI-compatible tools.** The console also shows these lines for fish (`set -gx NAME "value"`) and PowerShell (`$env:NAME = "value"`):
+- Hermes (Nous Research) uses the Chat Completions format. There is no `ambit connect` for it.
+- Put the config below in `~/.hermes/config.yaml` and run `export AMBIT_API_KEY=ambit_...`.
+- `key_env` works inside `custom_providers`, not in the `model:` block. Our first config used the `model:` block, sent no key and got 403. Putting `api_key:` in the `model:` block writes the key into the file; we did not test it.
+- MCP was not tested. Hermes reads `mcp_servers` with `url` and `headers`; see the [Hermes MCP guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp).
 
-```sh
-export OPENAI_BASE_URL=http://llm.localtest.me:8080/v1
-export OPENAI_API_KEY=ambit_...
+```yaml
+model:
+  default: nvidia/nemotron-3-super-120b-a12b:free
+  provider: custom:ambit
+custom_providers:
+  - name: ambit
+    base_url: http://llm.localtest.me:8080/v1
+    key_env: AMBIT_API_KEY
+    api_mode: chat_completions
 ```
 
-**Anthropic SDK:**
+## Other agents
+
+Not tested by Ambit. Any agent that lets you set a base URL and a key should work. The LLM gateway serves `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, `/v1/embeddings` and `/v1/models`. Any other path gets 403. Send the key as `Authorization: Bearer ambit_...` or `x-api-key: ambit_...`. Clients send the provider's model name. Where there is a choice, use Chat Completions: it has the most testing in Ambit.
 
 ```sh
+# OpenAI SDK and OpenAI-compatible tools (Chat Completions)
+export OPENAI_BASE_URL=http://llm.localtest.me:8080/v1
+export OPENAI_API_KEY=ambit_...
+
+# Anthropic SDK (Messages)
 export ANTHROPIC_BASE_URL=http://llm.localtest.me:8080
 export ANTHROPIC_API_KEY=ambit_...
 ```
 
-## Disconnect and revoke
+Settings from vendor documentation, read on 2026-10-14. Nobody has run these against Ambit. Settings change, so check the vendor page first. `<llm>` is your LLM address.
 
-`ambit disconnect claude-code` (or `codex`, `opencode`, `cursor`, or `--all`) removes exactly the entries and blocks that `ambit connect` added, and keeps everything else in the file. If nothing changed in between, the file is the same as before, byte for byte. For Codex and opencode this needs the state file `connect.json`; without it, the blank line that connect added before a block stays. If you changed an Ambit entry after connect, it stays, and the command says so. If a tool rewrote its file in between (for example with other indentation), the entries are removed by their meaning and the file keeps the tool's formatting. A secret that `--force` removed is not put back: its old value is in the `.ambit.bak` file, and the command prints the path.
+- **GitHub Copilot CLI**: `COPILOT_PROVIDER_BASE_URL=<llm>/v1`, `COPILOT_PROVIDER_API_KEY`, `COPILOT_MODEL`. The model must support tool calls and streaming. [Vendor page](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-byok-models).
+- **Cline**, **Roo Code**, **Kilo Code**: provider "OpenAI Compatible", base URL `<llm>/v1`, key, model ID. Roo Code needs a model with native tool calling. [Cline](https://docs.cline.bot/provider-config/openai-compatible), [Roo Code](https://roocodeinc.github.io/Roo-Code/providers/openai-compatible), [Kilo Code](https://kilo.ai/docs/ai-providers/openai-compatible).
+- **Continue**: in `config.yaml`, `provider: openai`, `apiBase: <llm>/v1`, `apiKey`, `model`. Set `useResponsesApi: false` for o-series and gpt-5 names. Tab autocomplete uses `/v1/completions`, which Ambit does not serve. [Vendor page](https://docs.continue.dev/customize/model-providers/top-level/openai).
+- **Aider**: `OPENAI_API_BASE=<llm>/v1`, `OPENAI_API_KEY`, and `--model openai/<model>`. [Vendor page](https://aider.chat/docs/llms/openai-compat.html).
+- **Goose**: `OPENAI_HOST=<llm host>`, `OPENAI_BASE_PATH=v1/chat/completions`, `OPENAI_API_KEY`. [Vendor page](https://goose-docs.ai/docs/getting-started/providers).
+- **Zed**: `language_models.openai_compatible.<name>` in `settings.json`, with `api_url: "<llm>/v1"` and an `available_models` list. [Vendor page](https://zed.dev/docs/ai/use-api-access).
+- **Factory Droid**: a `customModels` entry in `~/.factory/settings.json`, with `baseUrl: "<llm>/v1"` and `provider: "generic-chat-completion-api"`. [Vendor page](https://docs.factory.com/cli/configuration/byok).
+- **Qwen Code**: an entry in `modelProviders.openai` in `~/.qwen/settings.json`, with `envKey` and `baseUrl: "<llm>/v1"`. The schema differs between versions. [Vendor page](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/model-providers/).
+- **Crush**: a provider with `type: "openai-compat"` and `base_url: "<llm>/v1"`. The file format is being replaced. [Project page](https://github.com/charmbracelet/crush).
+- **pi**: a provider with `baseUrl: "<llm>/v1"` and `api: "openai-completions"`. An open report (issue 3168) says custom providers can stop responding. [Vendor page](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/models.md).
+- **Warp**: a custom inference endpoint with the URL `<llm>/v1` and the key. Local agent runs only. [Vendor page](https://docs.warp.dev/agents/inference/custom-inference-endpoint/).
 
-When no other tool uses the same LLM address, `ambit disconnect` also deletes the stored key (keep it with `--keep-key`). **This does not revoke the key.** The key keeps working until you revoke it: sign in to the console, open **Keys** and revoke it there. The command prints this as its last line. See [Personal API keys](../api-keys.md#revoke-a-key).
+Agents that should not work, or that we cannot say:
 
-## Check it works
+- **Gemini CLI and Antigravity CLI**: they speak the Gemini API, and Ambit serves none of its paths. They may send the key as `x-goog-api-key`, which Ambit does not read.
+- **Amp, Windsurf, JetBrains AI Assistant, GitHub Copilot in VS Code**: unknown. We found no confirmed custom-endpoint setting.
 
-Put the key in a shell variable. The first command reads it without showing it on the screen.
+MCP gateway: some of these agents take a URL and a header. Use `<mcp>/mcp` with `Authorization: Bearer <key>`, and read the vendor's MCP page for the setting names.
+
+## Disconnect, check, revoke
+
+- `ambit disconnect claude-code` (or `codex`, `opencode`, `cursor`, or `--all`) removes exactly what `connect` added. An entry you changed after `connect` stays, and the command says so. **It does not revoke the key.** Revoke it in the console under **Keys** ([Personal API keys](../api-keys.md#revoke-a-key)).
+- Check: read the key without showing it, then call the gateway. The answer ends with `HTTP 200`. A wrong key gives `HTTP 403`. For Claude Code, call `/v1/messages` with `x-api-key: $KEY` and `anthropic-version: 2023-06-01`.
 
 ```sh
 read -rs KEY
-```
-
-Call the OpenAI-style endpoint with `Authorization: Bearer`:
-
-```sh
 curl -s -w '\nHTTP %{http_code}\n' http://llm.localtest.me:8080/v1/chat/completions \
   -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
   -d '{"model":"nvidia/nemotron-3-super-120b-a12b:free","messages":[{"role":"user","content":"Say hello in five words."}]}'
 ```
 
-Call the Anthropic-style endpoint with `x-api-key`:
+Then open **Audit** in the console and search for your email address. Each call is listed with the model, the token counts and the key's ID.
 
-```sh
-curl -s -w '\nHTTP %{http_code}\n' http://llm.localtest.me:8080/v1/messages \
-  -H "x-api-key: $KEY" -H 'anthropic-version: 2023-06-01' -H 'Content-Type: application/json' \
-  -d '{"model":"nvidia/nemotron-3-super-120b-a12b:free","max_tokens":300,"messages":[{"role":"user","content":"Say hello in five words."}]}'
-```
-
-Both commands end with `HTTP 200` and an answer from the model. A new key works at once. With a wrong key, the answer is:
-
-```text
-authorization failed
-HTTP 403
-```
-
-Then restart Claude Code with the settings above, run `/status`, and ask it a question. In the console, open **Audit** and search for your email address. Each call is listed with the model, the token counts and the key that made it. The audit shows the key's ID, never the key.
+Not tested: a real Claude model behind `/v1/messages`; Codex with an OpenAI-type provider; Claude Code without the `ANTHROPIC_DEFAULT_*_MODEL` variables; any model other than Nemotron.
 
 ## Related
 
-- [Connect Codex, opencode and Hermes Agent](codex-opencode-hermes.md) and [Other coding agents](other-agents.md): more tools.
-- [Claude Desktop with Ambit's models](claude-desktop.md): the Claude Desktop app with third-party inference and a personal key.
-- [Claude Desktop with MCP tools](claude-desktop-mcp.md): the `mcp-remote` bridge and a personal key, for the Claude Desktop app.
-- [Personal API keys](../api-keys.md): scope, end dates, limits, revoking, and how the gateway checks a key.
-- [Models and providers](../providers.md): other providers and models.
-- [Someone leaves](someone-leaves.md): what happens to a person's keys when they are offboarded.
+- [Claude Desktop with Ambit's models](claude-desktop.md) and [Claude Desktop with MCP tools](claude-desktop-mcp.md).
+- [Personal API keys](../api-keys.md), [Give an agent tools and apps](mcp-apps.md), [Models and providers](../providers.md), [Someone leaves](someone-leaves.md).

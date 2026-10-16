@@ -28,11 +28,12 @@ func TestLeaderStartsTheTermAfterRepair(t *testing.T) {
 	s := &KeyService{Client: fake.NewClientBuilder().Build(), Namespace: "ambit-system", Now: time.Now,
 		Settings: KeySettings{Enabled: true, InactivityDays: 30, MaxDays: 365}}
 	var writableInStart atomic.Bool
-	started := make(chan struct{})
+	started, returned := make(chan struct{}), make(chan struct{})
 	go RunLeader(ctx, cs, "ambit-system", "pod-a", func(lead context.Context) error {
 		close(started)
 		err := s.StartTerm(lead)
 		writableInStart.Store(s.Writable())
+		close(returned)
 		return err
 	}, s.EndTerm)
 	select {
@@ -40,7 +41,11 @@ func TestLeaderStartsTheTermAfterRepair(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("never became leader")
 	}
-	waitFor(t, s.Writable)
+	select {
+	case <-returned:
+	case <-time.After(10 * time.Second):
+		t.Fatal("onStart did not return")
+	}
 	if !writableInStart.Load() {
 		t.Fatal("term must be published when onStart returns")
 	}

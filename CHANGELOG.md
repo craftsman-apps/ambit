@@ -8,6 +8,24 @@ For upgrade steps in detail, read [docs/upgrading.md](docs/upgrading.md).
 
 Add a line here for each change that users can see, in the pull request that makes the change.
 
+## 0.2.1
+
+- The `ambit` command-line tool is now on Homebrew and npm for the first time: `brew install craftsman-apps/tap/ambit`
+  and `npm install -g @craftsman-apps/ambit`. These two ways to install start with 0.2.1; for 0.2.0 use `install.sh`
+  or `install.ps1`.
+- The release builds the command-line tool for the tag that was pushed, and marks a release as the latest only when
+  all of its command-line files are present.
+- The Homebrew formula is written from the verified `checksums.txt` of the release.
+- The npm packages are published by their absolute paths.
+- A test of the key leader (`TestLeaderStartsTheTermAfterRepair`) failed now and then because it checked its result
+  before the code under test had recorded it. The test now waits. The product code did not change.
+
+Upgrade: nothing to do. The chart and the container image have the same behavior as 0.2.0.
+
+Security: this release fixes no publicly known vulnerability.
+
+## 0.2.0 (2026-10-16)
+
 - The `ambit` command-line tool, first released here. Install it with Homebrew (`brew install craftsman-apps/tap/ambit`),
   npm (`npx @craftsman-apps/ambit`), `install.sh` (macOS and Linux) or `install.ps1` (Windows). Commands:
   `ambit local up`, `local down` and `local password` (a local Ambit in a kind cluster), `ambit check` (including

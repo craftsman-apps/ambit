@@ -4,7 +4,7 @@ import {fileURLToPath} from 'node:url';
 
 export function changelogPage(md) {
   const text = md
-    .replace(/^## Unreleased\n[\s\S]*?(?=^## )/m, '')
+    .replace(/^## Unreleased\n[\s\S]*?(?=^## |(?![\s\S]))/m, '')
     .replace(/\]\(docs\/([^)#\s]+)\.md(#[^)\s]*)?\)/g, (_, p, frag = '') => `](${p === 'index' ? '/docs' : `/docs/${p}`}${frag})`);
   return `---\ntitle: Changelog\n---\n\n${text}`;
 }

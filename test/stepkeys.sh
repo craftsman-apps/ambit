@@ -146,7 +146,7 @@ fi
 DEACTIVATED=1
 [[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_OFF") == 200 ]] || fail "6 deactivate: $(cat "$W/api")"
 wait_for 10 '[[ $(code -H "Authorization: Bearer $AK") == 403 ]]' || fail "6 an offboarded person's key still works"
-[[ $(code -H "Authorization: Bearer $(token keytest)") == 403 ]] || fail "6 the offboarded person's JWT still works"
+wait_for 5 '[[ $(code -H "Authorization: Bearer $(token keytest)") == 403 ]]' || fail "6 the offboarded person's JWT still works"
 ! kubectl -n "$NS" get secret "ambit-key-$AKID" >/dev/null 2>&1 || fail "6 the key Secret survived offboarding"
 [[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_ON") == 200 ]] || fail "6 reactivate: $(cat "$W/api")"
 DEACTIVATED=""

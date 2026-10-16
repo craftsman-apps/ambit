@@ -9,7 +9,7 @@ For upgrade steps in detail, read [docs/upgrading.md](docs/upgrading.md).
 Add a line here for each change that users can see, in the pull request that makes the change.
 
 - The console box "Connect a tool" (Keys page) shows the `ambit connect` command first for Claude Code, Codex, opencode and Cursor; the manual steps are shorter and come second.
-- The guide "Connect Claude Code, Codex, opencode, Cursor and SDKs" (`guides/coding-tools`, same URL) is about half as long.
+- The three guides (coding tools; Codex, opencode and Hermes; other agents) are now one shorter page, "Connect your coding agents", at `guides/coding-tools`. The two old addresses redirect to it.
 
 ## 0.2.1
 

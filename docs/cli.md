@@ -42,7 +42,7 @@ Creates a local Ambit on a kind cluster, or repairs one that `ambit local up` cr
 | `--name <name>` | `ambit` | name of the kind cluster; the kubectl context is `kind-<name>`. `ambit local down` and `ambit local password` take it too. |
 | `--port <port>` | `8080` | port on `127.0.0.1` for the console and the gateway |
 | `--https-port <port>` | `8443` | port on `127.0.0.1` for HTTPS |
-| `--openrouter-key-file <file>` | | file with an OpenRouter API key (one line). `OPENROUTER_API_KEY` works too. |
+| `--openrouter-key-file <file>` | | file with an OpenRouter API key (one line). `OPENROUTER_API_KEY` works too. For the order, see [Which key does it use?](quick-start.md#which-key-does-it-use). |
 | `--no-key` | off | use the test model that repeats your message; do not ask for a key |
 | `--model <id>` | automatic | OpenRouter model id, instead of the first free model that answers |
 | `--no-password` | off | do not print the admin password in the summary |

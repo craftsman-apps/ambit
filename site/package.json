@@ -29,6 +29,7 @@
     "@fontsource/ibm-plex-sans": "5.3.0",
     "@mdx-js/react": "3.1.1",
     "clsx": "2.1.1",
+    "posthog-js": "1.438.12",
     "prism-react-renderer": "2.4.1",
     "react": "19.3.0",
     "react-dom": "19.3.0"

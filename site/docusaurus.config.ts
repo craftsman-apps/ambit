@@ -15,6 +15,7 @@ const config: Config = {
   markdown: {format: 'detect', hooks: {onBrokenMarkdownLinks: 'throw'}},   // .md files are plain CommonMark: the docs contain <vendor>-style text MDX rejects
   staticDirectories: ['static', '../docs/assets'],   // serves /brand/*.svg for the landing page
   i18n: {defaultLocale: 'en', locales: ['en']},
+  clientModules: ['./src/analytics.mjs'],   // PostHog page views, production host only
   presets: [[
     'classic',
     {

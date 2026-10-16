@@ -1,6 +1,6 @@
 {
-  "date": "2026-10-16T07:32:05.127883Z",
-  "commit": "52438f57d23da062abc9d2a001c26adfd7c6a760",
+  "date": "2026-10-16T17:07:45.286669Z",
+  "commit": "bbea564e5f32e9e3e684607abf8a0b2b4e377c56",
   "catalogHash": "e065077b701d2762dd407e7ddb35d96f7257ba9d969399197fc0407479fde3db",
   "presets": [
     {
@@ -206,6 +206,7 @@
         "finalize_asset_upload",
         "form_questions_editor",
         "get_action",
+        "get_activity_logs",
         "get_asset_upload_url",
         "get_assets",
         "get_automation_runs",

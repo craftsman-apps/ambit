@@ -26,7 +26,16 @@ const config: Config = {
         exclude: ['maintainers/**', 'superpowers/**', 'assets/**'],
         editUrl: ({docPath}) => `https://github.com/craftsman-apps/ambit/edit/main/docs/${docPath}`,
       },
-      blog: false,
+      blog: {
+        path: './generated-releases',   // made from CHANGELOG.md by scripts/releases-pages.mjs
+        routeBasePath: 'releases',
+        blogTitle: 'Releases',
+        blogSidebarTitle: 'Releases',
+        blogSidebarCount: 'ALL',
+        showReadingTime: false,
+        onUntruncatedBlogPosts: 'ignore',   // no truncate marker: the list page shows each version in full
+        feedOptions: {type: ['rss', 'atom'], title: 'Ambit releases', description: 'Ambit release notes'},
+      },
       theme: {customCss: './src/css/custom.css'},
       sitemap: {changefreq: 'weekly'},
     } satisfies Preset.Options,
@@ -44,6 +53,7 @@ const config: Config = {
       items: [
         {type: 'docSidebar', sidebarId: 'docs', position: 'left', label: 'Docs'},
         {to: '/docs/quick-start', label: 'Quick start', position: 'left'},
+        {to: '/releases', label: 'Releases', position: 'left'},
         {href: 'https://github.com/craftsman-apps/ambit', label: 'GitHub', position: 'right'},
       ],
     },

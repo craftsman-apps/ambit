@@ -25,3 +25,9 @@ test('CSP connect-src allows the PostHog hosts and still allows the site itself'
 test('CSP script-src gets no new origins (posthog-js loads no remote scripts)', () => {
   assert.deepEqual(csp()['script-src'], ["'self'", "'unsafe-inline'"]);
 });
+
+test('CSP font-src allows data: URLs (the built CSS inlines @fontsource fonts)', () => {
+  const font = csp()['font-src'];
+  assert.ok(font.includes("'self'"));
+  assert.ok(font.includes('data:'));
+});

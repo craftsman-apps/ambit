@@ -8,7 +8,7 @@ For upgrade steps in detail, read [docs/upgrading.md](docs/upgrading.md).
 
 Add a line here for each change that users can see, in the pull request that makes the change.
 
-- ambitproject.dev page views reach PostHog; the site's Content-Security-Policy blocked them in 0.2.2.
+- ambitproject.dev page views reach PostHog, and the site's own fonts load; the site's Content-Security-Policy blocked both in 0.2.2.
 
 ## 0.2.2 (2026-10-17)
 

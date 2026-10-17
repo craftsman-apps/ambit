@@ -2,7 +2,7 @@ import {cpSync, existsSync, mkdirSync, readdirSync, writeFileSync} from 'node:fs
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 
-const CSP = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'";
+const CSP = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self' https://us.i.posthog.com https://us-assets.i.posthog.com; frame-ancestors 'none'; base-uri 'self'";
 const HEADERS = {
   'Content-Security-Policy': CSP,
   'Strict-Transport-Security': 'max-age=63072000; includeSubDomains; preload',

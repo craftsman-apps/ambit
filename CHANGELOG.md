@@ -8,6 +8,8 @@ For upgrade steps in detail, read [docs/upgrading.md](docs/upgrading.md).
 
 Add a line here for each change that users can see, in the pull request that makes the change.
 
+- ambitproject.dev page views reach PostHog; the site's Content-Security-Policy blocked them in 0.2.2.
+
 ## 0.2.2 (2026-10-17)
 
 - The website has a changelog page, [docs/changelog](https://ambitproject.dev/docs/changelog), made from this file.

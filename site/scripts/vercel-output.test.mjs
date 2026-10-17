@@ -51,3 +51,12 @@ test('the two merged guide pages redirect to their section, before the trailing-
       assert.equal(go(p).headers.Location, `/docs/guides/${to}`, p);
   assert.equal(go('/docs/guides/coding-tools'), undefined, 'the new page does not redirect');
 });
+
+test('/docs/changelog redirects to /releases, before the trailing-slash rule', () => {
+  const b = mkdtempSync(join(tmpdir(), 'b-')); writeFileSync(join(b, 'index.html'), 'home');
+  const o = join(mkdtempSync(join(tmpdir(), 'o-')), 'output');
+  writeVercelOutput(b, o);
+  const {routes} = JSON.parse(readFileSync(join(o, 'config.json'), 'utf8'));
+  const go = path => routes.find(r => r.status === 308 && new RegExp(r.src).test(path));
+  for (const p of ['/docs/changelog', '/docs/changelog/']) assert.equal(go(p).headers.Location, '/releases', p);
+});

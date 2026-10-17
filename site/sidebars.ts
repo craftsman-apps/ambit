@@ -7,7 +7,7 @@ const sidebars: SidebarsConfig = {
       'guides/coding-tools', 'guides/models-per-team', 'guides/mcp-apps', 'guides/request-an-app', 'guides/claude-desktop', 'guides/claude-desktop-mcp', 'guides/spending-limits', 'guides/someone-leaves', 'guides/audit-only',
     ]},
     {type: 'category', label: 'Reference', collapsed: false, items: [
-      'cli', 'providers', 'api-keys', 'presets', 'budgets', 'routing', 'offboarding', 'alerts', 'compliance', 'upgrading', 'changelog',
+      'cli', 'providers', 'api-keys', 'presets', 'budgets', 'routing', 'offboarding', 'alerts', 'compliance', 'upgrading',
     ]},
   ],
 };

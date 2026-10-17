@@ -36,6 +36,7 @@ export function writeVercelOutput(buildDir, outDir) {
     version: 3,
     routes: [
       ...Object.entries(MOVED).map(([from, to]) => ({src: `^/docs/guides/${from}/?$`, status: 308, headers: {Location: `/docs/guides/${to}`}})),
+      {src: '^/docs/changelog/?$', status: 308, headers: {Location: '/releases'}},
       {src: '^/(.+)/$', status: 308, headers: {Location: '/$1'}},
       {src: '/(.*)', headers: HEADERS, continue: true},
       {handle: 'filesystem'},

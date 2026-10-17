@@ -4,9 +4,9 @@
   "private": true,
   "scripts": {
     "docusaurus": "docusaurus",
-    "prestart": "node scripts/changelog-page.mjs",
+    "prestart": "node scripts/releases-pages.mjs",
     "start": "docusaurus start",
-    "prebuild": "node scripts/changelog-page.mjs",
+    "prebuild": "node scripts/releases-pages.mjs",
     "build": "docusaurus build",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",

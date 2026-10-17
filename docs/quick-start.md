@@ -12,7 +12,7 @@ description: Install the ambit CLI and start a local Ambit with one command, amb
 - **It creates:** a kind cluster named `ambit` (kubectl context `kind-ambit`). It installs the CRDs and the Ambit Helm charts into it, sets up a model and an access rule, and makes a test call.
 - **To remove it:** `ambit local down`.
 
-This install is for testing only: plain HTTP, one gateway replica, and sign-in tokens from Ambit's own Dex. To install on a real cluster, see [Install on your cluster](install.md). To see each object that `ambit local up` creates, or to do the steps by hand, see [What ambit local up does](local-up.md).
+This install is for testing only: plain HTTP, one gateway replica, and sign-in tokens from Ambit's own Dex. To install on a real cluster, see [Install on your cluster](install.md). To see each object that `ambit local up` creates, or to do the steps by hand, see [Install locally by hand](local-up.md).
 
 ## What you need
 
@@ -54,7 +54,7 @@ npx @craftsman-apps/ambit local up
 Go:
 
 ```sh
-go install github.com/craftsman-apps/ambit/cmd/ambit@v0.2.0
+go install github.com/craftsman-apps/ambit/cmd/ambit@v0.2.2
 ```
 
 Check the install: `ambit version` prints `ambit 0.2.0`. If no CLI release is published yet, the install scripts say so (`No Ambit CLI release is published yet`) and install nothing. Releases with a `-` in the tag, such as `v0.2.0-rc.1`, are published on GitHub only, not to Homebrew or npm.

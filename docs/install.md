@@ -18,13 +18,13 @@ Ambit is installed with two Helm charts. The charts and the console image are pu
 
 ## Install
 
-Install the dependency CRDs, the Ambit CRDs, and then Ambit. Replace `0.1.0` with the release you want.
+Install the dependency CRDs, the Ambit CRDs, and then Ambit. This page installs 0.2.2. To install another release, replace `0.2.2` with it.
 
 ```sh
-R=https://github.com/craftsman-apps/ambit/releases/download/v0.1.0
+R=https://github.com/craftsman-apps/ambit/releases/download/v0.2.2
 curl -fsSLO $R/crds.yaml
 kubectl apply --server-side -f crds.yaml
-helm install ambit-crds oci://ghcr.io/craftsman-apps/charts/ambit-crds --version 0.1.0 -n ambit-system --create-namespace --wait
+helm install ambit-crds oci://ghcr.io/craftsman-apps/charts/ambit-crds --version 0.2.2 -n ambit-system --create-namespace --wait
 ```
 
 Write a values file, `values.yaml`. This one is the smallest useful production file: HTTPS addresses, the LLM and MCP gateways, and the audit log.
@@ -49,8 +49,10 @@ protection:
   enabled: true
 ```
 
+The chart refuses to render with `llm.enabled` or `mcp.enabled` and no token issuer. Add the settings from [Tokens for the gateways](#tokens-for-the-gateways) to this file before you install.
+
 ```sh
-helm install ambit oci://ghcr.io/craftsman-apps/charts/ambit --version 0.1.0 -n ambit-system -f values.yaml --wait --timeout 10m
+helm install ambit oci://ghcr.io/craftsman-apps/charts/ambit --version 0.2.2 -n ambit-system -f values.yaml --wait --timeout 10m
 ```
 
 `console.host` must be the host of `console.url`. Point DNS for the three hosts at the gateway's Service (`kubectl -n ambit-system get service`; with `gateway.service.type: LoadBalancer` it has an external address).
@@ -152,7 +154,7 @@ limits:
 
 The ClickHouse user needs `CREATE TABLE` in the database once, then `INSERT` and `SELECT`. The collector writes over the native protocol (`nativePort`, default 9440) and the console reads over HTTPS (`httpPort`, default 8443). Without TLS the ports are 9000 and 8123.
 
-Valkey holds the budget counters. The Valkey that the chart installs has no persistence: a restart sets today's counters to zero. An external Valkey with persistence keeps them.
+Valkey holds the budget counters (see [Budgets](budgets.md)). The Valkey that the chart installs has no persistence: a restart sets today's counters to zero. An external Valkey with persistence keeps them.
 
 ## Argo CD and GitOps
 
@@ -184,7 +186,7 @@ gateway:
     certificateSecret: ambit-tls
 ```
 
-The gateway then serves HTTPS on `gateway.tls.port` (default 8443), and plain HTTP on the console and LLM hosts redirects to it. Clients use that port in the address unless it is 443. Set `console.url` to the address people open, with `https://`: it is also the issuer address of Dex.
+The gateway then serves HTTPS on `gateway.tls.port` (default 8443), and plain HTTP on the console and LLM hosts redirects to it. The MCP host is served only over HTTPS and has no redirect. Clients use that port in the address unless it is 443. Set `console.url` to the address people open, with `https://`: it is also the issuer address of Dex.
 
 ## Upgrade and uninstall
 
@@ -211,6 +213,8 @@ access:
 Helm refuses `audit` when `evidence.enabled` is `false`. Only a change of this value (by `helm upgrade` or in Git) switches the mode. See [Turn Ambit on without blocking anyone](guides/audit-only.md).
 
 ## Production checklist
+
+[`ambit check --production`](cli.md#ambit-check) tests most of these points against your cluster.
 
 - `gateway.replicas` is 2 or more. With two replicas the chart also adds a PodDisruptionBudget. A rolling update starts one extra pod first, so the nodes need room for one more.
 - `bootstrapAdmin.enabled` is `false` after company sign-in works.

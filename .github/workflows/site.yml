@@ -25,6 +25,9 @@ jobs:
       - name: The quick start shows every install method
         run: npm run check-install-methods
         working-directory: site
+      - name: The install pages name the latest release
+        run: npm run check-install-version
+        working-directory: site
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with: { name: site-build, path: site/build, retention-days: 3 }
   site-deploy:

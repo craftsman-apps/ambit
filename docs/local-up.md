@@ -1,6 +1,6 @@
 ---
 title: Install locally by hand
-description: The steps of ambit local up done by hand with kind, kubectl and Helm, so you can see each object.
+description: "Install Ambit locally by hand with kind, kubectl and Helm: the steps that ambit local up runs, one object at a time."
 ---
 
 # Install locally by hand

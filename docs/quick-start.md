@@ -57,7 +57,7 @@ Go:
 go install github.com/craftsman-apps/ambit/cmd/ambit@v0.2.2
 ```
 
-Check the install: `ambit version` prints `ambit 0.2.0`. If no CLI release is published yet, the install scripts say so (`No Ambit CLI release is published yet`) and install nothing. Releases with a `-` in the tag, such as `v0.2.0-rc.1`, are published on GitHub only, not to Homebrew or npm.
+Check the install: `ambit version` prints `ambit 0.2.2`. If no CLI release is published yet, the install scripts say so (`No Ambit CLI release is published yet`) and install nothing. Releases with a `-` in the tag, such as `v0.2.0-rc.1`, are published on GitHub only, not to Homebrew or npm.
 
 The [release page](https://github.com/craftsman-apps/ambit/releases) also has an archive for each system. The binaries are not signed by Apple or Microsoft. A binary installed with the commands above runs without a warning. An archive that you download with a web browser can show a warning: on macOS, open System Settings, then Privacy & Security, and choose "Open Anyway" for `ambit`; on Windows, choose "More info" and then "Run anyway". To check that an archive was built by this project's release workflow: `gh attestation verify ambit_linux_amd64.tar.gz --repo craftsman-apps/ambit`.
 

@@ -1,0 +1,18 @@
+{
+  "theme.blog.post.paginator.olderPost": {
+    "message": "Older release",
+    "description": "Label of the link to the older release"
+  },
+  "theme.blog.post.paginator.newerPost": {
+    "message": "Newer release",
+    "description": "Label of the link to the newer release"
+  },
+  "theme.blog.paginator.olderEntries": {
+    "message": "Older releases",
+    "description": "Label of the link to older releases on the list page"
+  },
+  "theme.blog.paginator.newerEntries": {
+    "message": "Newer releases",
+    "description": "Label of the link to newer releases on the list page"
+  }
+}

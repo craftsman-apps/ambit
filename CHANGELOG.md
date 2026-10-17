@@ -10,6 +10,7 @@ Add a line here for each change that users can see, in the pull request that mak
 
 - ambitproject.dev page views reach PostHog, and the site's own fonts load; the site's Content-Security-Policy blocked both in 0.2.2.
 - The changelog moved to its own menu, Releases, with one page per version and an RSS feed.
+- The by-hand local install and Install on your cluster pages install 0.2.2; they still installed 0.1.0, and the quick start's go install named 0.2.0. The by-hand page is now named Install locally by hand and is under Reference.
 
 ## 0.2.2 (2026-10-17)
 

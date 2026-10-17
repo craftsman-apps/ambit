@@ -23,6 +23,7 @@ deploys nothing.
 
 1. Merge every pull request for the release into `main`, including its docs.
    In `CHANGELOG.md`, rename "Unreleased" to the version and the date (for example "0.2.0 (2026-10-20)"), and add a new empty "Unreleased" section.
+   In the same PR, update the version in `docs/local-up.md` and `docs/install.md`; the site build fails otherwise.
    The site Releases section (one page per version) is generated from `CHANGELOG.md` (without "Unreleased") and appears at the next `v*` or `site-*` tag.
 2. Push the tag on that commit: `git tag v0.2.0 <commit>` then `git push origin v0.2.0`. The `release` workflow
    publishes the image, the charts and the CLI; the `site` workflow deploys ambitproject.dev from the same commit.

@@ -8,9 +8,11 @@ For upgrade steps in detail, read [docs/upgrading.md](docs/upgrading.md).
 
 Add a line here for each change that users can see, in the pull request that makes the change.
 
+- The changelog moved to its own menu, Releases, with one page per version and an RSS feed.
+
 ## 0.2.2 (2026-10-17)
 
-- The website has a changelog page, [docs/changelog](https://ambitproject.dev/docs/changelog), made from this file.
+- The website has a changelog page, [ambitproject.dev/releases](https://ambitproject.dev/releases), made from this file.
 - The `ambit local up` section of the quick start is shorter and states the order in which the OpenRouter key is chosen.
 - The console box "Connect a tool" (Keys page) shows the `ambit connect` command first for Claude Code, Codex, opencode and Cursor; the manual steps are shorter and come second.
 - The three guides (coding tools; Codex, opencode and Hermes; other agents) are now one shorter page, "Connect your coding agents", at `guides/coding-tools`. The two old addresses redirect to it.

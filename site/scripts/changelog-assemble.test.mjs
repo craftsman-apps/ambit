@@ -64,3 +64,10 @@ test('Unreleased as the last section still works', () => {
   assemble('0.2.4', '2026-10-20', s.file, s.dir);
   assert.deepEqual(releasePages(s.read()).map((p) => p.version), ['0.2.4']);
 });
+
+test('the existing-version check is plain text: 0.2.30 is not 0.2.3, and special characters in a version are refused', () => {
+  const s = setup({'a.md': '- A.\n'});
+  for (const v of ['0x2.3', '0.2.3\\', '0.2.3(.*)', '0.2.3|0']) assert.throws(() => assemble(v, '2026-10-20', s.file, s.dir), /version/, v);
+  assert.equal(s.read(), SAMPLE);
+  assert.deepEqual(assemble('0.2.30', '2026-10-20', s.file, s.dir), ['a.md']);
+});

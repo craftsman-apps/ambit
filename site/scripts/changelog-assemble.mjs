@@ -8,7 +8,7 @@ export function assemble(version, date, changelogFile, dir) {
   if (!/^\d+\.\d+\.\d+\S*$/.test(version)) throw new Error(`version "${version}" must look like 0.2.4`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`date "${date}" must look like YYYY-MM-DD`);
   const md = readFileSync(changelogFile, 'utf8');
-  if (new RegExp(`^## ${version.replace(/\./g, '\\.')} \\(`, 'm').test(md)) throw new Error(`CHANGELOG.md already has version ${version}`);
+  if (md.split('\n').some((l) => l.startsWith(`## ${version} (`))) throw new Error(`CHANGELOG.md already has version ${version}`);
   const names = readdirSync(dir).filter((f) => f.endsWith('.md') && f !== 'README.md').sort();
   if (!names.length) throw new Error(`no fragment files in ${dir}`);
   const bodies = names.map((f) => {

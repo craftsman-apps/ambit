@@ -12,7 +12,7 @@ description: "Install Ambit locally by hand with kind, kubectl and Helm: the ste
 - Its access rule is named `everyone-local`, and its OpenRouter model `free-model`.
 - It installs the charts and files of its own version, and gives back your previous kubectl context after kind creates the cluster.
 
-In this guide you install Ambit release v0.2.2 on a laptop, add a free model, allow people to use it, and make a first call through the gateway. The install takes from 2 to 20 minutes, depending on your network, because Ambit pulls about 1 GB of images.
+In this guide you install Ambit release v0.2.3 on a laptop, add a free model, allow people to use it, and make a first call through the gateway. The install takes from 2 to 20 minutes, depending on your network, because Ambit pulls about 1 GB of images.
 
 This install is for testing only: plain HTTP, one gateway replica, and sign-in tokens from Ambit's own Dex. To install on a real cluster, see [Install on your cluster](install.md).
 
@@ -30,7 +30,7 @@ The addresses in this guide use `localtest.me`. Every name under `localtest.me` 
 Download the three files of the release. The cluster file maps port 8080 on your laptop to the Ambit gateway.
 
 ```sh
-R=https://github.com/craftsman-apps/ambit/releases/download/v0.2.2
+R=https://github.com/craftsman-apps/ambit/releases/download/v0.2.3
 curl -fsSLO $R/kind-cluster.yaml -O $R/quickstart.yaml -O $R/crds.yaml
 kind create cluster --config kind-cluster.yaml
 ```
@@ -43,8 +43,8 @@ Install the CRDs of Ambit's dependencies, then the two charts.
 
 ```sh
 kubectl apply --server-side -f crds.yaml
-helm install ambit-crds oci://ghcr.io/craftsman-apps/charts/ambit-crds --version 0.2.2 -n ambit-system --create-namespace --wait
-helm install ambit oci://ghcr.io/craftsman-apps/charts/ambit --version 0.2.2 -n ambit-system -f quickstart.yaml --wait --timeout 10m
+helm install ambit-crds oci://ghcr.io/craftsman-apps/charts/ambit-crds --version 0.2.3 -n ambit-system --create-namespace --wait
+helm install ambit oci://ghcr.io/craftsman-apps/charts/ambit --version 0.2.3 -n ambit-system -f quickstart.yaml --wait --timeout 10m
 ```
 
 The last command waits until every pod is ready. The first time, it pulls about 1 GB of images, so it can take several minutes. If your network or computer is slow, the command can stop after 10 minutes with `INSTALLATION FAILED ... context deadline exceeded`. The pods keep starting. Run `kubectl -n ambit-system get pods` and wait until every pod shows `1/1`; then go on. Do not install again.

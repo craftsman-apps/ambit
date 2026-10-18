@@ -358,6 +358,30 @@ func TestLoginOptionsArePublic(t *testing.T) {
 	}
 }
 
+func TestLoginOptionsNamespace(t *testing.T) {
+	f := newFakeIssuer(t)
+	for _, tc := range []struct{ in, want string }{{"ambit-system", "ambit-system"}, {"", ""}} {
+		ts := httptest.NewServer(nil)
+		auth, err := NewAuth(t.Context(), AuthConfig{Issuer: f.srv.URL, ClientID: "ambit-console", ClientSecret: "s",
+			PublicURL: ts.URL, SessionKey: []byte("0123456789abcdef0123456789abcdef"), SessionTTL: time.Hour})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ts.Config.Handler = NewServer(auth, testSPA, LoginOptions{Bootstrap: tc.in != "", Namespace: tc.in}, nil)
+		resp, err := http.Get(ts.URL + "/api/login-options")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		json.NewDecoder(resp.Body).Decode(&got)
+		resp.Body.Close()
+		ts.Close()
+		if got["namespace"] != tc.want {
+			t.Fatalf("namespace %q: got %v", tc.want, got)
+		}
+	}
+}
+
 func TestParseConnectors(t *testing.T) {
 	got, err := ParseConnectors(`[{"id":"keycloak","name":"Acme"},{"id":"okta","name":"Okta"}]`)
 	if err != nil || len(got) != 2 || got[1].ID != "okta" {

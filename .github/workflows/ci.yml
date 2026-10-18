@@ -193,12 +193,13 @@ jobs:
           kubectl -n ambit-system logs deploy/ambit-console --tail=100 || true
           kubectl -n ambit-system logs deploy/ambit-dex --tail=50 || true
 
-  # Five parallel parts, each on its own runner and kind cluster: every step sets up what it needs (ensure_llm_setup
-  # in test/lib.sh), so steps need no other step's residue. The exceptions, which fix the order inside part a: step 0
-  # first (it expects the fresh install), 1 before 2 (2 restores the bootstrap admin that 1 uses), and Playwright last,
-  # after step 7 (the UI tests expect the `time` MCP server that test/mcp/objects.yaml creates) and after every
-  # `helm upgrade`. Measured 2026-10-19: step 8 takes 7 min, 10 and 12 4.5 min each, the others 20 s to 3.5 min; each
-  # part adds about 2.5 min of setup.
+  # Five parallel parts, each on its own runner and kind cluster: a step sets up what it needs (ensure_llm_setup in
+  # test/lib.sh), but some need more, which fixes the packing (trial run, PR 174): step 0 first (it expects the fresh
+  # install), 1 before 2 (2 restores the bootstrap admin that 1 uses), 6 and 7 after 4a-5 (7 found no audit record of a
+  # refused model call on a cluster that only ran 1-3c), Playwright last in part a, after `args` (the UI tests expect
+  # the `time` MCP server of test/mcp/objects.yaml, which `args` applies and waits for) and after every `helm upgrade`.
+  # Measured 2026-10-19: step 8 takes 7 min, 10 and 12 4.5 min each, 4a 3.5 min, the others 20 s to 2 min; each part
+  # adds about 2.5 min of setup.
   e2e:
     name: e2e (${{ matrix.part.name }})
     needs: [changes, image]
@@ -209,11 +210,11 @@ jobs:
       fail-fast: false
       matrix:
         part:
-          - { name: a, steps: "0 1 2 3 3b 3c 7", ui: true }
+          - { name: a, steps: "0 1 2 3 3b 3c args", ui: true }
           - { name: b, steps: "8", ui: false }
           - { name: c, steps: "10 keys 9", ui: false }
-          - { name: d, steps: "12 ext args 6", ui: false }
-          - { name: e, steps: "4a 4b 4c 4d 5", ui: false }
+          - { name: d, steps: "12 ext", ui: false }
+          - { name: e, steps: "4a 4b 4c 4d 5 6 7", ui: false }
     steps:
       # The runner's disk held the kind images, the build cache and Go's caches until "no space left on device"
       # (2026-10-08). Preinstalled tools this job never uses are removed in the background.

@@ -8,6 +8,8 @@ For upgrade steps in detail, read [docs/upgrading.md](docs/upgrading.md).
 
 Add a line here for each change that users can see, in the pull request that makes the change.
 
+## 0.2.3 (2026-10-18)
+
 - Access rules can name people (`users`, email addresses) as well as groups.
   People are matched by a verified email (`accessRules.usersRequireVerifiedEmail`, default true); `ambit check --production` warns (P12) when it is false.
   Upgrade the controller and the ambit-guard together (the chart does this). An older guard does not know `users` and does not apply argument limits for people listed there.

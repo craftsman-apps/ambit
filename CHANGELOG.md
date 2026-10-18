@@ -14,6 +14,7 @@ Add a line here for each change that users can see, in the pull request that mak
 - Connect your coding agents is now under Getting started, right after the Quick start; its first steps follow the console's Keys page, and the button name is Create key.
 - The top menu no longer has Quick start; it is the first page under Docs.
 - Admins can add a model in the console, with the API key typed in the console or taken from an existing Secret.
+- CI: the CLI snapshot build is named after the newest release tag, not a site deploy tag.
 
 ## 0.2.2 (2026-10-17)
 

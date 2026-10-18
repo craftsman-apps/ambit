@@ -25,13 +25,30 @@ You need the cluster from the [Quick start](../quick-start.md), with a model and
 
 - LLM address: `http://llm.localtest.me:8080`. MCP address: `http://mcp.localtest.me:8080/mcp`.
 - Model name: the provider's model name, not the name of the `Model` object. The console page **Models** shows it. The examples use `nvidia/nemotron-3-super-120b-a12b:free`.
-- A key: in the console, open **Keys**, choose **New key**, choose the scope **LLM** (**MCP** or **LLM and MCP** for MCP) and an end date. The key starts with `ambit_`. The console shows it once. Treat it like a password.
+- A key: in the console, open **Keys**, choose **Create key**, choose the scope **LLM** (**MCP** or **LLM and MCP** for MCP) and an end date. The key starts with `ambit_`. The console shows it once. Treat it like a password. The next section shows the steps.
 
 `ambit connect <tool> --url <llm> --model <model>` needs the `ambit` CLI 0.2.0 or later ([install it](../quick-start.md#1-install-the-cli)). It asks for the key (hidden), shows a diff, and asks `Write these changes? [y/N]`. Then it stores the key in your system keychain, saves `<file>.ambit.bak`, writes the change, and makes one test call. It never writes the key to a file and never changes a project file. Options: `--dry-run` shows the diff and changes nothing; `--yes` with `--key-file <path>` or `AMBIT_API_KEY` is for scripts. If the file has an entry that defeats Ambit's, the command stops and lists it; `--force` replaces it. See [Where the Ambit CLI keeps the key](../api-keys.md#where-the-ambit-cli-keeps-the-key).
 
 Tested on 2026-10-14 with Nemotron at OpenRouter: Claude Code 2.1.299, Codex 0.159.3, opencode 1.18.34, Hermes Agent v0.13.0.
 
+## Create a key and connect from the console
+
+1. Open the console. In the quick start, the address is `http://console.localtest.me:8080`.
+2. Open **Keys**, then choose **Create key**.
+3. In the form **New key**, fill in **Name** (for example `my laptop`), **Scope** (**LLM**, **MCP** or **LLM and MCP**) and **End date** (for example `90 days from now`).
+4. Choose **Create**.
+5. The console shows **Key '<name>' created**. It says: "This is the only time the key is shown. Store it now." Choose **Copy** under **Key** and save the key.
+6. Under **Connect a tool**, if the scope includes LLM, pick the **Model name**. Then choose the tab of your tool.
+7. Choose **Copy** next to the command, and run it in a terminal.
+8. Choose **Done**.
+
+The key is shown only once. After **Done**, the console cannot show it again. If you lose it, revoke it and create a new key.
+
+The sections below are the reference for each tool.
+
 ## Claude Code
+
+The **Claude Code** tab under **Connect a tool** gives the same command.
 
 - `ambit connect claude-code` writes `apiKeyHelper` and five `env` entries into `~/.claude/settings.json`. Claude Desktop does not run `apiKeyHelper`; see [Claude Desktop with Ambit's models](claude-desktop.md).
 - By hand: merge this into `"env"` of `~/.claude/settings.json`, never into a project file. Restart and run `/status`: `Anthropic base URL` must show your address.
@@ -53,6 +70,8 @@ Tested on 2026-10-14 with Nemotron at OpenRouter: Claude Code 2.1.299, Codex 0.1
 ```
 
 ## Codex
+
+The **Codex** tab under **Connect a tool** gives the same command.
 
 - Codex speaks only the OpenAI Responses format (`/v1/responses`). It worked with an OpenRouter model. Try your own provider with one prompt first.
 - `ambit connect codex` writes two blocks, between `# >>> ambit` and `# <<< ambit <<<`, into `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`). Codex reads the key with `ambit key print`, so the file has no key.
@@ -77,6 +96,8 @@ bearer_token_env_var = "AMBIT_API_KEY"
 
 ## opencode
 
+The **opencode** tab under **Connect a tool** gives the same command.
+
 - `ambit connect opencode` adds the provider `ambit` and the `model` to `~/.config/opencode/opencode.json`. opencode cannot run a command to read a key, so the command also adds a shell function `opencode` to your shell profile. It sets `AMBIT_API_KEY` for that one process. Choose the shell with `--shell bash|zsh|fish|powershell`, or `--shell none` to write no function.
 - Open a new terminal after `connect`. An editor or launcher that starts opencode itself does not see the function.
 - If your file uses the opencode v2 format (a top-level `providers`), the command stops. Add the provider by hand.
@@ -100,6 +121,8 @@ bearer_token_env_var = "AMBIT_API_KEY"
 
 ## Cursor
 
+The **Cursor** tab under **Connect a tool** gives the same steps.
+
 - `ambit connect cursor` prints the steps and writes nothing.
 - Open Settings, then Models. Turn on **OpenAI API Key** and **Override OpenAI Base URL**, enter the values below, and add the model name.
 - Cursor sends requests from its own servers. The LLM address must be public HTTPS: `localhost` and `localtest.me` do not work. If the gateway is open to the internet, only keys and tokens protect it.
@@ -110,6 +133,8 @@ Override OpenAI Base URL: http://llm.localtest.me:8080/v1
 ```
 
 ## Hermes Agent
+
+The console has no Hermes tab. Use the config below.
 
 - Hermes (Nous Research) uses the Chat Completions format. There is no `ambit connect` for it.
 - Put the config below in `~/.hermes/config.yaml` and run `export AMBIT_API_KEY=ambit_...`.
@@ -128,6 +153,8 @@ custom_providers:
 ```
 
 ## Other agents
+
+The **SDK** tab under **Connect a tool** gives the OpenAI and Anthropic variables below, and the **MCP** tab gives the MCP settings.
 
 Not tested by Ambit. Any agent that lets you set a base URL and a key should work. The LLM gateway serves `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, `/v1/embeddings` and `/v1/models`. Any other path gets 403. Send the key as `Authorization: Bearer ambit_...` or `x-api-key: ambit_...`. Clients send the provider's model name. Where there is a choice, use Chat Completions: it has the most testing in Ambit.
 

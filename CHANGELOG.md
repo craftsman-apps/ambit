@@ -8,6 +8,7 @@ For upgrade steps in detail, read [docs/upgrading.md](docs/upgrading.md).
 
 Add a line here for each change that users can see, in the pull request that makes the change.
 
+- With HTTPS on, plain HTTP requests to the MCP host now redirect to HTTPS, like the console and LLM hosts.
 - The console refuses an access rule that grants exactly what another rule grants.
 - The access rule form suggests known group names as you type and says that groups come from your identity provider.
 - The console sign-in page tells you where to find the bootstrap admin password if you lose it.

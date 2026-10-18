@@ -138,10 +138,24 @@ spec:
                   - name
                   type: object
                 type: array
+              users:
+                description: 'Users are email addresses, in lowercase: a person whose identity email (a personal key''s owner, or the
+
+                  JWT''s email) is listed is allowed. Exact match only. Prefer groups; use people for exceptions such as a
+
+                  pilot user or a contractor.'
+                items:
+                  maxLength: 254
+                  pattern: ^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$
+                  type: string
+                maxItems: 50
+                type: array
             type: object
             x-kubernetes-validations:
-            - message: 'set either groups or allSignedIn: true, not both'
-              rule: (has(self.groups) && size(self.groups) > 0) != (has(self.allSignedIn) && self.allSignedIn)
+            - message: 'set groups, users or allSignedIn: true'
+              rule: (has(self.groups) && size(self.groups) > 0) || (has(self.users) && size(self.users) > 0) || (has(self.allSignedIn) && self.allSignedIn)
+            - message: 'allSignedIn: true allows everyone; do not also set groups or users'
+              rule: '!(has(self.allSignedIn) && self.allSignedIn) || ((!has(self.groups) || size(self.groups) == 0) && (!has(self.users) || size(self.users) == 0))'
             - message: name at least one model or server
               rule: (has(self.models) && size(self.models) > 0) || (has(self.servers) && size(self.servers) > 0)
           status:

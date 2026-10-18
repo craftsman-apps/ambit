@@ -46,6 +46,12 @@ func Principal(requireEmail bool) string {
 	return `(has(apiKey.keyId) ? apiKey.email : ((` + HasEmail() + `) ? jwt.email.trim().lowerAscii() : jwt.sub))`
 }
 
+// PrincipalEmail is the same identity's email, or "" when it has none (a JWT without a usable email, accepted when
+// emails are not required). Never the subject: an AccessRule's users match emails only.
+func PrincipalEmail() string {
+	return `(has(apiKey.keyId) ? apiKey.email : ((` + HasEmail() + `) ? jwt.email.trim().lowerAscii() : ""))`
+}
+
 // PrincipalGroups are the groups of the same identity.
 const PrincipalGroups = `(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : []))`
 

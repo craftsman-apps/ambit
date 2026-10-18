@@ -89,3 +89,35 @@ func TestEmailRuleParity(t *testing.T) {
 		}
 	}
 }
+
+// PrincipalEmail never yields the subject: an emailless JWT gives "", which no AccessRule user (pattern-checked
+// email) equals. A key gives its owner's email.
+func TestPrincipalEmail(t *testing.T) {
+	env, err := cel.NewEnv(ext.Strings(), cel.Variable("jwt", cel.MapType(cel.StringType, cel.DynType)),
+		cel.Variable("apiKey", cel.MapType(cel.StringType, cel.DynType)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ast, iss := env.Compile(PrincipalEmail())
+	if iss.Err() != nil {
+		t.Fatal(iss.Err())
+	}
+	p, err := env.Program(ast)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		jwt, key map[string]any
+		want     string
+	}{
+		{map[string]any{"sub": "u1", "email": " Alice@Acme.com "}, map[string]any{}, "alice@acme.com"},
+		{map[string]any{"sub": "alice@acme.com"}, map[string]any{}, ""},
+		{map[string]any{"sub": "u1", "email": "not-an-email"}, map[string]any{}, ""},
+		{map[string]any{}, map[string]any{"keyId": "k1", "email": "bob@acme.com"}, "bob@acme.com"},
+	} {
+		v, _, err := p.Eval(map[string]any{"jwt": c.jwt, "apiKey": c.key})
+		if err != nil || v.Value() != c.want {
+			t.Errorf("PrincipalEmail(jwt %v, key %v) = %v, %v; want %q", c.jwt, c.key, v, err, c.want)
+		}
+	}
+}

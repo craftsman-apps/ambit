@@ -129,6 +129,8 @@ type ModelStatus struct {
 	// +optional
 	AllowedGroups []string `json:"allowedGroups,omitempty"`
 	// +optional
+	AllowedUsers []string `json:"allowedUsers,omitempty"`
+	// +optional
 	AllowAllSignedIn bool `json:"allowAllSignedIn,omitempty"`
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
@@ -156,13 +158,22 @@ type ModelList struct {
 }
 
 // AccessRuleSpec says who may use which models and MCP tools. Rules only grant access; nothing is allowed by default.
-// +kubebuilder:validation:XValidation:rule="(has(self.groups) && size(self.groups) > 0) != (has(self.allSignedIn) && self.allSignedIn)",message="set either groups or allSignedIn: true, not both"
+// +kubebuilder:validation:XValidation:rule="(has(self.groups) && size(self.groups) > 0) || (has(self.users) && size(self.users) > 0) || (has(self.allSignedIn) && self.allSignedIn)",message="set groups, users or allSignedIn: true"
+// +kubebuilder:validation:XValidation:rule="!(has(self.allSignedIn) && self.allSignedIn) || ((!has(self.groups) || size(self.groups) == 0) && (!has(self.users) || size(self.users) == 0))",message="allSignedIn: true allows everyone; do not also set groups or users"
 // +kubebuilder:validation:XValidation:rule="(has(self.models) && size(self.models) > 0) || (has(self.servers) && size(self.servers) > 0)",message="name at least one model or server"
 type AccessRuleSpec struct {
 	// Groups from the identity provider's "groups" claim. A member of any listed group is allowed.
 	// +optional
 	// +kubebuilder:validation:items:Pattern=`^[A-Za-z0-9][A-Za-z0-9._@/-]*$`
 	Groups []string `json:"groups,omitempty"`
+	// Users are email addresses, in lowercase: a person whose identity email (a personal key's owner, or the
+	// JWT's email) is listed is allowed. Exact match only. Prefer groups; use people for exceptions such as a
+	// pilot user or a contractor.
+	// +optional
+	// +kubebuilder:validation:MaxItems=50
+	// +kubebuilder:validation:items:MaxLength=254
+	// +kubebuilder:validation:items:Pattern=`^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$`
+	Users []string `json:"users,omitempty"`
 	// AllSignedIn allows everyone with a valid token.
 	// +optional
 	AllSignedIn bool `json:"allSignedIn,omitempty"`

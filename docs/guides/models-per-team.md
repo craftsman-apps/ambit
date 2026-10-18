@@ -196,6 +196,8 @@ EOF
 
 The group names are the names your identity provider sends. A person in any listed group is allowed.
 
+To let in one person who is not in the group, such as a pilot user or a contractor, add `users` with their email address next to `groups` (for example `users: [dana@example.com]`). Prefer groups; use people for exceptions.
+
 ## Check it works
 
 The gateway needs a few seconds to load new rules. Define this function, then make the four calls. It prints the answer and the HTTP status.

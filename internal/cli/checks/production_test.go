@@ -2,6 +2,7 @@ package checks
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -239,5 +240,57 @@ func TestP4DeepMessageClaim(t *testing.T) {
 		}}
 	if r := one(t, "P4", f); r.Status != Pass || r.Message != pinnedP4Line {
 		t.Fatalf("P4 = %s %q; want pass %q", r.Status, r.Message, pinnedP4Line)
+	}
+}
+
+// #134: a provider's 429 or 5xx on the first Ready Model moves the test call to the next one (at most 3, in name
+// order); a 401 or 403 from Ambit itself is a finding and is not retried.
+func TestP4DeepTriesNextModel(t *testing.T) {
+	// status answers per model id (the request body's "model").
+	run := func(t *testing.T, status map[string]int, models ...runtime.Object) (Result, []string) {
+		var asked []string
+		gw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body struct{ Model string }
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			asked = append(asked, body.Model)
+			w.WriteHeader(status[body.Model])
+			fmt.Fprint(w, `{"choices":[{"message":{"content":"OK"}}]}`)
+		}))
+		t.Cleanup(gw.Close)
+		var n atomic.Int32
+		f := fx{helm: vals(map[string]any{"console": map[string]any{"url": gw.URL}, "llm": map[string]any{"host": "127.0.0.1"},
+			"evidence": map[string]any{"enabled": true}}),
+			kubeObjs: []runtime.Object{readyPod("c", map[string]string{"app.kubernetes.io/name": "ambit-otel-collector"}),
+				readyPod("ch", map[string]string{"app.kubernetes.io/name": "ambit-clickhouse"})},
+			ctrlObjs: models, deep: true, token: "t", deepWait: 200 * time.Millisecond,
+			forward: func(w http.ResponseWriter, _ *http.Request) {
+				fmt.Fprintf(w, "otelcol_exporter_sent_log_records_total{exporter=\"clickhouse\"} %d\n", n.Add(1))
+			}}
+		return one(t, "P4", f), asked
+	}
+	four := []runtime.Object{model("a", "OpenAI", "k", true), model("b", "OpenAI", "k", true), model("c", "OpenAI", "k", true), model("d", "OpenAI", "k", true)}
+
+	r, asked := run(t, map[string]int{"a-id": 429, "b-id": 200}, four...)
+	want(t, r, Pass, pinnedP4Line)
+	if !strings.Contains(r.Message, "models tried: a-id: HTTP 429, b-id answered") || strings.Join(asked, ",") != "a-id,b-id" {
+		t.Errorf("message %q, asked %v", r.Message, asked)
+	}
+
+	r, asked = run(t, map[string]int{"a-id": 502, "b-id": 503, "c-id": 429, "d-id": 200}, four...)
+	want(t, r, Unknown, "every Ready Model tried answered 429 or 5xx")
+	if !strings.Contains(r.Message, "a-id: HTTP 502, b-id: HTTP 503, c-id: HTTP 429") || len(asked) != 3 {
+		t.Errorf("message %q, asked %v (want 3 models, d-id not asked)", r.Message, asked)
+	}
+
+	r, asked = run(t, map[string]int{"a-id": 403, "b-id": 200}, four...)
+	want(t, r, Fail, "test call for the audit check failed: HTTP 403")
+	if len(asked) != 1 {
+		t.Errorf("a 403 was retried: asked %v", asked)
+	}
+
+	// A model that is not Ready is skipped; the first Ready one answers and the pass line is unchanged.
+	r, asked = run(t, map[string]int{"b-id": 200}, model("a", "OpenAI", "k", false), model("b", "OpenAI", "k", true))
+	if r.Status != Pass || r.Message != pinnedP4Line || strings.Join(asked, ",") != "b-id" {
+		t.Errorf("%s %q asked %v", r.Status, r.Message, asked)
 	}
 }

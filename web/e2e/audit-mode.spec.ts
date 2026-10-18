@@ -103,6 +103,8 @@ test("only admins get the Add model button", async ({ page }) => {
 });
 
 test("Add model in GitOps mode: the caveat says the key is not in Git, and Bedrock keys are not entered", async ({ page }) => {
+  // The console may be served over plain http, where crypto.randomUUID does not exist (this crashed the form in CI).
+  await page.addInitScript(() => { Object.defineProperty(crypto, "randomUUID", { value: undefined }); });
   await setup(page, { config: { ...enforce, mode: "gitops", namespace: "ambit-system", repository: "acme/ambit-config" } });
   const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
   let sent: Record<string, unknown> = {};

@@ -10,7 +10,8 @@ const cloudOnly = (p: string) => p === "Bedrock" || p === "VertexAI";
 const formats = ["Completions", "Messages", "Responses", "Embeddings"];
 const nameRE = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
 // The browser chooses the operation ID, so a retry of the same form repeats the same addition.
-const newOperation = () => crypto.randomUUID().replaceAll("-", "").slice(0, 20);
+// getRandomValues, not randomUUID: randomUUID exists only in secure contexts, and the console may be served over http.
+const newOperation = () => Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => b.toString(16).padStart(2, "0")).join("");
 
 type Credentials = "entered" | "existing" | "cloud";
 type Unfinished = { secret: string; model: string; operation: string; pullRequest?: PullRequest & { closed: boolean; merged: boolean } };

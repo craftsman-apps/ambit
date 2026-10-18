@@ -105,7 +105,7 @@ function PickTools({ app }: { app: string }) {
     onSuccess: () => { setAsked(Date.now()); qc.invalidateQueries({ queryKey: ["servers"] }); },
   });
   const grant = useMutation({
-    mutationFn: () => sendJSON("POST", "/api/access-rules", { name: `${app}-users`, groups: groups.split(/[\s,]+/).filter(Boolean), allSignedIn: false,
+    mutationFn: () => sendJSON("POST", "/api/access-rules", { name: `${app}-users`, groups: groups.split(/[\s,]+/).filter(Boolean), users: [], allSignedIn: false,
       servers: [{ name: app, tools: Object.keys(checked).filter((k) => checked[k]) }] }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["access", app] }),
   });
@@ -117,8 +117,8 @@ function PickTools({ app }: { app: string }) {
       <p role={srv?.ready === "False" || access.isError ? "alert" : undefined}>{srv?.ready === "False" ? `This server is not ready: ${srv.message || "no reason given"}`
         : access.isPending ? "Loading…"
         : access.isError ? access.error.message
-        : !a || (!a.allSignedIn && a.groups.length === 0) ? "Nobody can use its tools yet."
-        : `Groups: ${a.groups.join(", ") || "none"} · all signed-in users: ${a.allSignedIn ? "yes" : "no"} · a rule grants all tools: ${a.allTools ? "yes" : "no"}`}</p>
+        : !a || (!a.allSignedIn && a.groups.length === 0 && a.users.length === 0) ? "Nobody can use its tools yet."
+        : `Groups: ${a.groups.join(", ") || "none"}${a.users.length ? ` · people: ${a.users.join(", ")}` : ""} · all signed-in users: ${a.allSignedIn ? "yes" : "no"} · a rule grants all tools: ${a.allTools ? "yes" : "no"}`}</p>
       {a?.allTools && <p className="text-warn">An existing access rule already grants every tool of this server, including tools it adds later.</p>}
       <h2 className="font-semibold">Pick tools</h2>
       <p className="text-muted">Ambit can read this server's tools only with someone's account. Your account is used for that alone, and every admin can see the tool list it returns.</p>

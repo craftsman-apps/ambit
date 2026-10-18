@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createColumnHelper, createSortedRowModel, rowSortingFeature, sortFn_text, tableFeatures, useTable } from "@tanstack/react-table";
 import { isProposed, sendJSON, useChanges, useConfig, useGroups, useMe, useModels, useRule, useRules, useServers, type PullRequest, type ArgumentRule, type RuleInput, type RuleView, type ServerAccess } from "@/api";
 import { GroupField } from "@/components/group-field";
+import { PeopleField } from "@/components/people-field";
 import { PullRequestNotice } from "@/components/pull-request";
 import { Button } from "@/components/ui/button";
 import { Shell, Status } from "@/components/shell";
@@ -13,7 +14,7 @@ import { closedWording } from "@/lib/audit-mode";
 // TanStack Table v9: features are declared up front; only sorting is used here.
 const features = tableFeatures({ rowSortingFeature, sortedRowModel: createSortedRowModel(), sortFns: { text: sortFn_text } });
 const col = createColumnHelper<typeof features, RuleView>();
-const who = (r: RuleView) => (r.allSignedIn ? "Everyone signed in" : r.groups.join(", "));
+const who = (r: RuleView) => (r.allSignedIn ? "Everyone signed in" : [...r.groups, ...r.users].join(", "));
 // "time: get_current_time" or "everything: all tools"; argument limits follow in brackets.
 const limitText = (a: ArgumentRule) => split(a).map((x) => x.oneOf ? `${x.name} one of ${x.oneOf.join("/")}` : x.notContains ? `${x.name} without ${x.notContains.join("/")}` : `${x.name} ≤ ${x.max}`).join("; ");
 const serverText = (sa: ServerAccess) => `${sa.name}: ${sa.tools?.length ? sa.tools.join(", ") : "all tools"}${sa.arguments?.length ? ` (${sa.arguments.map(limitText).join("; ")})` : ""}`;
@@ -37,8 +38,10 @@ export function AccessRulesPage() {
     col.accessor("name", { header: "Rule", cell: (c) => (
       <><span className="whitespace-nowrap font-mono">{c.getValue()}</span>
         {c.row.original.ready === "False" && <span className="block text-small text-muted">{c.row.original.message}</span>}</>) }),
-    col.accessor(who, { id: "who", header: "Who", cell: (c) => c.row.original.allSignedIn ? c.getValue() :
-      c.row.original.groups.map((g, i, a) => <Fragment key={g}><span className="whitespace-nowrap">{g}{i < a.length - 1 && ","}</span> </Fragment>) }),
+    col.accessor(who, { id: "who", header: "Who", cell: (c) => c.row.original.allSignedIn ? c.getValue() : <>
+      {c.row.original.groups.map((g, i, a) => <Fragment key={g}><span className="whitespace-nowrap">{g}{i < a.length - 1 && ","}</span> </Fragment>)}
+      {c.row.original.users.length > 0 && <span className="block text-small">{c.row.original.users.map((u, i, a) =>
+        <Fragment key={u}><span className="whitespace-nowrap font-mono">{u}{i < a.length - 1 && ","}</span> </Fragment>)}</span>}</> }),
     col.accessor(canUse, { id: "models", header: "Can use" }),
     col.accessor((r) => (r.gitManaged ? "Git" : r.createdBy ? "Console" : "Cluster"), { id: "source", header: "Source",
       cell: (c) => <span className="font-mono text-small">{c.getValue()}</span> }),
@@ -137,7 +140,9 @@ function RuleDetailPanel({ name, isAdmin, gitops, repository, onEdit, onDeleted 
         <p className="text-small text-muted">AccessRule · {r.gitManaged ? "managed in Git" : r.createdBy ? `created in the console by ${r.createdBy}` : "applied directly to the cluster (for example with kubectl)"}</p>
       </div>
       <dl className="grid grid-cols-[76px_1fr] gap-x-3 gap-y-2">
-        <dt className="text-muted">Who</dt><dd>{r.allSignedIn ? "Everyone with a valid token" : <>Members of <b>{r.groups.join(", ")}</b></>}</dd>
+        <dt className="text-muted">Who</dt><dd>{r.allSignedIn ? "Everyone with a valid token" : <>
+          {r.groups.length > 0 && <span className="block">Members of <b>{r.groups.join(", ")}</b></span>}
+          {r.users.length > 0 && <span className="block">People: <span className="font-mono">{r.users.join(", ")}</span></span>}</>}</dd>
         <dt className="text-muted">Can use</dt>
         <dd>{r.models.join(", ")}{r.servers.map((sa) => <span key={sa.name} className="block">MCP {serverText(sa)}</span>)}</dd>
         <dt className="text-muted">Status</dt><dd><Status ready={r.ready} /><span className="block text-small text-muted">{r.message}</span></dd>
@@ -183,10 +188,12 @@ function RuleForm({ name, repository, onDone }: { name?: string; repository?: st
   const [ruleName, setRuleName] = useState("");
   const [everyone, setEveryone] = useState<boolean | null>(null);
   const [groups, setGroups] = useState<string[] | null>(null);
+  const [users, setUsers] = useState<string[] | null>(null);
   const known = useGroups();
   const [picked, setPicked] = useState<string[] | null>(null);
   const allSignedIn = everyone ?? init?.allSignedIn ?? false;
   const chosenGroups = groups ?? init?.groups ?? [];
+  const chosenUsers = users ?? init?.users ?? [];
   const chosen = picked ?? init?.models ?? [];
   const [pickedServers, setPickedServers] = useState<ServerAccess[] | null>(null);
   const chosenServers = pickedServers ?? init?.servers ?? [];
@@ -204,7 +211,7 @@ function RuleForm({ name, repository, onDone }: { name?: string; repository?: st
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     save.mutate({ ...(name ? {} : { name: ruleName }), allSignedIn,
-      groups: allSignedIn ? [] : chosenGroups, models: chosen, servers: chosenServers });
+      groups: allSignedIn ? [] : chosenGroups, users: allSignedIn ? [] : chosenUsers, models: chosen, servers: chosenServers });
   };
   const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 font-mono text-body outline-none focus:border-accent";
   return (
@@ -216,8 +223,15 @@ function RuleForm({ name, repository, onDone }: { name?: string; repository?: st
       )}
       <fieldset className="space-y-1.5">
         <legend className="mb-1 text-muted">Who</legend>
-        <label className="flex items-center gap-2"><input id="who-groups" type="radio" checked={!allSignedIn} onChange={() => setEveryone(false)} /> Members of groups</label>
-        {!allSignedIn && <GroupField value={chosenGroups} onChange={setGroups} known={known.data ?? []} />}
+        <label className="flex items-center gap-2"><input id="who-some" type="radio" checked={!allSignedIn} onChange={() => setEveryone(false)} /> Groups and people</label>
+        {!allSignedIn && (
+          <div className="ml-6 space-y-2">
+            <div><span className="mb-1 block text-small text-muted">Members of groups</span>
+              <GroupField value={chosenGroups} onChange={setGroups} known={known.data ?? []} /></div>
+            <div><span className="mb-1 block text-small text-muted">People</span>
+              <PeopleField value={chosenUsers} onChange={setUsers} /></div>
+          </div>
+        )}
         <label className="flex items-center gap-2"><input id="who-everyone" type="radio" checked={allSignedIn} onChange={() => setEveryone(true)} /> Everyone signed in</label>
       </fieldset>
       <fieldset>

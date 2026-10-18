@@ -84,7 +84,9 @@ export function ModelsPage() {
                 <td className="px-3 py-2.5"><span className="font-mono">{m.name}</span><span className="block text-small text-muted">{m.displayName}</span></td>
                 <td className="px-3 py-2.5 font-mono text-small">{m.model}</td>
                 <td className="px-3 py-2.5">{providerName[m.provider] ?? m.provider}</td>
-                <td className="px-3 py-2.5">{m.allSignedIn ? "Everyone signed in" : m.allowedGroups.length ? m.allowedGroups.join(", ") : <span className="text-muted">Nobody yet</span>}</td>
+                <td className="px-3 py-2.5">{m.allSignedIn ? "Everyone signed in" : m.allowedGroups.length || m.allowedUsers.length ? <>
+                  {m.allowedGroups.join(", ")}
+                  {m.allowedUsers.length > 0 && <span className="block font-mono text-small">{m.allowedUsers.join(", ")}</span>}</> : <span className="text-muted">Nobody yet</span>}</td>
                 <td className="px-3 py-2.5">
                   {m.price ? <span className="font-mono text-small">{priceText(m.price)}</span> : <span className="text-muted">No price</span>}
                   {refusedText(m.message) && <span className="block text-small text-warn">{refusedText(m.message)}</span>}

@@ -53,7 +53,7 @@ The **Claude Code** tab under **Connect a tool** gives the same command.
 - `ambit connect claude-code` writes `apiKeyHelper` and five `env` entries into `~/.claude/settings.json`. Claude Desktop does not run `apiKeyHelper`; see [Claude Desktop with Ambit's models](claude-desktop.md).
 - By hand: merge this into `"env"` of `~/.claude/settings.json`, never into a project file. Restart and run `/status`: `Anthropic base URL` must show your address.
 - With a model that is not a Claude model, if the provider refuses the request, add `"CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"`. "Unknown model" warnings are harmless.
-- Ambit answers 403 for `/v1/messages/count_tokens`. Claude Code shows estimates. These 403 entries in **Audit** are not an attack.
+- Ambit answers 404 for `/v1/messages/count_tokens`; it does not serve that path. Claude Code shows estimates. These 404 entries are not an attack.
 - MCP: `claude mcp add --transport http ambit http://mcp.localtest.me:8080/mcp --header "Authorization: Bearer ambit_..."`
 
 ```json
@@ -156,7 +156,7 @@ custom_providers:
 
 The **SDK** tab under **Connect a tool** gives the OpenAI and Anthropic variables below, and the **MCP** tab gives the MCP settings.
 
-Not tested by Ambit. Any agent that lets you set a base URL and a key should work. The LLM gateway serves `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, `/v1/embeddings` and `/v1/models`. Any other path gets 403. Send the key as `Authorization: Bearer ambit_...` or `x-api-key: ambit_...`. Clients send the provider's model name. Where there is a choice, use Chat Completions: it has the most testing in Ambit.
+Not tested by Ambit. Any agent that lets you set a base URL and a key should work. The LLM gateway serves `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, `/v1/embeddings` and `/v1/models`. Any other path gets 404, with or without a key: if you see 404 with "no such path on the Ambit LLM gateway", check the base URL (for example a doubled `/v1`). Send the key as `Authorization: Bearer ambit_...` or `x-api-key: ambit_...`. Clients send the provider's model name. Where there is a choice, use Chat Completions: it has the most testing in Ambit.
 
 ```sh
 # OpenAI SDK and OpenAI-compatible tools (Chat Completions)

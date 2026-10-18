@@ -35,9 +35,9 @@ Tested on 2026-10-14 with Nemotron at OpenRouter: Claude Code 2.1.299, Codex 0.1
 
 1. Open the console. In the quick start, the address is `http://console.localtest.me:8080`.
 2. Open **Keys**, then choose **Create key**.
-3. In the form **New key**, fill in **Name** (for example `my laptop`), **Scope** (**LLM**, **MCP** or **LLM and MCP**) and **End date** (for example `90 days from now`).
+3. In the form **New key**, fill in **Name** (for example `my laptop`), **Scope** (**LLM**, **MCP** or **LLM and MCP**) and **End date** (**30 days from now**, **90 days from now** or **365 days from now**).
 4. Choose **Create**.
-5. The console shows **Key '<name>' created**. It says: "This is the only time the key is shown. Store it now." Choose **Copy** under **Key** and save the key.
+5. The console shows **Key ‘<name>’ created**. It says: "This is the only time the key is shown. Store it now." Choose **Copy** under **Key** and save the key.
 6. Under **Connect a tool**, if the scope includes LLM, pick the **Model name**. Then choose the tab of your tool.
 7. Choose **Copy** next to the command, and run it in a terminal.
 8. Choose **Done**.

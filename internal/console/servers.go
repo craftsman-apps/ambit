@@ -15,6 +15,7 @@ import (
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/identity"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -478,8 +479,8 @@ func (c *Catalog) denyRequest(w http.ResponseWriter, r *http.Request, s Session)
 	writeJSON(w, http.StatusOK, requestView(*q))
 }
 
-// myAccess lists what the rules grant the signed-in user's groups. The groups come from the console
-// sign-in; the gateway checks the groups in the client's own token, which normally match.
+// myAccess lists what the rules grant the signed-in user, by groups or by email. Both come from the console
+// sign-in; the gateway checks the client's own token or key, which normally match.
 func (c *Catalog) myAccess(w http.ResponseWriter, r *http.Request, s Session) {
 	models, rules, err := c.load(r)
 	if err != nil {
@@ -493,8 +494,10 @@ func (c *Catalog) myAccess(w http.ResponseWriter, r *http.Request, s Session) {
 	}
 	out := MyAccess{Groups: nonNil(s.Groups), Models: []string{}, Servers: []ServerAccess{}}
 	bySrv := map[string]*ServerAccess{}
+	email, hasEmail := identity.CanonicalEmail(s.Email)
 	for _, ar := range rules {
-		if !ar.Spec.AllSignedIn && !slices.ContainsFunc(ar.Spec.Groups, func(g string) bool { return slices.Contains(s.Groups, g) }) {
+		if !ar.Spec.AllSignedIn && !slices.ContainsFunc(ar.Spec.Groups, func(g string) bool { return slices.Contains(s.Groups, g) }) &&
+			(!hasEmail || !slices.Contains(ar.Spec.Users, email)) {
 			continue
 		}
 		for _, m := range ar.Spec.Models {

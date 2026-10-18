@@ -16,7 +16,7 @@ import (
 // Every field of v1.AccessRuleSpec, v1.ServerAccess and v1.ArgumentRule must be compared here; TestSameGrantComparesEveryField
 // fails when a field is added to either struct and this function is not updated.
 func sameGrant(a, b v1.AccessRuleSpec) bool {
-	if a.AllSignedIn != b.AllSignedIn || !sameSet(a.Groups, b.Groups) || !sameSet(a.Models, b.Models) {
+	if a.AllSignedIn != b.AllSignedIn || !sameSet(a.Groups, b.Groups) || !sameSet(a.Users, b.Users) || !sameSet(a.Models, b.Models) {
 		return false
 	}
 	as, bs := serverSets(a.Servers), serverSets(b.Servers)

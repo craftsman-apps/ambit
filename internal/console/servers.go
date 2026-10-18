@@ -74,6 +74,10 @@ type RequestView struct {
 	DecidedAt   *time.Time `json:"decidedAt"`
 	Comment     string     `json:"comment"`
 	PullRequest string     `json:"pullRequest"`
+	// State is "PullRequestOpen" or "PullRequestUnknown" while a GitOps approval waits for its pull request; Note
+	// explains a request that went back to waiting ("pull request closed without merging").
+	State string `json:"state"`
+	Note  string `json:"note"`
 }
 
 // RequestInput asks for a server that runs in the cluster (Image) or one reached by URL, usually
@@ -270,7 +274,11 @@ func (c *Catalog) listRequests(w http.ResponseWriter, r *http.Request, _ Session
 	}
 	out := []RequestView{}
 	for _, q := range qs {
-		out = append(out, requestView(q))
+		// ponytail: one GitHub lookup per undecided request with a pull request, on every listing.
+		state, note := c.followPR(r.Context(), &q)
+		v := requestView(q)
+		v.State, v.Note = state, note
+		out = append(out, v)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -372,6 +380,11 @@ func (c *Catalog) pending(w http.ResponseWriter, r *http.Request, s Session) (*v
 		}
 		return nil, false
 	}
+	state, _ := c.followPR(r.Context(), &q)
+	if state != "" {
+		writeErr(w, http.StatusConflict, fmt.Sprintf("this request's pull request is still open (%s): approve or deny only after it is merged or closed", q.Status.PullRequest))
+		return nil, false
+	}
 	if q.Status.Decision != "" {
 		writeErr(w, http.StatusConflict, fmt.Sprintf("this request was already %s by %s", lower(q.Status.Decision), q.Status.DecidedBy))
 		return nil, false
@@ -434,11 +447,17 @@ func (c *Catalog) approveRequest(w http.ResponseWriter, r *http.Request, s Sessi
 			writeErr(w, http.StatusBadGateway, "could not open a pull request in "+c.GitOps.Repository+": "+err.Error())
 			return
 		}
-		q.Status.PullRequest = pr.URL
-		if !c.decide(w, r, s, q, "Approved", in.Comment) {
+		// The decision stays empty until the pull request is merged (followPR).
+		q.Status.PullRequest, q.Status.PullRequestBranch, q.Status.PullRequestBy, q.Status.Comment = pr.URL, pr.Branch, s.Email, in.Comment
+		if err := c.Client.Status().Update(r.Context(), q); err != nil {
+			if apierrors.IsConflict(err) {
+				writeErr(w, http.StatusConflict, "someone else decided on this request first; reload")
+				return
+			}
+			apiErr(w, err)
 			return
 		}
-		slog.Info("server request approved; pull request opened", "request", q.Name, "server", srv.Name, "approvedBy", s.Email, "url", pr.URL)
+		slog.Info("server request approved; pull request opened, waiting for the merge", "request", q.Name, "server", srv.Name, "approvedBy", s.Email, "url", pr.URL)
 		writeJSON(w, http.StatusAccepted, Proposed{PullRequest: pr})
 		return
 	}

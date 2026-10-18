@@ -72,7 +72,14 @@ If the name of the server was taken by someone else after the request was sent, 
 
 ### GitOps mode
 
-When the console runs in GitOps mode, approval does not change the cluster. It opens a pull request in your configuration repository with the `Server`. The request is marked **Approved** at once and shows a link to the pull request. The `Server` appears when someone merges the pull request and Argo CD applies it. The merge is a second review. If the pull request is closed without a merge, the request still says Approved, but no server exists. See [Install on your cluster](../install.md), section "Argo CD and GitOps".
+When the console runs in GitOps mode, approval does not change the cluster. It opens a pull request in your configuration repository with the `Server`.
+
+- While the pull request is open, the request shows **Pull request open** with a link to it. It cannot be approved or denied again until the pull request is merged or closed.
+- When someone merges the pull request, the request shows **Approved**. The `Server` appears when Argo CD applies it. The merge is a second review.
+- If the pull request is closed without a merge, the request goes back to **Waiting for an approver**, with the note "pull request closed without merging". An approver can approve it again, which opens a new pull request, or deny it.
+- If the console cannot reach the Git host, the request shows **Pull request state unknown** and cannot be decided until it can.
+
+See [Install on your cluster](../install.md), section "Argo CD and GitOps".
 
 ## 3. Give a group the tools
 
@@ -82,7 +89,7 @@ Approval does not give anyone access. An admin writes an access rule that names 
 
 | Where | What it holds |
 |---|---|
-| The `ServerRequest` object in the namespace `ambit-system` | Spec: the server name, the full server settings (the image digest or URL, the transport, the connection), the reason, and `requestedBy`. The creation time is the time of the request. Status: `decision` (`Approved` or `Denied`), `decidedBy`, `decidedAt`, `comment`, and `pullRequest` in GitOps mode. Kubernetes refuses a change of the spec and a change of a decision. The object is kept after the decision. |
+| The `ServerRequest` object in the namespace `ambit-system` | Spec: the server name, the full server settings (the image digest or URL, the transport, the connection), the reason, and `requestedBy`. The creation time is the time of the request. Status: `decision` (`Approved` or `Denied`), `decidedBy`, `decidedAt`, `comment`, and in GitOps mode `pullRequest`, `pullRequestBranch` and `pullRequestBy` (the decision is set when the pull request is merged). Kubernetes refuses a change of the spec and a change of a decision. The object is kept after the decision. |
 | The `Server` object | The annotations `ambitproject.dev/requested-by`, `ambitproject.dev/approved-by` and `ambitproject.dev/server-request` (the name of the request). The console shows them as **Approved by** and "asked for by". |
 | The console | The **Decisions** list under the servers: who asked, who decided, the comment, and the pull request link. |
 | The log of the console pod | One line for each request, approval and denial, with the request, the server, the image or URL, and the emails. |

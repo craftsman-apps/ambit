@@ -11,6 +11,9 @@ spec:
     {{- if .Values.llm.enabled }}
     - {{ .Values.llm.host | quote }}
     {{- end }}
+    {{- if .Values.mcp.enabled }}
+    - {{ .Values.mcp.host | quote }}
+    {{- end }}
   rules:
     - filters:
         - type: RequestRedirect

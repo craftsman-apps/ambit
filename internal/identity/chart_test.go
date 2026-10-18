@@ -137,6 +137,20 @@ func TestRoutesAreExclusive(t *testing.T) {
 	}
 }
 
+// With TLS on, plain HTTP on every enabled Ambit host redirects to HTTPS.
+func TestHTTPSRedirectListsEnabledHosts(t *testing.T) {
+	hosts := func(args ...string) []any {
+		d := find(t, render(t, append([]string{"--set", "gateway.tls.enabled=true", "--set", "gateway.tls.certificateSecret=tls"}, args...)...), "HTTPRoute", "ambit-https-redirect")
+		return get(t, d, "spec", "hostnames").([]any)
+	}
+	if h := hosts("--set", "mcp.enabled=true", "--set", "mcp.host=mcp.example.com"); !contains(h, "mcp.example.com") {
+		t.Errorf("mcp on: redirect hosts %v lack the MCP host", h)
+	}
+	if h := hosts("--set", "mcp.enabled=false", "--set", "mcp.host=mcp.example.com"); contains(h, "mcp.example.com") {
+		t.Errorf("mcp off: redirect hosts %v list the MCP host", h)
+	}
+}
+
 // The console may create Models only in Direct mode; in GitOps mode a Model changes only through a pull request.
 func TestConsoleCreatesModelsOnlyInDirectMode(t *testing.T) {
 	creates := func(docs []doc) bool {

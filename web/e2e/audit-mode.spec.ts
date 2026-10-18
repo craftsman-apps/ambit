@@ -90,6 +90,47 @@ test("the banner shows only in audit-only mode, with the days", async ({ page })
   await expect(page.getByTestId("access-mode-banner")).toHaveCount(0);
 });
 
+test("only admins get the Add model button", async ({ page }) => {
+  await setup(page, { role: "viewer", config: enforce });
+  await page.goto("/models");
+  await expect(page.getByRole("heading", { name: "Models" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add model" })).toHaveCount(0);
+
+  await page.unrouteAll();
+  await setup(page, { role: "admin", config: enforce });
+  await page.goto("/models");
+  await expect(page.getByRole("button", { name: "Add model" })).toBeVisible();
+});
+
+test("Add model in GitOps mode: the caveat says the key is not in Git, and Bedrock keys are not entered", async ({ page }) => {
+  await setup(page, { config: { ...enforce, mode: "gitops", namespace: "ambit-system", repository: "acme/ambit-config" } });
+  const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+  let sent: Record<string, unknown> = {};
+  await page.route("**/api/changes/3", (r) => json(r, { number: 3, closed: false, merged: false, steps: [] }));
+  await page.route("**/api/models", (r) => {
+    if (r.request().method() !== "POST") return json(r, []);
+    sent = r.request().postDataJSON();
+    return json(r, { pullRequest: { number: 3, url: "https://github.test/pull/3", title: "t", branch: "b" } }, 202);
+  });
+  await page.goto("/models");
+  await page.getByRole("button", { name: "Add model" }).click();
+  const form = page.getByRole("form", { name: "Add model" });
+  await form.getByLabel("Name", { exact: true }).fill("m1");
+  await form.getByLabel("Model ID").fill("gpt-4o");
+  await form.getByLabel("API key").fill("sk-not-a-real-key");
+  await expect(form.getByTestId("key-caveat")).toContainText("The key is not put in Git.");
+  await form.getByLabel("Provider").selectOption("Bedrock");
+  await expect(form.getByLabel("Enter the key here")).toHaveCount(0); // Bedrock keys are not entered in the console
+  await expect(form.getByLabel("Use the gateway's cloud identity")).toBeVisible();
+  await form.getByLabel("Provider").selectOption("OpenAI");
+  await form.getByLabel("Enter the key here").check();
+  await form.getByLabel("API key").fill("sk-not-a-real-key");
+  await form.getByRole("button", { name: "Create model" }).click();
+  await expect(page.getByText("Pull request #3 opened")).toBeVisible();
+  expect(sent).toMatchObject({ name: "m1", provider: "OpenAI", model: "gpt-4o", credentials: "entered", apiKey: "sk-not-a-real-key" });
+  expect(sent.operation).toMatch(/^[a-z0-9]{6,32}$/);
+});
+
 test("everyone sees the banner; only admins get the link and the upgrade step", async ({ page }) => {
   await setup(page, { role: "viewer", config: audit });
   await page.goto("/access-rules");

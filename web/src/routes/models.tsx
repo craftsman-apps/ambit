@@ -5,14 +5,9 @@ import { Button } from "@/components/ui/button";
 import { PullRequestNotice } from "@/components/pull-request";
 import { Shell, Status } from "@/components/shell";
 import { closedWording } from "@/lib/audit-mode";
+import { providerName } from "@/lib/providers";
+import { AddModel, UnfinishedModels } from "@/routes/add-model";
 
-// The Model API spells providers as agentgateway does; people read the vendors' own names.
-const providerName: Record<string, string> = {
-  Anthropic: "Anthropic", Azure: "Azure OpenAI", Baseten: "Baseten", Bedrock: "Amazon Bedrock", Cerebras: "Cerebras",
-  Cohere: "Cohere", Deepinfra: "DeepInfra", Deepseek: "DeepSeek", Fireworks: "Fireworks AI", Gemini: "Google Gemini",
-  Groq: "Groq", Huggingface: "Hugging Face", Meta: "Meta Llama API", Mistral: "Mistral AI", OpenAI: "OpenAI",
-  Openrouter: "OpenRouter", TogetherAI: "Together AI", VertexAI: "Google Vertex AI", XAI: "xAI",
-};
 const field = "w-28 rounded-md border border-line bg-surface px-2 py-1 font-mono text-small outline-none focus:border-accent";
 const priceText = (p: ModelPrice) => `$${p.inputPerMillionTokens} / $${p.outputPerMillionTokens} per million`;
 // The controller appends "refused for groups …: no price" to the Ready message when a dollar budget applies.
@@ -64,11 +59,15 @@ export function ModelsPage() {
   const admin = useMe().data?.role === "admin";
   const audit = useConfig().data?.accessMode === "audit";
   const [editing, setEditing] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
   return (
     <Shell crumb="Govern / Models">
       <section className="p-5">
         <h1 className="text-h1 font-semibold tracking-tight">Models</h1>
         <p className="mb-4 text-muted">{closedWording(audit).models}</p>
+        {admin && !adding && <Button className="mb-4 w-auto" onClick={() => setAdding(true)}>Add model</Button>}
+        {admin && adding && <AddModel onDone={() => setAdding(false)} />}
+        {admin && <UnfinishedModels />}
         {q.isError && <p className="text-bad">{q.error.message}</p>}
         <table className="w-full border-collapse">
           <thead>

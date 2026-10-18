@@ -277,6 +277,32 @@ spec: { provider: OpenAI, model: gpt-4o-mini, credentialsRef: { name: ambit-llm-
   });
 });
 
+test.describe("add model", () => {
+  const name = `ui-add-${Date.now().toString(36)}`;
+  const kubectl = (args: string[]) => execFileSync("kubectl", ["-n", "ambit-system", ...args]);
+  test.afterAll(() => {
+    kubectl(["delete", "models.ambitproject.dev", name, "--ignore-not-found"]);
+    kubectl(["delete", "secret", `ambit-llm-${name}`, "--ignore-not-found"]);
+  });
+
+  test("an admin adds a model with a typed key; the caveat shows and the model is listed", async ({ page }) => {
+    await signInAsBootstrapAdmin(page);
+    await page.goto("/models");
+    await page.getByRole("button", { name: "Add model" }).click();
+    const form = page.getByRole("form", { name: "Add model" });
+    await form.getByLabel("Name", { exact: true }).fill(name);
+    await form.getByLabel("Model ID").fill("gpt-4o-mini");
+    await expect(form.getByLabel("API key")).toHaveAttribute("type", "password");
+    await expect(form.getByTestId("key-caveat")).toContainText(`Anyone who can read Secrets in this namespace can read the key.`);
+    await expect(form.getByTestId("key-caveat")).toContainText(`ambit-llm-${name}`);
+    await form.getByLabel("API key").fill("sk-e2e-not-a-real-key");
+    await form.getByRole("button", { name: "Create model" }).click();
+    await expect(page.getByTestId(`model-${name}`)).toBeVisible();
+    await expect(page.getByTestId(`model-${name}`)).toContainText("gpt-4o-mini");
+    await expect(page.locator("body")).not.toContainText("sk-e2e-not-a-real-key");
+  });
+});
+
 const presetsE2E = !!process.env.AMBIT_PRESETS_E2E;
 
 // Step 5 removes its objects when it ends; these tests set up the whoami server and the saas app themselves.

@@ -197,7 +197,7 @@ func TestUnknownLLMPathAnswers404(t *testing.T) {
 		{"MCP host", "mcp.example.com", "/mcp", 403, false},
 	}
 	for _, c := range cases {
-		in := map[string]any{"request": map[string]any{"path": c.path, "host": c.host}, "response": map[string]any{"code": c.code, "headers": map[string]any{}}}
+		in := map[string]any{"request": map[string]any{"path": c.path, "headers": map[string]any{"host": c.host}}, "response": map[string]any{"code": c.code, "headers": map[string]any{}}}
 		flag := eval(flagExpr, in)
 		if flag != c.want {
 			t.Errorf("%s: flag %v, want %v", c.name, flag, c.want)
@@ -215,6 +215,9 @@ func TestUnknownLLMPathAnswers404(t *testing.T) {
 			t.Errorf("%s: status %v, body %s", c.name, status, b)
 		}
 	}
-	// A request without a host must not make the expression fail.
-	eval(flagExpr, map[string]any{"request": map[string]any{"path": "/x", "host": nil}, "response": map[string]any{"code": int64(403)}})
+	// No metadata key (its expression failed) must not make the others fail: agentgateway would answer 503.
+	empty := map[string]any{"request": map[string]any{"path": "/x"}, "response": map[string]any{"code": int64(403), "headers": map[string]any{}}, "metadata": map[string]any{"ambitBudgetRefusal": false}}
+	if eval(statusExpr, empty) != nil || eval(bodyExpr, empty) != nil {
+		t.Error("without the metadata key the response must be left alone")
+	}
 }

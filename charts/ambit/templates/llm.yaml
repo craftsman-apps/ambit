@@ -60,7 +60,8 @@ spec:
       # direct response only after authorization, so the status is changed on the way out instead:
       # Gateway PreRouting response policies run on every response, refusals included, and ":status" can be set.
       # Known paths keep their 401/403. Every expression here must evaluate for every response: a failed body
-      # expression turns the response into a 500.
+      # expression turns the response into a 500. The metadata key is missing when an expression failed (for example a
+      # refusal that has no request snapshot), so every use checks has() first.
       {{- if .Values.limits.enabled }}
       # A Budget refusal from agentgateway v1.6.0 is a 429 with an empty body, no content type, and x-ratelimit-*
       # headers in the ratelimit service's numbers (dollars in units of $0.00001; requests one less than the Budget).
@@ -73,18 +74,18 @@ spec:
       {{- end }}
       response:
         metadata:
-          ambitUnknownPath: 'response.code in [401, 403] && !(request.path in [{{ $paths }}]) && request.host != null && request.host.startsWith({{ .Values.llm.host | quote }})'
+          ambitUnknownPath: 'response.code in [401, 403] && !(request.path in [{{ $paths }}]) && "host" in request.headers && request.headers["host"].startsWith({{ .Values.llm.host | quote }})'
           {{- if .Values.limits.enabled }}
           ambitBudgetRefusal: 'response.code == 429 && !("content-type" in response.headers) && "retry-after" in response.headers && "x-ratelimit-remaining" in response.headers && response.headers["x-ratelimit-remaining"] == "0" && request.path in ["/v1/chat/completions", "/v1/completions", "/v1/responses", "/v1/embeddings", "/v1/messages"]'
           {{- end }}
         # The CRD takes a list of {name, value} here (agentgateway's standalone config takes a map).
         set:
           - name: ":status"
-            value: 'metadata.ambitUnknownPath ? uint(404) : null'
+            value: 'has(metadata.ambitUnknownPath) && metadata.ambitUnknownPath ? uint(404) : null'
           - name: content-type
-            value: '{{ if .Values.limits.enabled }}metadata.ambitUnknownPath || metadata.ambitBudgetRefusal{{ else }}metadata.ambitUnknownPath{{ end }} ? "application/json" : ("content-type" in response.headers ? response.headers["content-type"] : null)'
+            value: '{{ if .Values.limits.enabled }}(has(metadata.ambitUnknownPath) && metadata.ambitUnknownPath) || metadata.ambitBudgetRefusal{{ else }}has(metadata.ambitUnknownPath) && metadata.ambitUnknownPath{{ end }} ? "application/json" : ("content-type" in response.headers ? response.headers["content-type"] : null)'
         {{- if .Values.limits.enabled }}
         remove: [x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset]
         {{- end }}
-        body: 'metadata.ambitUnknownPath ? {"error": {"type": "not_found", "message": "no such path on the Ambit LLM gateway: " + request.path + "; check the base URL"}} : {{ if .Values.limits.enabled }}(metadata.ambitBudgetRefusal ? (request.path == "/v1/messages" ? {"type": "error", "error": {"type": "rate_limit_error", "message": "A daily Budget limit was reached: the request limit or the spending limit, for you or for your group. Requests are refused until midnight UTC (see the Retry-After header)."}} : {"error": {"message": "A daily Budget limit was reached: the request limit or the spending limit, for you or for your group. Requests are refused until midnight UTC (see the Retry-After header).", "type": "insufficient_quota", "code": "budget_exceeded"}}) : null){{ else }}null{{ end }}'
+        body: 'has(metadata.ambitUnknownPath) && metadata.ambitUnknownPath ? {"error": {"type": "not_found", "message": "no such path on the Ambit LLM gateway: " + request.path + "; check the base URL"}} : {{ if .Values.limits.enabled }}(metadata.ambitBudgetRefusal ? (request.path == "/v1/messages" ? {"type": "error", "error": {"type": "rate_limit_error", "message": "A daily Budget limit was reached: the request limit or the spending limit, for you or for your group. Requests are refused until midnight UTC (see the Retry-After header)."}} : {"error": {"message": "A daily Budget limit was reached: the request limit or the spending limit, for you or for your group. Requests are refused until midnight UTC (see the Retry-After header).", "type": "insufficient_quota", "code": "budget_exceeded"}}) : null){{ else }}null{{ end }}'
 {{- end }}

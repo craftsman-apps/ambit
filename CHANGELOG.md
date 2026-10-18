@@ -8,6 +8,8 @@ For upgrade steps in detail, read [docs/upgrading.md](docs/upgrading.md).
 
 Add a line here for each change that users can see, in the pull request that makes the change.
 
+- CI: the image is built in its own job, and e2e runs in more parallel parts; a full run takes about 17 minutes instead of 26.
+
 ## 0.2.3 (2026-10-18)
 
 - Access rules can name people (`users`, email addresses) as well as groups.

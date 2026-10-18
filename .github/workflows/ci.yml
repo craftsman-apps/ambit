@@ -46,8 +46,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-latest
-    # The image binaries are static (cgo off). The tests use the same setting, so the image build below reuses
-    # everything they compiled instead of compiling all dependencies again (3.2 of 4.5 min, 2026-10-10).
+    # Static binaries (cgo off), as in the `image` job, so both use the same Go cache entries.
     env: { CGO_ENABLED: "0" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -91,8 +90,44 @@ jobs:
           cmp /tmp/r1 /tmp/r2
       - name: Alert rules (promtool unit tests)
         run: test/alerts.sh
-      # The image for both e2e parts, built once: Go's cache is warm here (setup-go and the tests above), and web/dist
-      # is already built. Docker builds inside the e2e jobs compiled everything again (6.4 min each, 2026-10-08).
+      - name: Chart rules (ambit-router shape and RBAC)
+        run: test/chart.sh
+
+  # The image and chart archives that quickstart, e2e, cli-local and cli-partial download. Its own job so they start
+  # without waiting for the tests in `build`. It repeats build's setup: the same Go cache, front end build and
+  # third-party cache.
+  image:
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    # Static binaries (cgo off), as in the tests: Go's cache restored by setup-go matches `build`'s.
+    env: { CGO_ENABLED: "0" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: 26, cache: npm, cache-dependency-path: web/package-lock.json }
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      # cr.agentgateway.dev failed twice on 2026-10-10. Its chart and images come from this cache (filled on main by
+      # ci-cache.yml, which every PR can read) and reach the e2e clusters through the artifact below.
+      - name: Third-party chart dependencies and agentgateway images (cache)
+        id: thirdparty
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            charts/ambit/charts
+            ${{ runner.temp }}/thirdparty
+          key: thirdparty-${{ hashFiles('charts/ambit/Chart.lock', 'hack/thirdparty-cache.sh') }}
+      - name: Fetch them (cache miss)
+        if: steps.thirdparty.outputs.cache-hit != 'true'
+        run: hack/thirdparty-cache.sh "$RUNNER_TEMP/thirdparty/agentgateway.tar"
+      # The console binary embeds web/dist, so the front end must be built before Go compiles.
+      - name: Front end type-check and build
+        run: cd web && npm ci --no-fund --no-audit && npm run build
+      # The image for all e2e parts, built once: Docker builds inside the e2e jobs compiled everything again (6.4 min
+      # each, 2026-10-08).
       # No -trimpath: it would change Go's cache keys and compile everything again; this image is for tests only
       # (release.yml builds the released one from the Dockerfile).
       - name: Build the Ambit image for the e2e and cli jobs
@@ -111,8 +146,6 @@ jobs:
             ${{ runner.temp }}/images.tar.gz
             ${{ runner.temp }}/thirdparty
           retention-days: 1
-      - name: Chart rules (ambit-router shape and RBAC)
-        run: test/chart.sh
 
   # Spec 9.2a: the CLI's Helm SDK must write releases that Helm 3 can list, read, roll back and upgrade, and the
   # SDK must upgrade again over Helm 3's revision. This job decided the SDK version (Helm v4) and stays as a guard.
@@ -135,7 +168,7 @@ jobs:
   # The quick start as the docs give it: deploy/quickstart.yaml on a fresh kind cluster, without the CoreDNS
   # rewrite or Keycloak the other parts use. Sign-in, a token from Dex, a first call, the audit record.
   quickstart:
-    needs: [changes, build]
+    needs: [changes, image]
     if: ${{ !github.event.pull_request.draft && needs.changes.outputs.quickstart == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -160,13 +193,16 @@ jobs:
           kubectl -n ambit-system logs deploy/ambit-console --tail=100 || true
           kubectl -n ambit-system logs deploy/ambit-dex --tail=50 || true
 
-  # Two parallel parts, each on its own kind cluster: every step sets up what it needs. Measured 2026-10-08:
-  # steps 8, 10 and 12 take about 5 min each, all the others 7 together; part a keeps the original order and
-  # the UI tests (which need step 3's catalog), part b the three longest steps. With step 8 in part a, it took
-  # 21.4 min and part b 13.4 (2026-10-10).
+  # Five parallel parts, each on its own runner and kind cluster: a step sets up what it needs (ensure_llm_setup in
+  # test/lib.sh), but some need more, which fixes the packing (trial run, PR 174): step 0 first (it expects the fresh
+  # install), 1 before 2 (2 restores the bootstrap admin that 1 uses), 6 and 7 after 4a-5 (7 found no audit record of a
+  # refused model call on a cluster that only ran 1-3c), Playwright last in part a, after `args` (the UI tests expect
+  # the `time` MCP server of test/mcp/objects.yaml, which `args` applies and waits for) and after every `helm upgrade`.
+  # Measured 2026-10-19: step 8 takes 7 min, 10 and 12 4.5 min each, 4a 3.5 min, the others 20 s to 2 min; each part
+  # adds about 2.5 min of setup.
   e2e:
     name: e2e (${{ matrix.part.name }})
-    needs: [changes, build]
+    needs: [changes, image]
     if: ${{ !github.event.pull_request.draft && needs.changes.outputs.e2e == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -174,8 +210,11 @@ jobs:
       fail-fast: false
       matrix:
         part:
-          - { name: a, steps: "0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 9 ext args", ui: true }
-          - { name: b, steps: "8 10 12 keys", ui: false }
+          - { name: a, steps: "0 1 2 3 3b 3c args", ui: true }
+          - { name: b, steps: "8", ui: false }
+          - { name: c, steps: "10 keys 9", ui: false }
+          - { name: d, steps: "12 ext", ui: false }
+          - { name: e, steps: "4a 4b 4c 4d 5 6 7", ui: false }
     steps:
       # The runner's disk held the kind images, the build cache and Go's caches until "no space left on device"
       # (2026-10-08). Preinstalled tools this job never uses are removed in the background.
@@ -284,7 +323,7 @@ jobs:
   # Spec 9.2 cli-local and the redaction and restricted-permission gates of 9.2a, on the branch image.
   # Unlike e2e, this job also runs on draft PRs: it is the proof for changes to the CLI.
   cli-local:
-    needs: [changes, build]
+    needs: [changes, image]
     if: needs.changes.outputs.cli_kind == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -317,7 +356,7 @@ jobs:
   # Spec 9.2a: an interrupted local up is repaired, and a cluster ambit did not create is refused.
   # Also runs on draft PRs (see cli-local).
   cli-partial:
-    needs: [changes, build]
+    needs: [changes, image]
     if: needs.changes.outputs.cli_kind == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 40

@@ -43,7 +43,7 @@ r=$(render --set limits.valkey.external.address=vk.example:6379 --set limits.val
 pass "R rendering: stale external settings are ignored without a host; a CA never turns TLS on by itself"
 
 ensure_llm_setup "$NS"
-kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
+kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null && mcp_ready "$NS"  # a fresh cluster has no running MCP servers yet
 
 # The customer's databases: a private CA, a server certificate for both, passwords.
 uv run --no-project --with cryptography python - "$W" <<'PY'

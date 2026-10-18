@@ -42,5 +42,16 @@ check "LICENSE" "snapshot" LICENSE
 check "empty list" "$ALL"
 check "blank lines only" "$ALL" "" ""
 
+# The consumers of the image (quickstart, e2e, cli-local and cli-partial) need the `image` job, which runs when
+# `build` is true: no file may switch one of them on without `build`.
+for f in test/lib.sh test/step5.sh test/cli-local.sh test/quickstart.sh test/llm/objects.yaml web/src/App.tsx charts/ambit/values.yaml \
+  Dockerfile Makefile hack/x.sh go.mod internal/a.go .github/workflows/ci.yml newtool.toml; do
+  out=$(printf '%s\n' "$f" | ./changes.sh)
+  case "$out" in
+    *quickstart=true* | *e2e=true* | *cli_kind=true*)
+      case "$out" in *build=true*) echo "ok   image consumers imply build: $f" ;; *) echo "FAIL $f runs an image consumer without build"; fails=$((fails + 1)) ;; esac ;;
+  esac
+done
+
 [ "$fails" -eq 0 ] || { echo "$fails failed"; exit 1; }
 echo "all passed"

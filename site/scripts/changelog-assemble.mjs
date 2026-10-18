@@ -5,7 +5,7 @@ import {readdirSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 
 export function assemble(version, date, changelogFile, dir) {
-  if (!/^\d+\.\d+\.\d+\S*$/.test(version)) throw new Error(`version "${version}" must look like 0.2.4`);
+  if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/.test(version)) throw new Error(`version "${version}" must look like 0.2.4`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`date "${date}" must look like YYYY-MM-DD`);
   const md = readFileSync(changelogFile, 'utf8');
   if (md.split('\n').some((l) => l.startsWith(`## ${version} (`))) throw new Error(`CHANGELOG.md already has version ${version}`);

@@ -354,6 +354,11 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version-file: go.mod }
+      # GoReleaser names the build after the newest tag, which can be a site-* deploy tag; name it after a v* tag.
+      - name: The newest v* tag is the snapshot's base version
+        run: |
+          tag=$(git describe --tags --abbrev=0 --match 'v*') || { echo "::error::no v* tag is reachable from HEAD"; exit 1; }
+          echo "GORELEASER_CURRENT_TAG=$tag" >> "$GITHUB_ENV"
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with: { distribution: goreleaser, version: v2.18.3, args: check }
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0

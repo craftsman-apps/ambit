@@ -36,6 +36,7 @@ type Catalog struct {
 	// timeline reads its sync status. Empty skips that step.
 	ArgoApplication string
 	containsCache   sync.Map // "commit...revision" pairs known to be contained
+	modelOps        sync.Map // operation IDs of Add model requests still running (one console replica)
 	// PublicURL and Connectors let the Connect SSO page build the callback URL and refuse IDs in use.
 	PublicURL  string
 	Connectors []Connector

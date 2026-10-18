@@ -40,6 +40,7 @@ type Catalog struct {
 	// duplicate check. It is enough because the console runs one replica (console.replicas must be 1).
 	ruleMu        sync.Mutex
 	containsCache sync.Map // "commit...revision" pairs known to be contained
+	modelOps      sync.Map // operation IDs of Add model requests still running (one console replica)
 	// PublicURL and Connectors let the Connect SSO page build the callback URL and refuse IDs in use.
 	PublicURL  string
 	Connectors []Connector
@@ -76,6 +77,7 @@ type Catalog struct {
 // Config tells the console UI how changes are applied.
 type Config struct {
 	Mode       string `json:"mode"` // "direct" or "gitops"
+	Namespace  string `json:"namespace"`
 	Repository string `json:"repository,omitempty"`
 	Branch     string `json:"branch,omitempty"`
 	// AccessMode is "enforce" or "audit" as the controller published it; the Since times are RFC 3339. Pending is
@@ -296,6 +298,13 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	}
 	mux.HandleFunc("GET /api/models/{name}/price", admin(c.modelPrice))
 	mux.HandleFunc("PUT /api/models/{name}/price", allow("only admins can change prices", c.setModelPrice, RoleAdmin))
+	modelAdmin := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
+		return allow("only admins can add models", h, RoleAdmin)
+	}
+	mux.HandleFunc("POST /api/models", modelAdmin(c.addModel))
+	mux.HandleFunc("GET /api/model-secrets", admin(c.secretNames))
+	mux.HandleFunc("GET /api/models/unfinished", admin(c.unfinishedModels))
+	mux.HandleFunc("DELETE /api/models/unfinished/{secret}", modelAdmin(c.removeModelKey))
 	mux.HandleFunc("GET /api/prices/licence", read(func(w http.ResponseWriter, r *http.Request, _ Session) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write([]byte(LiteLLMLicence))
@@ -318,9 +327,9 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 }
 
 func (c *Catalog) config(w http.ResponseWriter, r *http.Request, s Session) {
-	cfg := Config{Mode: "direct"}
+	cfg := Config{Mode: "direct", Namespace: c.Namespace}
 	if c.GitOps != nil {
-		cfg = Config{Mode: "gitops", Repository: c.GitOps.Repository, Branch: c.GitOps.Branch}
+		cfg = Config{Mode: "gitops", Namespace: c.Namespace, Repository: c.GitOps.Repository, Branch: c.GitOps.Branch}
 	}
 	cm := c.accessModeData(r)
 	cfg.AccessMode = cm.Data["mode"]

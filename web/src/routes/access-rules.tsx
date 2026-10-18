@@ -2,7 +2,8 @@ import { Fragment, useMemo, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createColumnHelper, createSortedRowModel, rowSortingFeature, sortFn_text, tableFeatures, useTable } from "@tanstack/react-table";
-import { isProposed, sendJSON, useChanges, useConfig, useMe, useModels, useRule, useRules, useServers, type PullRequest, type ArgumentRule, type RuleInput, type RuleView, type ServerAccess } from "@/api";
+import { isProposed, sendJSON, useChanges, useConfig, useGroups, useMe, useModels, useRule, useRules, useServers, type PullRequest, type ArgumentRule, type RuleInput, type RuleView, type ServerAccess } from "@/api";
+import { GroupField } from "@/components/group-field";
 import { PullRequestNotice } from "@/components/pull-request";
 import { Button } from "@/components/ui/button";
 import { Shell, Status } from "@/components/shell";
@@ -181,10 +182,11 @@ function RuleForm({ name, repository, onDone }: { name?: string; repository?: st
   const init = existing.data;
   const [ruleName, setRuleName] = useState("");
   const [everyone, setEveryone] = useState<boolean | null>(null);
-  const [groups, setGroups] = useState<string | null>(null);
+  const [groups, setGroups] = useState<string[] | null>(null);
+  const known = useGroups();
   const [picked, setPicked] = useState<string[] | null>(null);
   const allSignedIn = everyone ?? init?.allSignedIn ?? false;
-  const groupText = groups ?? init?.groups.join(", ") ?? "";
+  const chosenGroups = groups ?? init?.groups ?? [];
   const chosen = picked ?? init?.models ?? [];
   const [pickedServers, setPickedServers] = useState<ServerAccess[] | null>(null);
   const chosenServers = pickedServers ?? init?.servers ?? [];
@@ -202,7 +204,7 @@ function RuleForm({ name, repository, onDone }: { name?: string; repository?: st
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     save.mutate({ ...(name ? {} : { name: ruleName }), allSignedIn,
-      groups: allSignedIn ? [] : groupText.split(",").map((g) => g.trim()).filter(Boolean), models: chosen, servers: chosenServers });
+      groups: allSignedIn ? [] : chosenGroups, models: chosen, servers: chosenServers });
   };
   const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 font-mono text-body outline-none focus:border-accent";
   return (
@@ -215,7 +217,7 @@ function RuleForm({ name, repository, onDone }: { name?: string; repository?: st
       <fieldset className="space-y-1.5">
         <legend className="mb-1 text-muted">Who</legend>
         <label className="flex items-center gap-2"><input id="who-groups" type="radio" checked={!allSignedIn} onChange={() => setEveryone(false)} /> Members of groups</label>
-        {!allSignedIn && <input id="rule-groups" aria-label="Group names, separated by commas" className={field} value={groupText} onChange={(e) => setGroups(e.target.value)} placeholder="ml-research, finance" />}
+        {!allSignedIn && <GroupField value={chosenGroups} onChange={setGroups} known={known.data ?? []} />}
         <label className="flex items-center gap-2"><input id="who-everyone" type="radio" checked={allSignedIn} onChange={() => setEveryone(true)} /> Everyone signed in</label>
       </fieldset>
       <fieldset>

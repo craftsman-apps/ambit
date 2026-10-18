@@ -35,7 +35,10 @@ type Catalog struct {
 	// ArgoApplication (namespace/name) is the Argo CD Application that syncs the repository; the change
 	// timeline reads its sync status. Empty skips that step.
 	ArgoApplication string
-	containsCache   sync.Map // "commit...revision" pairs known to be contained
+	// ruleMu makes "list rules, compare, create/update/propose" one step, so two requests cannot both pass the
+	// duplicate check. It is enough because the console runs one replica (console.replicas must be 1).
+	ruleMu        sync.Mutex
+	containsCache sync.Map // "commit...revision" pairs known to be contained
 	// PublicURL and Connectors let the Connect SSO page build the callback URL and refuse IDs in use.
 	PublicURL  string
 	Connectors []Connector
@@ -46,6 +49,8 @@ type Catalog struct {
 	LLMURL   string
 	MCPURL   string
 	LastUsed func(ctx context.Context, ids []string, from time.Time) (map[string]time.Time, error)
+	// Groups remembers group names seen at sign-in for the access rule form; nil suggests only names in rules.
+	Groups *GroupStore
 	// Conns serves "My connections" and the connect flow; nil when no grants namespace is configured.
 	Conns *Connections
 	// SCIM receives users from the identity provider and offboards deactivated ones; nil without Conns.
@@ -255,6 +260,7 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 			h(w, r, s)
 		})
 	}
+	mux.HandleFunc("GET /api/groups", admin(c.listGroups))
 	if c.Tools != nil {
 		mux.HandleFunc("PUT /api/servers/{name}/tool-reader", allow("only admins can choose a tool reader", func(w http.ResponseWriter, r *http.Request, s Session) {
 			if err := c.Tools.SetReader(r.Context(), s.Email, r.PathValue("name")); err != nil {
@@ -541,6 +547,8 @@ func (c *Catalog) createRule(w http.ResponseWriter, r *http.Request, s Session) 
 	if !ok {
 		return
 	}
+	c.ruleMu.Lock()
+	defer c.ruleMu.Unlock()
 	if !nameRE.MatchString(in.Name) {
 		writeErr(w, http.StatusBadRequest, "name must be lowercase letters, digits and dashes, starting and ending with a letter or digit")
 		return
@@ -559,7 +567,13 @@ func (c *Catalog) createRule(w http.ResponseWriter, r *http.Request, s Session) 
 			writeErr(w, http.StatusConflict, "an access rule named "+in.Name+" already exists")
 			return
 		}
+		if !c.refuseDuplicate(w, r, ar.Spec, "") {
+			return
+		}
 		c.propose(w, r, s, "create", "AccessRule", "accessrules", in.Name, ar.Spec, ar.Labels, ar.Annotations)
+		return
+	}
+	if !c.refuseDuplicate(w, r, ar.Spec, "") {
 		return
 	}
 	if err := c.Client.Create(r.Context(), ar); err != nil {
@@ -597,6 +611,8 @@ func (c *Catalog) updateRule(w http.ResponseWriter, r *http.Request, s Session) 
 	if !ok {
 		return
 	}
+	c.ruleMu.Lock()
+	defer c.ruleMu.Unlock()
 	ar, ok := c.editable(w, r)
 	if !ok {
 		return
@@ -610,6 +626,9 @@ func (c *Catalog) updateRule(w http.ResponseWriter, r *http.Request, s Session) 
 		return
 	}
 	ar.Spec = v1.AccessRuleSpec{Groups: in.Groups, AllSignedIn: in.AllSignedIn, Models: in.Models, Servers: servers}
+	if !c.refuseDuplicate(w, r, ar.Spec, ar.Name) {
+		return
+	}
 	if c.GitOps != nil {
 		c.propose(w, r, s, "update", "AccessRule", "accessrules", ar.Name, ar.Spec, ar.Labels, consoleAnnotations(ar.Annotations))
 		return

@@ -265,7 +265,7 @@ test("the pages say what happens to what no rule names, by mode", async ({ page 
   ];
   const homeMocks = async () => { // the overview needs a person's access and one model that no rule names
     await page.route("**/api/me/access", (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify({ groups: [], models: [], servers: [] }) }));
-    await page.route("**/api/models", (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify(r.request().headers()["referer"]?.endsWith("/") ? [{ name: "gpt-4o", allSignedIn: false, allowedGroups: [] }] : []) }));
+    await page.route("**/api/models", (r) => r.fulfill({ contentType: "application/json", body: JSON.stringify(r.request().headers()["referer"]?.endsWith("/") ? [{ name: "gpt-4o", allSignedIn: false, allowedGroups: [], allowedUsers: [] }] : []) }));
   };
   await setup(page, { config: audit });
   await homeMocks();

@@ -21,6 +21,9 @@ has(apiKey.keyId) && timestamp(apiKey.until) > request.startTime
 {{- define "ambit.identity.groups" -}}
 (has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : []))
 {{- end -}}
+{{- define "ambit.identity.email" -}}
+(has(apiKey.keyId) ? apiKey.email : (({{ include "ambit.identity.hasEmail" . }}) ? jwt.email.trim().lowerAscii() : ""))
+{{- end -}}
 {{- define "ambit.identity.principal" -}}
 {{- if .requireEmail -}}(has(apiKey.keyId) ? apiKey.email : jwt.email.trim().lowerAscii()){{- else -}}(has(apiKey.keyId) ? apiKey.email : (({{ include "ambit.identity.hasEmail" . }}) ? jwt.email.trim().lowerAscii() : jwt.sub)){{- end -}}
 {{- end -}}

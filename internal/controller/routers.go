@@ -143,7 +143,7 @@ func CompileRouters(routers []v1.ModelRouter, models []v1.Model, res *Result, ro
 			c.reasons, c.msgs = append(c.reasons, "CategoryNeedsClassifier"), append(c.msgs, "routes with a category need a classifier (type LLM); they are ignored, the rest is applied")
 		}
 		if !mayShare(res.Access[r.Name], res.Access[r.Spec.Default], refused[r.Spec.Default]) {
-			c.reasons, c.msgs = append(c.reasons, "DefaultNotAllowed"), append(c.msgs, "no group may use both this router and its default "+r.Spec.Default+"; its users get 400 whenever no route they may use matches")
+			c.reasons, c.msgs = append(c.reasons, "DefaultNotAllowed"), append(c.msgs, "no group or user may use both this router and its default "+r.Spec.Default+"; its users get 400 whenever no route they may use matches")
 		}
 		if cfgRouter != nil {
 			for _, cat := range r.Spec.Classifier.Categories {
@@ -241,7 +241,7 @@ func llmConfig(r v1.ModelRouter, wire string, byObject map[string]v1.Model, ci C
 		}
 		return nil, "the Secret " + m.Spec.CredentialsRef.Name + " of classifier Model " + m.Name + " is missing or has no Authorization entry"
 	}
-	out := &routerconfig.Router{Name: r.Name, Wire: wire, Type: "LLM", Groups: a.Groups, AllSignedIn: a.AllSignedIn,
+	out := &routerconfig.Router{Name: r.Name, Wire: wire, Type: "LLM", Groups: a.Groups, Users: a.Users, AllSignedIn: a.AllSignedIn,
 		LLM:           &routerconfig.LLM{Endpoint: endpoint, Model: m.Spec.Model, CredentialKey: m.Name},
 		TimeoutMillis: cl.TimeoutOrDefault().Milliseconds(), MaxBytes: cl.MaxBytesOrDefault(), RatePerMinute: cl.RateOrDefault()}
 	for _, c := range cl.Categories {
@@ -371,9 +371,9 @@ func categoryCondition(hash, name string) string {
 	return `request.headers["x-ambit-config"] == ` + strconv.Quote(hash) + ` && request.headers["x-ambit-route"] == ` + strconv.Quote(name)
 }
 
-// mayShare reports whether some signed-in user may use both a and b.
 // mayShare reports whether some signed-in user may use both a and b, where members of the groups in refusedB
-// are refused b (an unpriced default for dollar-capped groups).
+// are refused b (an unpriced default for dollar-capped groups). Groups and users match by name; a user listed in
+// both counts (whether their token carries a refused group is known only per request).
 func mayShare(a, b Access, refusedB []string) bool {
 	open := func(gs []string) []string {
 		var out []string
@@ -389,16 +389,16 @@ func mayShare(a, b Access, refusedB []string) bool {
 	case a.AllSignedIn && b.AllSignedIn:
 		return true
 	case a.AllSignedIn:
-		return len(bGroups) > 0
+		return len(bGroups) > 0 || len(b.Users) > 0
 	case b.AllSignedIn:
-		return len(aGroups) > 0
+		return len(aGroups) > 0 || len(a.Users) > 0
 	}
 	for _, g := range aGroups {
 		if slices.Contains(bGroups, g) {
 			return true
 		}
 	}
-	return false
+	return slices.ContainsFunc(a.Users, func(u string) bool { return slices.Contains(b.Users, u) })
 }
 
 func virtualModel(r v1.ModelRouter, wire string, lines []any, route RouteRef) *unstructured.Unstructured {

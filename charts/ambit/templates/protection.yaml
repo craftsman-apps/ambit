@@ -84,8 +84,8 @@ spec:
           - remote:
               backendRef: { name: ambit-guard, port: 9090 }
               failureMode: FailClosed
-              # The caller's groups from the verified token, for argument limits in access rules.
-              metadata: { groups: {{ include "ambit.identity.groups" . | quote }} }
+              # The caller's groups and email ("" without one) from the verified token, for argument limits in access rules.
+              metadata: { groups: {{ include "ambit.identity.groups" . | quote }}, email: {{ include "ambit.identity.email" . | quote }} }
               # The guard needs no credentials.
               disallowedRequestHeaders: [authorization, cookie, x-ambit-user]
             methods:

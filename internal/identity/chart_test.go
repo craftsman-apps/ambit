@@ -106,12 +106,15 @@ func TestChartUsesTheSameFragments(t *testing.T) {
 		}
 	}
 	g := find(t, render(t, "--set", "protection.enabled=true"), "AgentgatewayPolicy", "ambit-mcp-guard")
-	var groups any
+	var groups, email any
 	for _, p := range get(t, g, "spec", "backend", "mcp", "guardrails", "processors").([]any) {
-		groups = get(t, p, "remote", "metadata", "groups")
+		groups, email = get(t, p, "remote", "metadata", "groups"), get(t, p, "remote", "metadata", "email")
 	}
 	if groups != PrincipalGroups {
 		t.Errorf("guard groups = %v, want %q", groups, PrincipalGroups)
+	}
+	if email != PrincipalEmail() {
+		t.Errorf("guard email = %v, want %q", email, PrincipalEmail())
 	}
 }
 

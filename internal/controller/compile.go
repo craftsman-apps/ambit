@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/identity"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/utils/ptr"
@@ -21,6 +22,7 @@ type RouteRef struct{ Name string }
 type Access struct {
 	AllSignedIn bool
 	Groups      []string
+	Users       []string // canonical emails (the CRD pattern allows only lowercase)
 }
 
 type Result struct {
@@ -49,7 +51,7 @@ func Compile(models []v1.Model, servers []v1.Server, rules []v1.AccessRule, rout
 		knownServer[s.Name] = true
 	}
 	res := Result{Access: map[string]Access{}, RuleConditions: map[string]metav1.Condition{}}
-	groups := map[string]map[string]bool{}
+	groups, users := map[string]map[string]bool{}, map[string]map[string]bool{}
 	for _, r := range rules {
 		var missing, missingServers []string
 		for _, sa := range r.Spec.Servers {
@@ -71,6 +73,12 @@ func Compile(models []v1.Model, servers []v1.Server, rules []v1.AccessRule, rout
 			for _, g := range r.Spec.Groups {
 				groups[name][g] = true
 			}
+			if users[name] == nil {
+				users[name] = map[string]bool{}
+			}
+			for _, u := range r.Spec.Users {
+				users[name][u] = true
+			}
 		}
 		res.RuleConditions[r.Name] = ruleCondition(r, missing, missingServers)
 	}
@@ -80,6 +88,14 @@ func Compile(models []v1.Model, servers []v1.Server, rules []v1.AccessRule, rout
 			a.Groups = append(a.Groups, g)
 		}
 		sort.Strings(a.Groups)
+		res.Access[name] = a
+	}
+	for name, set := range users {
+		a := res.Access[name]
+		for u := range set {
+			a.Users = append(a.Users, u)
+		}
+		sort.Strings(a.Users)
 		res.Access[name] = a
 	}
 	sorted := slices.Clone(models)
@@ -114,19 +130,36 @@ func ruleCondition(r v1.AccessRule, missing, missingServers []string) metav1.Con
 	return c
 }
 
-// CEL returns the authorization expression for one model.
+// CEL returns the authorization expression for one model: a member of a listed group, or a listed user by the
+// request's email (an identity without a usable email never matches users).
 func CEL(a Access) string {
 	switch {
 	case a.AllSignedIn:
 		return "true"
-	case len(a.Groups) == 0:
+	case len(a.Groups) == 0 && len(a.Users) == 0:
 		return "false"
 	}
-	q := make([]string, len(a.Groups))
-	for i, g := range a.Groups {
-		q[i] = strconv.Quote(g) // group names are restricted by the CRD pattern, so Go quoting is valid CEL
+	var parts []string
+	if len(a.Groups) > 0 {
+		parts = append(parts, principalGroups+".exists(g, g in ["+quoted(a.Groups)+"])")
 	}
-	return principalGroups + ".exists(g, g in [" + strings.Join(q, ", ") + "])"
+	if len(a.Users) > 0 {
+		parts = append(parts, identity.PrincipalEmail()+" in ["+quoted(a.Users)+"]")
+	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return "(" + strings.Join(parts, " || ") + ")" // callers append "&& ..." to it
+}
+
+// quoted joins CEL string literals. Group names and user emails are restricted by the CRD patterns (no quotes or
+// backslashes), so Go quoting is valid CEL.
+func quoted(xs []string) string {
+	q := make([]string, len(xs))
+	for i, x := range xs {
+		q[i] = strconv.Quote(x)
+	}
+	return strings.Join(q, ", ")
 }
 
 // modelAuth is how the gateway authenticates to the provider: AWS keys for Bedrock or a Google key file for VertexAI,

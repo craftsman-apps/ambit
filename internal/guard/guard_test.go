@@ -192,3 +192,33 @@ func TestCallArgumentsAreLimited(t *testing.T) {
 		t.Fatalf("rules unreadable: %v", r)
 	}
 }
+
+// A grant to named people: the email comes from the gateway's metadata (canonical form), an emailless caller ("")
+// matches no user, and a missing email key refuses the call, since the user's limits could not apply.
+func TestCallArgumentsForUsers(t *testing.T) {
+	g := &Guard{Pins: pins, Masker: Builtin{}, Rules: fakeRules{
+		{Rule: "pilot", Users: []string{"alice@acme.com"}, Tools: []string{"get_customer"},
+			Arguments: []v1.ArgumentRule{{Name: "region", OneOf: []string{"eu"}}}},
+	}}
+	call := func(md map[string]any) *extmcp.McpRequestResult {
+		s, _ := structpb.NewStruct(md)
+		res, _ := g.CheckRequest(t.Context(), &extmcp.McpRequest{ServiceNames: []string{"crm"}, Method: "tools/call", MetadataContext: s,
+			McpRequest: []byte(`{"name":"get_customer","arguments":{"region":"us","email":"alice@acme.com"}}`)})
+		return res
+	}
+	refused := func(r *extmcp.McpRequestResult, part string) bool {
+		return r.GetError() != nil && strings.Contains(r.GetError().Reason, part)
+	}
+	if r := call(map[string]any{"groups": []any{}, "email": " Alice@Acme.com "}); !refused(r, "rule pilot: argument region must be one of eu") {
+		t.Fatalf("listed user's limit not enforced: %v", r)
+	}
+	if r := call(map[string]any{"groups": []any{}, "email": "bob@acme.com"}); r.GetPass() == nil {
+		t.Fatalf("another user: no applicable rule, the gateway decides: %v", r)
+	}
+	if r := call(map[string]any{"groups": []any{}, "email": ""}); r.GetPass() == nil {
+		t.Fatalf("no email: matches no user: %v", r)
+	}
+	if r := call(map[string]any{"groups": []any{}}); !refused(r, "email did not reach the guard") {
+		t.Fatalf("email key missing: %v", r)
+	}
+}

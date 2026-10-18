@@ -16,6 +16,7 @@ import (
 type Grant struct {
 	Rule        string
 	Groups      []string
+	Users       []string // canonical emails
 	AllSignedIn bool
 	Tools       []string // nil: every tool
 	Arguments   []v1.ArgumentRule
@@ -41,7 +42,7 @@ func (k KubeRules) Grants(ctx context.Context, server string) ([]Grant, error) {
 	for _, r := range l.Items {
 		for _, sa := range r.Spec.Servers {
 			if sa.Name == server {
-				out = append(out, Grant{Rule: r.Name, Groups: r.Spec.Groups, AllSignedIn: r.Spec.AllSignedIn, Tools: sa.Tools, Arguments: sa.Arguments})
+				out = append(out, Grant{Rule: r.Name, Groups: r.Spec.Groups, Users: r.Spec.Users, AllSignedIn: r.Spec.AllSignedIn, Tools: sa.Tools, Arguments: sa.Arguments})
 			}
 		}
 	}
@@ -55,11 +56,13 @@ func Limited(grants []Grant) bool {
 
 // CheckArguments returns why a call is refused, or "" when it is allowed. A call is allowed when any rule
 // that grants this tool to the caller allows its arguments (rules add up, as in the gateway). When no rule
-// grants the tool, the gateway's own authorization decides, so this allows it.
-func CheckArguments(grants []Grant, groups []string, tool string, args map[string]any) string {
+// grants the tool, the gateway's own authorization decides, so this allows it. email is the caller's canonical
+// email, or "" without one (it then matches no user).
+func CheckArguments(grants []Grant, groups []string, email string, tool string, args map[string]any) string {
 	var applicable []Grant
 	for _, g := range grants {
-		if (g.AllSignedIn || slices.ContainsFunc(g.Groups, func(x string) bool { return slices.Contains(groups, x) })) &&
+		if (g.AllSignedIn || slices.ContainsFunc(g.Groups, func(x string) bool { return slices.Contains(groups, x) }) ||
+			(email != "" && slices.Contains(g.Users, email))) &&
 			(g.Tools == nil || slices.Contains(g.Tools, tool)) {
 			applicable = append(applicable, g)
 		}

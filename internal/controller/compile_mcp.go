@@ -205,22 +205,28 @@ func connectionPolicy(s v1.Server) *unstructured.Unstructured {
 func merge(a Access, spec v1.AccessRuleSpec) Access {
 	a.AllSignedIn = a.AllSignedIn || spec.AllSignedIn
 	a.Groups = append(a.Groups, spec.Groups...)
+	a.Users = append(a.Users, spec.Users...)
 	return a
 }
 
-// normalize sorts and removes duplicate groups so the expression is stable.
+// normalize sorts and removes duplicate groups and users so the expression is stable.
 func normalize(a Access) Access {
 	sort.Strings(a.Groups)
 	a.Groups = slices.Compact(a.Groups)
+	sort.Strings(a.Users)
+	a.Users = slices.Compact(a.Users)
 	return a
 }
+
+// grants reports whether a grants anyone.
+func (a Access) grants() bool { return a.AllSignedIn || len(a.Groups) > 0 || len(a.Users) > 0 }
 
 // serverClauses gives one clause for whole-server access, then one per group of tools that share
 // the same audience. Access is by the unprefixed tool name, which is what agentgateway evaluates.
 func serverClauses(name string, a *serverAccess) []string {
 	target := "mcp.tool.target == " + strconv.Quote(name)
 	var out []string
-	if who := normalize(a.all); who.AllSignedIn || len(who.Groups) > 0 {
+	if who := normalize(a.all); who.grants() {
 		out = append(out, withWho(target, who))
 	}
 	byWho := map[string][]string{}
@@ -294,14 +300,16 @@ func generated(apiVersion, kind, name, ns string, spec map[string]any) *unstruct
 type EffectiveAccess struct {
 	AllSignedIn bool                `json:"allSignedIn"`
 	Groups      []string            `json:"groups"`
-	AllTools    bool                `json:"allTools"` // some rule grants every tool, including ones added later
-	Tools       map[string][]string `json:"tools"`    // tool → groups granted it by name
+	Users       []string            `json:"users"`
+	AllTools    bool                `json:"allTools"`  // some rule grants every tool, including ones added later
+	Tools       map[string][]string `json:"tools"`     // tool → groups granted it by name
+	ToolUsers   map[string][]string `json:"toolUsers"` // tool → users granted it by name
 }
 
 // ServerAccess reads the same merged access the gateway policy is built from (accessByServer), and
 // is empty for a Server the reconciler leaves out: refused by BindServers, or with a URL that does not parse.
 func ServerAccess(servers []v1.Server, conns []v1.Connection, rules []v1.AccessRule, name string) EffectiveAccess {
-	out := EffectiveAccess{Groups: []string{}, Tools: map[string][]string{}}
+	out := EffectiveAccess{Groups: []string{}, Users: []string{}, Tools: map[string][]string{}, ToolUsers: map[string][]string{}}
 	kept, _ := BindServers(servers, conns)
 	i := slices.IndexFunc(kept, func(s v1.Server) bool { return s.Name == name })
 	if i < 0 {
@@ -311,24 +319,32 @@ func ServerAccess(servers []v1.Server, conns []v1.Connection, rules []v1.AccessR
 		return out
 	}
 	a := accessByServer(kept, rules)[name]
-	groups := map[string]bool{}
+	groups, users := map[string]bool{}, map[string]bool{}
 	add := func(x Access) {
 		out.AllSignedIn = out.AllSignedIn || x.AllSignedIn
 		for _, g := range x.Groups {
 			groups[g] = true
 		}
+		for _, u := range x.Users {
+			users[u] = true
+		}
 	}
-	if a.all.AllSignedIn || len(a.all.Groups) > 0 {
+	if a.all.grants() {
 		out.AllTools = true
 		add(a.all)
 	}
 	for tool, x := range a.tools {
 		add(x)
 		out.Tools[tool] = append([]string{}, x.Groups...)
+		out.ToolUsers[tool] = append([]string{}, x.Users...)
 	}
 	for g := range groups {
 		out.Groups = append(out.Groups, g)
 	}
+	for u := range users {
+		out.Users = append(out.Users, u)
+	}
 	sort.Strings(out.Groups)
+	sort.Strings(out.Users)
 	return out
 }

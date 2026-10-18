@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/craftsman-apps/ambit/internal/identity"
 	"github.com/craftsman-apps/ambit/internal/routerconfig"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	filterv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
@@ -60,6 +61,7 @@ func (h *Handler) logFailure(router string, err error) {
 // Attrs are the values the gateway sends per request (the policy's requestAttributes).
 type Attrs struct {
 	Groups []string
+	Email  string // canonical, or "" when the caller has none
 	Config string // the configuration hash the gateway's policy names
 }
 
@@ -89,7 +91,8 @@ func (h *Handler) decide(ctx context.Context, start time.Time, snap *Snapshot, a
 	if !ok {
 		return Result{}
 	}
-	if !r.AllSignedIn && !slices.ContainsFunc(a.Groups, func(g string) bool { return slices.Contains(r.Groups, g) }) {
+	if !r.AllSignedIn && !slices.ContainsFunc(a.Groups, func(g string) bool { return slices.Contains(r.Groups, g) }) &&
+		(a.Email == "" || !slices.Contains(r.Users, a.Email)) {
 		return Result{Reason: "denied"}
 	}
 	text, ok := lastUserText(req.Messages)
@@ -188,6 +191,7 @@ func attrsOf(st *structpb.Struct) Attrs {
 	for _, v := range f["ambit.groups"].GetListValue().GetValues() {
 		a.Groups = append(a.Groups, v.GetStringValue())
 	}
+	a.Email, _ = identity.CanonicalEmail(f["ambit.email"].GetStringValue())
 	a.Config = f["ambit.config"].GetStringValue()
 	return a
 }

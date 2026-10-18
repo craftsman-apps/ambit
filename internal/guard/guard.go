@@ -12,10 +12,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/craftsman-apps/ambit/internal/controller"
 	"github.com/craftsman-apps/ambit/internal/extmcp"
+	"github.com/craftsman-apps/ambit/internal/identity"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -99,7 +101,13 @@ func (g *Guard) CheckRequest(ctx context.Context, req *extmcp.McpRequest) (*extm
 				slog.Error("guard: no groups from the gateway; call refused", "server", server, "tool", tool)
 				return deny("the caller's groups did not reach the guard, so argument limits could not be checked"), nil
 			}
-			if reason := CheckArguments(grants, groups, tool, p.Arguments); reason != "" {
+			email, present := metadataEmail(req.MetadataContext)
+			if !present && slices.ContainsFunc(grants, func(x Grant) bool { return len(x.Users) > 0 && len(x.Arguments) > 0 }) {
+				// Without it a listed user's limited grant would not apply, and the call would pass unchecked.
+				slog.Error("guard: no email from the gateway; call refused", "server", server, "tool", tool)
+				return deny("the caller's email did not reach the guard, so argument limits could not be checked"), nil
+			}
+			if reason := CheckArguments(grants, groups, email, tool, p.Arguments); reason != "" {
 				slog.Info("guard: refused arguments", "server", server, "tool", tool, "reason", reason)
 				return deny(reason), nil
 			}
@@ -128,6 +136,15 @@ func metadataStrings(ctx *structpb.Struct, key string) (out []string, ok bool) {
 		return []string{x.StringValue}, true
 	}
 	return nil, false
+}
+
+// metadataEmail is the caller's canonical email from the gateway's metadata, or "" when it has none (an
+// emailless JWT sends ""). present is false when the gateway sent no email at all (a policy older than users in
+// access rules).
+func metadataEmail(ctx *structpb.Struct) (email string, present bool) {
+	v, present := ctx.GetFields()["email"]
+	email, _ = identity.CanonicalEmail(v.GetStringValue())
+	return email, present
 }
 
 func (g *Guard) CheckResponse(ctx context.Context, resp *extmcp.McpResponse) (*extmcp.McpResponseResult, error) {

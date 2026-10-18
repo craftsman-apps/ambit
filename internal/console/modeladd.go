@@ -364,7 +364,9 @@ func (c *Catalog) ensureModelSecret(ctx context.Context, s Session, in ModelAddI
 	}
 	// An error that is not AlreadyExists may hide a Secret that was stored (timeout, canceled request): look at it.
 	var cur corev1.Secret
-	if gerr := c.Client.Get(context.WithoutCancel(ctx), client.ObjectKeyFromObject(sec), &cur); gerr != nil {
+	gctx, gcancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer gcancel()
+	if gerr := c.Client.Get(gctx, client.ObjectKeyFromObject(sec), &cur); gerr != nil {
 		slog.Error("add model: read key secret", "secret", sec.Name, "operation", in.Operation, "err", redact(gerr.Error(), in.APIKey))
 		return nil, http.StatusBadGateway, fmt.Errorf("could not store the key in Secret %s", sec.Name)
 	}
@@ -552,7 +554,13 @@ func (c *Catalog) removeModelKey(w http.ResponseWriter, r *http.Request, s Sessi
 		return
 	}
 	// A Model may have started to use the Secret between the check and the delete. Say so; do not hide it.
-	if m, err := c.modelUsing(ctx, sec.Name); err == nil && m != "" {
+	m, err := c.modelUsing(ctx, sec.Name)
+	if err != nil {
+		slog.Warn("model key removed; the check for a model that uses it could not run", "secret", sec.Name, "by", s.Email, "err", err)
+		writeErr(w, http.StatusBadGateway, "the Secret "+sec.Name+" was removed, but the re-check for a model that uses it could not run; check the models")
+		return
+	}
+	if m != "" {
 		slog.Warn("model key removed while a model started to use it", "secret", sec.Name, "model", m, "by", s.Email)
 		writeErr(w, http.StatusConflict, "the Secret "+sec.Name+" was removed while the model "+m+" started using it; create the Secret again")
 		return

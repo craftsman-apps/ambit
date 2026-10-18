@@ -742,3 +742,42 @@ func TestAddModelGitOpsClosedPullRequestMovesToANewBranch(t *testing.T) {
 		t.Fatalf("branch %q", sec.Annotations["ambitproject.dev/branch"])
 	}
 }
+
+func TestRemoveKeyLogsAListErrorAfterTheDelete(t *testing.T) {
+	var lists int
+	e := modelFixture(t, false, interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, l client.ObjectList, opts ...client.ListOption) error {
+		if _, ok := l.(*v1.ModelList); ok {
+			if lists++; lists > 1 { // the check before the delete worked; the re-check after it fails
+				return errors.New("list failed")
+			}
+		}
+		return c.List(ctx, l, opts...)
+	}}, unfinishedSecret("ambit-llm-half", "half", "ophalf11"))
+	rec := do(t, e.h, "DELETE", "/api/models/unfinished/ambit-llm-half", e.ck, nil)
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "re-check") || strings.Contains(rec.Body.String(), "list failed") ||
+		!strings.Contains(e.logs.String(), "level=WARN") || !strings.Contains(e.logs.String(), "secret=ambit-llm-half") {
+		t.Fatalf("%d %s\n%s", rec.Code, rec.Body, e.logs)
+	}
+}
+
+func TestAddModelReadOfAnAmbiguousSecretCreateHasATimeout(t *testing.T) {
+	var deadline bool
+	e := modelFixture(t, false, interceptor.Funcs{
+		Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+			err := c.Create(ctx, obj, opts...)
+			if _, ok := obj.(*corev1.Secret); ok && err == nil {
+				return context.DeadlineExceeded
+			}
+			return err
+		},
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*corev1.Secret); ok {
+				_, deadline = ctx.Deadline()
+			}
+			return c.Get(ctx, key, obj, opts...)
+		}})
+	do(t, e.h, "POST", "/api/models", e.ck, enteredInput("op1abcde", "lost"))
+	if !deadline {
+		t.Fatal("the Secret read after an ambiguous create has no timeout")
+	}
+}

@@ -37,6 +37,33 @@ A Google service-account key file for Vertex AI goes in `credentials.json`:
 kubectl -n ambit-system create secret generic ambit-llm-gcp --from-file=credentials.json=<service-account key file>
 ```
 
+## Add a model in the console
+
+An admin adds a model on the Models page with **Add model**. The form asks for the name, the provider, the model ID
+and the settings the provider needs. For the API key, choose one of three ways:
+
+- **Enter the key here.** Not for Bedrock access keys or Vertex AI key files. The console stores the key in the Secret
+  `ambit-llm-<name>` and the Model names it.
+- **Use an existing Secret.** Choose one of the Secrets named `ambit-llm-*` in the namespace; the console lists names
+  only and never reads their contents. Create one as shown in [Secrets](#secrets).
+- **Use the gateway's cloud identity.** Bedrock and Vertex AI only.
+
+If you enter the key, read this first:
+
+> The key is stored in the Kubernetes Secret `ambit-llm-<name>` in the namespace `<namespace>`. Anyone who can read
+> Secrets in this namespace can read the key. The console never shows the key again. For production, create the
+> Secret with your secret manager (for example External Secrets) and choose **Use an existing Secret**.
+
+In GitOps mode the console also says:
+
+> The key is not put in Git. The console writes the Secret to the cluster now; the pull request adds only the Model.
+> If you rebuild the cluster from Git, create the Secret again.
+
+The console never overwrites a Secret: if `ambit-llm-<name>` exists, choose **Use an existing Secret** or another
+name. If the pull request is closed without merging, or a step fails after the Secret was written, the Models page
+lists the key under **Unfinished additions**, with **Remove key**. To change or rotate a stored key, update the
+Secret with `kubectl`.
+
 ## Azure OpenAI and Azure AI Foundry
 
 `model` is the **deployment name**. The gateway sends the key in the `api-key` header, as Azure documents for

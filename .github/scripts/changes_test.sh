@@ -14,7 +14,7 @@ check() {  # check <name> <jobs that run> <file>...
 ALL="build cli_unit interop snapshot cli_kind quickstart e2e"
 
 # PR #149: site pages, Markdown and .gitignore.
-check "PR 149 (site and docs)" "" .gitignore CHANGELOG.md docs/maintainers/release-checklist.md docs/upgrading.md \
+check "PR 149 (site and docs)" "" .gitignore CHANGELOG.md changelog/unreleased/some-branch.md changelog/unreleased/README.md docs/maintainers/release-checklist.md docs/upgrading.md \
   site/package.json site/scripts/changelog-page.mjs site/scripts/changelog-page.test.mjs site/sidebars.ts
 check "PR 146 (Go and a step script)" "$ALL" CHANGELOG.md internal/controller/activation.go \
   internal/controller/activation_envtest_test.go test/stepkeys.sh

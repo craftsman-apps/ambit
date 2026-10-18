@@ -36,5 +36,7 @@ The e2e job takes about 50 minutes of the organization's Actions minutes. To spe
 - Mark the PR ready (`gh pr ready <n>`) when the change is complete: that also runs the quickstart and e2e jobs once.
 - Merge only a PR whose head contains the current `main` (`gh pr update-branch <n>` first if `main` moved), with
   CI green on that head. A merge to `main` does not run CI again.
+- A change users can see adds a file in `changelog/unreleased/<branch-without-pueding/>.md` (see its README). Never edit
+  `CHANGELOG.md` for it; this avoids merge conflicts between parallel pull requests.
 - Changes to documentation only (`docs/`, `*.md`, `LICENSE`, `NOTICE`) skip the build and e2e jobs; CI is green in
   under a minute.

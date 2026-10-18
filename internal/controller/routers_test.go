@@ -244,7 +244,7 @@ func TestRouterWarningsAreAllShown(t *testing.T) {
 	rules := []v1.AccessRule{rule("auto-users", []string{"eng"}, false, "auto"), rule("ml-sonnet", []string{"ml"}, false, "sonnet")}
 	_, conds := compileWithRouters(catalog, rules, router("auto", "Rules", "sonnet", v1.RouterRoute{Model: "missing", Keywords: []string{"x"}}))
 	c := conds["auto"]
-	if c.Reason != "UnknownModel" || !strings.Contains(c.Message, "missing") || !strings.Contains(c.Message, "no group may use both") {
+	if c.Reason != "UnknownModel" || !strings.Contains(c.Message, "missing") || !strings.Contains(c.Message, "no group or user may use both") {
 		t.Fatalf("got %s: %s", c.Reason, c.Message)
 	}
 }

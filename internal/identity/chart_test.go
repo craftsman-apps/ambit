@@ -2,6 +2,7 @@ package identity
 
 import (
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -105,13 +106,24 @@ func TestChartUsesTheSameFragments(t *testing.T) {
 			}
 		}
 	}
-	g := find(t, render(t, "--set", "protection.enabled=true"), "AgentgatewayPolicy", "ambit-mcp-guard")
-	var groups any
-	for _, p := range get(t, g, "spec", "backend", "mcp", "guardrails", "processors").([]any) {
-		groups = get(t, p, "remote", "metadata", "groups")
-	}
-	if groups != PrincipalGroups {
-		t.Errorf("guard groups = %v, want %q", groups, PrincipalGroups)
+	for _, verified := range []bool{true, false} {
+		d := render(t, "--set", "protection.enabled=true", "--set", "accessRules.usersRequireVerifiedEmail="+strconv.FormatBool(verified))
+		g := find(t, d, "AgentgatewayPolicy", "ambit-mcp-guard")
+		var groups, email any
+		for _, p := range get(t, g, "spec", "backend", "mcp", "guardrails", "processors").([]any) {
+			groups, email = get(t, p, "remote", "metadata", "groups"), get(t, p, "remote", "metadata", "email")
+		}
+		if groups != PrincipalGroups {
+			t.Errorf("guard groups = %v, want %q", groups, PrincipalGroups)
+		}
+		if email != PrincipalEmail(verified) {
+			t.Errorf("verified=%v: guard email = %v, want %q", verified, email, PrincipalEmail(verified))
+		}
+		// The router's ambit.email comes from the controller, which gets the same value as a flag.
+		if !contains(get(t, find(t, d, "Deployment", "ambit-controller"), "spec", "template", "spec", "containers").([]any)[0].(doc)["command"],
+			"--users-require-verified-email="+strconv.FormatBool(verified)) {
+			t.Errorf("verified=%v: controller flag missing", verified)
+		}
 	}
 }
 

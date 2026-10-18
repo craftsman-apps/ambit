@@ -97,7 +97,7 @@ rc=0; "$AMBIT" check --kubeconfig "$W/view.kubeconfig" --production --verbose --
 python3 - "$O/view.json" <<'PY' || fail "6 restricted results"
 import json, sys
 rs = json.load(open(sys.argv[1]))
-assert len(rs) == 19, len(rs)                      # H1-H8 and P1-P11
+assert len(rs) == 20, len(rs)                      # H1-H8 and P1-P12
 for r in rs:
     assert r["status"] in ("pass", "warn", "fail", "unknown", "n/a"), r
     if r["status"] == "unknown":

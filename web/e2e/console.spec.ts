@@ -109,6 +109,30 @@ test("group field suggests known groups, adds and removes chips, and explains wh
   }
 });
 
+test("a rule can name people by email, alone or with groups", async ({ page }) => {
+  await signInAsBootstrapAdmin(page);
+  try {
+    await page.goto("/access-rules?edit=new");
+    await expect(page.getByTestId("people-help")).toHaveText("Prefer groups; use people for exceptions.");
+    await page.getByLabel("Name", { exact: true }).fill("ui-test-people");
+    const box = page.getByRole("textbox", { name: "Email addresses" });
+    await box.fill("not an email");
+    await box.press("Enter");
+    await expect(page.getByText(/is not an email address/)).toBeVisible();
+    await box.fill(" Pilot.User@Acme.test ");
+    await box.press("Enter");
+    await expect(page.getByTestId("person-chip-pilot.user@acme.test")).toBeVisible();
+    await page.getByLabel(/nemotron-3-super/).check();
+    await page.getByRole("button", { name: "Create rule" }).click();
+    await expect(page).toHaveURL(/rule=ui-test-people/);
+    await expect(page.getByText("People: pilot.user@acme.test")).toBeVisible();
+    await expect(page.getByText(/in \["pilot\.user@acme\.test"\]/)).toBeVisible();
+    await expect(page.getByRole("row", { name: /ui-test-people/ })).toContainText("pilot.user@acme.test");
+  } finally {
+    await page.request.delete("/api/access-rules/ui-test-people");
+  }
+});
+
 test("creating a rule that duplicates another rule shows the refusal", async ({ page }) => {
   await signInAsBootstrapAdmin(page);
   const made = await page.request.post("/api/access-rules", { data: { name: "ui-test-dup-a", groups: ["e2e-dup"], models: ["nemotron-3-super"] } });

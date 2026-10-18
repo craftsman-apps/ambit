@@ -76,6 +76,11 @@ func (in *AccessRuleSpec) DeepCopyInto(out *AccessRuleSpec) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.Users != nil {
+		in, out := &in.Users, &out.Users
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Models != nil {
 		in, out := &in.Models, &out.Models
 		*out = make([]string, len(*in))
@@ -620,6 +625,11 @@ func (in *ModelStatus) DeepCopyInto(out *ModelStatus) {
 	*out = *in
 	if in.AllowedGroups != nil {
 		in, out := &in.AllowedGroups, &out.AllowedGroups
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.AllowedUsers != nil {
+		in, out := &in.AllowedUsers, &out.AllowedUsers
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}

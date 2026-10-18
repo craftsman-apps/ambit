@@ -405,7 +405,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		m := &models.Items[i]
 		a := res.Access[m.Name]
 		next := m.DeepCopy()
-		next.Status.AllowedGroups, next.Status.AllowAllSignedIn = a.Groups, a.AllSignedIn
+		next.Status.AllowedGroups, next.Status.AllowedUsers, next.Status.AllowAllSignedIn = a.Groups, a.Users, a.AllSignedIn
 		c := conds["Model/"+m.Name]
 		if gs := refused[m.Name]; len(gs) > 0 && c.Status == metav1.ConditionTrue {
 			c.Message = strings.TrimPrefix(c.Message+"; "+unpricedMessage(gs), "; ")

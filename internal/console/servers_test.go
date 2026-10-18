@@ -270,3 +270,20 @@ func TestRemoteServerURLMustParse(t *testing.T) {
 		}
 	}
 }
+
+// My access matches rules that name the signed-in user's email (canonical form), not only their groups.
+func TestMyAccessByEmail(t *testing.T) {
+	h, c, a := serversFixture(t)
+	if err := c.Create(t.Context(), &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "pilot", Namespace: testNS},
+		Spec: v1.AccessRuleSpec{Users: []string{"mira@acme.test"}, Servers: []v1.ServerAccess{{Name: "time"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	got := decodeAs[MyAccess](t, do(t, h, "GET", "/api/me/access", user(a, "Mira@Acme.test", RoleViewer, "ml-research"), nil).Body.String())
+	if len(got.Servers) != 1 || got.Servers[0].Server != "time" || !got.Servers[0].AllTools {
+		t.Fatalf("mira: %+v", got)
+	}
+	other := decodeAs[MyAccess](t, do(t, h, "GET", "/api/me/access", user(a, "bob@acme.test", RoleViewer, "ml-research"), nil).Body.String())
+	if len(other.Servers) != 0 {
+		t.Fatalf("bob: %+v", other)
+	}
+}

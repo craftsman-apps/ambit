@@ -8,6 +8,9 @@ For upgrade steps in detail, read [docs/upgrading.md](docs/upgrading.md).
 
 Add a line here for each change that users can see, in the pull request that makes the change.
 
+- Access rules can name people (`users`, email addresses) as well as groups.
+  People are matched by a verified email (`accessRules.usersRequireVerifiedEmail`, default true); `ambit check --production` warns (P12) when it is false.
+  Upgrade the controller and the ambit-guard together (the chart does this). An older guard does not know `users` and does not apply argument limits for people listed there.
 - The LLM gateway answers 404, not 403, for a path it does not serve (for example /v1/v1/messages from a doubled base URL, or /v1/messages/count_tokens), with or without a key; the body names the path.
 - GitOps mode: an app request shows Pull request open until its pull request is merged, and only then Approved; if the pull request is closed without a merge, the request goes back to waiting and can be approved again.
 - ambit check --deep no longer fails P4 and P11 when a provider answers 429 or 5xx: it tries the next Ready model (up to 3) and names the models it tried. If every model failed that way, the result is Unknown.

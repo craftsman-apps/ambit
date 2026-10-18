@@ -166,4 +166,4 @@ LLM (`auto → claude-sonnet (coding)`, `auto → gemma (timeout)`), and the exp
 | `ClassifierNotInstalled` | type LLM, but ambit-router is not installed (`routing.router.enabled=false`) | category routes are ignored, the rest is served |
 | `ClassifierUnhealthy` | some ambit-router replicas are not available | served; some requests may get no label |
 | `ClassifierStartFailed` | ambit-router has not become available in 15 minutes | served without labels; see `kubectl describe deployment ambit-router` |
-| `DefaultNotAllowed` | no group may use both the router and its default | served, but its users get 400 when no route they may use matches |
+| `DefaultNotAllowed` | no group or user may use both the router and its default | served, but its users get 400 when no route they may use matches |

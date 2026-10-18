@@ -17,6 +17,7 @@ import (
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/controller"
+	"github.com/craftsman-apps/ambit/internal/identity"
 	"github.com/craftsman-apps/ambit/internal/presets"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -109,6 +110,7 @@ type ModelView struct {
 	Model         string   `json:"model"`
 	Provider      string   `json:"provider"`
 	AllowedGroups []string `json:"allowedGroups"`
+	AllowedUsers  []string `json:"allowedUsers"`
 	AllSignedIn   bool     `json:"allSignedIn"`
 	Ready         string   `json:"ready"`
 	Message       string   `json:"message"`
@@ -119,6 +121,7 @@ type ModelView struct {
 type RuleView struct {
 	Name        string            `json:"name"`
 	Groups      []string          `json:"groups"`
+	Users       []string          `json:"users"`
 	AllSignedIn bool              `json:"allSignedIn"`
 	Models      []string          `json:"models"`
 	Servers     []v1.ServerAccess `json:"servers"`
@@ -151,6 +154,7 @@ type RuleDetail struct {
 type RuleInput struct {
 	Name        string   `json:"name"`
 	Groups      []string `json:"groups"`
+	Users       []string `json:"users"` // email addresses; lowercased and trimmed before saving
 	AllSignedIn bool     `json:"allSignedIn"`
 	Models      []string `json:"models"`
 	// Servers replaces the rule's servers; left out (nil) keeps them, for clients that edit models only.
@@ -164,8 +168,9 @@ const (
 
 var (
 	nameRE  = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
-	groupRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@/-]*$`) // same pattern as the CRD
-	toolRE  = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)        // same pattern as the CRD
+	groupRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@/-]*$`)          // same pattern as the CRD
+	toolRE  = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)                 // same pattern as the CRD
+	userRE  = regexp.MustCompile(`^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$`) // same pattern as the CRD
 )
 
 func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
@@ -427,7 +432,7 @@ func (c *Catalog) listModels(w http.ResponseWriter, r *http.Request, _ Session) 
 	for _, m := range ms {
 		cond := meta.FindStatusCondition(m.Status.Conditions, "Ready")
 		v := ModelView{Name: m.Name, DisplayName: m.Spec.DisplayName, Model: m.Spec.Model, Provider: m.Spec.Provider,
-			AllowedGroups: nonNil(m.Status.AllowedGroups), AllSignedIn: m.Status.AllowAllSignedIn, Ready: "Unknown", Price: m.Spec.Price}
+			AllowedGroups: nonNil(m.Status.AllowedGroups), AllowedUsers: nonNil(m.Status.AllowedUsers), AllSignedIn: m.Status.AllowAllSignedIn, Ready: "Unknown", Price: m.Spec.Price}
 		if cond != nil {
 			v.Ready, v.Message = string(cond.Status), cond.Message
 		}
@@ -437,7 +442,7 @@ func (c *Catalog) listModels(w http.ResponseWriter, r *http.Request, _ Session) 
 }
 
 func ruleView(ar v1.AccessRule) RuleView {
-	v := RuleView{Name: ar.Name, Groups: nonNil(ar.Spec.Groups), AllSignedIn: ar.Spec.AllSignedIn, Models: nonNil(ar.Spec.Models),
+	v := RuleView{Name: ar.Name, Groups: nonNil(ar.Spec.Groups), Users: nonNil(ar.Spec.Users), AllSignedIn: ar.Spec.AllSignedIn, Models: nonNil(ar.Spec.Models),
 		Servers: ar.Spec.Servers,
 		Ready:   "Unknown", GitManaged: gitManaged(ar.Annotations), CreatedBy: ar.Annotations[createdByKey]}
 	if cond := meta.FindStatusCondition(ar.Status.Conditions, "Ready"); cond != nil {
@@ -499,8 +504,12 @@ func (c *Catalog) getRule(w http.ResponseWriter, r *http.Request, _ Session) {
 // validate checks a rule from the form. hasServers is true when the rule will grant MCP tools.
 func (c *Catalog) validate(r *http.Request, in RuleInput, hasServers bool) error {
 	switch {
-	case (len(in.Groups) > 0) == in.AllSignedIn:
-		return errors.New("choose either groups or everyone signed in, not both")
+	case in.AllSignedIn && (len(in.Groups) > 0 || len(in.Users) > 0):
+		return errors.New("everyone signed in already includes every group and person; remove the groups and people, or choose them instead")
+	case !in.AllSignedIn && len(in.Groups) == 0 && len(in.Users) == 0:
+		return errors.New("choose everyone signed in, or groups or people")
+	case len(in.Users) > 50:
+		return errors.New("name at most 50 people; use a group for more")
 	case len(in.Models) == 0 && !hasServers:
 		return errors.New("choose at least one model or server")
 	}
@@ -528,6 +537,11 @@ func (c *Catalog) validate(r *http.Request, in RuleInput, hasServers bool) error
 			return fmt.Errorf("group %q may only contain letters, digits and . _ @ / -", g)
 		}
 	}
+	for _, u := range in.Users {
+		if c, ok := identity.CanonicalEmail(u); !ok || c != u || len(u) > 254 || !userRE.MatchString(u) {
+			return fmt.Errorf("%q is not an email address (lowercase letters, digits and . _ %% + - only)", u)
+		}
+	}
 	ms, _, err := c.load(r)
 	if err != nil {
 		return err
@@ -538,6 +552,13 @@ func (c *Catalog) validate(r *http.Request, in RuleInput, hasServers bool) error
 		}
 	}
 	return nil
+}
+
+// canonicalUsers lowercases and trims the emails, the form the rule stores and the gateway compares.
+func canonicalUsers(in *RuleInput) {
+	for i, u := range in.Users {
+		in.Users[i] = strings.ToLower(strings.TrimSpace(u))
+	}
 }
 
 func decode(w http.ResponseWriter, r *http.Request) (RuleInput, bool) {
@@ -556,6 +577,7 @@ func (c *Catalog) createRule(w http.ResponseWriter, r *http.Request, s Session) 
 	if !ok {
 		return
 	}
+	canonicalUsers(&in)
 	c.ruleMu.Lock()
 	defer c.ruleMu.Unlock()
 	if !nameRE.MatchString(in.Name) {
@@ -568,7 +590,7 @@ func (c *Catalog) createRule(w http.ResponseWriter, r *http.Request, s Session) 
 	}
 	ar := &v1.AccessRule{
 		ObjectMeta: metav1.ObjectMeta{Name: in.Name, Namespace: c.Namespace, Annotations: map[string]string{createdByKey: s.Email}},
-		Spec:       v1.AccessRuleSpec{Groups: in.Groups, AllSignedIn: in.AllSignedIn, Models: in.Models, Servers: in.Servers},
+		Spec:       v1.AccessRuleSpec{Groups: in.Groups, Users: in.Users, AllSignedIn: in.AllSignedIn, Models: in.Models, Servers: in.Servers},
 	}
 	if c.GitOps != nil {
 		var existing v1.AccessRule
@@ -593,7 +615,7 @@ func (c *Catalog) createRule(w http.ResponseWriter, r *http.Request, s Session) 
 		apiErr(w, err)
 		return
 	}
-	slog.Info("access rule created", "rule", in.Name, "by", s.Email, "groups", in.Groups, "allSignedIn", in.AllSignedIn, "models", in.Models, "servers", in.Servers)
+	slog.Info("access rule created", "rule", in.Name, "by", s.Email, "groups", in.Groups, "users", in.Users, "allSignedIn", in.AllSignedIn, "models", in.Models, "servers", in.Servers)
 	writeJSON(w, http.StatusCreated, ruleView(*ar))
 }
 
@@ -620,6 +642,7 @@ func (c *Catalog) updateRule(w http.ResponseWriter, r *http.Request, s Session) 
 	if !ok {
 		return
 	}
+	canonicalUsers(&in)
 	c.ruleMu.Lock()
 	defer c.ruleMu.Unlock()
 	ar, ok := c.editable(w, r)
@@ -634,7 +657,7 @@ func (c *Catalog) updateRule(w http.ResponseWriter, r *http.Request, s Session) 
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	ar.Spec = v1.AccessRuleSpec{Groups: in.Groups, AllSignedIn: in.AllSignedIn, Models: in.Models, Servers: servers}
+	ar.Spec = v1.AccessRuleSpec{Groups: in.Groups, Users: in.Users, AllSignedIn: in.AllSignedIn, Models: in.Models, Servers: servers}
 	if !c.refuseDuplicate(w, r, ar.Spec, ar.Name) {
 		return
 	}
@@ -650,7 +673,7 @@ func (c *Catalog) updateRule(w http.ResponseWriter, r *http.Request, s Session) 
 		apiErr(w, err)
 		return
 	}
-	slog.Info("access rule updated", "rule", ar.Name, "by", s.Email, "groups", in.Groups, "allSignedIn", in.AllSignedIn, "models", in.Models, "servers", servers)
+	slog.Info("access rule updated", "rule", ar.Name, "by", s.Email, "groups", in.Groups, "users", in.Users, "allSignedIn", in.AllSignedIn, "models", in.Models, "servers", servers)
 	writeJSON(w, http.StatusOK, ruleView(*ar))
 }
 

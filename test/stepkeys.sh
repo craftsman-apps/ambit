@@ -24,7 +24,7 @@ PATCH_ON='{"Operations":[{"op":"replace","path":"active","value":true}]}'
 PATCH_OFF='{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"Replace","path":"active","value":"False"}]}'
 past() { date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ; }
 cleanup() {
-  kubectl -n "$NS" delete "accessrules.$G" keys-everyone-mock keys-eng-mock --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete "accessrules.$G" keys-everyone-mock keys-eng-mock keys-users-mock keys-users-tool --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" delete "budgets.$G" keys-mira --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" delete secret forge-test forge-scope --ignore-not-found >/dev/null 2>&1 || true
   [[ -n "$DISABLED" ]] && helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --wait --timeout 5m >/dev/null 2>&1 || true
@@ -242,4 +242,36 @@ wait_for 60 '[[ $(code -H "Authorization: Bearer $(token keytest)") == 200 ]]' |
 sign_in keycloak keytest keytest-test-pass; mkkey keytest-after llm
 wait_for 90 '[[ $(code -H "x-api-key: $KEY") == 200 ]]' || fail "12 after restore a new key is not accepted: $(cat "$W/llm")"
 pass "12 apiKeys.enabled=false: group-rule JWT 200, keys refused, offboarded JWT 403; enabled again: keys work"
+
+# 13 · users: a rule naming a person (keytest, in group eng) admits that person by JWT and by key and nobody else
+# (alice is in eng too); offboarding still wins; an MCP tool granted to the person is listed only for that person
+kubectl -n "$NS" apply -f - >/dev/null <<EOF
+apiVersion: $G/v1alpha1
+kind: AccessRule
+metadata: { name: keys-users-mock }
+spec: { users: [keytest@acme.test], models: [mock-echo] }
+---
+apiVersion: $G/v1alpha1
+kind: AccessRule
+metadata: { name: keys-users-tool }
+spec: { users: [keytest@acme.test], servers: [{ name: everything, tools: [echo] }] }
+EOF
+kubectl -n "$NS" delete "accessrules.$G" keys-eng-mock >/dev/null
+sign_in keycloak keytest keytest-test-pass; mkkey keytest-users llm; UK=$KEY
+wait_for 120 '[[ $(code -H "Authorization: Bearer $(token keytest)") == 200 && $(code -H "Authorization: Bearer $(token alice)") == 403 ]]' ||
+  fail "13 only keytest should reach mock-echo: $(cat "$W/llm")"
+wait_for 60 '[[ $(code -H "x-api-key: $UK") == 200 ]]' || fail "13 keytest's key is refused: $(cat "$W/llm")"
+[[ $(code -H "Authorization: Bearer $(token priya)") == 403 ]] || fail "13 priya reached a rule naming only keytest: $(cat "$W/llm")"
+[[ $(kubectl -n "$NS" get "models.$G" mock-echo -o jsonpath='{.status.allowedUsers}') == *keytest@acme.test* ]] || fail "13 Model status lacks allowedUsers"
+wait_for 60 'try_tools "$(token keytest)"; [[ $TOOLS == *everything_echo* ]]' || fail "13 keytest does not see everything_echo: $TOOLS"
+tools "$(token alice)"; [[ $TOOLS != *everything_* ]] || fail "13 alice sees a tool granted to keytest: $TOOLS"
+DEACTIVATED=1
+wait_for 60 '[[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_OFF") == 200 ]]' || fail "13 deactivate: $(cat "$W/api")"
+wait_for 10 '[[ $(code -H "Authorization: Bearer $(token keytest)") == 403 && $(code -H "x-api-key: $UK") == 403 ]]' ||
+  fail "13 an offboarded person listed in users is not refused: $(cat "$W/llm")"
+wait_for 60 '[[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_ON") == 200 ]]' || fail "13 reactivate: $(cat "$W/api")"
+DEACTIVATED=""
+wait_for 30 '[[ $(code -H "Authorization: Bearer $(token keytest)") == 200 ]]' || fail "13 reactivation did not lift the block"
+kubectl -n "$NS" delete "accessrules.$G" keys-users-mock keys-users-tool >/dev/null
+pass "13 users: keytest by JWT and key 200, alice and priya 403, everything_echo listed for keytest only; offboarded keytest 403"
 done_step keys

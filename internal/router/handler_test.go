@@ -345,3 +345,31 @@ func TestStreamNotARouterSetsNothing(t *testing.T) {
 		t.Fatalf("a request for another model is left alone: %v", hs)
 	}
 }
+
+// A router granted to named people: the caller's canonical email (from the gateway's ambit.email attribute) must
+// equal a listed user exactly; an emailless caller ("") and a subject never match.
+func TestUsersMatchByEmail(t *testing.T) {
+	llm := &fakeLLM{answer: "coding"}
+	pilot := auto
+	pilot.Groups, pilot.Users = nil, []string{"alice@acme.com"}
+	cfg := cfgOf(pilot)
+	h := handler(llm, cfg)
+	attrs := func(email string) Attrs {
+		st, _ := structpb.NewStruct(map[string]any{"ambit.groups": []any{}, "ambit.email": email, "ambit.config": cfg.Hash})
+		return attrsOf(st)
+	}
+	for email, want := range map[string]string{
+		" Alice@Acme.com ": "classified",
+		"bob@acme.com":     "denied",
+		"":                 "denied",
+		"alice":            "denied", // a subject, not an email
+		"alice@acme.co":    "denied", // exact, no prefix or domain match
+	} {
+		if r := h.decide(t.Context(), time.Now(), h.Store.Snapshot(), attrs(email), body("auto", "code")); r.Reason != want {
+			t.Errorf("email %q: %+v, want %s", email, r, want)
+		}
+	}
+	if llm.calls.Load() != 1 {
+		t.Fatalf("calls %d, want 1", llm.calls.Load())
+	}
+}

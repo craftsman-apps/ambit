@@ -103,6 +103,24 @@ func TestCRDRulesRejectUnsafeObjects(t *testing.T) {
 	reject("tool name that could break CEL", &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "inject", Namespace: ns},
 		Spec: v1.AccessRuleSpec{Groups: []string{"eng"}, Servers: []v1.ServerAccess{{Name: "time", Tools: []string{`x" || true || "`}}}}}, "spec.servers[0].tools[0]")
 
+	// users: canonical emails only (quotes would break the generated CEL), and allSignedIn alone.
+	for _, u := range []string{`a"b@c.de`, "A@B.COM", "*@acme.com", "alice"} {
+		reject("user "+u, &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "bad-user", Namespace: ns},
+			Spec: v1.AccessRuleSpec{Users: []string{u}, Models: []string{"gemma"}}}, "spec.users[0]")
+	}
+	reject("allSignedIn with users", &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "all-users", Namespace: ns},
+		Spec: v1.AccessRuleSpec{AllSignedIn: true, Users: []string{"alice@acme.com"}, Models: []string{"gemma"}}}, "do not also set groups or users")
+	reject("nobody", &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "nobody", Namespace: ns},
+		Spec: v1.AccessRuleSpec{Models: []string{"gemma"}}}, "set groups, users or allSignedIn")
+	for name, spec := range map[string]v1.AccessRuleSpec{
+		"users-only":  {Users: []string{"alice@acme.com"}, Models: []string{"gemma"}},
+		"groups-only": {Groups: []string{"eng"}, Models: []string{"gemma"}}, // an existing rule: unchanged (upgrade)
+	} {
+		if err := envClient.Create(ctx, &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Spec: spec}); err != nil {
+			t.Errorf("%s refused: %v", name, err)
+		}
+	}
+
 	// "tools: []" must be refused, not read as "all tools". Sent as raw JSON, since omitempty would drop it.
 	raw := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": v1.GroupVersion.String(), "kind": "AccessRule",

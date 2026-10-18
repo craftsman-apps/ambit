@@ -316,7 +316,7 @@ func validateModelOffline(ctx context.Context, m *v1.Model) ([]string, error) {
 
 func modelView(m v1.Model) ModelView {
 	return ModelView{Name: m.Name, DisplayName: m.Spec.DisplayName, Model: m.Spec.Model, Provider: m.Spec.Provider,
-		AllowedGroups: nonNil(m.Status.AllowedGroups), Ready: "Unknown", Price: m.Spec.Price}
+		AllowedGroups: nonNil(m.Status.AllowedGroups), AllowedUsers: nonNil(m.Status.AllowedUsers), Ready: "Unknown", Price: m.Spec.Price}
 }
 
 // dropSecret deletes the Secret this request created, and only that exact one (UID precondition).

@@ -27,6 +27,7 @@ type Router struct {
 	Type          string     `json:"type"`
 	Categories    []Category `json:"categories"`
 	Groups        []string   `json:"groups,omitempty"`
+	Users         []string   `json:"users,omitempty"`
 	AllSignedIn   bool       `json:"allSignedIn,omitempty"`
 	LLM           *LLM       `json:"llm,omitempty"`
 	TimeoutMillis int64      `json:"timeoutMillis"`

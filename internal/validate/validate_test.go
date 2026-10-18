@@ -354,3 +354,38 @@ func TestRouteWithoutConditionOnlyBreaksTheCELRule(t *testing.T) {
 		t.Errorf("want exactly the CEL rule message, got %v", p)
 	}
 }
+
+// AccessRule users: lowercase ASCII email addresses only (no quotes, so the controller's Go quoting stays valid
+// CEL), at least one of groups, users or allSignedIn, and allSignedIn alone.
+func TestAccessRuleUsers(t *testing.T) {
+	rule := func(spec string) string {
+		return "apiVersion: ambitproject.dev/v1alpha1\nkind: AccessRule\nmetadata: { name: pilot }\nspec: " + spec
+	}
+	for _, spec := range []string{
+		`{ users: [alice@acme.com], models: [gemma] }`,
+		`{ groups: [eng], users: [alice@acme.com, o.brien+ai@mail.acme.co.uk], models: [gemma] }`,
+		`{ groups: [eng], models: [gemma] }`,
+		`{ allSignedIn: true, models: [gemma] }`,
+	} {
+		if p := check(t, rule(spec)); len(p) != 0 {
+			t.Errorf("%s: %v", spec, p)
+		}
+	}
+	for spec, want := range map[string]string{
+		`{ users: ['a"b@c.de'], models: [gemma] }`:                            "should match",
+		`{ users: [A@B.COM], models: [gemma] }`:                               "should match",
+		`{ users: ['a\b@c.de'], models: [gemma] }`:                            "should match",
+		`{ users: ["*@acme.com"], models: [gemma] }`:                          "should match",
+		`{ users: [alice], models: [gemma] }`:                                 "should match",
+		`{ models: [gemma] }`:                                                 "set groups, users or allSignedIn",
+		`{ users: [], models: [gemma] }`:                                      "set groups, users or allSignedIn",
+		`{ allSignedIn: true, users: [alice@acme.com], models: [gemma] }`:     "do not also set groups or users",
+		`{ allSignedIn: true, groups: [eng], models: [gemma] }`:               "do not also set groups or users",
+		`{ users: [` + strings.Repeat("a@b.co,", 51) + `], models: [gemma] }`: "must have at most 50 items",
+	} {
+		p := check(t, rule(spec))
+		if len(p) == 0 || !strings.Contains(fmt.Sprint(p), want) {
+			t.Errorf("%s: %v, want %q", spec, p, want)
+		}
+	}
+}

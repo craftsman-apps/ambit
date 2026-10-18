@@ -43,7 +43,7 @@ func TestCheckArguments(t *testing.T) {
 		{"no grant applies: the gateway decides", []string{"sales"}, "query", map[string]any{"database": "prod"}, ""},
 		{"a different tool of the server is not limited", []string{"eng"}, "other", map[string]any{}, ""},
 	} {
-		reason := CheckArguments(grants, tc.groups, tc.tool, tc.args)
+		reason := CheckArguments(grants, tc.groups, "", tc.tool, tc.args)
 		if (tc.want == "") != (reason == "") || !strings.Contains(reason, tc.want) {
 			t.Errorf("%s: got %q, want %q", tc.name, reason, tc.want)
 		}
@@ -51,10 +51,32 @@ func TestCheckArguments(t *testing.T) {
 	// Everyone signed in, and two limited rules: allowed when either one is satisfied.
 	a := Grant{Rule: "a", AllSignedIn: true, Arguments: []v1.ArgumentRule{{Name: "region", OneOf: []string{"eu"}}}}
 	b := Grant{Rule: "b", Groups: []string{"us-team"}, Arguments: []v1.ArgumentRule{{Name: "region", OneOf: []string{"us"}}}}
-	if r := CheckArguments([]Grant{a, b}, []string{"us-team"}, "x", map[string]any{"region": "us"}); r != "" {
+	if r := CheckArguments([]Grant{a, b}, []string{"us-team"}, "", "x", map[string]any{"region": "us"}); r != "" {
 		t.Errorf("rule b should allow: %s", r)
 	}
-	if r := CheckArguments([]Grant{a, b}, nil, "x", map[string]any{"region": "us"}); !strings.Contains(r, "region must be one of eu") {
+	if r := CheckArguments([]Grant{a, b}, nil, "", "x", map[string]any{"region": "us"}); !strings.Contains(r, "region must be one of eu") {
 		t.Errorf("only rule a applies: %q", r)
+	}
+}
+
+// A grant to named people applies to the caller with that exact canonical email, and never to a caller without one.
+func TestCheckArgumentsUsers(t *testing.T) {
+	g := Grant{Rule: "pilot", Users: []string{"alice@acme.com"}, Arguments: []v1.ArgumentRule{{Name: "region", OneOf: []string{"eu"}}}}
+	for _, tc := range []struct {
+		name, email, want string
+	}{
+		{"listed user, allowed value", "alice@acme.com", ""},
+		{"listed user, refused value", "alice@acme.com", "region must be one of eu"},
+		{"another user: not this grant, the gateway decides", "bob@acme.com", ""},
+		{"no email: not this grant", "", ""},
+	} {
+		region := "us"
+		if tc.name == "listed user, allowed value" {
+			region = "eu"
+		}
+		r := CheckArguments([]Grant{g}, nil, tc.email, "x", map[string]any{"region": region})
+		if (tc.want == "") != (r == "") || !strings.Contains(r, tc.want) {
+			t.Errorf("%s: got %q, want %q", tc.name, r, tc.want)
+		}
 	}
 }

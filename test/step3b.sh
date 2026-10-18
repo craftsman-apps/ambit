@@ -58,7 +58,7 @@ pass "4 edit to finance -> alice 403 again"
 
 # 5 · invalid input and cross-site forms are refused with a reason
 [[ $(api POST /api/access-rules '{"name":"bad","groups":["eng"],"allSignedIn":true,"models":["gemma-4-31b"]}') == 400 ]] \
-  && grep -q 'either groups or everyone' "$W/api" || fail "5 invalid rule accepted: $(cat "$W/api")"
+  && grep -q 'everyone signed in already includes every group and person' "$W/api" || fail "5 invalid rule accepted: $(cat "$W/api")"
 c=$(command curl -s -o /dev/null -w '%{http_code}' -b "$W/jar" -X POST -d 'name=x' "$BASE/api/access-rules")
 [[ "$c" == 415 ]] || fail "5 form post not refused: $c"
 pass "5 invalid rule -> 400 with the reason; form-encoded post -> 415"

@@ -156,4 +156,13 @@ func TestClassifierSendsRequestGroups(t *testing.T) {
 	if !strings.Contains(fmt.Sprint(o.Object), identity.PrincipalGroups) {
 		t.Fatal("ambit.groups must be the request identity's groups")
 	}
+	// ambit.email follows accessRules.usersRequireVerifiedEmail, as the AccessRule CEL and the guard's metadata do.
+	for _, verified := range []bool{true, false} {
+		UsersRequireVerifiedEmail = verified
+		o := fmt.Sprint(classifyPolicy("ns", "ambit-llm", "ambit-router", cfg).Object)
+		if !strings.Contains(o, identity.PrincipalEmail(verified)) || strings.Contains(o, "email_verified") != verified {
+			t.Errorf("verified=%v: ambit.email is not PrincipalEmail(%v): %s", verified, verified, o)
+		}
+	}
+	UsersRequireVerifiedEmail = true
 }

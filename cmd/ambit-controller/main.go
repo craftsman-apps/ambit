@@ -25,6 +25,7 @@ import (
 func main() {
 	ns := os.Getenv("AMBIT_NAMESPACE")
 	requireEmail := flag.Bool("require-email", true, "gateway JWTs must carry a usable email (llm/mcp.jwt.requireEmail)")
+	usersVerified := flag.Bool("users-require-verified-email", true, "an AccessRule's users match a JWT's email only with email_verified: true (accessRules.usersRequireVerifiedEmail)")
 	route := flag.String("llm-route", "ambit-llm", "HTTPRoute that every model attaches to")
 	rlService := flag.String("ratelimit-service", "", "Service of envoy's ratelimit for Budgets; empty turns budgets off")
 	rlPort := flag.Int64("ratelimit-port", 8081, "gRPC port of the ratelimit service")
@@ -41,6 +42,7 @@ func main() {
 	activationSettle := flag.Duration("activation-settle", 3*time.Second, "wait after agentgateway accepted a step, for the change to reach every gateway pod")
 	flag.Parse()
 	controller.RequireEmail = *requireEmail
+	controller.UsersRequireVerifiedEmail = *usersVerified
 	ctrl.SetLogger(zap.New())
 	log := ctrl.Log.WithName("setup")
 	if ns == "" {

@@ -116,6 +116,9 @@ func TestAddModelDirectEnteredKeyCreatesSecretThenModel(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
+	if !strings.Contains(rec.Body.String(), `"allowedUsers":[]`) { // the web reads .length of it
+		t.Fatalf("the new model's view lacks allowedUsers: %s", rec.Body)
+	}
 	secs, ms := e.secrets(t), e.models(t)
 	if len(secs) != 1 || len(ms) != 1 {
 		t.Fatalf("%d secrets, %d models", len(secs), len(ms))

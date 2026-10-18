@@ -18,7 +18,7 @@ export function HomePage() {
   const u = me.data;
   const waiting = (requests.data ?? []).filter((q) => !q.decision).length;
   const attention = (rules.data ?? []).filter((r) => r.ready !== "True").length;
-  const closed = (models.data ?? []).filter((m) => !m.allSignedIn && m.allowedGroups.length === 0).length;
+  const closed = (models.data ?? []).filter((m) => !m.allSignedIn && m.allowedGroups.length === 0 && m.allowedUsers.length === 0).length;
   const admin = u?.role === "admin";
   // Admins see budgets at 80% or more today; the budgets endpoint is admin-only.
   const budgets = useQuery({
@@ -81,7 +81,7 @@ export function HomePage() {
           <Card data-testid="my-access">
             <h2 className="mb-1 font-semibold">What you can use</h2>
             <p className="mb-3 text-small text-muted">
-              From the access rules that name your groups{access.data.groups.length ? <> ({access.data.groups.join(", ")})</> : " (you have none)"} or everyone signed in.
+              From the access rules that name your groups{access.data.groups.length ? <> ({access.data.groups.join(", ")})</> : " (you have none)"}, your email address, or everyone signed in.
               If a tool you need is missing, ask an admin for a rule; the gateway reports tools you may not use as unknown.
             </p>
             <dl className="grid grid-cols-[96px_1fr] gap-x-3 gap-y-1.5">

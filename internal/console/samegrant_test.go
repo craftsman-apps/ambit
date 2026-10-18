@@ -53,12 +53,32 @@ func TestSameGrant(t *testing.T) {
 	if !sameGrant(v1.AccessRuleSpec{}, v1.AccessRuleSpec{Groups: []string{}}) {
 		t.Error("nil and empty lists should match")
 	}
+	// Users compare as a set too.
+	people := v1.AccessRuleSpec{Users: []string{"alice@acme.com", "bob@acme.com"}, Models: []string{"a"}}
+	for _, tc := range []struct {
+		name  string
+		users []string
+		want  bool
+	}{
+		{"same users, other order, repeated", []string{"bob@acme.com", "alice@acme.com", "bob@acme.com"}, true},
+		{"one user fewer", []string{"alice@acme.com"}, false},
+		{"another user", []string{"alice@acme.com", "carol@acme.com"}, false},
+		{"no users", nil, false},
+	} {
+		b := v1.AccessRuleSpec{Users: tc.users, Models: []string{"a"}}
+		if got := sameGrant(people, b); got != tc.want || sameGrant(b, people) != tc.want {
+			t.Errorf("users %s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	if sameGrant(v1.AccessRuleSpec{Groups: []string{"eng"}, Models: []string{"a"}}, v1.AccessRuleSpec{Groups: []string{"eng"}, Users: []string{"alice@acme.com"}, Models: []string{"a"}}) {
+		t.Error("adding a user changes the grant")
+	}
 }
 
 // sameGrant compares each field by hand. A field added to these structs fails here until sameGrant handles it.
 func TestSameGrantComparesEveryField(t *testing.T) {
 	for typ, want := range map[reflect.Type][]string{
-		reflect.TypeFor[v1.AccessRuleSpec](): {"Groups", "AllSignedIn", "Models", "Servers"},
+		reflect.TypeFor[v1.AccessRuleSpec](): {"Groups", "Users", "AllSignedIn", "Models", "Servers"},
 		reflect.TypeFor[v1.ServerAccess]():   {"Name", "Tools", "Arguments"},
 		reflect.TypeFor[v1.ArgumentRule]():   {"Name", "OneOf", "NotContains", "Max"},
 	} {

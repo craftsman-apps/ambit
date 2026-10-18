@@ -2,6 +2,15 @@
 
 For what each release changes, read the [release notes](https://ambitproject.dev/releases).
 
+## To the release with access rules that name people
+
+- **Upgrade the controller and the ambit-guard together** (the chart does this). An older guard does not know `users`
+  and does not apply argument limits for people listed there.
+- **`users` match verified emails only.** A JWT's email counts only when the token says `email_verified: true`
+  (`accessRules.usersRequireVerifiedEmail`, default true). If your identity provider does not send `email_verified`,
+  set it to false only if users cannot change their own email. `ambit check --production` has a new check, P12, that
+  warns when it is false.
+
 ## To the release with audit-only mode
 
 - **The controller now writes the access-log policy.** The AgentgatewayPolicy `ambit-access-log` has the same name as

@@ -35,6 +35,7 @@ spec:
             {{- end }}
             # One flag for both gateways: if either relaxes the email rule, the principal falls back to the JWT subject on both (the safe superset).
             - --require-email={{ and (ne (toString .Values.llm.jwt.requireEmail) "false") (ne (toString .Values.mcp.jwt.requireEmail) "false") }}
+            - --users-require-verified-email={{ ne (toString (.Values.accessRules | default dict).usersRequireVerifiedEmail) "false" }}
             - --access-mode={{ $mode }}
             - --activation-timeout={{ $timeout }}
             - --activation-settle={{ $settle }}

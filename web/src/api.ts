@@ -38,7 +38,7 @@ export function useLoginOptions() {
 export type ModelPrice = { inputPerMillionTokens: string; outputPerMillionTokens: string };
 export type ModelView = {
   name: string; displayName: string; model: string; provider: string;
-  allowedGroups: string[]; allSignedIn: boolean; ready: string; message: string;
+  allowedGroups: string[]; allowedUsers: string[]; allSignedIn: boolean; ready: string; message: string;
   price: ModelPrice | null;
 };
 // A model's price and the suggestion from LiteLLM's list (admins only).
@@ -51,14 +51,14 @@ export type PriceInfo = {
 export type ArgumentRule = { name: string; oneOf?: string[]; notContains?: string[]; max?: string };
 export type ServerAccess = { name: string; tools?: string[]; arguments?: ArgumentRule[] };
 export type RuleView = {
-  name: string; groups: string[]; allSignedIn: boolean; models: string[]; servers: ServerAccess[];
+  name: string; groups: string[]; users: string[]; allSignedIn: boolean; models: string[]; servers: ServerAccess[];
   ready: string; reason: string; message: string; gitManaged: boolean; createdBy: string;
 };
 export type RuleDetail = RuleView & {
   effective: { model: string; modelName: string; cel: string }[];
   effectiveServers: { server: string; cel: string }[];
 };
-export type RuleInput = { name?: string; groups: string[]; allSignedIn: boolean; models: string[]; servers: ServerAccess[] };
+export type RuleInput = { name?: string; groups: string[]; users: string[]; allSignedIn: boolean; models: string[]; servers: ServerAccess[] };
 
 export type Tool = { name: string; description?: string; readOnlyHint?: boolean; destructiveHint?: boolean };
 export type ServerView = {
@@ -133,4 +133,4 @@ export type PresetOverrides = { serverURL?: string; scopes?: string[] };
 export type PresetAddInput = { operation: string; preset: string; version: number; name: string; displayName: string;
   clientID: string; clientSecret: string; values: Record<string, string>; overrides?: PresetOverrides };
 export type Unfinished = { operation: string; app: string; missing: string[]; pullRequest?: PullRequest };
-export type EffectiveAccess = { allSignedIn: boolean; groups: string[]; allTools: boolean; tools: Record<string, string[]> };
+export type EffectiveAccess = { allSignedIn: boolean; groups: string[]; users: string[]; allTools: boolean; tools: Record<string, string[]>; toolUsers: Record<string, string[]> };

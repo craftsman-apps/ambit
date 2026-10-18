@@ -180,6 +180,7 @@ Without flags it runs the checks that apply: the pre-install group when Ambit is
 | P9 | production | one console replica, Ready | values, Deployment |
 | P10 | production | every Model's credentials are in an existing Secret, or in the gateway's cloud identity | objects, Secret existence, values |
 | P11 | production | `access.mode` is `enforce` (audit-only mode is a warning, with the days since `modeSince`); with `--deep` in audit mode, it fails when a test call's audit record does not reach the store. A line under it counts the audit-mode call records of the last 24 hours with a missing or failed mark (a warning above 0). While a mode switch or rules change is not active, another line (a warning) names the object agentgateway rejected, the gateway's reason and the next step | values, `ambit-access-mode`, collector metrics; the line reads ClickHouse |
+| P12 | production | an AccessRule's `users` match verified emails only: a warning when `accessRules.usersRequireVerifiedEmail` is false | values |
 
 ### Permissions
 

@@ -24,8 +24,8 @@ export function ServersPage() {
   const requests = useRequests();
   const [open, setOpen] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
-  const waiting = (requests.data ?? []).filter((q) => !q.decision);
-  const decided = (requests.data ?? []).filter((q) => q.decision);
+  const waiting = (requests.data ?? []).filter((q) => !q.decision && !q.state);
+  const decided = (requests.data ?? []).filter((q) => q.decision || q.state);
   const canDecide = me.data?.role === "admin" || me.data?.role === "approver";
 
   return (
@@ -64,8 +64,8 @@ export function ServersPage() {
                   {decided.map((q) => (
                     <tr key={q.name} className="border-b border-line-soft align-top">
                       <td className="whitespace-nowrap px-3 py-2 font-mono">{q.serverName}</td>
-                      <td className={cn("px-3 py-2", q.decision === "Denied" && "text-bad")}>{q.decision}</td>
-                      <td className="px-3 py-2 text-muted">asked by {q.requestedBy}, {q.decision.toLowerCase()} by {q.decidedBy}{q.comment && `: “${q.comment}”`}
+                      <td className={cn("px-3 py-2", q.decision === "Denied" && "text-bad")}>{q.decision || (q.state === "PullRequestOpen" ? "Pull request open" : "Pull request state unknown")}</td>
+                      <td className="px-3 py-2 text-muted">{q.decision ? `asked by ${q.requestedBy}, ${q.decision.toLowerCase()} by ${q.decidedBy}` : `asked by ${q.requestedBy}; the Server appears when the pull request is merged`}{q.comment && `: “${q.comment}”`}
                         {q.pullRequest && <> · <a className="text-accent-text underline" href={q.pullRequest} target="_blank" rel="noopener noreferrer">pull request</a></>}</td>
                       <td className="px-3 py-2 font-mono text-small text-muted" title={q.image || q.url}>{runs(q)}</td>
                     </tr>
@@ -181,6 +181,7 @@ function PendingCard({ q, me, canDecide }: { q: RequestView; me: string; canDeci
       <p className="mt-1 break-all font-mono text-small">{q.url || q.image}</p>
       {q.connection && <p className="text-small text-muted">Each user signs in to {app} with their own account.</p>}
       {q.reason && <p className="mt-2">“{q.reason}”</p>}
+      {q.note && <p className="mt-2 text-small text-warn">Earlier approval: {q.note}.</p>}
       {canDecide && !own && (
         <div className="mt-3 space-y-2">
           <input id={`comment-${q.name}`} aria-label="Comment for the requester" className={field} value={comment}

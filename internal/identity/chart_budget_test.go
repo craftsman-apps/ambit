@@ -197,7 +197,7 @@ func TestUnknownLLMPathAnswers404(t *testing.T) {
 		{"MCP host", "mcp.example.com", "/mcp", 403, false},
 	}
 	for _, c := range cases {
-		in := map[string]any{"request": map[string]any{"path": c.path, "headers": map[string]any{"host": c.host}}, "response": map[string]any{"code": c.code, "headers": map[string]any{}}}
+		in := map[string]any{"request": map[string]any{"path": c.path, "host": c.host}, "response": map[string]any{"code": c.code, "headers": map[string]any{}}}
 		flag := eval(flagExpr, in)
 		if flag != c.want {
 			t.Errorf("%s: flag %v, want %v", c.name, flag, c.want)

@@ -74,7 +74,7 @@ spec:
       {{- end }}
       response:
         metadata:
-          ambitUnknownPath: 'response.code in [401, 403] && !(request.path in [{{ $paths }}]) && "host" in request.headers && request.headers["host"].startsWith({{ .Values.llm.host | quote }})'
+          ambitUnknownPath: 'response.code in [401, 403] && !(request.path in [{{ $paths }}]) && request.host != null && request.host.startsWith({{ .Values.llm.host | quote }})'
           {{- if .Values.limits.enabled }}
           ambitBudgetRefusal: 'response.code == 429 && !("content-type" in response.headers) && "retry-after" in response.headers && "x-ratelimit-remaining" in response.headers && response.headers["x-ratelimit-remaining"] == "0" && request.path in ["/v1/chat/completions", "/v1/completions", "/v1/responses", "/v1/embeddings", "/v1/messages"]'
           {{- end }}

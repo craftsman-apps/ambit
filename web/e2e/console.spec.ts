@@ -38,6 +38,14 @@ test("unauthenticated visitors land on the login page", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 });
 
+test("sign-in page says where a lost bootstrap password is", async ({ page }) => {
+  await page.goto("/login");
+  const hint = page.getByTestId("lost-password-hint");
+  await expect(hint).toBeVisible();
+  await expect(hint).toContainText("ambit local password");
+  await expect(hint).toContainText("ambit-initial-admin");
+});
+
 test("bootstrap admin signs in and sees the overview", async ({ page }) => {
   await signInAsBootstrapAdmin(page);
   await expect(page.getByText("You are using the bootstrap admin.")).toBeVisible();

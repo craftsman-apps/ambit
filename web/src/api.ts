@@ -8,7 +8,7 @@ export type Me = {
   bootstrap: boolean;
 };
 
-export type LoginOptions = { bootstrap: boolean; sso: { id: string; name: string }[] };
+export type LoginOptions = { bootstrap: boolean; namespace: string; sso: { id: string; name: string }[] };
 
 // null means "not signed in"; any other failure is an error.
 export function useMe() {

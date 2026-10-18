@@ -6,7 +6,7 @@ For upgrade steps in detail, read [docs/upgrading.md](docs/upgrading.md).
 
 ## Unreleased
 
-Add a line here for each change that users can see, in the pull request that makes the change.
+Each pull request adds a file in changelog/unreleased/ (see its README); the release assembles them here.
 
 ## 0.2.3 (2026-10-18)
 

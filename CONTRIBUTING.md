@@ -67,7 +67,7 @@ calls when the file does not exist.
   that also runs the quickstart and end-to-end jobs once (about 50 minutes of CI time).
 - One concern per commit. Write each commit message in plain English: what changed and why.
 - Add tests with the change, not later. A failing test is revised, never skipped.
-- Add a line to `CHANGELOG.md` under "Unreleased" for each change that users can see.
+- Add a file in `changelog/unreleased/` (see its README) for each change that users can see. Do not edit `CHANGELOG.md`.
 - A change is accepted when `go vet ./...` and `make test-go` pass, the front end builds with `make web` (it type-checks),
   generated files are current, and the change comes with its tests. CI runs these checks and more.
 - Before a merge, the branch must contain the current `main` and CI must pass on that head.

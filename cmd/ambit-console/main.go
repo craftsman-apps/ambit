@@ -182,12 +182,14 @@ func run(ctx context.Context) error {
 			}
 		}
 	}()
+	groupStore := &console.GroupStore{Client: objects, Namespace: ns}
 	var auth *console.Auth
 	if err := retry(ctx, "dex discovery", func() (e error) {
 		auth, e = console.NewAuth(ctx, console.AuthConfig{
 			Issuer: publicURL + "/dex", InternalIssuer: os.Getenv("AMBIT_DEX_URL"), ClientID: console.ClientID, ClientSecret: keys.ClientSecret,
 			PublicURL: publicURL, SessionKey: keys.SessionKey, SessionTTL: time.Duration(hours) * time.Hour,
 			OnSignIn: func(c context.Context, sess console.Session) {
+				groupStore.RecordAsync(c, sess.Groups)
 				go func() { // never make sign-in wait for the key lock; Refresh keeps the newest sign-in, so order does not matter
 					switch err := keySvc.RefreshAtSignIn(c, sess); {
 					case errors.Is(err, console.ErrNotLeader):
@@ -291,9 +293,13 @@ func run(ctx context.Context) error {
 	deps := &console.Dependencies{Client: objects, Namespace: ns, Audit: audit, Budgets: budgets,
 		RatelimitMode: os.Getenv("AMBIT_RATELIMIT_FAILURE_MODE"), Protection: os.Getenv("AMBIT_PROTECTION") == "true", ModelRouting: os.Getenv("AMBIT_MODEL_ROUTING") == "true",
 		XDSAddr: os.Getenv("AMBIT_XDS_ADDR")}
-	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), console.LoginOptions{Bootstrap: bootstrapAdmin, SSO: sso},
+	loginOpts := console.LoginOptions{Bootstrap: bootstrapAdmin, SSO: sso}
+	if bootstrapAdmin {
+		loginOpts.Namespace = ns
+	}
+	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), loginOpts,
 		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, Budgets: budgets, Dependencies: deps, AccessMode: os.Getenv("AMBIT_ACCESS_MODE"), Prices: prices, Tools: reader, Presets: catalogPresets,
-			Keys: keySvc, LLMURL: os.Getenv("AMBIT_LLM_URL"), MCPURL: os.Getenv("AMBIT_MCP_URL")}), ReadHeaderTimeout: 10 * time.Second}
+			Groups: groupStore, Keys: keySvc, LLMURL: os.Getenv("AMBIT_LLM_URL"), MCPURL: os.Getenv("AMBIT_MCP_URL")}), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)

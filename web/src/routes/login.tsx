@@ -42,6 +42,11 @@ export function LoginPage() {
             <p className="mt-4 text-small text-warn">
               The bootstrap admin is for first setup only. Turn it off after you connect SSO.
             </p>
+            <p className="mt-2 text-small text-muted" data-testid="lost-password-hint">
+              Lost the password? On a cluster made by <code>ambit local up</code>, run <code>ambit local password</code>.
+              Otherwise it is in the Secret <code>ambit-initial-admin</code>
+              {opts.data.namespace && <> in the namespace <code>{opts.data.namespace}</code></>}.
+            </p>
           </>
         )}
       </Card>

@@ -38,6 +38,14 @@ test("unauthenticated visitors land on the login page", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 });
 
+test("sign-in page says where a lost bootstrap password is", async ({ page }) => {
+  await page.goto("/login");
+  const hint = page.getByTestId("lost-password-hint");
+  await expect(hint).toBeVisible();
+  await expect(hint).toContainText("ambit local password");
+  await expect(hint).toContainText("ambit-initial-admin");
+});
+
 test("bootstrap admin signs in and sees the overview", async ({ page }) => {
   await signInAsBootstrapAdmin(page);
   await expect(page.getByText("You are using the bootstrap admin.")).toBeVisible();
@@ -58,7 +66,8 @@ test("admin creates a rule in the form, sees the merged policy, and deletes it",
   await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: /Access rules/ }).click();
   await page.getByRole("button", { name: "New rule" }).click();
   await page.getByLabel("Name", { exact: true }).fill("ui-test-finance");
-  await page.getByLabel("Group names, separated by commas").fill("finance");
+  await page.getByRole("combobox", { name: "Group names" }).fill("finance");
+  await page.getByRole("combobox", { name: "Group names" }).press("Enter");
   await page.getByLabel(/nemotron-3-super/).check();
   await page.getByRole("button", { name: "Create rule" }).click();
   await expect(page).toHaveURL(/rule=ui-test-finance/);
@@ -67,6 +76,54 @@ test("admin creates a rule in the form, sees the merged policy, and deletes it",
   await page.getByRole("button", { name: "Delete", exact: true }).click();
   await page.getByRole("button", { name: "Delete ui-test-finance" }).click();
   await expect(page.getByRole("cell", { name: "ui-test-finance" })).toHaveCount(0);
+});
+
+test("group field suggests known groups, adds and removes chips, and explains where groups come from", async ({ page }) => {
+  await signInAsBootstrapAdmin(page);
+  const made = await page.request.post("/api/access-rules", { data: { name: "ui-test-known-group", groups: ["e2e-payments-team"], models: ["nemotron-3-super"] } });
+  expect(made.status()).toBe(201);
+  try {
+    await page.goto("/access-rules?edit=new");
+    await expect(page.getByTestId("groups-help")).toContainText("Groups come from your identity provider. Ambit does not create them.");
+    await expect(page.getByRole("link", { name: "Groups and console roles" })).toHaveAttribute("href", "https://ambitproject.dev/docs/install#groups-and-console-roles");
+    const box = page.getByRole("combobox", { name: "Group names" });
+    await box.fill("PAYMENTS");
+    await page.getByRole("option", { name: /e2e-payments-team/ }).click();
+    await expect(page.getByTestId("group-chip-e2e-payments-team")).toBeVisible();
+    await page.getByRole("button", { name: "Remove e2e-payments-team" }).click();
+    await expect(page.getByTestId("group-chip-e2e-payments-team")).toHaveCount(0);
+    // A name that is not known can be added; an invalid one is refused with a message.
+    await box.fill("brand-new-group");
+    await expect(page.getByRole("option", { name: "Add 'brand-new-group'" })).toBeVisible();
+    await box.press("Enter");
+    await expect(page.getByTestId("group-chip-brand-new-group")).toBeVisible();
+    await box.fill("bad name!");
+    await box.press("Enter");
+    await expect(page.getByText(/is not a valid group name/)).toBeVisible();
+    await expect(page.getByTestId("group-chip-bad name!")).toHaveCount(0);
+    await box.fill("");
+    await box.press("Backspace");
+    await expect(page.getByTestId("group-chip-brand-new-group")).toHaveCount(0);
+  } finally {
+    await page.request.delete("/api/access-rules/ui-test-known-group");
+  }
+});
+
+test("creating a rule that duplicates another rule shows the refusal", async ({ page }) => {
+  await signInAsBootstrapAdmin(page);
+  const made = await page.request.post("/api/access-rules", { data: { name: "ui-test-dup-a", groups: ["e2e-dup"], models: ["nemotron-3-super"] } });
+  expect(made.status()).toBe(201);
+  try {
+    await page.goto("/access-rules?edit=new");
+    await page.getByLabel("Name", { exact: true }).fill("ui-test-dup-b");
+    await page.getByRole("combobox", { name: "Group names" }).fill("e2e-dup");
+    await page.getByRole("combobox", { name: "Group names" }).press("Enter");
+    await page.getByLabel(/nemotron-3-super/).check();
+    await page.getByRole("button", { name: "Create rule" }).click();
+    await expect(page.getByText("access rule ui-test-dup-a already grants exactly this")).toBeVisible();
+  } finally {
+    await page.request.delete("/api/access-rules/ui-test-dup-a");
+  }
 });
 
 test("MCP servers: tools are listed, and a request waits for another approver", async ({ page }) => {

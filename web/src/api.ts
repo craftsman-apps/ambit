@@ -8,7 +8,7 @@ export type Me = {
   bootstrap: boolean;
 };
 
-export type LoginOptions = { bootstrap: boolean; sso: { id: string; name: string }[] };
+export type LoginOptions = { bootstrap: boolean; namespace: string; sso: { id: string; name: string }[] };
 
 // null means "not signed in"; any other failure is an error.
 export function useMe() {
@@ -107,6 +107,8 @@ export async function sendJSON(method: string, url: string, body?: unknown) {
 
 export const useModels = () => useQuery({ queryKey: ["models"], queryFn: () => getJSON<ModelView[]>("/api/models") });
 export const useRules = () => useQuery({ queryKey: ["rules"], queryFn: () => getJSON<RuleView[]>("/api/access-rules") });
+export type GroupView = { name: string; source: "rules" | "sign-in" | "both" };
+export const useGroups = (enabled = true) => useQuery({ queryKey: ["groups"], enabled, queryFn: () => getJSON<GroupView[]>("/api/groups") });
 export const useRule = (name?: string) =>
   useQuery({ queryKey: ["rule", name], enabled: !!name, queryFn: () => getJSON<RuleDetail>(`/api/access-rules/${encodeURIComponent(name!)}`) });
 export const useServers = () => useQuery({ queryKey: ["servers"], queryFn: () => getJSON<ServerView[]>("/api/servers") });

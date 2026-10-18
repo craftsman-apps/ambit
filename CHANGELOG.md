@@ -8,6 +8,9 @@ For upgrade steps in detail, read [docs/upgrading.md](docs/upgrading.md).
 
 Add a line here for each change that users can see, in the pull request that makes the change.
 
+- The console refuses an access rule that grants exactly what another rule grants.
+- The access rule form suggests known group names as you type and says that groups come from your identity provider.
+- The console sign-in page tells you where to find the bootstrap admin password if you lose it.
 - ambitproject.dev page views reach PostHog, and the site's own fonts load; the site's Content-Security-Policy blocked both in 0.2.2.
 - The changelog moved to its own menu, Releases, with one page per version and an RSS feed.
 - The by-hand local install and Install on your cluster pages install 0.2.2; they still installed 0.1.0, and the quick start's go install named 0.2.0. The by-hand page is now named Install locally by hand and is under Reference.

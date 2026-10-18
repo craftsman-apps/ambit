@@ -18,6 +18,9 @@ type Connector struct {
 type LoginOptions struct {
 	Bootstrap bool        `json:"bootstrap"`
 	SSO       []Connector `json:"sso"`
+	// Namespace is where the Secret ambit-initial-admin lives. Only its name is public, not its content.
+	// Empty when the bootstrap admin is off.
+	Namespace string `json:"namespace"`
 }
 
 // ParseConnectors reads AMBIT_SSO_CONNECTORS, a JSON list rendered by the chart.

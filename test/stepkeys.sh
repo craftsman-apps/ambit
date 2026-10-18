@@ -248,7 +248,7 @@ sign_in keycloak keytest keytest-test-pass; mkkey keytest-users llm; UK=$KEY
 wait_for 120 '[[ $(code -H "Authorization: Bearer $(token keytest)") == 200 && $(code -H "Authorization: Bearer $(token alice)") == 403 ]]' ||
   fail "13 only keytest should reach mock-echo: $(cat "$W/llm")"
 wait_for 60 '[[ $(code -H "x-api-key: $UK") == 200 ]]' || fail "13 keytest's key is refused: $(cat "$W/llm")"
-[[ $(code -H "Authorization: Bearer $(token mira)") == 403 ]] || fail "13 mira reached a rule naming only keytest: $(cat "$W/llm")"
+[[ $(code -H "Authorization: Bearer $(token priya)") == 403 ]] || fail "13 priya reached a rule naming only keytest: $(cat "$W/llm")"
 [[ $(kubectl -n "$NS" get "models.$G" mock-echo -o jsonpath='{.status.allowedUsers}') == *keytest@acme.test* ]] || fail "13 Model status lacks allowedUsers"
 wait_for 60 'try_tools "$(token keytest)"; [[ $TOOLS == *everything_echo* ]]' || fail "13 keytest does not see everything_echo: $TOOLS"
 tools "$(token alice)"; [[ $TOOLS != *everything_* ]] || fail "13 alice sees a tool granted to keytest: $TOOLS"
@@ -260,5 +260,5 @@ wait_for 60 '[[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_ON") == 200 ]]' || fail "
 DEACTIVATED=""
 wait_for 30 '[[ $(code -H "Authorization: Bearer $(token keytest)") == 200 ]]' || fail "13 reactivation did not lift the block"
 kubectl -n "$NS" delete "accessrules.$G" keys-users-mock keys-users-tool >/dev/null
-pass "13 users: keytest by JWT and key 200, alice and mira 403, everything_echo listed for keytest only; offboarded keytest 403"
+pass "13 users: keytest by JWT and key 200, alice and priya 403, everything_echo listed for keytest only; offboarded keytest 403"
 done_step keys

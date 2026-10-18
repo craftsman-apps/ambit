@@ -69,6 +69,8 @@ export type RequestView = {
   name: string; serverName: string; displayName: string; image: string; url: string; connection: string; transport: string; reason: string;
   requestedBy: string; requestedAt: string; decision: "" | "Approved" | "Denied"; decidedBy: string; decidedAt: string | null; comment: string;
   pullRequest: string;
+  // GitOps: set while an approval waits for its pull request; note says why a request went back to waiting.
+  state: "" | "PullRequestOpen" | "PullRequestUnknown"; note: string;
 };
 export type PullRequest = { number: number; url: string; title: string; branch: string; author?: string };
 // A change in GitOps mode answers 202 with the pull request it opened; nothing changed yet.

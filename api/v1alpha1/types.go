@@ -505,6 +505,14 @@ type ServerRequestStatus struct {
 	// PullRequest is set in GitOps mode: approval opens it, and the Server appears when it is merged.
 	// +optional
 	PullRequest string `json:"pullRequest,omitempty"`
+	// PullRequestBranch is the branch of that pull request. While it is set and Decision is empty, the console
+	// reads the pull request's state: merged sets Decision to Approved; closed without a merge leaves the
+	// request waiting, and a new approval opens a new pull request.
+	// +optional
+	PullRequestBranch string `json:"pullRequestBranch,omitempty"`
+	// PullRequestBy is the approver who opened the pull request; it becomes DecidedBy when the pull request is merged.
+	// +optional
+	PullRequestBy string `json:"pullRequestBy,omitempty"`
 }
 
 // +kubebuilder:object:root=true

@@ -126,7 +126,7 @@ func TestGitOpsApprovalOpensAPullRequestInsteadOfCreatingTheServer(t *testing.T)
 	}
 	var q v1.ServerRequest
 	c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: req.Name}, &q)
-	if q.Status.Decision != "Approved" || q.Status.PullRequest != "https://github.com/acme/config/pull/1" {
+	if q.Status.Decision != "" || q.Status.PullRequestBy != "sam@acme.test" || q.Status.PullRequestBranch == "" || q.Status.PullRequest != "https://github.com/acme/config/pull/1" {
 		t.Fatalf("request status %+v", q.Status)
 	}
 }

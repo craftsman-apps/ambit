@@ -69,6 +69,19 @@ wait_for 60 '[[ $(code -H "Authorization: Bearer $K") == 200 ]]' || fail "0 a ne
 [[ $(code -H "x-api-key: $K") == 200 && $(seen_key) == False ]] || fail "1 x-api-key: $(cat "$W/llm")"
 pass "1 a key in either header reaches the model; the model received no ambit_ value ($(uv run --no-project python -c 'import json,sys;print(json.load(open(sys.argv[1]))["x_seen"]["headers"])' "$W/llm"))"
 
+# 1b · #115: a path the LLM host does not serve answers 404 with or without a key (a wrong base URL must not look like a
+# bad key), the body names the path, and the known paths keep their authentication
+LLMHOST=http://llm.localtest.me:8080
+at() { command curl -s -o "$W/llm" -w '%{http_code}' -X POST "$LLMHOST$1" -H 'Content-Type: application/json' "${@:2}" -d "$body"; }
+[[ $(at /v1/v1/messages -H "x-api-key: $K") == 404 ]] || fail "1b /v1/v1/messages with a valid key: $(cat "$W/llm")"
+grep -q 'no such path on the Ambit LLM gateway: /v1/v1/messages' "$W/llm" || fail "1b the 404 body does not name the path: $(cat "$W/llm")"
+[[ $(at /v1/v1/chat/completions) == 404 ]] || fail "1b an unknown path with no key: $(cat "$W/llm")"
+[[ $(at /v1/messages/count_tokens -H "x-api-key: $K") == 404 ]] || fail "1b count_tokens: $(cat "$W/llm")"
+[[ $(at /v1/messages) =~ ^40[13]$ ]] || fail "1b /v1/messages with no key must stay refused: $(cat "$W/llm")"
+[[ $(at /v1/chat/completions -H "x-api-key: ambit_wrongwrongwrongwrongwrongwrongwrongwrongwro") == 403 ]] || fail "1b a wrong key on a known path: $(cat "$W/llm")"
+[[ $(code -H "x-api-key: $K") == 200 ]] || fail "1b a model call must still work: $(cat "$W/llm")"
+pass "1b unknown LLM paths answer 404 with or without a key; known paths keep 401/403; a model call works"
+
 # 2 · refused: no credential, wrong key, broken JWT, wrong-scope key, valid JWT + wrong key
 TOK=$(token alice)
 # First prove a valid JWT works (after a Keycloak restart the gateway holds the old keys until the controller

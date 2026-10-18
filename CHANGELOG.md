@@ -11,6 +11,10 @@ Add a line here for each change that users can see, in the pull request that mak
 - Access rules can name people (`users`, email addresses) as well as groups.
   People are matched by a verified email (`accessRules.usersRequireVerifiedEmail`, default true); `ambit check --production` warns (P12) when it is false.
   Upgrade the controller and the ambit-guard together (the chart does this). An older guard does not know `users` and does not apply argument limits for people listed there.
+- The LLM gateway answers 404, not 403, for a path it does not serve (for example /v1/v1/messages from a doubled base URL, or /v1/messages/count_tokens), with or without a key; the body names the path.
+- GitOps mode: an app request shows Pull request open until its pull request is merged, and only then Approved; if the pull request is closed without a merge, the request goes back to waiting and can be approved again.
+- ambit check --deep no longer fails P4 and P11 when a provider answers 429 or 5xx: it tries the next Ready model (up to 3) and names the models it tried. If every model failed that way, the result is Unknown.
+- With HTTPS on, plain HTTP requests to the MCP host now redirect to HTTPS, like the console and LLM hosts.
 - The console refuses an access rule that grants exactly what another rule grants.
 - The access rule form suggests known group names as you type and says that groups come from your identity provider.
 - The console sign-in page tells you where to find the bootstrap admin password if you lose it.

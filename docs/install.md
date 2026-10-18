@@ -186,7 +186,7 @@ gateway:
     certificateSecret: ambit-tls
 ```
 
-The gateway then serves HTTPS on `gateway.tls.port` (default 8443), and plain HTTP on the console and LLM hosts redirects to it. The MCP host is served only over HTTPS and has no redirect. Clients use that port in the address unless it is 443. Set `console.url` to the address people open, with `https://`: it is also the issuer address of Dex.
+The gateway then serves HTTPS on `gateway.tls.port` (default 8443), and plain HTTP on the console, LLM and (if enabled) MCP hosts redirects to it. Clients use that port in the address unless it is 443. Set `console.url` to the address people open, with `https://`: it is also the issuer address of Dex.
 
 ## Upgrade and uninstall
 

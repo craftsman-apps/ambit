@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -177,6 +178,9 @@ func (e *Env) deepRecords(ctx context.Context, all map[string]any) *Result {
 // service.telemetry; TestCollectorExposesMetrics keeps the two in step).
 const collectorMetricsPort = 8888
 
+// maxDeepModels is how many Ready Models (in name order) the --deep test call tries before it gives up.
+const maxDeepModels = 3
+
 // p4Records makes one test call with the user's token and watches the collector's counter of log records the
 // ClickHouse exporter sent. No Secret is read. The chart runs one collector pod (replicas: 1), so one
 // port-forward sees every record.
@@ -186,14 +190,14 @@ func p4Records(ctx context.Context, e *Env, all map[string]any) Result {
 	if err := e.Ctrl.List(ctx, &models, client.InNamespace(e.Namespace)); err != nil {
 		return unknownFor(err, "list", "models.ambitproject.dev", e.Namespace, src)
 	}
-	model := ""
+	sort.Slice(models.Items, func(i, j int) bool { return models.Items[i].Name < models.Items[j].Name })
+	var ready []string
 	for _, m := range models.Items {
-		if meta.IsStatusConditionTrue(m.Status.Conditions, "Ready") {
-			model = m.Spec.Model
-			break
+		if meta.IsStatusConditionTrue(m.Status.Conditions, "Ready") && len(ready) < maxDeepModels {
+			ready = append(ready, m.Spec.Model)
 		}
 	}
-	if model == "" {
+	if len(ready) == 0 {
 		return res(Unknown, src, "evidence pods are Ready; no Ready Model to make the test call with")
 	}
 	port, stop, err := e.Forward(ctx, "app.kubernetes.io/name=ambit-otel-collector", collectorMetricsPort)
@@ -206,8 +210,26 @@ func p4Records(ctx context.Context, e *Env, all map[string]any) Result {
 	if err != nil {
 		return res(Unknown, src, "the collector's metrics endpoint does not answer: %v", err)
 	}
-	if code, _, err := deepCall(ctx, e, all, model); err != nil || code != http.StatusOK {
-		return res(Fail, src, "the test call for the audit check failed: HTTP %d %v", code, err)
+	// A provider's own 429 or 5xx says nothing about record delivery: try the next Ready Model. Any other failure,
+	// such as a 401 or 403 from Ambit, is a finding and is not retried.
+	var tried []string
+	for _, model := range ready {
+		code, _, err := deepCall(ctx, e, all, model)
+		if err == nil && code == http.StatusOK {
+			tried = append(tried, model+" answered")
+			break
+		}
+		if err != nil || (code != http.StatusTooManyRequests && code < 500) {
+			return res(Fail, src, "the test call for the audit check failed: HTTP %d %v", code, err)
+		}
+		tried = append(tried, fmt.Sprintf("%s: HTTP %d", model, code))
+	}
+	if !strings.HasSuffix(tried[len(tried)-1], " answered") {
+		return res(Unknown, src, "every Ready Model tried answered 429 or 5xx, so the audit pipeline was not checked (%s); try again later", strings.Join(tried, ", "))
+	}
+	via := ""
+	if len(tried) > 1 {
+		via = " (models tried: " + strings.Join(tried, ", ") + ")"
 	}
 	wait := e.DeepWait
 	if wait == 0 {
@@ -217,7 +239,7 @@ func p4Records(ctx context.Context, e *Env, all map[string]any) Result {
 	for {
 		after, err := sentLogRecords(ctx, e.HTTP, metricsURL)
 		if err == nil && after > before {
-			return res(Pass, src, "audit pipeline: the collector sent records to ClickHouse after the test call")
+			return res(Pass, src, "audit pipeline: the collector sent records to ClickHouse after the test call%s", via)
 		}
 		if time.Now().After(deadline) {
 			return res(Fail, src, "the collector sent no record to ClickHouse within %s of a test call", wait).

@@ -150,3 +150,22 @@ func TestHTTPSRedirectListsEnabledHosts(t *testing.T) {
 		t.Errorf("mcp off: redirect hosts %v list the MCP host", h)
 	}
 }
+
+// The console may create Models only in Direct mode; in GitOps mode a Model changes only through a pull request.
+func TestConsoleCreatesModelsOnlyInDirectMode(t *testing.T) {
+	creates := func(docs []doc) bool {
+		for _, r := range get(t, find(t, docs, "Role", "ambit-console"), "rules").([]any) {
+			if contains(get(t, r, "resources"), "models") && contains(get(t, r, "verbs"), "create") {
+				return true
+			}
+		}
+		return false
+	}
+	if !creates(render(t, "--set", "gitops.enabled=false")) {
+		t.Error("Direct mode: the console cannot create Models")
+	}
+	gitops := render(t, "--set", "gitops.enabled=true", "--set", "gitops.repository=acme/cfg", "--set", "gitops.github.appID=1")
+	if creates(gitops) {
+		t.Error("GitOps mode: the console can create Models")
+	}
+}

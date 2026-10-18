@@ -51,10 +51,11 @@ rules:
   - apiGroups: [ambitproject.dev]
     resources: [accessrules, budgets, connections]
     verbs: [create, update, delete]
-  # Edit price (Models page): the console changes only spec.price, admins only.
+  # Edit price (Models page): the console changes only spec.price, admins only. Add model (Direct mode only)
+  # creates a Model, after a dry-run create. In GitOps mode the console never writes a Model; it validates offline.
   - apiGroups: [ambitproject.dev]
     resources: [models]
-    verbs: [update]
+    verbs: [create, update]
   # Anyone signed in may request a server; approving one creates the Server, and records a decision
   # only in the request's status. Adding an app from a preset creates its Server too.
   - apiGroups: [ambitproject.dev]

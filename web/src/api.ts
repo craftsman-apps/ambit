@@ -79,7 +79,7 @@ export type ChangeStep = { name: string; state: "done" | "waiting" | "failed" | 
 export type Change = PullRequest & { merged: boolean; closed: boolean; verb: string; kind: string; name: string; steps: ChangeStep[] };
 export const isProposed = (v: unknown): v is Proposed => !!v && typeof v === "object" && "pullRequest" in v;
 export type Config = {
-  mode: "direct" | "gitops"; repository?: string; branch?: string;
+  mode: "direct" | "gitops"; namespace?: string; repository?: string; branch?: string;
   // The access mode as the controller published it; pending is a change agentgateway has not applied (admins only).
   accessMode: "enforce" | "audit"; modeSince?: string; rulesVersion?: string; rulesSince?: string;
   pending?: { mode: string; rulesVersion: string; step: string; error?: string; objects?: string[] };

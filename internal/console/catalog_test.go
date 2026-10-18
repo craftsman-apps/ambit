@@ -263,7 +263,7 @@ func TestRuleWithUsers(t *testing.T) {
 	var detail RuleDetail
 	json.NewDecoder(d.Body).Decode(&detail)
 	if len(detail.Users) != 1 || detail.Users[0] != "alice@acme.com" || len(detail.Effective) != 1 ||
-		!contains(detail.Effective[0].CEL, identity.PrincipalEmail()+` in ["alice@acme.com"]`) {
+		!contains(detail.Effective[0].CEL, identity.PrincipalEmail(true)+` in ["alice@acme.com"]`) {
 		t.Fatalf("detail %+v", detail)
 	}
 	// Users only, then updated to everyone signed in (which clears nothing by itself: users must be removed).

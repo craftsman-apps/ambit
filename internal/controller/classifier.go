@@ -9,7 +9,6 @@ import (
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
-	"github.com/craftsman-apps/ambit/internal/identity"
 	"github.com/craftsman-apps/ambit/internal/routerconfig"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -171,7 +170,7 @@ func classifyPolicy(ns, route, service string, cfg routerconfig.Config) *unstruc
 				"policy": map[string]any{
 					"backendRef":        map[string]any{"name": service, "port": int64(9000)},
 					"failureMode":       "FailOpen",
-					"requestAttributes": map[string]any{"ambit.groups": principalGroups, "ambit.email": identity.PrincipalEmail(), "ambit.config": "'" + hash + "'"},
+					"requestAttributes": map[string]any{"ambit.groups": principalGroups, "ambit.email": principalEmail(), "ambit.config": "'" + hash + "'"},
 					"processingOptions": map[string]any{
 						"requestHeaderMode": "Send", "requestBodyMode": "None", "allowModeOverride": true,
 						"responseHeaderMode": "Skip", "responseBodyMode": "None",

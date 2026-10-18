@@ -403,6 +403,19 @@ func p10Credentials(ctx context.Context, e *Env) Result {
 	return res(Pass, src, "%d Models use Secrets or cloud identity", len(models.Items))
 }
 
+// P12: an AccessRule's users match a JWT's email only when the token says email_verified (a warning when turned off).
+func p12VerifiedEmail(_ context.Context, e *Env) Result {
+	_, all, err := e.values()
+	if err != nil {
+		return e.valuesUnknown("values")
+	}
+	if v, set := get(all, "accessRules.usersRequireVerifiedEmail"); set && v == false {
+		return res(Warn, "values", "accessRules.usersRequireVerifiedEmail is false: an AccessRule's users match any email in a token, verified or not").
+			next("keep it false only if your identity provider never lets users change their own email (https://ambitproject.dev/docs/concepts)")
+	}
+	return res(Pass, "values", "an AccessRule's users match verified emails only")
+}
+
 // P11: audit-only mode (access.mode: audit) is a trial, not a way to run in production: AccessRules are recorded,
 // not enforced. The check states the mode, how long it has been on, and (with --deep) that the records reach the
 // audit store; it never judges marks. A line under it counts the records of the last 24 h with a missing or failed

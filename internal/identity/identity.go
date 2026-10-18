@@ -47,9 +47,14 @@ func Principal(requireEmail bool) string {
 }
 
 // PrincipalEmail is the same identity's email, or "" when it has none (a JWT without a usable email, accepted when
-// emails are not required). Never the subject: an AccessRule's users match emails only.
-func PrincipalEmail() string {
-	return `(has(apiKey.keyId) ? apiKey.email : ((` + HasEmail() + `) ? jwt.email.trim().lowerAscii() : ""))`
+// emails are not required). Never the subject: an AccessRule's users match emails only. With requireVerified
+// (accessRules.usersRequireVerifiedEmail), a JWT's email counts only when the token says email_verified: true.
+func PrincipalEmail(requireVerified bool) string {
+	has := HasEmail()
+	if requireVerified {
+		has += ` && has(jwt.email_verified) && jwt.email_verified == true`
+	}
+	return `(has(apiKey.keyId) ? apiKey.email : ((` + has + `) ? jwt.email.trim().lowerAscii() : ""))`
 }
 
 // PrincipalGroups are the groups of the same identity.

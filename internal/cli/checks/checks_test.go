@@ -55,7 +55,7 @@ func TestPrint(t *testing.T) {
 
 func TestRunSelectsGroups(t *testing.T) {
 	rs := Run(context.Background(), fx{}.env(t), map[string]bool{GroupProduction: true})
-	if len(rs) != 11 || rs[0].ID != "P1" || rs[10].ID != "P11" { // P11 is one check; the mark-missing line is under it
+	if len(rs) != 12 || rs[0].ID != "P1" || rs[11].ID != "P12" { // P11 is one check; the mark-missing line is under it
 		t.Fatalf("production group = %d results, first %s", len(rs), rs[0].ID)
 	}
 	for _, r := range rs {

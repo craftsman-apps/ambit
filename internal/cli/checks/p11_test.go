@@ -32,6 +32,16 @@ func values(mode string) *fakeHelm {
 	return vals(map[string]any{"access": map[string]any{"mode": mode}})
 }
 
+// P12 warns only when accessRules.usersRequireVerifiedEmail is false; unset (an older chart) or true passes.
+func TestP12VerifiedEmail(t *testing.T) {
+	set := func(v any) *fakeHelm {
+		return vals(map[string]any{"accessRules": map[string]any{"usersRequireVerifiedEmail": v}})
+	}
+	want(t, one(t, "P12", fx{helm: vals(map[string]any{})}), Pass, "verified emails only")
+	want(t, one(t, "P12", fx{helm: set(true)}), Pass, "verified emails only")
+	want(t, one(t, "P12", fx{helm: set(false)}), Warn, "accessRules.usersRequireVerifiedEmail is false")
+}
+
 func TestP11Mode(t *testing.T) {
 	// enforce, set or by default: AccessRules decide.
 	want(t, one(t, "P11", fx{helm: values("")}), Pass, "access.mode is enforce")

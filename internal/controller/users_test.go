@@ -17,7 +17,7 @@ func userRule(name string, groups, users []string, models ...string) v1.AccessRu
 }
 
 func TestCELWithUsers(t *testing.T) {
-	g, e := identity.PrincipalGroups, identity.PrincipalEmail()
+	g, e := identity.PrincipalGroups, identity.PrincipalEmail(true) // UsersRequireVerifiedEmail defaults to true
 	for name, c := range map[string]struct {
 		a    Access
 		want string
@@ -58,8 +58,8 @@ func eval(t *testing.T, expr string, jwt, key map[string]any, tool string) bool 
 }
 
 var (
-	alice      = map[string]any{"sub": "u-alice", "email": "Alice@Acme.com", "groups": []any{"sales"}}
-	bob        = map[string]any{"sub": "u-bob", "email": "bob@acme.com", "groups": []any{"sales"}}
+	alice      = map[string]any{"sub": "u-alice", "email": "Alice@Acme.com", "email_verified": true, "groups": []any{"sales"}}
+	bob        = map[string]any{"sub": "u-bob", "email": "bob@acme.com", "email_verified": true, "groups": []any{"sales"}}
 	emailless  = map[string]any{"sub": "alice@acme.com", "groups": []any{"sales"}} // requireEmail: false; a subject that looks like an email
 	noKey      = map[string]any{}
 	aliceKey   = map[string]any{"keyId": "k1", "email": "alice@acme.com", "groups": []any{}}
@@ -90,6 +90,34 @@ func TestUsersRuleDecisions(t *testing.T) {
 	}
 }
 
+// A JWT email counts for users only when verified (accessRules.usersRequireVerifiedEmail, default true); with the
+// value false any well-formed email counts. A personal key matches by its owner's email either way.
+func TestUsersRequireVerifiedEmail(t *testing.T) {
+	unverified := map[string]any{"sub": "u-alice", "email": "alice@acme.com", "email_verified": false}
+	noClaim := map[string]any{"sub": "u-alice", "email": "alice@acme.com"}
+	for _, c := range []struct {
+		verified bool
+		jwt, key map[string]any
+		want     bool
+	}{
+		{true, alice, noKey, true},
+		{true, unverified, noKey, false},
+		{true, noClaim, noKey, false},
+		{true, map[string]any{}, aliceKey, true},
+		{false, noClaim, noKey, true},
+		{false, map[string]any{}, aliceKey, true},
+		{false, emailless, noKey, false},
+	} {
+		UsersRequireVerifiedEmail = c.verified
+		res := Compile([]v1.Model{model("gemma", "google/gemma")}, nil, []v1.AccessRule{userRule("pilot", nil, pilotUsers, "gemma")}, route)
+		x := expr(t, byName(res.Objects)["gemma"])
+		if got := eval(t, x, c.jwt, c.key, ""); got != c.want {
+			t.Errorf("verified=%v jwt %v key %v: %v, want %v (%s)", c.verified, c.jwt, c.key, got, c.want, x)
+		}
+	}
+	UsersRequireVerifiedEmail = true
+}
+
 // Rules merge users per model, sorted and without duplicates; a rule without users changes nothing (upgrade).
 func TestUsersMergeAndUpgrade(t *testing.T) {
 	res := Compile([]v1.Model{model("gemma", "google/gemma")}, nil, []v1.AccessRule{
@@ -114,7 +142,7 @@ func TestUnpricedRefusesListedUserInADollarGroup(t *testing.T) {
 	if eval(t, x, alice, noKey, "") {
 		t.Errorf("alice is in sales (dollar budget) but reached an unpriced model: %s", x)
 	}
-	if !eval(t, x, map[string]any{"sub": "u", "email": "alice@acme.com"}, noKey, "") {
+	if !eval(t, x, map[string]any{"sub": "u", "email": "alice@acme.com", "email_verified": true}, noKey, "") {
 		t.Errorf("alice without a dollar-capped group refused: %s", x)
 	}
 }

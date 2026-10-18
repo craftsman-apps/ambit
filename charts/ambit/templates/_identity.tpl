@@ -1,7 +1,8 @@
 {{/*
 CEL fragments of who a gateway request belongs to. They must equal internal/identity/identity.go
 (internal/identity/chart_test.go decodes the rendered policies and compares). Emit them with `quote`.
-The helpers that depend on the email rule take (dict "requireEmail" <bool>); the others take anything.
+The helpers that depend on the email rule take (dict "requireEmail" <bool>); ambit.identity.email takes
+(dict "verified" <bool>) (accessRules.usersRequireVerifiedEmail); the others take anything.
 */}}
 {{- define "ambit.identity.hasEmail" -}}
 has(jwt.email) && type(jwt.email) == string && jwt.email.trim().matches('^[^@\\s]+@[^@\\s]+$')
@@ -22,7 +23,7 @@ has(apiKey.keyId) && timestamp(apiKey.until) > request.startTime
 (has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : []))
 {{- end -}}
 {{- define "ambit.identity.email" -}}
-(has(apiKey.keyId) ? apiKey.email : (({{ include "ambit.identity.hasEmail" . }}) ? jwt.email.trim().lowerAscii() : ""))
+(has(apiKey.keyId) ? apiKey.email : (({{ include "ambit.identity.hasEmail" . }}{{ if .verified }} && has(jwt.email_verified) && jwt.email_verified == true{{ end }}) ? jwt.email.trim().lowerAscii() : ""))
 {{- end -}}
 {{- define "ambit.identity.principal" -}}
 {{- if .requireEmail -}}(has(apiKey.keyId) ? apiKey.email : jwt.email.trim().lowerAscii()){{- else -}}(has(apiKey.keyId) ? apiKey.email : (({{ include "ambit.identity.hasEmail" . }}) ? jwt.email.trim().lowerAscii() : jwt.sub)){{- end -}}

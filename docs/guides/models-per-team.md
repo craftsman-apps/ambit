@@ -196,7 +196,7 @@ EOF
 
 The group names are the names your identity provider sends. A person in any listed group is allowed.
 
-To let in one person who is not in the group, such as a pilot user or a contractor, add `users` with their email address next to `groups` (for example `users: [dana@example.com]`). Prefer groups; use people for exceptions.
+To let in one person who is not in the group, such as a pilot user or a contractor, add `users` with their email address next to `groups` (for example `users: [dana@example.com]`). Prefer groups; use people for exceptions. People are matched by a verified email. If your identity provider does not send `email_verified`, set `accessRules.usersRequireVerifiedEmail: false` only if users cannot change their own email.
 
 ## Check it works
 

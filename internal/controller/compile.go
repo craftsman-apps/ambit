@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
-	"github.com/craftsman-apps/ambit/internal/identity"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/utils/ptr"
@@ -144,7 +143,7 @@ func CEL(a Access) string {
 		parts = append(parts, principalGroups+".exists(g, g in ["+quoted(a.Groups)+"])")
 	}
 	if len(a.Users) > 0 {
-		parts = append(parts, identity.PrincipalEmail()+" in ["+quoted(a.Users)+"]")
+		parts = append(parts, principalEmail()+" in ["+quoted(a.Users)+"]")
 	}
 	if len(parts) == 1 {
 		return parts[0]

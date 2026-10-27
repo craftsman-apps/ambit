@@ -88,6 +88,16 @@ Clients call `https://<mcp host>/mcp`.
 
 Budgets belong to the model path. They count LLM requests.
 
+## Masking
+
+With `protection.enabled`, `ambit-guard` masks personal data in the results of MCP tools before the client sees them. It reads every text in the result, including the structured content. It does not mask tool arguments, and it does not mask the model path.
+
+- **Default masks.** Korean resident registration numbers and US Social Security numbers become `<NATIONAL_ID>`. Card numbers (a valid Luhn check is required) become `<CARD_NUMBER>`. Email addresses become `<EMAIL>`. These masks need no other service.
+- **Presidio adds to the default masks.** If you set `protection.presidio.analyzerURL`, the guard first applies the default masks to each text, and then sends the masked text to [Microsoft Presidio](https://microsoft.github.io/presidio/). Presidio can find names, addresses and more languages. Because the default masks run first, Korean resident registration numbers are masked even when Presidio's own recognizers do not find them. Each Presidio finding is replaced by `<ENTITY_TYPE>`, for example `<PERSON>`. Presidio does not change the default placeholders.
+- **Presidio is not part of Ambit.** Ambit does not install it. You run the Presidio analyzer service yourself and give its address in the `protection.presidio` values (see `charts/ambit/values.yaml`). `anonymizerURL` is no longer used. The guard sends the text of one result to the analyzer in pieces of at most 100,000 characters, up to 4 at the same time, and `protection.presidio.timeout` (default 10 s) limits all of those calls together.
+- **Fail closed.** If masking fails (Presidio is down, too slow, or returns an error), the guard withholds the whole result and the call fails. The client never receives unmasked text. If the guard itself is down, the call also fails.
+- **Size limit.** The guard accepts a tool result up to 32 MiB by message size. In a test with the default guard memory limit (128 MiB), a result of 10 MiB was masked and returned, but a result of 12 MiB or more made the guard run out of memory and restart, and the call failed. Plan for tool results of about 10 MiB at most. A failed call returns an error; unmasked text is never returned.
+
 ## Setup path
 
 Requests are not the only flow. Admins change objects in the console (or by pull request, in GitOps mode). The controller `ambit-controller` turns the objects into gateway configuration. Your identity provider reports people who leave to the console by SCIM, and Ambit then stops their keys, sessions and app sign-ins.

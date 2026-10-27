@@ -72,6 +72,9 @@ func RulesVersion(objs []*unstructured.Unstructured) string {
 			continue
 		}
 		a, _, _ := unstructured.NestedFieldNoCopy(o.Object, path...)
+		if a == nil { // a virtual failover model: its targets carry the decisions
+			continue
+		}
 		auth[o.GetKind()+"/"+o.GetName()] = a
 	}
 	b, _ := json.Marshal(auth) // map keys are sorted

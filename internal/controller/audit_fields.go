@@ -58,7 +58,9 @@ func AuditFields(res Result, room int) ([]any, error) {
 				continue
 			}
 			final[o.GetName()], specOf[o.GetName()] = e[0], spec
-			bySpec[spec] = append(bySpec[spec], e[0])
+			if !slices.Contains(bySpec[spec], e[0]) { // a Model's extra endpoints repeat its expression
+				bySpec[spec] = append(bySpec[spec], e[0])
+			}
 		case o.GetKind() == "AgentgatewayPolicy" && o.GetName() == MCPBackendName+"-access":
 			if e, _, _ := unstructured.NestedStringSlice(o.Object, "spec", "backend", "mcp", "authorization", "policy", "matchExpressions"); len(e) == 1 {
 				tool = e[0]

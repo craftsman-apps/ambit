@@ -37,6 +37,56 @@ A Google service-account key file for Vertex AI goes in `credentials.json`:
 kubectl -n ambit-system create secret generic ambit-llm-gcp --from-file=credentials.json=<service-account key file>
 ```
 
+## Fallback and several servers
+
+A Model can use more than one server, and name other Models to use when its servers fail. Clients still ask for the
+one model name; nothing changes for Models that set neither field.
+
+```yaml
+apiVersion: ambitproject.dev/v1alpha1
+kind: Model
+metadata: { name: gpt-5 }
+spec:
+  provider: Azure
+  model: gpt-5
+  credentialsRef: { name: ambit-llm-azure-eu }
+  azure: { resourceName: eu-west, resourceType: OpenAI }
+  # More servers for this same model. The settings above are the first one. Requests are shared by health and speed.
+  additionalEndpoints:
+    - credentialsRef: { name: ambit-llm-azure-us }
+      azure: { resourceName: us-east, resourceType: OpenAI }
+  # Other Models, in order, for when every server above fails.
+  fallback: [claude-sonnet]
+```
+
+- **When a server fails.** A response with status 500 or higher (529 included) or 429 counts as a failure. The gateway
+  tries the request again and sends it to another server, and skips the failed server for 10 seconds (longer after
+  repeated failures). A person sees the answer of the next server, about 10 to 15 ms later. Other errors, such as 400
+  or 401, are returned as they are.
+- **`additionalEndpoints`** (at most 7) set the whole endpoint again: `baseURL`, `credentialsRef`, `azure`, `bedrock`
+  or `vertexai`, as for the Model itself. Provider, model name, price and access rules are the Model's.
+- **`fallback`** (at most 4) names Models in the same namespace. All servers of a fallback Model are used. A fallback
+  Model's own `fallback` is not followed.
+- **Access.** The gateway checks the AccessRules of the Model that answers. A person who may use the Model but not its
+  fallback gets 403 when the Model fails; they are never answered by a model they may not use. The Model's `Ready`
+  message lists who may use it but not a fallback.
+- **Budgets and audit.** The Model that answers is charged at its own price and named in the audit record. The record
+  also shows the name the client asked for. A fallback with no price is refused to groups with a dollar budget, as
+  any Model without a price is.
+- **Routers.** agentgateway v1.6.0 cannot nest these lists. Through a [ModelRouter](routing.md), one server of a Model
+  with these fields answers (measured: always the same one, not chosen by health), without fallback, and the
+  router's condition says `FallbackIgnored`. Do not put such a Model behind a router yet.
+
+What the gateway (agentgateway v1.6.0) cannot do yet:
+
+- **A timeout or a refused connection** is not handled inside the same request. The request ends in 504 or 503; the
+  following requests go to the next server. Most client libraries try again, which hides it.
+- **A stream that breaks after the first byte** is not retried, and the server is not marked as failed. A stream that
+  fails before the first byte is retried like any request.
+- **A person who is told 403 for a fallback** sees the text `authorization failed`, not the provider's error.
+- Retries apply to Models that have these fields only. Ambit writes one retry policy for the whole LLM route
+  (`ambit-llm-retry`) with `2 x (servers - 1)` attempts for the longest list, at most 8.
+
 ## Add a model in the console
 
 An admin adds a model on the Models page with **Add model**. The form asks for the name, the provider, the model ID

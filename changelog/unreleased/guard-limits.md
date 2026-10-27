@@ -1,0 +1,2 @@
+- Masking: ambit-guard now accepts tool results up to 32 MiB (it refused results over 4 MiB before). With Presidio, it sends a result to the analyzer in a few large calls instead of two calls per string, and it replaces the findings itself. The anonymizer is no longer called. The new value `protection.presidio.timeout` (default 10 s) limits all analyzer calls of one result.
+- Docs: Presidio replaces the built-in masks, it does not add to them. See Masking in Concepts.

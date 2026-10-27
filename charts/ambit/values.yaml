@@ -193,8 +193,8 @@ protection:
   # are refused from the next read.
   toolsRefresh: 10m
   # Leave analyzerURL empty for the built-in masks (Korean resident registration numbers, US Social Security
-  # numbers, card numbers, emails). Set it to use Microsoft Presidio instead: Presidio REPLACES the built-in
-  # masks, so check that its recognizers cover the data you must mask. Ambit does not install Presidio.
+  # numbers, card numbers, emails). Set it to add Microsoft Presidio (names, addresses, more languages): the
+  # built-in masks run first, then Presidio. Ambit does not install Presidio.
   presidio:
     analyzerURL: ""
     # Not used any more (Ambit replaces the findings itself). Kept so that existing values still work.

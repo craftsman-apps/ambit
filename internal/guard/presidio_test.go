@@ -215,3 +215,37 @@ func TestGuardServesAToolResultOverFourMiB(t *testing.T) {
 		t.Fatalf("not masked: %v", res)
 	}
 }
+
+const customerRecord = "Kim Minsu: resident registration number 900101-1234567, card 4111 1111 1111 1111, mail minsu@example.com"
+
+func TestBuiltinMasksStillRunWhenPresidioIsOn(t *testing.T) {
+	f := newFakeAnalyzer(t, nil) // Presidio finds nothing, as it may for a Korean resident registration number
+	m := BuiltinThenPresidio{Presidio: &Presidio{AnalyzerURL: f.srv.URL}}
+	out, n, err := m.Mask(t.Context(), customerRecord)
+	if err != nil || n != 3 || strings.Contains(out, "900101") || strings.Contains(out, "4111") ||
+		!strings.Contains(out, "<NATIONAL_ID>") || !strings.Contains(out, "<CARD_NUMBER>") {
+		t.Fatalf("%q %d %v", out, n, err)
+	}
+}
+
+func TestBuiltinAndPresidioCountsAddUpAndPlaceholdersSurvive(t *testing.T) {
+	// Presidio finds a name, and also reports the word inside the built-in placeholder as a name.
+	f := newFakeAnalyzer(t, map[string]string{"Kim Minsu": "PERSON", "NATIONAL_ID": "PERSON"})
+	m := BuiltinThenPresidio{Presidio: &Presidio{AnalyzerURL: f.srv.URL}}
+	out, n, err := m.MaskAll(t.Context(), []string{customerRecord, "call Kim Minsu"})
+	want0 := "<PERSON>: resident registration number <NATIONAL_ID>, card <CARD_NUMBER>, mail <EMAIL>"
+	if err != nil || n != 5 || out[0] != want0 || out[1] != "call <PERSON>" {
+		t.Fatalf("%q %d %v", out, n, err)
+	}
+}
+
+func TestBuiltinThenPresidioFailsClosed(t *testing.T) {
+	f := newFakeAnalyzer(t, nil)
+	f.fail = func(string) bool { return true }
+	g := &Guard{Pins: pins, Masker: BuiltinThenPresidio{Presidio: &Presidio{AnalyzerURL: f.srv.URL}}}
+	res, _ := g.CheckResponse(t.Context(), &extmcp.McpResponse{ServiceNames: []string{"crm"}, Method: "tools/call",
+		McpResponse: []byte(`{"content":[{"type":"text","text":"900101-1234567"}]}`)})
+	if res.GetError() == nil || res.GetMutated() != nil || res.GetPass() != nil {
+		t.Fatalf("want the result withheld: %v", res)
+	}
+}

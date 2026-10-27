@@ -42,8 +42,8 @@ func main() {
 			slog.Error("AMBIT_PRESIDIO_TIMEOUT", "err", err)
 			os.Exit(1)
 		}
-		masker = &guard.Presidio{AnalyzerURL: a, AnonymizerURL: os.Getenv("AMBIT_PRESIDIO_ANONYMIZER_URL"),
-			Language: os.Getenv("AMBIT_PRESIDIO_LANGUAGE"), Timeout: timeout}
+		masker = guard.BuiltinThenPresidio{Presidio: &guard.Presidio{AnalyzerURL: a, AnonymizerURL: os.Getenv("AMBIT_PRESIDIO_ANONYMIZER_URL"),
+			Language: os.Getenv("AMBIT_PRESIDIO_LANGUAGE"), Timeout: timeout}}
 		slog.Info("masking with Presidio", "analyzer", a)
 	}
 	srv := grpc.NewServer(guard.ServerOptions()...)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -116,6 +117,49 @@ func (p *Presidio) analyze(ctx context.Context, text string) ([]finding, error) 
 	return out, json.NewDecoder(resp.Body).Decode(&out)
 }
 
+// BuiltinThenPresidio runs the built-in masks on every text first, then Presidio on the masked texts, so
+// Presidio adds to the built-in masks. The found count is the sum.
+type BuiltinThenPresidio struct{ Presidio *Presidio }
+
+func (b BuiltinThenPresidio) MaskAll(ctx context.Context, texts []string) ([]string, int, error) {
+	pre, total := make([]string, len(texts)), 0
+	for i, t := range texts {
+		m, n, _ := Builtin{}.Mask(ctx, t) // never fails
+		pre[i], total = m, total+n
+	}
+	out, n, err := b.Presidio.MaskAll(ctx, pre)
+	if err != nil {
+		return nil, 0, err
+	}
+	return out, total + n, nil
+}
+
+func (b BuiltinThenPresidio) Mask(ctx context.Context, text string) (string, int, error) {
+	out, n, err := b.MaskAll(ctx, []string{text})
+	if err != nil {
+		return "", 0, err
+	}
+	return out[0], n, nil
+}
+
+// placeholders returns the [start, end) character spans of tokens like <NATIONAL_ID>, in order.
+func placeholders(text []rune) (spans [][2]int) {
+	for i := 0; i < len(text); i++ {
+		if text[i] != '<' {
+			continue
+		}
+		j := i + 1
+		for j < len(text) && (text[j] == '_' || text[j] >= 'A' && text[j] <= 'Z') {
+			j++
+		}
+		if j > i+1 && j < len(text) && text[j] == '>' {
+			spans = append(spans, [2]int{i, j + 1})
+			i = j
+		}
+	}
+	return spans
+}
+
 func (p *Presidio) Mask(ctx context.Context, text string) (string, int, error) {
 	out, n, err := p.MaskAll(ctx, []string{text})
 	if err != nil {
@@ -195,6 +239,12 @@ func (p *Presidio) MaskAll(ctx context.Context, texts []string) ([]string, int, 
 		}
 		merged = append(merged, f)
 	}
+	// Leave alone what lies wholly inside a mask placed by the built-in masker, such as <NATIONAL_ID>.
+	spans := placeholders(all)
+	merged = slices.DeleteFunc(merged, func(f finding) bool {
+		i := sort.Search(len(spans), func(i int) bool { return spans[i][0] > f.Start }) - 1
+		return i >= 0 && f.End <= spans[i][1]
+	})
 	// Replace inside each text only: a finding that reaches over a separator is cut at the text's edge.
 	out, count := make([]string, len(texts)), 0
 	for i, t := range texts {

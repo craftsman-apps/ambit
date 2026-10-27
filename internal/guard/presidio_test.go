@@ -239,6 +239,14 @@ func TestBuiltinAndPresidioCountsAddUpAndPlaceholdersSurvive(t *testing.T) {
 	}
 }
 
+func TestPresidioStillChecksOtherTextInAngleBrackets(t *testing.T) {
+	f := newFakeAnalyzer(t, map[string]string{"JOHN": "PERSON"})
+	m := BuiltinThenPresidio{Presidio: &Presidio{AnalyzerURL: f.srv.URL}}
+	if out, _, err := m.Mask(t.Context(), "<JOHN> wrote"); err != nil || out != "<<PERSON>> wrote" {
+		t.Fatalf("%q %v", out, err)
+	}
+}
+
 func TestBuiltinThenPresidioFailsClosed(t *testing.T) {
 	f := newFakeAnalyzer(t, nil)
 	f.fail = func(string) bool { return true }

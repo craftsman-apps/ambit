@@ -142,19 +142,19 @@ func (b BuiltinThenPresidio) Mask(ctx context.Context, text string) (string, int
 	return out[0], n, nil
 }
 
-// placeholders returns the [start, end) character spans of tokens like <NATIONAL_ID>, in order.
+// placeholders returns the [start, end) character spans of the built-in masks (<NATIONAL_ID>, <CARD_NUMBER>,
+// <EMAIL>) in text, in order. Other text in angle brackets is not one: Presidio must still check it.
 func placeholders(text []rune) (spans [][2]int) {
 	for i := 0; i < len(text); i++ {
 		if text[i] != '<' {
 			continue
 		}
-		j := i + 1
-		for j < len(text) && (text[j] == '_' || text[j] >= 'A' && text[j] <= 'Z') {
-			j++
-		}
-		if j > i+1 && j < len(text) && text[j] == '>' {
-			spans = append(spans, [2]int{i, j + 1})
-			i = j
+		for _, r := range builtinRules {
+			if l := []rune(r.label); i+len(l) <= len(text) && slices.Equal(text[i:i+len(l)], l) {
+				spans = append(spans, [2]int{i, i + len(l)})
+				i += len(l) - 1
+				break
+			}
 		}
 	}
 	return spans

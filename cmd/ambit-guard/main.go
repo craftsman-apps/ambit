@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/extmcp"
@@ -36,10 +37,16 @@ func main() {
 	}
 	var masker guard.Masker = guard.Builtin{}
 	if a := os.Getenv("AMBIT_PRESIDIO_ANALYZER_URL"); a != "" {
-		masker = &guard.Presidio{AnalyzerURL: a, AnonymizerURL: os.Getenv("AMBIT_PRESIDIO_ANONYMIZER_URL"), Language: os.Getenv("AMBIT_PRESIDIO_LANGUAGE")}
+		timeout, err := time.ParseDuration(os.Getenv("AMBIT_PRESIDIO_TIMEOUT")) // empty: the default
+		if err != nil && os.Getenv("AMBIT_PRESIDIO_TIMEOUT") != "" {
+			slog.Error("AMBIT_PRESIDIO_TIMEOUT", "err", err)
+			os.Exit(1)
+		}
+		masker = guard.BuiltinThenPresidio{Presidio: &guard.Presidio{AnalyzerURL: a, AnonymizerURL: os.Getenv("AMBIT_PRESIDIO_ANONYMIZER_URL"),
+			Language: os.Getenv("AMBIT_PRESIDIO_LANGUAGE"), Timeout: timeout}}
 		slog.Info("masking with Presidio", "analyzer", a)
 	}
-	srv := grpc.NewServer()
+	srv := grpc.NewServer(guard.ServerOptions()...)
 	extmcp.RegisterExtMcpServer(srv, &guard.Guard{Pins: guard.KubePins{Client: mgr.GetClient(), Namespace: ns}, Masker: masker,
 		Rules: guard.KubeRules{Client: mgr.GetClient(), Namespace: ns}})
 	lis, err := net.Listen("tcp", ":9090")

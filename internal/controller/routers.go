@@ -130,6 +130,11 @@ func CompileRouters(routers []v1.ModelRouter, models []v1.Model, res *Result, ro
 			conds[r.Name] = cond(metav1.ConditionFalse, "AmbiguousTarget", amb)
 			continue
 		}
+		for _, n := range slices.Compact(slices.Sorted(slices.Values(append(targetNames(c.kept), r.Spec.Default)))) {
+			if usesFailover(byObject[n]) {
+				c.reasons, c.msgs = append(c.reasons, "FallbackIgnored"), append(c.msgs, n+" has a fallback or additional endpoints, which a router does not use: one of its servers answers (not chosen by health), and there is no fallback")
+			}
+		}
 		if len(missing) > 0 {
 			c.reasons, c.msgs = append(c.reasons, "UnknownModel"), append(c.msgs, "no Model named "+strings.Join(missing, ", ")+"; those routes are dropped, the rest is applied")
 		}
@@ -203,9 +208,11 @@ func RelaxForAudit(res Result, refused map[string][]string, compileRouters func(
 		}
 		o = o.DeepCopy()
 		switch {
+		case o.GetKind() == "AgentgatewayModel" && isFailover(o):
+			// a virtual model has no policies; the access decisions are on its targets
 		case o.GetKind() == "AgentgatewayModel":
 			expr := "true"
-			if gs := refused[o.GetName()]; len(gs) > 0 {
+			if gs := refused[modelOf(o)]; len(gs) > 0 {
 				expr = "(true) && " + unpricedDeny(gs)
 			}
 			_ = unstructured.SetNestedSlice(o.Object, []any{expr}, "spec", "policies", "authorization", "policy", "matchExpressions")

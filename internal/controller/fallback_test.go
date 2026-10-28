@@ -129,10 +129,10 @@ func TestFallbackModelsFollowInOrderAtLowerPriority(t *testing.T) {
 		n, p := tgt(tg)
 		got = append(got, n+"@"+string(rune('0'+p)))
 	}
-	if want := []string{"a@0", "b@1", "c@2"}; !slices.Equal(got, want) {
+	if want := []string{"a@0", "a-fb1@1", "a-fb2@2"}; !slices.Equal(got, want) {
 		t.Fatalf("targets %v, want %v", got, want)
 	}
-	for _, n := range []string{"a", "b", "c"} {
+	for _, n := range []string{"a", "a-fb1", "a-fb2"} {
 		h, ok, _ := unstructured.NestedMap(objs[n].Object, "spec", "policies", "health")
 		if !ok {
 			t.Fatalf("%s has no health block", n)
@@ -148,8 +148,18 @@ func TestFallbackModelsFollowInOrderAtLowerPriority(t *testing.T) {
 	if v, _, _ := unstructured.NestedString(objs["a"].Object, "spec", "visibility"); v != "Internal" {
 		t.Fatalf("a must be Internal, got %q", v)
 	}
-	if _, ok, _ := unstructured.NestedString(objs["b"].Object, "spec", "visibility"); ok {
-		t.Fatal("b has no fallback of its own and stays public")
+	for _, n := range []string{"a-fb1", "a-fb2"} {
+		if v, _, _ := unstructured.NestedString(objs[n].Object, "spec", "visibility"); v != "Internal" {
+			t.Fatalf("%s is a target of the virtual model and must be Internal, got %q", n, v)
+		}
+	}
+	for _, n := range []string{"b", "c"} {
+		if _, ok, _ := unstructured.NestedString(objs[n].Object, "spec", "visibility"); ok {
+			t.Fatalf("%s has no fallback of its own and stays public", n)
+		}
+		if _, ok, _ := unstructured.NestedMap(objs[n].Object, "spec", "policies", "health"); ok {
+			t.Fatalf("%s is not a target of a virtual model; the copy is", n)
+		}
 	}
 	if _, has := objs["b-failover"]; has {
 		t.Fatal("b needs no virtual model")
@@ -165,7 +175,7 @@ func TestFallbackUsesEveryEndpointOfTheFallbackModel(t *testing.T) {
 		n, p := tgt(tg)
 		got = append(got, n+"@"+string(rune('0'+p)))
 	}
-	if want := []string{"a@0", "b@1", "b-ep1@1"}; !slices.Equal(got, want) {
+	if want := []string{"a@0", "a-fb1@1", "a-fb1-ep1@1"}; !slices.Equal(got, want) {
 		t.Fatalf("targets %v, want %v", got, want)
 	}
 }
@@ -201,7 +211,7 @@ func TestInvalidFallbacksAreDroppedWithANote(t *testing.T) {
 		n, _ := tgt(tg)
 		got = append(got, n)
 	}
-	if want := []string{"a", "b"}; !slices.Equal(got, want) {
+	if want := []string{"a", "a-fb1"}; !slices.Equal(got, want) {
 		t.Fatalf("targets %v, want %v", got, want)
 	}
 	for _, sub := range []string{"no Model named missing", "cannot fall back to itself", "serves a wildcard"} {
@@ -231,7 +241,89 @@ func TestWildcardModelCannotHaveEndpointsOrFallback(t *testing.T) {
 	}
 }
 
+func TestEndpointWithoutBaseURLOnASelfHostedModelIsNotCompiled(t *testing.T) {
+	m := withEndpoints(model("a", "a"), "http://second.svc:8000/v1")
+	m.Spec.AdditionalEndpoints = append(m.Spec.AdditionalEndpoints, v1.ModelEndpoint{CredentialsRef: &v1.SecretRef{Name: "ambit-llm-open"}})
+	r := compileModels([]v1.Model{m}, nil, route)
+	if len(r.Objects) != 1 || !hasNote(r, "a", "public server") {
+		t.Fatalf("want one plain object and a note, got %v %v", keys(byName(r.Objects)), r.Notes["a"])
+	}
+	// The fallback still works; only the endpoints are dropped.
+	r = compileModels([]v1.Model{withFallback(m, "b"), model("b", "model-b")}, nil, route)
+	got := byName(r.Objects)
+	if got["a-ep1"] != nil || got["a-ep2"] != nil || len(virtualOf(t, got, "a-failover")) != 2 {
+		t.Fatalf("endpoints compiled: %v", keys(got))
+	}
+}
+
+// The fallback is reached through a copy that only people who may use both Models can use (#193).
+func TestFallbackCopyIsOpenOnlyToPeopleWhoMayUseBothModels(t *testing.T) {
+	a, b := withFallback(model("a", "model-a"), "b"), model("b", "model-b")
+	rules := []v1.AccessRule{rule("eng", []string{"eng"}, false, "a"), rule("ops", []string{"ops"}, false, "b")}
+	objs := byName(compileModels([]v1.Model{a, b}, rules, route).Objects)
+	if got, want := expr(t, objs["a-fb1"]), `(`+CEL(Access{Groups: []string{"eng"}})+`) && (`+CEL(Access{Groups: []string{"ops"}})+`)`; got != want {
+		t.Fatalf("copy expression %s, want %s", got, want)
+	}
+	if got := expr(t, objs["b"]); got != CEL(Access{Groups: []string{"ops"}}) {
+		t.Fatalf("the fallback Model itself keeps its own rule, got %s", got)
+	}
+	// Open to everyone on one side: the copy is the other side's rule, unchanged.
+	objs = byName(compileModels([]v1.Model{a, b}, []v1.AccessRule{rule("all", nil, true, "a"), rule("ops", []string{"ops"}, false, "b")}, route).Objects)
+	if got, want := expr(t, objs["a-fb1"]), CEL(Access{Groups: []string{"ops"}}); got != want {
+		t.Fatalf("copy expression %s, want %s", got, want)
+	}
+	// No rule on the primary: nobody may use its name, so nobody is answered under it by the fallback.
+	objs = byName(compileModels([]v1.Model{a, b}, []v1.AccessRule{rule("ops", []string{"ops"}, false, "b")}, route).Objects)
+	if got := expr(t, objs["a-fb1"]); !strings.HasPrefix(got, "(false) && ") {
+		t.Fatalf("copy expression %s must refuse everyone", got)
+	}
+}
+
+func TestFallbackCopyBelongsToThePrimaryAndKeepsTheFallbacksPriceRules(t *testing.T) {
+	a, b := withFallback(model("a", "model-a"), "b"), withEndpoints(model("b", "model-b"), "http://b2.svc:8000/v1")
+	res := compileModels([]v1.Model{a, b}, []v1.AccessRule{rule("all", nil, true, "a", "b")}, route)
+	objs := byName(res.Objects)
+	for _, n := range []string{"a-fb1", "a-fb1-ep1"} {
+		o := objs[n]
+		if o == nil {
+			t.Fatalf("no %s in %v", n, keys(objs))
+		}
+		if o.GetLabels()[FallbackLabel] != "a" || o.GetLabels()[FallbackTargetLabel] != "a" || modelOf(o) != "b" {
+			t.Fatalf("%s labels %v", n, o.GetLabels())
+		}
+		if refs := o.GetOwnerReferences(); len(refs) != 1 || refs[0].Name != "a" {
+			t.Fatalf("%s owner %v, want the primary", n, refs)
+		}
+	}
+	refused := RefuseUnpriced(&res, []v1.Model{a, b}, map[string]v1.ModelPrice{"model-a": {}}, []string{"eng"})
+	if gs := refused["b"]; !slices.Equal(gs, []string{"eng"}) {
+		t.Fatalf("refused %v, want b refused to eng", refused)
+	}
+	for _, n := range []string{"b", "b-ep1", "a-fb1", "a-fb1-ep1"} {
+		if got := expr(t, objs[n]); !strings.Contains(got, `"eng"`) {
+			t.Fatalf("%s is still open to eng: %s", n, got)
+		}
+	}
+}
+
+func TestAuditFieldsIgnoreFallbackCopies(t *testing.T) {
+	rules := []v1.AccessRule{rule("eng", []string{"eng"}, false, "a", "b")}
+	plain := compileModels([]v1.Model{model("a", "model-a"), model("b", "model-b")}, rules, route)
+	fb := compileModels([]v1.Model{withFallback(model("a", "model-a"), "b"), model("b", "model-b")}, rules, route)
+	f1, err1 := AuditFields(plain, 10)
+	f2, err2 := AuditFields(fb, 10)
+	if err1 != nil || err2 != nil {
+		t.Fatal(err1, err2)
+	}
+	if !slices.EqualFunc(f1, f2, func(x, y any) bool { return x.(map[string]any)["expression"] == y.(map[string]any)["expression"] }) {
+		t.Fatalf("a fallback changed the audit fields:\n%v\n%v", f1, f2)
+	}
+}
+
 func TestGeneratedNameClashingWithAModelDisablesFallback(t *testing.T) {
+	if r := compileModels([]v1.Model{withFallback(model("a", "model-a"), "b"), model("b", "model-b"), model("a-fb1-ep3", "model-x")}, nil, route); !hasNote(r, "a", "a-fb1-ep3") {
+		t.Fatalf("a Model named like a copy of a fallback must disable the fallback: %v", r.Notes["a"])
+	}
 	a := withFallback(model("a", "model-a"), "b")
 	r := compileModels([]v1.Model{a, model("b", "model-b"), model("a-failover", "model-x")}, nil, route)
 	if _, has := byName(r.Objects)["a-failover"]; !has || len(virtualOf2(r, "a-failover")) != 0 {
@@ -346,12 +438,12 @@ func TestRefuseUnpricedAlsoClosesTheExtraEndpoints(t *testing.T) {
 	}
 }
 
-func TestRulesVersionIgnoresTheVirtualModelButSeesEndpoints(t *testing.T) {
+func TestRulesVersionIgnoresTheVirtualModelButSeesEndpointsAndFallbackCopies(t *testing.T) {
 	rules := []v1.AccessRule{rule("all", nil, true, "a", "b")}
 	plain := RulesVersion(compileModels([]v1.Model{model("a", "model-a"), model("b", "model-b")}, rules, route).Objects)
 	fb := RulesVersion(compileModels([]v1.Model{withFallback(model("a", "model-a"), "b"), model("b", "model-b")}, rules, route).Objects)
-	if plain != fb {
-		t.Fatalf("a fallback list grants nothing new: %s != %s", plain, fb)
+	if plain == fb {
+		t.Fatal("the copy of a fallback Model carries an access decision and must change the version")
 	}
 	more := RulesVersion(compileModels([]v1.Model{withEndpoints(model("a", "model-a"), "http://x/v1"), model("b", "model-b")}, rules, route).Objects)
 	if plain == more {

@@ -8,6 +8,8 @@
 # 4 · two servers of one Model share the requests
 # 5 · the gateway's access log names the Model that answered
 # 6 · removing the fallback removes the virtual model; the failing Model then answers with its own 500
+# 7 · a person who may use the fallback but not the primary is never answered under the primary's name, whether the
+#     primary is healthy or failing (#193)
 set -euo pipefail
 NS=${1:-ambit-system}
 cd "$(dirname "$0")/.."
@@ -18,8 +20,8 @@ MOCK=http://mock-llm.$NS.svc.cluster.local:8080/v1
 MOCK2=http://mock-classifier.$NS.svc.cluster.local:8080/v1  # the same server, a second deployment
 
 cleanup() {
-  kubectl -n "$NS" delete "models.$G" fb-primary-500 fb-primary-429 fb-backup fb-shared --ignore-not-found >/dev/null 2>&1 || true
-  kubectl -n "$NS" delete "accessrules.$G" fb-ml fb-eng --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete "models.$G" fb-primary-500 fb-primary-429 fb-backup fb-shared fb-solo fb-backup2 --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete "accessrules.$G" fb-ml fb-eng fb-solo-ml fb-solo-eng --ignore-not-found >/dev/null 2>&1 || true
 }
 trap 'rc=$?; cleanup; on_exit $rc' EXIT
 
@@ -122,6 +124,44 @@ until_ok 60 "6 the virtual model fb-primary-500-failover is still there" gone
 plain() { [[ $(ask "$M" mock/fail500) == 500 ]]; }
 until_ok 60 "6 mock/fail500 is not answered with its own 500 after the fallback was removed" plain
 pass "6 fallback removed: virtual model deleted, mock/fail500 answers with its own 500"
+
+# 7 · alice may use the fallback (mock/backup2) but not the primary (mock/fail500-solo); mira may use both
+kubectl -n "$NS" apply -f - >/dev/null <<YAML
+apiVersion: $G/v1alpha1
+kind: Model
+metadata: { name: fb-backup2 }
+spec: { provider: OpenAI, model: mock/backup2, baseURL: $MOCK, credentialsRef: { name: ambit-llm-mock }, $price }
+---
+apiVersion: $G/v1alpha1
+kind: Model
+metadata: { name: fb-solo }
+spec: { provider: OpenAI, model: mock/fail500-solo, baseURL: $MOCK, credentialsRef: { name: ambit-llm-mock }, $price, fallback: [fb-backup2] }
+---
+apiVersion: $G/v1alpha1
+kind: AccessRule
+metadata: { name: fb-solo-ml }
+spec: { groups: [ml-research], models: [fb-solo, fb-backup2] }
+---
+apiVersion: $G/v1alpha1
+kind: AccessRule
+metadata: { name: fb-solo-eng }
+spec: { groups: [eng], models: [fb-backup2] }
+YAML
+for m in fb-backup2 fb-solo; do
+  kubectl -n "$NS" wait "models.$G" "$m" --for=condition=Ready --timeout=120s >/dev/null \
+    || fail "7 $m not Ready: $(kubectl -n "$NS" get "models.$G" "$m" -o jsonpath='{.status.conditions[0].message}')"
+done
+mira_fails_over() { [[ $(ask "$M" mock/fail500-solo) == 200 ]] && grep -q '"model":"mock/backup2"' "$W/llm"; }
+until_ok 60 "7 mira's request for mock/fail500-solo is not answered by mock/backup2" mira_fails_over
+before=$(hits mock-llm mock/backup2)
+for _ in 1 2 3; do  # the primary is marked failing now; alice asks while it is skipped
+  c=$(ask "$A" mock/fail500-solo)
+  [[ "$c" == 403 ]] || fail "7 alice -> mock/fail500-solo while the primary fails: $c $(head -c 200 "$W/llm") (expected 403)"
+done
+[[ $(hits mock-llm mock/backup2) == "$before" ]] || fail "7 the fallback received alice's request for the primary's name"
+c=$(ask "$A" mock/backup2)
+[[ "$c" == 200 ]] || fail "7 alice -> mock/backup2 (she may use it): $c $(head -c 200 "$W/llm")"
+pass "7 alice (allowed on mock/backup2 only): 403 for mock/fail500-solo while its primary fails, 200 for mock/backup2 itself"
 
 cleanup; trap 'on_exit $?' EXIT
 done_step fallback

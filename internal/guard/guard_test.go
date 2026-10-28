@@ -220,3 +220,16 @@ func TestCallArgumentsForUsers(t *testing.T) {
 		t.Fatalf("email key missing: %v", r)
 	}
 }
+
+func TestBuiltinMaskEdges(t *testing.T) {
+	for in, want := range map[string]string{
+		"": "", "nothing here": "nothing here",
+		"a@b.com and c@d.org":                                "<EMAIL> and <EMAIL>",
+		"1234567890123 then 4111 1111 1111 1111 then x@y.io": "1234567890123 then <CARD_NUMBER> then <EMAIL>", // the first fails Luhn
+		"900101-1234567":                                     "<NATIONAL_ID>", "ends with 123-45-6789": "ends with <NATIONAL_ID>",
+	} {
+		if got, _, _ := (Builtin{}).Mask(t.Context(), in); got != want {
+			t.Errorf("%q: got %q, want %q", in, got, want)
+		}
+	}
+}

@@ -14,6 +14,7 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // +kubebuilder:validation:XValidation:rule="!has(self.additionalEndpoints) || self.additionalEndpoints.all(e, has(e.vertexai) == (self.provider == 'VertexAI'))",message="every additional endpoint needs vertexai settings with provider VertexAI, and only there"
 // +kubebuilder:validation:XValidation:rule="!has(self.additionalEndpoints) || self.additionalEndpoints.all(e, has(e.credentialsRef) || self.provider in ['Bedrock', 'VertexAI'])",message="every additional endpoint needs credentialsRef (only Bedrock and VertexAI may use the gateway's cloud identity)"
 // +kubebuilder:validation:XValidation:rule="!has(self.additionalEndpoints) || self.additionalEndpoints.all(e, !has(e.baseURL) || !(self.provider in ['Azure', 'Bedrock', 'VertexAI']))",message="baseURL is not used with Azure, Bedrock or VertexAI: their settings define the endpoint"
+// +kubebuilder:validation:XValidation:rule="!has(self.baseURL) || !has(self.additionalEndpoints) || self.additionalEndpoints.all(e, has(e.baseURL))",message="the Model has a baseURL, so every additional endpoint needs its own baseURL: without one it would go to the provider's public server"
 type ModelSpec struct {
 	// Provider serving the model. Values follow agentgateway's AgentgatewayModel providers. Azure, Bedrock and VertexAI
 	// also need their settings block (azure, bedrock, vertexai). Ollama and other self-hosted servers: provider OpenAI
@@ -72,8 +73,8 @@ type ModelSpec struct {
 	// +kubebuilder:validation:MaxItems=7
 	AdditionalEndpoints []ModelEndpoint `json:"additionalEndpoints,omitempty"`
 	// Fallback names other Models (in this namespace), in order, that answer when every server of this Model fails
-	// with 5xx or 429. Clients still ask for this Model. A person is answered by a fallback only if the fallback's own
-	// AccessRules allow them; otherwise they get 403. The fallback is billed at its own price. A fallback's own
+	// with 5xx or 429. Clients still ask for this Model. A person is answered by a fallback only if the AccessRules allow
+	// them to use both this Model and the fallback; otherwise they get 403, also while this Model works. The fallback is billed at its own price. A fallback's own
 	// fallback list is not followed.
 	// +optional
 	// +kubebuilder:validation:MaxItems=4

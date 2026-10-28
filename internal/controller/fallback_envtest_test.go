@@ -51,6 +51,9 @@ func TestFallbackCRDRules(t *testing.T) {
 		"endpoint-bad-url": func(s *v1.ModelSpec) {
 			s.AdditionalEndpoints = []v1.ModelEndpoint{{BaseURL: "not a url", CredentialsRef: ep.CredentialsRef}}
 		},
+		"endpoint-without-baseurl-on-self-hosted-model": func(s *v1.ModelSpec) {
+			s.AdditionalEndpoints = []v1.ModelEndpoint{ep, {CredentialsRef: ep.CredentialsRef}}
+		},
 		"eight-endpoints":     func(s *v1.ModelSpec) { s.AdditionalEndpoints = many(8) },
 		"five-fallbacks":      func(s *v1.ModelSpec) { s.Fallback = []string{"a", "b", "c", "d", "e"} },
 		"duplicate-fallback":  func(s *v1.ModelSpec) { s.Fallback = []string{"a", "a"} },

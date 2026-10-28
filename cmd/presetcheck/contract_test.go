@@ -133,7 +133,7 @@ func tenantVendor(t *testing.T, issuerInMetadata string) (*httptest.Server, pres
 	srv, p := vendor(t, func(path string, w http.ResponseWriter) bool {
 		switch path {
 		case "/.well-known/oauth-protected-resource/mcp":
-			w.Write([]byte(`{"authorization_servers":["` + srv.URL + `/tenant"]}`))
+			w.Write([]byte(`{"resource":"` + srv.URL + `/mcp","authorization_servers":["` + srv.URL + `/tenant"]}`))
 		case "/.well-known/oauth-authorization-server/tenant":
 			iss := issuerInMetadata
 			if iss == "" {
@@ -226,21 +226,59 @@ func presetWith(p presets.Preset, placeholder bool) presets.Preset {
 	return p
 }
 
-func TestContractRefusesResourceMetadataOnAnotherHost(t *testing.T) {
-	var other int
-	otherSrv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { other++ }))
-	t.Cleanup(otherSrv.Close)
+// RFC 9728: the server may name its resource metadata on another host (Zoom). It counts only if the metadata's
+// "resource" is the server URL (section 3.3); otherwise another host could speak for the server.
+func TestContractResourceMetadataOnAnotherHost(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		resource func(serverURL string) string
+		want     string // "" = the contract passes
+	}{
+		{"names the server", func(s string) string { return s }, ""},
+		{"names the server with a slash", func(s string) string { return s + "/" }, ""},
+		{"names the server's origin", func(s string) string { u, _ := url.Parse(s); return u.Scheme + "://" + u.Host }, ""},
+		{"names a path that is not a parent", func(s string) string { return s + "x" }, "not for the server"},
+		{"names another resource", func(string) string { return "https://other.example/mcp" }, "not for the server"},
+		{"names no resource", func(string) string { return "" }, "not for the server"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			srv, p := vendor(t, nil) // the vendor's own metadata stays unused: the server points elsewhere
+			meta := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte(`{"resource":"` + c.resource(p.Server.URL) + `","authorization_servers":["` + srv.URL + `"]}`))
+			}))
+			t.Cleanup(meta.Close)
+			srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/mcp":
+					w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+meta.URL+`/prm"`)
+					w.WriteHeader(401)
+				case "/.well-known/oauth-authorization-server":
+					w.Write([]byte(`{"issuer":"` + srv.URL + `","authorization_endpoint":"` + srv.URL + `/authorize","token_endpoint":"` + srv.URL + `/token"}`))
+				case "/token":
+					w.WriteHeader(400)
+					w.Write([]byte(`{"error":"invalid_request"}`))
+				}
+			})
+			hc := srv.Client() // the test servers share one certificate
+			probs := strings.Join(checkContract(t.Context(), hc, p, nil), "\n")
+			if (c.want == "") != (probs == "") || !strings.Contains(probs, c.want) {
+				t.Fatalf("want %q, problems: %s", c.want, probs)
+			}
+		})
+	}
+}
+
+func TestContractRefusesResourceMetadataWithoutHTTPS(t *testing.T) {
 	srv, p := vendor(t, func(path string, w http.ResponseWriter) bool {
 		if path == "/mcp" {
-			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+otherSrv.URL+`/prm"`)
+			w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="http://other.example/prm"`)
 			w.WriteHeader(401)
 			return true
 		}
 		return false
 	})
-	probs := strings.Join(checkContract(t.Context(), srv.Client(), p, nil), "\n")
-	if !strings.Contains(probs, "another host") || other != 0 {
-		t.Fatalf("other host got %d requests; problems: %s", other, probs)
+	if probs := strings.Join(checkContract(t.Context(), srv.Client(), p, nil), "\n"); !strings.Contains(probs, "not an https URL") {
+		t.Fatal(probs)
 	}
 }
 

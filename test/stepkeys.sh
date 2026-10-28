@@ -82,6 +82,14 @@ grep -q 'no such path on the Ambit LLM gateway: /v1/v1/messages' "$W/llm" || fai
 [[ $(code -H "x-api-key: $K") == 200 ]] || fail "1b a model call must still work: $(cat "$W/llm")"
 pass "1b unknown LLM paths answer 404 with or without a key; known paths keep 401/403; a model call works"
 
+# 1c · #139: Codex asks GET /v1/models?client_version=... and reads {"models": [...]}; it gets that. Any other request
+# keeps the OpenAI list, and the same identity gate applies to both.
+models() { command curl -s -o "$W/llm" -w '%{http_code}' "$LLMHOST/v1/models$1" "${@:2}"; }
+[[ $(models '?client_version=0.159.3' -H "x-api-key: $K") == 200 && "$(cat "$W/llm")" == '{"models":[]}' ]] || fail "1c Codex model list: $(cat "$W/llm")"
+[[ $(models '' -H "x-api-key: $K") == 200 && "$(cat "$W/llm")" == *'"object":"list"'* && "$(cat "$W/llm")" == *'"data":['* ]] || fail "1c OpenAI model list: $(cat "$W/llm")"
+[[ $(models '?client_version=0.159.3') =~ ^40[13]$ && $(models '?client_version=0.159.3' -H "x-api-key: ambit_wrongwrongwrongwrongwrongwrongwrongwrongwro") == 403 ]] || fail "1c Codex model list without a valid key: $(cat "$W/llm")"
+pass "1c GET /v1/models?client_version= answers {\"models\":[]} for Codex, the OpenAI list otherwise; both need a key"
+
 # 2 · refused: no credential, wrong key, broken JWT, wrong-scope key, valid JWT + wrong key
 TOK=$(token alice)
 # First prove a valid JWT works (after a Keycloak restart the gateway holds the old keys until the controller

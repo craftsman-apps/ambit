@@ -101,17 +101,12 @@ func Compile(models []v1.Model, servers []v1.Server, rules []v1.AccessRule, rout
 	sorted := slices.Clone(models)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	plans := planFailover(sorted, res.Access)
-	targeted := map[string]bool{} // Models whose objects are targets of a virtual failover model
-	for name, p := range plans {
-		if p.on {
-			targeted[name] = true
-			for _, f := range p.fallback {
-				targeted[f] = true
-			}
-		}
+	byName := map[string]v1.Model{}
+	for _, m := range sorted {
+		byName[m.Name] = m
 	}
 	for _, m := range sorted {
-		res.Objects = append(res.Objects, modelObjects(m, res.Access[m.Name], route, plans, targeted[m.Name])...)
+		res.Objects = append(res.Objects, modelObjects(m, res.Access[m.Name], route, plans, byName, res.Access)...)
 		if p := plans[m.Name]; p != nil && len(p.notes) > 0 {
 			if res.Notes == nil {
 				res.Notes = map[string][]string{}

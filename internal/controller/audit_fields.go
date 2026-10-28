@@ -51,6 +51,8 @@ func AuditFields(res Result, room int) ([]any, error) {
 		switch {
 		case o.GetKind() == "AgentgatewayModel" && o.GetLabels()[RouterLabel] != "":
 			routers = append(routers, o)
+		case o.GetKind() == "AgentgatewayModel" && o.GetLabels()[FallbackTargetLabel] != "":
+			// a copy of a fallback Model, open to fewer people than the Model itself: its expression adds nothing
 		case o.GetKind() == "AgentgatewayModel":
 			e, _, _ := unstructured.NestedStringSlice(o.Object, "spec", "policies", "authorization", "policy", "matchExpressions")
 			spec, _, _ := unstructured.NestedString(o.Object, "spec", "match", "model")

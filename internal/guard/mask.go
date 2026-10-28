@@ -52,13 +52,26 @@ func luhn(s string) bool {
 func (Builtin) Mask(_ context.Context, text string) (string, int, error) {
 	n := 0
 	for _, r := range builtinRules {
-		text = r.re.ReplaceAllStringFunc(text, func(m string) string {
-			if r.check != nil && !r.check(m) {
-				return m
+		// One output copy per rule that finds something (ReplaceAllStringFunc grows its buffer by doubling and
+		// copies it again), and none for a rule that finds nothing.
+		var b strings.Builder
+		last := 0
+		for _, loc := range r.re.FindAllStringIndex(text, -1) {
+			if r.check != nil && !r.check(text[loc[0]:loc[1]]) {
+				continue
 			}
+			if b.Len() == 0 {
+				b.Grow(len(text))
+			}
+			b.WriteString(text[last:loc[0]])
+			b.WriteString(r.label)
+			last = loc[1]
 			n++
-			return r.label
-		})
+		}
+		if last > 0 || b.Len() > 0 {
+			b.WriteString(text[last:])
+			text = b.String()
+		}
 	}
 	return text, n, nil
 }

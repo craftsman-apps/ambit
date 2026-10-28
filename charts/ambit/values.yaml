@@ -192,12 +192,17 @@ protection:
   # How often each server's tools are read again; a changed definition is hidden at once, and calls to it
   # are refused from the next read.
   toolsRefresh: 10m
-  # Leave empty for the built-in masks (national ID numbers, card numbers, emails). Set both to use
-  # Microsoft Presidio (names, addresses, more languages).
+  # Leave analyzerURL empty for the built-in masks (Korean resident registration numbers, US Social Security
+  # numbers, card numbers, emails). Set it to add Microsoft Presidio (names, addresses, more languages): the
+  # built-in masks run first, then Presidio. Ambit does not install Presidio.
   presidio:
     analyzerURL: ""
+    # Not used any more (Ambit replaces the findings itself). Kept so that existing values still work.
     anonymizerURL: ""
     language: en
+    # The time limit for all analyzer calls of one tool result (a Go duration). If it is exceeded, the result
+    # is withheld.
+    timeout: 10s
 
 limits:
   # Budgets: daily LLM request limits per group and per user (Budget objects), shared by every replica.

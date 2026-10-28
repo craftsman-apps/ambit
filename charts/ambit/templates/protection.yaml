@@ -47,6 +47,7 @@ spec:
             - { name: AMBIT_PRESIDIO_ANALYZER_URL, value: {{ .analyzerURL | quote }} }
             - { name: AMBIT_PRESIDIO_ANONYMIZER_URL, value: {{ .anonymizerURL | quote }} }
             - { name: AMBIT_PRESIDIO_LANGUAGE, value: {{ .language | quote }} }
+            - { name: AMBIT_PRESIDIO_TIMEOUT, value: {{ .timeout | default "10s" | quote }} }
             {{- end }}{{ end }}
           ports: [{ name: grpc, containerPort: 9090 }, { name: health, containerPort: 8081 }]
           readinessProbe: { httpGet: { path: /, port: health } }

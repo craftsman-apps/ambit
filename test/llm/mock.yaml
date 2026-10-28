@@ -1,7 +1,8 @@
 # Test only: an OpenAI-compatible server that answers every chat completion with fixed usage (12 input,
 # 3 output tokens), streamed or not; like OpenAI, a stream carries usage only with stream_options.include_usage. Tests use it instead of a real provider where they need a successful
 # answer (token counts, cost), so they do not depend on a provider's free quota. The answer names any
-# X-Ambit-User header it received, so a test can check that clients cannot pass one through.
+# X-Ambit-User header it received, so a test can check that clients cannot pass one through. A model name that starts
+# with mock/fail500 or mock/fail429 is answered with that status (a provider that is down or rate-limited).
 apiVersion: v1
 kind: ConfigMap
 metadata: { name: mock-llm }
@@ -9,7 +10,7 @@ data:
   server.py: |
     import json, http.server, time
     USAGE = {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15}
-    COUNT = {"classify": 0, "auth": ""}  # test hooks for the classifier (step 12)
+    COUNT = {"classify": 0, "auth": "", "models": {}}  # test hooks: the classifier (step 12), requests per model name (step fallback)
     class H(http.server.BaseHTTPRequestHandler):
         def log_message(self, *a): pass
         def do_GET(self):  # classifications answered, and the last classifier Authorization header
@@ -19,6 +20,11 @@ data:
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
             model = body.get("model")
+            COUNT["models"][model] = COUNT["models"].get(model, 0) + 1
+            if isinstance(model, str) and model.startswith(("mock/fail500", "mock/fail429")):  # a provider that is down or rate-limited
+                out = json.dumps({"error": {"message": "mock provider failure", "type": "server_error"}}).encode()
+                self.send_response(500 if model.startswith("mock/fail500") else 429); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(out)))
+                self.end_headers(); self.wfile.write(out); return
             last = (body.get("messages") or [{}])[-1].get("content", "")
             text = last if isinstance(last, str) else ""  # a multi-part message has a list content
             system = next((m.get("content") for m in body.get("messages", []) if m.get("role") == "system"), "") or ""

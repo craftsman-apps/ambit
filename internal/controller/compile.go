@@ -31,6 +31,7 @@ type Result struct {
 	Access         map[string]Access           // by Model name
 	RuleConditions map[string]metav1.Condition // "Ready" condition by AccessRule name
 	Audit          bool                        // audit mode: CompileRouters writes lines without the access part
+	Notes          map[string][]string         // by Model name: what is wrong or ignored in its fallback settings
 }
 
 // Compile is a pure function: the same inputs in any order give the same output.
@@ -99,8 +100,19 @@ func Compile(models []v1.Model, servers []v1.Server, rules []v1.AccessRule, rout
 	}
 	sorted := slices.Clone(models)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	plans := planFailover(sorted, res.Access)
+	byName := map[string]v1.Model{}
 	for _, m := range sorted {
-		res.Objects = append(res.Objects, agentgatewayModel(m, res.Access[m.Name], route))
+		byName[m.Name] = m
+	}
+	for _, m := range sorted {
+		res.Objects = append(res.Objects, modelObjects(m, res.Access[m.Name], route, plans, byName, res.Access)...)
+		if p := plans[m.Name]; p != nil && len(p.notes) > 0 {
+			if res.Notes == nil {
+				res.Notes = map[string][]string{}
+			}
+			res.Notes[m.Name] = p.notes
+		}
 	}
 	res.Objects = append(res.Objects, compileServers(servers, rules)...)
 	return res

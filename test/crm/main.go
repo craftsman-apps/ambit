@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -15,6 +16,10 @@ import (
 
 type args struct {
 	ID string `json:"id"`
+}
+
+type bigArgs struct {
+	MiB int `json:"mib"`
 }
 
 func main() {
@@ -32,6 +37,12 @@ func main() {
 			})
 	}
 	add("Look up a customer by id.")
+	// A tool result of the given size in MiB, with an email at its end: the guard must mask it (step 9, check 1b).
+	mcp.AddTool(s, &mcp.Tool{Name: "get_report", Description: "Return a report of the given size in MiB."},
+		func(_ context.Context, _ *mcp.CallToolRequest, a bigArgs) (*mcp.CallToolResult, any, error) {
+			text := strings.Repeat("quarterly figures. ", a.MiB<<20/19) + " contact minsu.kim@example.com"
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: text}}}, nil, nil
+		})
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, &mcp.StreamableHTTPOptions{Stateless: true})
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", h)

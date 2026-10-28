@@ -89,7 +89,7 @@ install: $(DEPS) install-crds
 	helm upgrade --install ambit-crds charts/ambit-crds -n $(NS) --create-namespace --wait
 	helm upgrade --install ambit charts/ambit -n $(NS) -f charts/ambit/values-kind.yaml --wait --timeout 5m
 
-STEPS ?= 0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 8 9 10 12 keys ext args
+STEPS ?= 0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 8 9 10 12 keys ext args fallback
 # make test            -> every step; make test STEPS=3b -> one step (each sets up what it needs)
 test:
 	@for s in $(STEPS); do ./test/step$$s.sh $(NS) || exit 1; done

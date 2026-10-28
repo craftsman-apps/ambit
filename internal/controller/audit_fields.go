@@ -51,6 +51,8 @@ func AuditFields(res Result, room int) ([]any, error) {
 		switch {
 		case o.GetKind() == "AgentgatewayModel" && o.GetLabels()[RouterLabel] != "":
 			routers = append(routers, o)
+		case o.GetKind() == "AgentgatewayModel" && o.GetLabels()[FallbackTargetLabel] != "":
+			// a copy of a fallback Model, open to fewer people than the Model itself: its expression adds nothing
 		case o.GetKind() == "AgentgatewayModel":
 			e, _, _ := unstructured.NestedStringSlice(o.Object, "spec", "policies", "authorization", "policy", "matchExpressions")
 			spec, _, _ := unstructured.NestedString(o.Object, "spec", "match", "model")
@@ -58,7 +60,9 @@ func AuditFields(res Result, room int) ([]any, error) {
 				continue
 			}
 			final[o.GetName()], specOf[o.GetName()] = e[0], spec
-			bySpec[spec] = append(bySpec[spec], e[0])
+			if !slices.Contains(bySpec[spec], e[0]) { // a Model's extra endpoints repeat its expression
+				bySpec[spec] = append(bySpec[spec], e[0])
+			}
 		case o.GetKind() == "AgentgatewayPolicy" && o.GetName() == MCPBackendName+"-access":
 			if e, _, _ := unstructured.NestedStringSlice(o.Object, "spec", "backend", "mcp", "authorization", "policy", "matchExpressions"); len(e) == 1 {
 				tool = e[0]

@@ -117,12 +117,10 @@ func TestLuhnSparesOrdinaryNumbers(t *testing.T) {
 
 func TestPresidioClient(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/analyze":
-			w.Write([]byte(`[{"entity_type":"PERSON","start":0,"end":3,"score":0.9}]`))
-		case "/anonymize":
-			w.Write([]byte(`{"text":"<PERSON> called"}`))
+		if r.URL.Path != "/analyze" {
+			t.Errorf("unexpected call to %s", r.URL.Path)
 		}
+		w.Write([]byte(`[{"entity_type":"PERSON","start":0,"end":3,"score":0.9}]`))
 	}))
 	defer srv.Close()
 	p := &Presidio{AnalyzerURL: srv.URL, AnonymizerURL: srv.URL}

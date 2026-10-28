@@ -1,0 +1,2 @@
+- A Model's `fallback` answers a request for the Model's name only for people who may use both Models. A person who may use the fallback but not the Model gets 403 for the Model's name, whether the Model works or fails.
+- When a Model has a `baseURL` (a server you host), every entry in `additionalEndpoints` needs its own `baseURL`. Ambit refuses the Model otherwise, so no prompt can reach the provider's public server by mistake.

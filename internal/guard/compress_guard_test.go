@@ -5,8 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
 	"math/rand"
 	"runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"strings"
 	"testing"
 	"time"
@@ -316,5 +320,18 @@ func TestCompressMemoryBound(t *testing.T) {
 				t.Errorf("%s/%s: allocated %d bytes for %d bytes of input (%.1f times)", name, mode, got, len(text), float64(got)/float64(len(text)))
 			}
 		}
+	}
+}
+
+func TestMinBytesDefaultsWhenZero(t *testing.T) {
+	sch := k8sruntime.NewScheme()
+	_ = v1.AddToScheme(sch)
+	srv := &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "crm", Namespace: "ns"}, Spec: v1.ServerSpec{ResultCompression: &v1.ResultCompression{Mode: ModeLossless}}}
+	k := KubeCompression{Client: fake.NewClientBuilder().WithScheme(sch).WithObjects(srv).Build(), Namespace: "ns"}
+	if c := k.Compression(t.Context(), "crm"); c.MinBytes != DefaultMinBytes || c.Mode != ModeLossless {
+		t.Fatalf("got %+v", c)
+	}
+	if c := k.Compression(t.Context(), "gone"); c.Mode != ModeOff {
+		t.Fatalf("unknown server: %+v", c)
 	}
 }

@@ -66,6 +66,28 @@ func TestCompressTableEscapedPipeStaysInItsCell(t *testing.T) {
 	}
 }
 
+func TestCompressTableCSVKeepsSpacesInCells(t *testing.T) {
+	in := "a,b\n1,\" x\"\n2,y \n3,\"z\"\n4,\" \"\n5,w\n"
+	out, ok := compressTable(in)
+	if !ok {
+		t.Fatal("not detected")
+	}
+	a, _ := readAll(in, ',')
+	b, err := readAll(out, ',')
+	if err != nil || !reflect.DeepEqual(a, b) {
+		t.Fatalf("cells changed: %q -> %q (%v)", a, b, err)
+	}
+}
+
+func TestCompressTablePipeCellTextIsNeverChanged(t *testing.T) {
+	in := "| a | b |\n|---|---|\n| x\\\\|y | 1 |\n| p | 2 |\n| q | 3 |\n| r | 4 |\n"
+	out, ok := compressTable(in)
+	// Either the row is left as it is (a ragged row makes the text unknown) or the cell text is unchanged.
+	if ok && !strings.Contains(out, "x\\\\|y|1") {
+		t.Fatalf("got %q", out)
+	}
+}
+
 func TestCompressTableRaggedIsUnknown(t *testing.T) {
 	in := "a,b,c\n1,2,3\n4,5\n6,7,8\n9,10,11\n12,13,14\n"
 	if _, ok := compressTable(in); ok {

@@ -43,5 +43,8 @@ func (k KubeCompression) Compression(ctx context.Context, server string) Compres
 		return CompressionConfig{Mode: ModeOff}
 	}
 	c := s.Spec.ResultCompression
+	if c.MinBytes == 0 {
+		return CompressionConfig{Mode: c.Mode, MinBytes: DefaultMinBytes} // the API server defaults it; this guards an old object
+	}
 	return CompressionConfig{Mode: c.Mode, MinBytes: int(c.MinBytes)}
 }

@@ -15,6 +15,9 @@ const (
 	ModeShorten  = "shorten"
 )
 
+// DefaultMinBytes is the size below which a text is not compressed, when the Server does not say.
+const DefaultMinBytes = 8192
+
 const (
 	// maxCompressBytes is the largest text the guard compresses. A larger one is masked and passed as it is.
 	// Measured with the memory test (see the pull request); lower it if two results at once do not fit.

@@ -327,6 +327,28 @@ type ServerSpec struct {
 	// DisplayName is shown in the console.
 	// +optional
 	DisplayName string `json:"displayName,omitempty"`
+	// ResultCompression makes the text of this server's tool results smaller before the client stores it,
+	// to save model tokens. Off unless set. ambit-guard needs protection.enabled.
+	// +optional
+	ResultCompression *ResultCompression `json:"resultCompression,omitempty"`
+}
+
+// ResultCompression is the compression of tool results of one server. Start with lossless, check the
+// ambit_guard_compress_* metrics, then move one server at a time to shorten.
+type ResultCompression struct {
+	// Mode: off changes nothing. lossless removes only layout (whitespace between tokens, repeated key names,
+	// padding, ANSI color codes) from JSON, CSV and tables, YAML, logs and test output. shorten also leaves out
+	// content of logs, test output and YAML (repeated log lines, passing tests, comments and managedFields),
+	// marks each cut, and adds a line that tells the model to call the tool again with a narrower query.
+	// +kubebuilder:validation:Enum=off;lossless;shorten
+	// +kubebuilder:default=off
+	Mode string `json:"mode,omitempty"`
+	// MinBytes: a text smaller than this is not touched.
+	// +kubebuilder:validation:Minimum=1024
+	// +kubebuilder:validation:Maximum=4194304
+	// +kubebuilder:default=8192
+	// +optional
+	MinBytes int32 `json:"minBytes,omitempty"`
 }
 
 type ServerStatus struct {

@@ -93,6 +93,33 @@ spec:
                     maximum: 65535
                     minimum: 1
                     type: integer
+                  resultCompression:
+                    description: 'ResultCompression makes the text of this server''s tool results smaller before the client stores it,
+
+                      to save model tokens. Off unless set. ambit-guard needs protection.enabled.'
+                    properties:
+                      minBytes:
+                        default: 8192
+                        description: 'MinBytes: a text smaller than this is not touched.'
+                        format: int32
+                        maximum: 4194304
+                        minimum: 1024
+                        type: integer
+                      mode:
+                        default: 'off'
+                        description: 'Mode: off changes nothing. lossless removes only layout (whitespace between tokens, repeated key names,
+
+                          padding, ANSI color codes) from JSON, CSV and tables, YAML, logs and test output. shorten also leaves out
+
+                          content of logs, test output and YAML (repeated log lines, passing tests, comments and managedFields),
+
+                          marks each cut, and adds a line that tells the model to call the tool again with a narrower query.'
+                        enum:
+                        - 'off'
+                        - lossless
+                        - shorten
+                        type: string
+                    type: object
                   transport:
                     default: stdio
                     description: How the server itself talks MCP. stdio servers are wrapped by ToolHive's proxy.

@@ -73,6 +73,28 @@ spec:
             summary: "Audit records were lost in the last 10 minutes ({{`{{ $value | printf \"%.0f\" }}`}})"
             description: "The collector could not write to ClickHouse, or refused records near its memory limit. Check ClickHouse first: kubectl -n {{ $ns }} logs deploy/ambit-otel-collector"
         {{- end }}
+        {{- if and .Values.mcp.enabled .Values.protection.enabled }}
+        - alert: AmbitGuardCompressionFailing
+          expr: sum by (namespace, server) (increase(ambit_guard_compress_results_total{namespace="{{ $ns }}", outcome=~"error|timeout"}[30m])) > 0
+          labels: { severity: warning }
+          annotations:
+            summary: "Result compression failed or ran out of time for server {{`{{ $labels.server }}`}} ({{`{{ $value | printf \"%.0f\" }}`}} results in 30 minutes)"
+            description: "The guard passed the original text, so no call failed. Set resultCompression.mode to off on the Server if it keeps happening, and read the guard log: kubectl -n {{ $ns }} logs deploy/ambit-guard"
+        {{- end }}
+{{- if and .Values.mcp.enabled .Values.protection.enabled }}
+---
+# The guard's /metrics (ambit_guard_compress_*), on its health port.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: ambit-guard
+  {{- with .Values.alerts.labels }}
+  labels: {{ toJson . }}
+  {{- end }}
+spec:
+  selector: { matchLabels: { app.kubernetes.io/name: ambit-guard } }
+  podMetricsEndpoints: [{ port: health }]
+{{- end }}
 {{- if .Values.evidence.enabled }}
 ---
 apiVersion: monitoring.coreos.com/v1

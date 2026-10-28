@@ -34,7 +34,7 @@ Rules are deny by default, except in audit-only mode (`access.mode: audit`, see 
 
 ### Server
 
-A `Server` is either a remote MCP server (`url`) or a container image that ToolHive runs inside your cluster (`image`, pinned by digest). A server with `connection` must be a remote server, because a per-person token cannot reach a container that speaks `stdio`. Ambit also keeps the definition of each tool when it first sees it (tool pinning). A tool whose definition changes later, and a new tool, is hidden and refused until an admin approves it again. See [MCP servers and apps](presets.md).
+A `Server` is either a remote MCP server (`url`) or a container image that ToolHive runs inside your cluster (`image`, pinned by digest). A server with `connection` must be a remote server, because a per-person token cannot reach a container that speaks `stdio`. Ambit also keeps the definition of each tool when it first sees it (tool pinning). A tool whose definition changes later, and a new tool, is hidden and refused until an admin approves it again. An admin can also set `resultCompression` on a `Server` to make its tool results smaller (see [Compressing tool results](#compressing-tool-results)). See [MCP servers and apps](presets.md).
 
 ### Budget
 
@@ -81,7 +81,7 @@ Clients call `https://<mcp host>/mcp`.
 
 1. **Identity.** The same three identity sources as above.
 2. **Server and tool access.** An `AccessRule` must allow the `Server` and the tool. (In audit-only mode the call goes on, and the record says whether it would have been refused.)
-3. **Guard.** With `protection.enabled`, `ambit-guard` refuses a tool whose definition changed (tool pinning), checks the `arguments` limits of the rule, and masks personal data in tool results (for example card numbers and national ID numbers).
+3. **Guard.** With `protection.enabled`, `ambit-guard` refuses a tool whose definition changed (tool pinning), checks the `arguments` limits of the rule, makes the tool result smaller if the `Server` has `resultCompression`, and masks personal data in tool results (for example card numbers and national ID numbers).
 4. **Token broker.** For a `Server` that has a `connection`, Ambit adds the calling person's own app token. The console refreshes the token when it expires.
 5. **MCP server.** The call reaches the remote server, or the server that ToolHive runs in your cluster. Only the gateway can reach ToolHive's pods.
 6. **Audit.** The call is recorded, denied calls included.
@@ -97,6 +97,56 @@ With `protection.enabled`, `ambit-guard` masks personal data in the results of M
 - **Presidio is not part of Ambit.** Ambit does not install it. You run the Presidio analyzer service yourself and give its address in the `protection.presidio` values (see `charts/ambit/values.yaml`). `anonymizerURL` is no longer used. The guard sends the text of one result to the analyzer in pieces of at most 100,000 characters, up to 4 at the same time, and `protection.presidio.timeout` (default 10 s) limits all of those calls together.
 - **Fail closed.** If masking fails (Presidio is down, too slow, or returns an error), the guard withholds the whole result and the call fails. The client never receives unmasked text. If the guard itself is down, the call also fails.
 - **Size limit.** The guard accepts a tool result up to 32 MiB by message size. It holds a result several times while it masks it. In a test with the default memory limit (`protection.memoryLimitMiB`, 512 MiB), results of 16 MiB and 30 MiB were masked and returned, and the guard used at most 323 MiB and did not restart. If you set a lower limit, plan for about 10 times the size of the largest result plus 50 MiB. A result that is too large for the guard makes the call fail with an error; unmasked text is never returned. While the guard restarts, every MCP tool call fails.
+
+## Compressing tool results
+
+A tool result is sent to the model again on every later turn, like a folder the model must read again before each answer. Compression makes the folder thinner before the client stores it, so each turn costs fewer tokens. It is off unless an admin turns it on for one `Server`. It needs `protection.enabled`, because `ambit-guard` does the work.
+
+```yaml
+apiVersion: ambitproject.dev/v1alpha1
+kind: Server
+metadata: { name: github }
+spec:
+  url: https://api.githubcopilot.com/mcp/
+  resultCompression:
+    mode: lossless      # off (default) | lossless | shorten
+    minBytes: 8192      # default; allowed 1024 to 4194304
+```
+
+- **`off`** changes nothing. A `Server` without the field behaves as before.
+- **`lossless`** removes only layout: whitespace between tokens, padding, blank lines, ANSI color codes. Every key, value, cell and line stays, in the same order. The text looks different, but the information is the same.
+- **`shorten`** does what `lossless` does and also leaves out content, and says so in the result. Start with `lossless`, check the counters (below), and move one server at a time to `shorten`.
+- **`minBytes`** is the size of one text in the result. A smaller text is not touched. A text larger than 4 MiB is not compressed either (it is still masked).
+
+| Type of text | `lossless` | `shorten` also |
+|---|---|---|
+| JSON | Removes whitespace. An array of 5 or more objects with the same keys is written as `{"columns":[...],"rows":[[...],...]}` (the key names once). Numbers and strings are copied byte for byte. | Nothing more. |
+| CSV, TSV, pipe and Markdown tables | Removes padding around cells, the Markdown separator row and blank lines. | Nothing more. |
+| YAML | Removes blank lines and trailing spaces (not inside block scalars). | Removes comment lines and `managedFields` blocks. |
+| Logs | Removes trailing spaces and ANSI color codes. | Removes lines that repeat an earlier line (compared without numbers). It keeps the first 20 and the last 20 lines, every WARN, ERROR, FATAL and panic line with its stack, and 2 lines around them. |
+| Test output (`go test`, pytest, jest) | Removes ANSI color codes. | Removes the lines of passing tests. It keeps every failure with its message and the summary. |
+| Anything else (HTML, prose, source code, base64) | Not changed. | Not changed. |
+
+Neither mode cuts rows of JSON or tables. Nothing tells Ambit which row the model will need, and the guard cannot give the full result back later.
+
+**Order.** The guard compresses first and masks last, so the masker always has the last word, and Presidio gets less text. The compressor never cuts inside a value and never joins digits with a space or dash, so it cannot hide personal data from the masks. While `protection.presidio.analyzerURL` is set, the guard does not write JSON as columns, because Presidio reads names better with their keys next to them.
+
+**What the model sees in `shorten`.** Each place where content was left out has one marker, for example `[ambit: 3940 repeated lines omitted here]`, and the end of the text has one line: `[ambit: this result was shortened from 250 KB to 5 KB. Parts were left out. If you need them, call the tool again with a narrower query (filters, a smaller range, a page number).]`. The wording is fixed and holds only numbers. This is the only way to get the left-out part: a narrower call. If the tool has no filter or paging, the same shortened result comes back. In that case set the `Server` back to `lossless` or `off`.
+
+**What is never compressed.** Results with `isError: true`, non-text content such as images, and `structuredContent` (it must keep the shape that the tool's output schema promises). If a client sends both `content` and `structuredContent` to the model, the saving is smaller.
+
+**If compression fails.** A problem in a compressor never fails a call and never withholds a result: the guard passes the original text (masked as before). A compressor that is too slow (100 ms up to 1 MiB, 400 ms above) is abandoned, and at most 2 texts are compressed at the same time. A third text passes uncompressed. If masking fails, the result is withheld, as before.
+
+**Counters.** The guard serves Prometheus metrics on port 8081 at `/metrics`. With `alerts.enabled` the chart adds a `PodMonitor` for them.
+
+| Metric | Labels |
+|---|---|
+| `ambit_guard_compress_bytes_in_total`, `ambit_guard_compress_bytes_out_total` | `server`, `type` |
+| `ambit_guard_compress_results_total` | `server`, `type`, `outcome` (`compressed`, `skipped_small`, `skipped_unknown`, `skipped_too_large`, `skipped_busy`, `no_gain`, `timeout`, `error`) |
+| `ambit_guard_compress_omitted_total` | `server`, `type` (cuts made by `shorten`) |
+| `ambit_guard_compress_seconds` | `type` |
+
+Bytes saved for a server are `bytes_in` minus `bytes_out`. These are bytes, not tokens. The guard also writes one log line for each compressed text with the sizes (never the content).
 
 ## Setup path
 

@@ -15,6 +15,7 @@ import (
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/extmcp"
 	"github.com/craftsman-apps/ambit/internal/guard"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -48,7 +49,7 @@ func main() {
 	}
 	srv := grpc.NewServer(guard.ServerOptions()...)
 	extmcp.RegisterExtMcpServer(srv, &guard.Guard{Pins: guard.KubePins{Client: mgr.GetClient(), Namespace: ns}, Masker: masker,
-		Rules: guard.KubeRules{Client: mgr.GetClient(), Namespace: ns}})
+		Rules: guard.KubeRules{Client: mgr.GetClient(), Namespace: ns}, Compression: guard.KubeCompression{Client: mgr.GetClient(), Namespace: ns}})
 	lis, err := net.Listen("tcp", ":9090")
 	if err != nil {
 		slog.Error("listen", "err", err)
@@ -60,13 +61,16 @@ func main() {
 		srv.GracefulStop()
 	}()
 	go func() {
-		_ = http.ListenAndServe(":8081", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler()) // the ambit_guard_compress_* metrics
+		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 			if mgr.GetCache().WaitForCacheSync(r.Context()) {
 				w.WriteHeader(http.StatusOK)
 				return
 			}
 			w.WriteHeader(http.StatusServiceUnavailable)
-		}))
+		})
+		_ = http.ListenAndServe(":8081", mux)
 	}()
 	slog.Info("ambit-guard ready", "namespace", ns)
 	if err := srv.Serve(lis); err != nil {

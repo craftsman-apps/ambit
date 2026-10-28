@@ -227,6 +227,9 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 	if err := json.Unmarshal(resp.McpResponse, &result); err != nil {
 		return passResp(), nil
 	}
+	// The decoded form is the only copy we need. Release the raw message now: a large result is held
+	// several times over while it is masked and encoded again, and the guard has a small memory limit.
+	resp.McpResponse = nil
 	var texts []string
 	var set []func(string)
 	var walk func(v any, put func(string))
@@ -262,7 +265,7 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 		return passResp(), nil
 	}
 	for i, m := range masked {
-		set[i](m)
+		set[i](m) // the unmasked text is dropped here
 	}
 	slog.Info("guard: masked personal data", "server", strings.Join(resp.ServiceNames, ","), "count", total)
 	return mutated(result)

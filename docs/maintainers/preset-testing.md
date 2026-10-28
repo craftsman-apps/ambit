@@ -15,6 +15,7 @@ The contract check has three exceptions:
   uses the endpoints of an app made in the vendor's developer portal, on purpose. Its token URL is still probed.
 - A preset with placeholders (ServiceNow) is checked with the tenant in `test/presets/fixtures.yaml`. If that
   tenant's host does not exist, the result is `SKIP`, not a failure. Put a real test tenant there.
+- The server may name its resource metadata on another host (Zoom does). The check follows it only over https, and only if the metadata's `resource` is the server URL or a parent of it (RFC 9728, section 3.3).
 - An issuer in the metadata that differs from the authorization server URL (Webex) is printed as a note. The
   preset holds no issuer. The endpoints are still compared.
 

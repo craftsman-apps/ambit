@@ -43,11 +43,18 @@ done
 [[ "$out" == *"<NATIONAL_ID>"* && "$out" == *"plan Enterprise"* ]] || fail "1 result: $out"
 pass "1 masked: $(uv run --no-project python -c 'import json,sys;print(json.loads(sys.argv[1])["result"]["content"][0]["text"])' "$out" | cut -c1-150)"
 
-# 1b · a tool result over 4 MiB (grpc-go's default limit) is still checked and masked. 5 MiB; the gateway buffers up to 32 MiB.
-big=$(raw_call crm_get_report '{"mib":5}')
-[[ ${#big} -gt $((5 << 20)) ]] || fail "1b the report is only ${#big} bytes: ${big:0:300}"
-[[ "$big" != *minsu.kim@example.com* && "$big" == *"<EMAIL>"* ]] || fail "1b a 5 MiB result was not masked: ${big:0:300} ... ${big: -200}"
-pass "1b a ${#big}-byte tool result came back masked"
+# 1b · a tool result over 4 MiB (grpc-go's default limit) is still checked and masked: 5 MiB, and 16 and 30 MiB near the
+# 32 MiB the gateway buffers. The guard must not run out of memory (issue 190), so it must not restart.
+restarts() { kubectl -n "$NS" get pod -l app.kubernetes.io/name=ambit-guard -o jsonpath='{.items[0].status.containerStatuses[0].restartCount}'; }
+before=$(restarts)
+for mib in 5 16 30; do
+  big=$(raw_call crm_get_report "{\"mib\":$mib}")
+  [[ ${#big} -gt $((mib << 20)) ]] || fail "1b the $mib MiB report is only ${#big} bytes: ${big:0:300}"
+  [[ "$big" != *minsu.kim@example.com* && "$big" == *"<EMAIL>"* ]] || fail "1b a $mib MiB result was not masked: ${big:0:300} ... ${big: -200}"
+  pass "1b a ${#big}-byte tool result came back masked"
+done
+[[ $(restarts) == "$before" ]] || fail "1b ambit-guard restarted (memory?): $(kubectl -n "$NS" get pod -l app.kubernetes.io/name=ambit-guard -o jsonpath='{.items[0].status.containerStatuses[0].lastState}')"
+pass "1b ambit-guard did not restart"
 
 # 2 · U6 fail closed: with the guard down, the call fails and nothing unmasked comes back
 kubectl -n "$NS" scale deploy/ambit-guard --replicas=0 >/dev/null

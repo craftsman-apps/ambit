@@ -65,11 +65,17 @@ spec:
   or 401, are returned as they are.
 - **`additionalEndpoints`** (at most 7) set the whole endpoint again: `baseURL`, `credentialsRef`, `azure`, `bedrock`
   or `vertexai`, as for the Model itself. Provider, model name, price and access rules are the Model's.
+  **If the Model has a `baseURL` (a server you host), every additional endpoint needs its own `baseURL`.** An endpoint
+  without one would go to the provider's public server (for example api.openai.com) and your prompts would leave your
+  network. Ambit refuses such a Model when you apply it. If one is already stored, Ambit ignores all its additional
+  endpoints and says so in the Model's `Ready` message.
 - **`fallback`** (at most 4) names Models in the same namespace. All servers of a fallback Model are used. A fallback
   Model's own `fallback` is not followed.
-- **Access.** The gateway checks the AccessRules of the Model that answers. A person who may use the Model but not its
-  fallback gets 403 when the Model fails; they are never answered by a model they may not use. The Model's `Ready`
-  message lists who may use it but not a fallback.
+- **Access.** A request for the Model's name is answered by a fallback only if the person may use both the Model and
+  the fallback. A person who may use the Model but not its fallback gets 403 when the Model fails. A person who may use
+  the fallback but not the Model gets 403 for the Model's name every time, whether the Model works or fails; they can
+  still ask for the fallback by its own name. So the answer to "may this person use this name" never depends on the
+  health of a provider. The Model's `Ready` message lists who may use it but not a fallback.
 - **Budgets and audit.** The Model that answers is charged at its own price and named in the audit record. The record
   also shows the name the client asked for. A fallback with no price is refused to groups with a dollar budget, as
   any Model without a price is.

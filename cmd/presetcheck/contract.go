@@ -84,14 +84,21 @@ func checkContractOrSkip(ctx context.Context, hc *http.Client, p presets.Preset,
 const tokenProbe = "grant_type=authorization_code&client_id=ambit-contract-check&code=ambit-contract-check&redirect_uri=https%3A%2F%2F127.0.0.1%2Fambit-contract"
 
 func checkMetadata(ctx context.Context, hc *http.Client, serverURL, prmURL, authURL, tokenURL, revURL string, appEndpoints bool) []string {
-	if !sameHost(serverURL, prmURL) {
-		return []string{"resource metadata is on another host: " + prmURL}
+	// RFC 9728 lets the server name its resource metadata on any host (Zoom: zoom.us for mcp.zoom.us). The
+	// protection is section 3.3: the metadata's "resource" must be the server URL, or its origin or a parent path (as
+	// Airtable and Slack publish). https only.
+	if u, err := url.Parse(prmURL); err != nil || u.Scheme != "https" || u.Host == "" {
+		return []string{"resource metadata is not an https URL: " + prmURL}
 	}
 	var prm struct {
+		Resource             string   `json:"resource"`
 		AuthorizationServers []string `json:"authorization_servers"`
 	}
 	if err := getJSON(ctx, hc, prmURL, &prm); err != nil {
 		return []string{fmt.Sprintf("resource metadata %s: %v", prmURL, err)}
+	}
+	if !resourceCovers(prm.Resource, serverURL) {
+		return []string{fmt.Sprintf("resource metadata %s is for %q, not for the server %s", prmURL, prm.Resource, serverURL)}
 	}
 	if len(prm.AuthorizationServers) == 0 {
 		return []string{fmt.Sprintf("resource metadata %s names no authorization server", prmURL)}
@@ -204,10 +211,15 @@ func getJSON(ctx context.Context, hc *http.Client, u string, out any) error {
 	return json.Unmarshal(a.body, out)
 }
 
-func sameHost(a, b string) bool {
-	ua, e1 := url.Parse(a)
-	ub, e2 := url.Parse(b)
-	return e1 == nil && e2 == nil && ua.Host == ub.Host && ub.Scheme == "https"
+// resourceCovers: resource is serverURL itself or a parent of it (same origin, path prefix at a "/").
+func resourceCovers(resource, serverURL string) bool {
+	r, e1 := url.Parse(resource)
+	s, e2 := url.Parse(serverURL)
+	if e1 != nil || e2 != nil || r.Scheme != "https" || r.Scheme != s.Scheme || !strings.EqualFold(r.Host, s.Host) {
+		return false
+	}
+	rp := strings.TrimSuffix(r.Path, "/")
+	return rp == "" || s.Path == rp || strings.HasPrefix(s.Path, rp+"/")
 }
 
 // contractClient: bounded, https only, no redirects to another host.

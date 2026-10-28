@@ -192,6 +192,9 @@ protection:
   # How often each server's tools are read again; a changed definition is hidden at once, and calls to it
   # are refused from the next read.
   toolsRefresh: 10m
+  # Memory limit of ambit-guard, in MiB. The guard holds a tool result several times while it masks it: a 30 MiB
+  # result used 323 MiB in a test. 512 fits the largest result it accepts (32 MiB). See Masking in docs/concepts.md.
+  memoryLimitMiB: 512
   # Leave analyzerURL empty for the built-in masks (Korean resident registration numbers, US Social Security
   # numbers, card numbers, emails). Set it to add Microsoft Presidio (names, addresses, more languages): the
   # built-in masks run first, then Presidio. Ambit does not install Presidio.

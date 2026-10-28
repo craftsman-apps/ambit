@@ -43,6 +43,8 @@ spec:
           env:
             - name: AMBIT_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            # Makes Go collect garbage before the container limit, so a large result does not end in an out-of-memory kill.
+            - { name: GOMEMLIMIT, value: "{{ div (mul .Values.protection.memoryLimitMiB 80) 100 }}MiB" }
             {{- with .Values.protection.presidio }}{{ if .analyzerURL }}
             - { name: AMBIT_PRESIDIO_ANALYZER_URL, value: {{ .analyzerURL | quote }} }
             - { name: AMBIT_PRESIDIO_ANONYMIZER_URL, value: {{ .anonymizerURL | quote }} }
@@ -52,7 +54,7 @@ spec:
           ports: [{ name: grpc, containerPort: 9090 }, { name: health, containerPort: 8081 }]
           readinessProbe: { httpGet: { path: /, port: health } }
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
-          resources: { requests: { cpu: 20m, memory: 32Mi }, limits: { memory: 128Mi } }
+          resources: { requests: { cpu: 20m, memory: 32Mi }, limits: { memory: {{ .Values.protection.memoryLimitMiB }}Mi } }
 ---
 apiVersion: v1
 kind: Service

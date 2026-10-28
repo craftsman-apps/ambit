@@ -76,6 +76,7 @@ The **Codex** tab under **Connect a tool** gives the same command.
 - Codex speaks only the OpenAI Responses format (`/v1/responses`). It worked with an OpenRouter model. Try your own provider with one prompt first.
 - `ambit connect codex` writes two blocks, between `# >>> ambit` and `# <<< ambit <<<`, into `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`). Codex reads the key with `ambit key print`, so the file has no key.
 - By hand, Codex reads the key from `AMBIT_API_KEY`: `export AMBIT_API_KEY=ambit_...`. Codex does not allow `env_key` and the `auth` command together.
+- At start, Codex asks `GET /v1/models?client_version=...` and reads the answer as `{"models": [...]}`. The gateway answers that one request with `{"models":[]}` (it needs a valid key like every other request). Before this change, Codex logged `failed to decode models response` on every run; the run still worked. Other clients get the usual OpenAI list.
 - Put `model` and `model_provider` above the first `[table]` line. The warning "Model metadata not found" is harmless. In a script, add `< /dev/null` to `codex exec`.
 - MCP: add the block below. The gateway serves tools only, so Codex's request for MCP resources gets `Method not found`.
 

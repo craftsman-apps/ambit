@@ -222,9 +222,9 @@ spec:
               fallback:
                 description: 'Fallback names other Models (in this namespace), in order, that answer when every server of this Model fails
 
-                  with 5xx or 429. Clients still ask for this Model. A person is answered by a fallback only if the fallback''s own
+                  with 5xx or 429. Clients still ask for this Model. A person is answered by a fallback only if the AccessRules allow
 
-                  AccessRules allow them; otherwise they get 403. The fallback is billed at its own price. A fallback''s own
+                  them to use both this Model and the fallback; otherwise they get 403, also while this Model works. The fallback is billed at its own price. A fallback''s own
 
                   fallback list is not followed.'
                 items:
@@ -346,6 +346,8 @@ spec:
               rule: '!has(self.additionalEndpoints) || self.additionalEndpoints.all(e, has(e.credentialsRef) || self.provider in [''Bedrock'', ''VertexAI''])'
             - message: 'baseURL is not used with Azure, Bedrock or VertexAI: their settings define the endpoint'
               rule: '!has(self.additionalEndpoints) || self.additionalEndpoints.all(e, !has(e.baseURL) || !(self.provider in [''Azure'', ''Bedrock'', ''VertexAI'']))'
+            - message: 'the Model has a baseURL, so every additional endpoint needs its own baseURL: without one it would go to the provider''s public server'
+              rule: '!has(self.baseURL) || !has(self.additionalEndpoints) || self.additionalEndpoints.all(e, has(e.baseURL))'
           status:
             properties:
               allowAllSignedIn:

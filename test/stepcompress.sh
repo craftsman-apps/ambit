@@ -47,7 +47,7 @@ before=$(restarts)
 ROWS='{"n":300}'; LOG='{"kib":300}'
 out=$(raw crm_get_rows "$ROWS")
 base=$(size <<<"$out")
-[[ $(text <<<"$out") == *$'\n    "id"'* && "$out" != *minsu.kim@example.com* && "$out" == *"<EMAIL>"* ]] || fail "1 result is not the plain masked rows: ${out:0:300}"
+[[ $(text <<<"$out") == *$'\n    {'* && "$out" != *minsu.kim@example.com* && "$out" == *"<EMAIL>"* ]] || fail "1 result is not the plain masked rows: ${out:0:300}"
 log_base=$(raw crm_get_log "$LOG" | size)
 page_base=$(raw crm_get_page '{}' | size)
 pass "1 no resultCompression: rows $base bytes, log $log_base bytes, page $page_base bytes (masked)"
@@ -115,13 +115,14 @@ kubectl -n "$NS" rollout status deploy/ambit-guard --timeout=180s >/dev/null
 wait_for 120 'tools "$(token alice)"; [[ "$TOOLS" == *crm_get_log* ]]' || fail "8 tools not back after the guard restart"
 until_size crm_get_log "$LOG" lt "$((log_base / 4))" || fail "8 shorten did not apply"
 before=$(restarts)
-for i in 1 2; do ( mcp_open "$(token alice)"; raw crm_get_log '{"kib":4000}' | size >"$W/mem$i" ) & done
+# Each call has its own session and header file (mcp_open writes $W/mh).
+for i in 1 2; do ( out=$W/mem$i; W=$W/s$i; mkdir -p "$W"; mcp_open "$(token alice)"; raw crm_get_log '{"kib":4000}' | size >"$out" ) & done
 wait
 for i in 1 2; do [[ $(cat "$W/mem$i") -gt 0 && $(cat "$W/mem$i") -lt $((4000 * 1024 / 4)) ]] || fail "8 result $i was not shortened: $(cat "$W/mem$i")"; done
 [[ $(restarts) == "$before" ]] || fail "8 ambit-guard restarted: $(kubectl -n "$NS" get pod -l "$GUARD" -o jsonpath='{.items[0].status.containerStatuses[0].lastState}')"
 cid=$(kubectl -n "$NS" get pod -l "$GUARD" -o jsonpath='{.items[0].status.containerStatuses[0].containerID}'); cid=${cid#*://}
 node=${KIND_NODE:-${KIND_CLUSTER:-ambit}-control-plane}
-peak=$(docker exec "$node" sh -c "cat \$(find /sys/fs/cgroup -type d -name \"cri-containerd-$cid.scope\" | head -1)/memory.peak")
+peak=$(docker exec "$node" sh -c 'cat "$(find /sys/fs/cgroup -type d -name "cri-containerd-$1.scope" | head -1)/memory.peak"' _ "$cid")
 limit=$(kubectl -n "$NS" get pod -l "$GUARD" -o jsonpath='{.items[0].spec.containers[0].resources.limits.memory}')
 pass "8 two 4000 KiB logs at once in shorten mode: sizes $(cat "$W/mem1") and $(cat "$W/mem2") bytes, peak memory $((peak >> 20)) MiB of $limit, no restart"
 done_step compress

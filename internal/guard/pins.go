@@ -30,3 +30,18 @@ func (k KubePins) Pins(ctx context.Context, server string) (approved, current ma
 	}
 	return approved, current, true
 }
+
+// KubeCompression reads the result compression setting from Server objects (a cached client, no API call).
+type KubeCompression struct {
+	Client    client.Reader
+	Namespace string
+}
+
+func (k KubeCompression) Compression(ctx context.Context, server string) CompressionConfig {
+	var s v1.Server
+	if server == "" || k.Client.Get(ctx, client.ObjectKey{Namespace: k.Namespace, Name: server}, &s) != nil || s.Spec.ResultCompression == nil {
+		return CompressionConfig{Mode: ModeOff}
+	}
+	c := s.Spec.ResultCompression
+	return CompressionConfig{Mode: c.Mode, MinBytes: int(c.MinBytes)}
+}

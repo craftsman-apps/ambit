@@ -30,7 +30,7 @@ const maxMessage = 32 << 20
 
 // ServerOptions are the gRPC server options of ambit-guard.
 func ServerOptions() []grpc.ServerOption {
-	return []grpc.ServerOption{grpc.MaxRecvMsgSize(maxMessage), grpc.MaxSendMsgSize(maxMessage)}
+	return []grpc.ServerOption{grpc.MaxRecvMsgSize(maxMessage), grpc.MaxSendMsgSize(maxMessage), grpc.UnaryInterceptor(recoverUnary)}
 }
 
 // Pins reports the approved fingerprints of a server's tools and the current ones the controller last
@@ -57,6 +57,9 @@ type Guard struct {
 	// Rules, when set, enforces argument limits from access rules (requirement 8). The caller's groups
 	// come from the gateway's metadata ("groups", from the verified token), never from the client.
 	Rules Rules
+	// Compression, when set, compresses the text of tool results of servers that opted in (see compress.go).
+	// It runs before masking, so the masker always has the last word.
+	Compression CompressionSource
 }
 
 func pass() *extmcp.McpRequestResult {
@@ -231,6 +234,7 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 	// The decoded form is the only copy we need. Release the raw message now: a large result is held
 	// several times over while it is masked and encoded again, and the guard has a small memory limit.
 	resp.McpResponse = nil
+	compressed := g.compressContent(ctx, resp.ServiceNames, result)
 	var texts []string
 	var set []func(string)
 	var walk func(v any, put func(string))
@@ -262,13 +266,15 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 		return &extmcp.McpResponseResult{Result: &extmcp.McpResponseResult_Error{Error: &extmcp.AuthorizationError{
 			Code: extmcp.AuthorizationError_UNKNOWN, Reason: "the tool result could not be checked for personal data, so it was withheld"}}}, nil
 	}
-	if total == 0 {
+	if total == 0 && !compressed {
 		return passResp(), nil
 	}
 	for i, m := range masked {
 		set[i](m) // the unmasked text is dropped here
 	}
-	slog.Info("guard: masked personal data", "server", strings.Join(resp.ServiceNames, ","), "count", total)
+	if total > 0 {
+		slog.Info("guard: masked personal data", "server", strings.Join(resp.ServiceNames, ","), "count", total)
+	}
 	return mutated(result)
 }
 
@@ -285,4 +291,60 @@ func (g *Guard) maskTexts(ctx context.Context, texts []string) ([]string, int, e
 		out[i], total = m, total+n
 	}
 	return out, total, nil
+}
+
+// compressContent compresses content[].text of a result in place, for a server that opted in, and reports
+// whether any text changed. Results with isError, non-text content and structuredContent (it must keep the
+// tool's output schema) are not touched. A problem in a compressor never fails the call: the original text stays.
+func (g *Guard) compressContent(ctx context.Context, services []string, result map[string]any) bool {
+	if g.Compression == nil || len(services) != 1 {
+		return false
+	}
+	server := services[0]
+	cfg := g.Compression.Compression(ctx, server)
+	if cfg.Mode != ModeLossless && cfg.Mode != ModeShorten {
+		return false
+	}
+	if isErr, _ := result["isError"].(bool); isErr {
+		return false
+	}
+	items, _ := result["content"].([]any)
+	columnar := !g.hasPresidio()
+	changed := false
+	for _, it := range items {
+		m, _ := it.(map[string]any)
+		text, _ := m["text"].(string)
+		if m == nil || m["type"] != "text" {
+			continue
+		}
+		switch {
+		case len(text) < cfg.MinBytes:
+			compressResults.WithLabelValues(server, "unknown", outSmall).Inc()
+			continue
+		case len(text) > maxCompressBytes:
+			compressResults.WithLabelValues(server, "unknown", outTooLarge).Inc()
+			continue
+		}
+		start := time.Now()
+		out, typ, omitted, outcome := compressText(ctx, text, cfg.Mode, columnar)
+		compressSeconds.WithLabelValues(typ).Observe(time.Since(start).Seconds())
+		compressResults.WithLabelValues(server, typ, outcome).Inc()
+		if outcome != outCompressed {
+			continue
+		}
+		compressBytesIn.WithLabelValues(server, typ).Add(float64(len(text)))
+		compressBytesOut.WithLabelValues(server, typ).Add(float64(len(out)))
+		compressOmitted.WithLabelValues(server, typ).Add(float64(omitted))
+		slog.Info("guard: compressed tool result", "server", server, "type", typ, "mode", cfg.Mode, "bytes_in", len(text), "bytes_out", len(out), "omitted", omitted)
+		m["text"], changed = out, true
+	}
+	return changed
+}
+
+func (g *Guard) hasPresidio() bool {
+	switch g.Masker.(type) {
+	case BuiltinThenPresidio, *BuiltinThenPresidio:
+		return true
+	}
+	return false
 }

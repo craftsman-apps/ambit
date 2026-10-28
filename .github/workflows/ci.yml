@@ -77,6 +77,8 @@ jobs:
         run: node --test scripts/npm/ scripts/homebrew/
       - name: Go vet, unit and integration tests (envtest API server)
         run: go vet ./... && KUBEBUILDER_ASSETS="$(make -s envtest-assets)" go test -count=1 ./...
+      - name: Result compression saves tokens (offline tokenizer)
+        run: go test -count=1 -tags tokencheck -run TestTokenRatios ./internal/guard
       - name: Preset versions bumped
         if: github.event_name == 'pull_request'
         run: go run ./cmd/presetcheck lockcheck --base "origin/${{ github.base_ref }}"

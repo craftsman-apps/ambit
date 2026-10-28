@@ -27,6 +27,35 @@ spec:
           requestHeaderModifier: { remove: [X-Ambit-User, x-api-key, authorization] }
       backendRefs: [{ group: agentgateway.dev, kind: AgentgatewayModel, name: "*" }]
 ---
+# Codex fetches the model list with GET /v1/models?client_version=... and reads it as {"models": [...]}. It logs
+# "failed to decode models response" for the OpenAI format the gateway serves ({"object": "list", "data": [...]}).
+# This route catches only that request and answers {"models": []}: Codex reads it and uses the model name from its own
+# settings. Every other client, and a /v1/models request without client_version, still get the OpenAI list from the
+# route above. A separate route is needed because the gateway's models attach to the route above, which must have one rule.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ambit-llm-codex-models
+spec:
+  parentRefs: [{ name: ambit{{ if .Values.gateway.tls.enabled }}, sectionName: https{{ end }} }]
+  hostnames: [{{ .Values.llm.host | quote }}]
+  rules:
+    - matches: [{ path: { type: Exact, value: /v1/models }, method: GET, queryParams: [{ name: client_version, type: RegularExpression, value: ".+" }] }]
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: ambit-llm-codex-models
+spec:
+  targetRefs: [{ group: gateway.networking.k8s.io, kind: HTTPRoute, name: ambit-llm-codex-models }]
+  traffic:
+    # The same identity gate as the LLM route: a request without a valid key or token gets no answer.
+    {{- include "ambit.gatewayAuth" (dict "root" $ "jwt" $jwt "scope" "llm" "extra" (list)) | nindent 4 }}
+    directResponse:
+      status: 200
+      body: '{"models":[]}'
+      headers: [{ name: content-type, value: application/json }]
+---
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata:

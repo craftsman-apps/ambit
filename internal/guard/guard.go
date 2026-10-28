@@ -18,8 +18,19 @@ import (
 	"github.com/craftsman-apps/ambit/internal/controller"
 	"github.com/craftsman-apps/ambit/internal/extmcp"
 	"github.com/craftsman-apps/ambit/internal/identity"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/structpb"
 )
+
+// maxMessage is the largest gRPC message the guard accepts and sends. agentgateway buffers MCP bodies up
+// to 32 MiB, and grpc-go's default receive limit is 4 MiB, which would refuse a larger tool result before
+// it is checked (the gateway then fails the call: FailClosed).
+const maxMessage = 32 << 20
+
+// ServerOptions are the gRPC server options of ambit-guard.
+func ServerOptions() []grpc.ServerOption {
+	return []grpc.ServerOption{grpc.MaxRecvMsgSize(maxMessage), grpc.MaxSendMsgSize(maxMessage)}
+}
 
 // Pins reports the approved fingerprints of a server's tools and the current ones the controller last
 // read. pinned is false for servers without pins (unknown tools, e.g. per-user servers): nothing is hidden.
@@ -30,6 +41,12 @@ type Pins interface {
 // Masker replaces personal data in text.
 type Masker interface {
 	Mask(ctx context.Context, text string) (masked string, found int, err error)
+}
+
+// BatchMasker masks many texts in one go. A Masker that also has this (Presidio) is called once per
+// result instead of once per string.
+type BatchMasker interface {
+	MaskAll(ctx context.Context, texts []string) (masked []string, found int, err error)
 }
 
 type Guard struct {
@@ -210,38 +227,32 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 	if err := json.Unmarshal(resp.McpResponse, &result); err != nil {
 		return passResp(), nil
 	}
-	total := 0
-	var maskErr error
-	var walk func(v any) any
-	walk = func(v any) any {
+	var texts []string
+	var set []func(string)
+	var walk func(v any, put func(string))
+	walk = func(v any, put func(string)) {
 		switch x := v.(type) {
 		case string:
-			m, n, err := g.Masker.Mask(ctx, x)
-			if err != nil {
-				maskErr = err
-				return x
-			}
-			total += n
-			return m
+			texts, set = append(texts, x), append(set, put)
 		case []any:
 			for i := range x {
-				x[i] = walk(x[i])
+				walk(x[i], func(s string) { x[i] = s })
 			}
 		case map[string]any:
 			for k, e := range x {
 				if k == "type" || k == "mimeType" || k == "uri" { // structure, not content
 					continue
 				}
-				x[k] = walk(e)
+				walk(e, func(s string) { x[k] = s })
 			}
 		}
-		return v
 	}
 	for _, k := range []string{"content", "structuredContent"} {
 		if v, ok := result[k]; ok {
-			result[k] = walk(v)
+			walk(v, func(s string) { result[k] = s })
 		}
 	}
+	masked, total, maskErr := g.maskTexts(ctx, texts)
 	if maskErr != nil {
 		slog.Error("guard: masking failed; result withheld", "server", strings.Join(resp.ServiceNames, ","), "err", maskErr)
 		return &extmcp.McpResponseResult{Result: &extmcp.McpResponseResult_Error{Error: &extmcp.AuthorizationError{
@@ -250,6 +261,24 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 	if total == 0 {
 		return passResp(), nil
 	}
+	for i, m := range masked {
+		set[i](m)
+	}
 	slog.Info("guard: masked personal data", "server", strings.Join(resp.ServiceNames, ","), "count", total)
 	return mutated(result)
+}
+
+func (g *Guard) maskTexts(ctx context.Context, texts []string) ([]string, int, error) {
+	if b, ok := g.Masker.(BatchMasker); ok {
+		return b.MaskAll(ctx, texts)
+	}
+	out, total := make([]string, len(texts)), 0
+	for i, t := range texts {
+		m, n, err := g.Masker.Mask(ctx, t)
+		if err != nil {
+			return nil, 0, err
+		}
+		out[i], total = m, total+n
+	}
+	return out, total, nil
 }

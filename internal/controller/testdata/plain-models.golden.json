@@ -1,0 +1,377 @@
+[
+  {
+    "apiVersion": "agentgateway.dev/v1alpha1",
+    "kind": "AgentgatewayModel",
+    "metadata": {
+      "labels": {
+        "ambitproject.dev/model": "azure-gpt",
+        "app.kubernetes.io/managed-by": "ambit"
+      },
+      "name": "azure-gpt",
+      "namespace": "ambit-system",
+      "ownerReferences": [
+        {
+          "apiVersion": "ambitproject.dev/v1alpha1",
+          "blockOwnerDeletion": true,
+          "controller": true,
+          "kind": "Model",
+          "name": "azure-gpt",
+          "uid": "uid-azure-gpt"
+        }
+      ]
+    },
+    "spec": {
+      "azure": {
+        "apiVersion": "2025-01-01",
+        "resourceName": "eu-west",
+        "resourceType": "OpenAI"
+      },
+      "match": {
+        "model": "gpt-5-deploy"
+      },
+      "parentRefs": [
+        {
+          "group": "gateway.networking.k8s.io",
+          "kind": "HTTPRoute",
+          "name": "ambit-llm"
+        }
+      ],
+      "policies": {
+        "auth": {
+          "location": {
+            "header": {
+              "name": "api-key"
+            }
+          },
+          "secretRef": {
+            "name": "ambit-llm-openrouter"
+          }
+        },
+        "authorization": {
+          "action": "Allow",
+          "policy": {
+            "matchExpressions": [
+              "(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in [\"eng\"])"
+            ]
+          }
+        }
+      },
+      "provider": "Azure"
+    }
+  },
+  {
+    "apiVersion": "agentgateway.dev/v1alpha1",
+    "kind": "AgentgatewayModel",
+    "metadata": {
+      "labels": {
+        "ambitproject.dev/model": "bedrock-sonnet",
+        "app.kubernetes.io/managed-by": "ambit"
+      },
+      "name": "bedrock-sonnet",
+      "namespace": "ambit-system",
+      "ownerReferences": [
+        {
+          "apiVersion": "ambitproject.dev/v1alpha1",
+          "blockOwnerDeletion": true,
+          "controller": true,
+          "kind": "Model",
+          "name": "bedrock-sonnet",
+          "uid": "uid-bedrock-sonnet"
+        }
+      ]
+    },
+    "spec": {
+      "bedrock": {
+        "region": "eu-central-1"
+      },
+      "match": {
+        "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+      },
+      "parentRefs": [
+        {
+          "group": "gateway.networking.k8s.io",
+          "kind": "HTTPRoute",
+          "name": "ambit-llm"
+        }
+      ],
+      "policies": {
+        "authorization": {
+          "action": "Allow",
+          "policy": {
+            "matchExpressions": [
+              "(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in [\"ml-research\"])"
+            ]
+          }
+        }
+      },
+      "provider": "Bedrock"
+    }
+  },
+  {
+    "apiVersion": "agentgateway.dev/v1alpha1",
+    "kind": "AgentgatewayModel",
+    "metadata": {
+      "labels": {
+        "ambitproject.dev/model": "claude",
+        "app.kubernetes.io/managed-by": "ambit"
+      },
+      "name": "claude",
+      "namespace": "ambit-system",
+      "ownerReferences": [
+        {
+          "apiVersion": "ambitproject.dev/v1alpha1",
+          "blockOwnerDeletion": true,
+          "controller": true,
+          "kind": "Model",
+          "name": "claude",
+          "uid": "uid-claude"
+        }
+      ]
+    },
+    "spec": {
+      "match": {
+        "model": "anthropic/claude-sonnet-4.5"
+      },
+      "parentRefs": [
+        {
+          "group": "gateway.networking.k8s.io",
+          "kind": "HTTPRoute",
+          "name": "ambit-llm"
+        }
+      ],
+      "policies": {
+        "auth": {
+          "secretRef": {
+            "name": "ambit-llm-openrouter"
+          }
+        },
+        "authorization": {
+          "action": "Allow",
+          "policy": {
+            "matchExpressions": [
+              "(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in [\"eng\"])"
+            ]
+          }
+        }
+      },
+      "provider": "Openrouter"
+    }
+  },
+  {
+    "apiVersion": "agentgateway.dev/v1alpha1",
+    "kind": "AgentgatewayModel",
+    "metadata": {
+      "labels": {
+        "ambitproject.dev/model": "gemma",
+        "app.kubernetes.io/managed-by": "ambit"
+      },
+      "name": "gemma",
+      "namespace": "ambit-system",
+      "ownerReferences": [
+        {
+          "apiVersion": "ambitproject.dev/v1alpha1",
+          "blockOwnerDeletion": true,
+          "controller": true,
+          "kind": "Model",
+          "name": "gemma",
+          "uid": "uid-gemma"
+        }
+      ]
+    },
+    "spec": {
+      "baseURL": "http://vllm.models.svc:8000/v1",
+      "custom": {
+        "formats": [
+          {
+            "type": "Completions"
+          },
+          {
+            "type": "Responses"
+          }
+        ]
+      },
+      "match": {
+        "model": "google/gemma-4-31b-it"
+      },
+      "parentRefs": [
+        {
+          "group": "gateway.networking.k8s.io",
+          "kind": "HTTPRoute",
+          "name": "ambit-llm"
+        }
+      ],
+      "policies": {
+        "auth": {
+          "secretRef": {
+            "name": "ambit-llm-openrouter"
+          }
+        },
+        "authorization": {
+          "action": "Allow",
+          "policy": {
+            "matchExpressions": [
+              "(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in [\"eng\"])"
+            ]
+          }
+        }
+      },
+      "provider": "Custom"
+    }
+  },
+  {
+    "apiVersion": "agentgateway.dev/v1alpha1",
+    "kind": "AgentgatewayModel",
+    "metadata": {
+      "labels": {
+        "ambitproject.dev/model": "gpt-5",
+        "app.kubernetes.io/managed-by": "ambit"
+      },
+      "name": "gpt-5",
+      "namespace": "ambit-system",
+      "ownerReferences": [
+        {
+          "apiVersion": "ambitproject.dev/v1alpha1",
+          "blockOwnerDeletion": true,
+          "controller": true,
+          "kind": "Model",
+          "name": "gpt-5",
+          "uid": "uid-gpt-5"
+        }
+      ]
+    },
+    "spec": {
+      "match": {
+        "model": "gpt-5"
+      },
+      "parentRefs": [
+        {
+          "group": "gateway.networking.k8s.io",
+          "kind": "HTTPRoute",
+          "name": "ambit-llm"
+        }
+      ],
+      "policies": {
+        "auth": {
+          "secretRef": {
+            "name": "ambit-llm-openrouter"
+          }
+        },
+        "authorization": {
+          "action": "Allow",
+          "policy": {
+            "matchExpressions": [
+              "(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in [\"eng\"])"
+            ]
+          }
+        }
+      },
+      "provider": "OpenAI"
+    }
+  },
+  {
+    "apiVersion": "agentgateway.dev/v1alpha1",
+    "kind": "AgentgatewayModel",
+    "metadata": {
+      "labels": {
+        "ambitproject.dev/model": "openrouter-free",
+        "app.kubernetes.io/managed-by": "ambit"
+      },
+      "name": "openrouter-free",
+      "namespace": "ambit-system",
+      "ownerReferences": [
+        {
+          "apiVersion": "ambitproject.dev/v1alpha1",
+          "blockOwnerDeletion": true,
+          "controller": true,
+          "kind": "Model",
+          "name": "openrouter-free",
+          "uid": "uid-openrouter-free"
+        }
+      ]
+    },
+    "spec": {
+      "match": {
+        "model": "*:free"
+      },
+      "parentRefs": [
+        {
+          "group": "gateway.networking.k8s.io",
+          "kind": "HTTPRoute",
+          "name": "ambit-llm"
+        }
+      ],
+      "policies": {
+        "auth": {
+          "secretRef": {
+            "name": "ambit-llm-openrouter"
+          }
+        },
+        "authorization": {
+          "action": "Allow",
+          "policy": {
+            "matchExpressions": [
+              "true"
+            ]
+          }
+        }
+      },
+      "provider": "Openrouter"
+    }
+  },
+  {
+    "apiVersion": "agentgateway.dev/v1alpha1",
+    "kind": "AgentgatewayModel",
+    "metadata": {
+      "labels": {
+        "ambitproject.dev/model": "vertex-gemini",
+        "app.kubernetes.io/managed-by": "ambit"
+      },
+      "name": "vertex-gemini",
+      "namespace": "ambit-system",
+      "ownerReferences": [
+        {
+          "apiVersion": "ambitproject.dev/v1alpha1",
+          "blockOwnerDeletion": true,
+          "controller": true,
+          "kind": "Model",
+          "name": "vertex-gemini",
+          "uid": "uid-vertex-gemini"
+        }
+      ]
+    },
+    "spec": {
+      "match": {
+        "model": "gemini-2.5-pro"
+      },
+      "parentRefs": [
+        {
+          "group": "gateway.networking.k8s.io",
+          "kind": "HTTPRoute",
+          "name": "ambit-llm"
+        }
+      ],
+      "policies": {
+        "auth": {
+          "gcp": {
+            "secretRef": {
+              "name": "ambit-llm-vertex"
+            }
+          }
+        },
+        "authorization": {
+          "action": "Allow",
+          "policy": {
+            "matchExpressions": [
+              "(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in [\"ml-research\"])"
+            ]
+          }
+        }
+      },
+      "provider": "VertexAI",
+      "vertexai": {
+        "projectId": "acme-ml-prod",
+        "region": "europe-west4"
+      }
+    }
+  }
+]

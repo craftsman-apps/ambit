@@ -1,0 +1,1 @@
+- A Model can list other Models in `fallback` and extra servers in `additionalEndpoints`: when a server returns a 5xx or 429 response, the request is answered by the next server or Model, and several servers of one Model share the requests. Access rules, budgets and the audit record follow the Model that answered. See Model providers.

@@ -24,7 +24,7 @@ func RefuseUnpriced(res *Result, models []v1.Model, prices map[string]v1.ModelPr
 	}
 	refused := map[string][]string{}
 	for _, o := range res.Objects {
-		if o.GetKind() != "AgentgatewayModel" || !unpriced[o.GetName()] {
+		if o.GetKind() != "AgentgatewayModel" || !unpriced[modelOf(o)] {
 			continue
 		}
 		path := []string{"spec", "policies", "authorization", "policy", "matchExpressions"}
@@ -34,7 +34,7 @@ func RefuseUnpriced(res *Result, models []v1.Model, prices map[string]v1.ModelPr
 		}
 		exprs[0] = "(" + exprs[0].(string) + ") && " + deny
 		_ = unstructured.SetNestedSlice(o.Object, exprs, path...)
-		refused[o.GetName()] = append([]string(nil), dollarGroups...)
+		refused[modelOf(o)] = append([]string(nil), dollarGroups...) // a Model's extra endpoints share its entry
 	}
 	return refused
 }

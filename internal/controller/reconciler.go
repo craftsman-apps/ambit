@@ -245,6 +245,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			usage = true
 		}
 	}
+	retry := false
+	if p := RetryPolicy(res.Objects, r.Namespace, r.Route.Name); p != nil {
+		res.Objects = append(res.Objects, p)
+		retry = true
+	}
 	switch p, err := r.offboarding(ctx); {
 	case err != nil:
 		return reconcile.Result{}, err
@@ -300,8 +305,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			}
 		}
 		// No budgets (or budgets off): stop asking the ratelimit service on every request. No dollar limit: stop
-		// rewriting requests for usage.
-		for name, wanted := range map[string]bool{BudgetPolicyName: budgetPolicy, UsagePolicyName: usage, ClassifyPolicyName: classify} {
+		// rewriting requests for usage. No Model with failover: stop retrying.
+		for name, wanted := range map[string]bool{BudgetPolicyName: budgetPolicy, UsagePolicyName: usage, ClassifyPolicyName: classify, RetryPolicyName: retry} {
 			if wanted {
 				continue
 			}
@@ -339,6 +344,30 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			}
 			uid := vm.GetUID() // delete exactly this object, not one that replaced it meanwhile
 			if err := r.Delete(ctx, vm, &client.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil &&
+				!apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
+				return err
+			}
+		}
+		// Failover objects of Models that lost their additional endpoints or fallback list (the virtual model would
+		// still answer for the wire name), the same way.
+		desiredFailover := map[string]bool{}
+		for _, o := range res.Objects {
+			if o.GetLabels()[FallbackLabel] != "" {
+				desiredFailover[o.GetName()] = true
+			}
+		}
+		var fos unstructured.UnstructuredList
+		fos.SetGroupVersionKind(AgentgatewayModelGVK)
+		if err := r.Live.List(ctx, &fos, client.InNamespace(r.Namespace), client.HasLabels{FallbackLabel}); err != nil {
+			return err
+		}
+		for i := range fos.Items {
+			fo := &fos.Items[i]
+			if desiredFailover[fo.GetName()] || controllerOwnerKind(fo) != "Model" {
+				continue
+			}
+			uid := fo.GetUID()
+			if err := r.Delete(ctx, fo, &client.DeleteOptions{Preconditions: &metav1.Preconditions{UID: &uid}}); err != nil &&
 				!apierrors.IsNotFound(err) && !apierrors.IsConflict(err) {
 				return err
 			}
@@ -409,6 +438,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		c := conds["Model/"+m.Name]
 		if gs := refused[m.Name]; len(gs) > 0 && c.Status == metav1.ConditionTrue {
 			c.Message = strings.TrimPrefix(c.Message+"; "+unpricedMessage(gs), "; ")
+		}
+		if c.Status == metav1.ConditionTrue { // fallback settings that are ignored or only partly work
+			for _, n := range res.Notes[m.Name] {
+				c.Message += "; " + n
+			}
 		}
 		setReady(&next.Status.Conditions, c, m.Generation)
 		if err := r.updateStatus(ctx, m.Status, next.Status, next); err != nil {
@@ -618,7 +652,10 @@ func (r *Reconciler) applyAll(ctx context.Context, objs []*unstructured.Unstruct
 		}
 		switch kind {
 		case "AgentgatewayModel":
-			conds[owner] = acceptedCondition(current)
+			// A Model may own several objects (extra endpoints, a virtual model): the worst condition shows.
+			if c := acceptedCondition(current); conds[owner].Status != metav1.ConditionFalse {
+				conds[owner] = c
+			}
 		case "MCPServer":
 			conds[owner] = mcpServerCondition(current)
 		}

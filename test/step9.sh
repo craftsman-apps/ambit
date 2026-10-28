@@ -43,6 +43,12 @@ done
 [[ "$out" == *"<NATIONAL_ID>"* && "$out" == *"plan Enterprise"* ]] || fail "1 result: $out"
 pass "1 masked: $(uv run --no-project python -c 'import json,sys;print(json.loads(sys.argv[1])["result"]["content"][0]["text"])' "$out" | cut -c1-150)"
 
+# 1b · a tool result over 4 MiB (grpc-go's default limit) is still checked and masked. 5 MiB; the gateway buffers up to 32 MiB.
+big=$(raw_call crm_get_report '{"mib":5}')
+[[ ${#big} -gt $((5 << 20)) ]] || fail "1b the report is only ${#big} bytes: ${big:0:300}"
+[[ "$big" != *minsu.kim@example.com* && "$big" == *"<EMAIL>"* ]] || fail "1b a 5 MiB result was not masked: ${big:0:300} ... ${big: -200}"
+pass "1b a ${#big}-byte tool result came back masked"
+
 # 2 · U6 fail closed: with the guard down, the call fails and nothing unmasked comes back
 kubectl -n "$NS" scale deploy/ambit-guard --replicas=0 >/dev/null
 kubectl -n "$NS" wait pod -l app.kubernetes.io/name=ambit-guard --for=delete --timeout=120s >/dev/null 2>&1 || true

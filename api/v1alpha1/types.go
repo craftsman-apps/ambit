@@ -9,6 +9,12 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 // +kubebuilder:validation:XValidation:rule="has(self.credentialsRef) || self.provider in ['Bedrock', 'VertexAI']",message="credentialsRef is required (only Bedrock and VertexAI may use the gateway's cloud identity)"
 // +kubebuilder:validation:XValidation:rule="!has(self.baseURL) || !(self.provider in ['Azure', 'Bedrock', 'VertexAI'])",message="baseURL is not used with Azure, Bedrock or VertexAI: their settings define the endpoint"
 // +kubebuilder:validation:XValidation:rule="has(self.vertexai) == (self.provider == 'VertexAI')",message="vertexai settings are required with provider VertexAI and only there"
+// +kubebuilder:validation:XValidation:rule="!has(self.additionalEndpoints) || self.additionalEndpoints.all(e, has(e.azure) == (self.provider == 'Azure'))",message="every additional endpoint needs azure settings with provider Azure, and only there"
+// +kubebuilder:validation:XValidation:rule="!has(self.additionalEndpoints) || self.additionalEndpoints.all(e, !has(e.bedrock) || self.provider == 'Bedrock')",message="bedrock settings are only for provider Bedrock"
+// +kubebuilder:validation:XValidation:rule="!has(self.additionalEndpoints) || self.additionalEndpoints.all(e, has(e.vertexai) == (self.provider == 'VertexAI'))",message="every additional endpoint needs vertexai settings with provider VertexAI, and only there"
+// +kubebuilder:validation:XValidation:rule="!has(self.additionalEndpoints) || self.additionalEndpoints.all(e, has(e.credentialsRef) || self.provider in ['Bedrock', 'VertexAI'])",message="every additional endpoint needs credentialsRef (only Bedrock and VertexAI may use the gateway's cloud identity)"
+// +kubebuilder:validation:XValidation:rule="!has(self.additionalEndpoints) || self.additionalEndpoints.all(e, !has(e.baseURL) || !(self.provider in ['Azure', 'Bedrock', 'VertexAI']))",message="baseURL is not used with Azure, Bedrock or VertexAI: their settings define the endpoint"
+// +kubebuilder:validation:XValidation:rule="!has(self.baseURL) || !has(self.additionalEndpoints) || self.additionalEndpoints.all(e, has(e.baseURL))",message="the Model has a baseURL, so every additional endpoint needs its own baseURL: without one it would go to the provider's public server"
 type ModelSpec struct {
 	// Provider serving the model. Values follow agentgateway's AgentgatewayModel providers. Azure, Bedrock and VertexAI
 	// also need their settings block (azure, bedrock, vertexai). Ollama and other self-hosted servers: provider OpenAI
@@ -60,6 +66,40 @@ type ModelSpec struct {
 	// Price of this model, for cost in Usage. Without it, Usage shows tokens only for this model.
 	// +optional
 	Price *ModelPrice `json:"price,omitempty"`
+	// AdditionalEndpoints are more servers for this same model (same provider, same model name, same price and access
+	// rules). The settings above are the first server; each entry here sets its own complete endpoint. Requests are
+	// shared between all servers by health and speed, and a server that returns 5xx or 429 is skipped for a while.
+	// +optional
+	// +kubebuilder:validation:MaxItems=7
+	AdditionalEndpoints []ModelEndpoint `json:"additionalEndpoints,omitempty"`
+	// Fallback names other Models (in this namespace), in order, that answer when every server of this Model fails
+	// with 5xx or 429. Clients still ask for this Model. A person is answered by a fallback only if the AccessRules allow
+	// them to use both this Model and the fallback; otherwise they get 403, also while this Model works. The fallback is billed at its own price. A fallback's own
+	// fallback list is not followed.
+	// +optional
+	// +kubebuilder:validation:MaxItems=4
+	// +kubebuilder:validation:items:MinLength=1
+	// +listType=set
+	Fallback []string `json:"fallback,omitempty"`
+}
+
+// ModelEndpoint is one server of a Model. Its fields replace the Model's baseURL, credentialsRef, azure, bedrock and
+// vertexai as a whole: a field left out here is not taken from the Model.
+type ModelEndpoint struct {
+	// BaseURL, as in the Model.
+	// +optional
+	// +kubebuilder:validation:Pattern=`^https?://[^/?#\s]+(/[^?#\s]*)?$`
+	BaseURL string `json:"baseURL,omitempty"`
+	// CredentialsRef, as in the Model.
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="self.name.startsWith('ambit-llm-')",message="credentialsRef must name a Secret called ambit-llm-<something>"
+	CredentialsRef *SecretRef `json:"credentialsRef,omitempty"`
+	// +optional
+	Azure *AzureSettings `json:"azure,omitempty"`
+	// +optional
+	Bedrock *BedrockSettings `json:"bedrock,omitempty"`
+	// +optional
+	VertexAI *VertexAISettings `json:"vertexai,omitempty"`
 }
 
 // +kubebuilder:validation:Enum=Completions;Messages;Responses;Embeddings

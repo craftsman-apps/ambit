@@ -55,6 +55,95 @@ spec:
           spec:
             description: 'ModelSpec is one entry in the model catalog: a model clients may request through the gateway.'
             properties:
+              additionalEndpoints:
+                description: 'AdditionalEndpoints are more servers for this same model (same provider, same model name, same price and access
+
+                  rules). The settings above are the first server; each entry here sets its own complete endpoint. Requests are
+
+                  shared between all servers by health and speed, and a server that returns 5xx or 429 is skipped for a while.'
+                items:
+                  description: 'ModelEndpoint is one server of a Model. Its fields replace the Model''s baseURL, credentialsRef, azure, bedrock and
+
+                    vertexai as a whole: a field left out here is not taken from the Model.'
+                  properties:
+                    azure:
+                      description: AzureSettings name the Azure resource; agentgateway builds the endpoint from them.
+                      properties:
+                        apiVersion:
+                          description: 'APIVersion, e.g. v1 or 2025-04-01-preview. Default (agentgateway): v1.'
+                          maxLength: 64
+                          minLength: 1
+                          pattern: ^[A-Za-z0-9.-]+$
+                          type: string
+                        projectName:
+                          description: ProjectName of the Foundry project (resourceType Foundry only).
+                          maxLength: 256
+                          minLength: 1
+                          type: string
+                        resourceName:
+                          description: 'ResourceName is the resource''s name: <name>.openai.azure.com (OpenAI) or <name>.services.ai.azure.com (Foundry).'
+                          maxLength: 64
+                          minLength: 2
+                          pattern: ^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])$
+                          type: string
+                        resourceType:
+                          enum:
+                          - OpenAI
+                          - Foundry
+                          type: string
+                      required:
+                      - resourceName
+                      - resourceType
+                      type: object
+                      x-kubernetes-validations:
+                      - message: projectName is required for Foundry and only there
+                        rule: has(self.projectName) == (self.resourceType == 'Foundry')
+                    baseURL:
+                      description: BaseURL, as in the Model.
+                      pattern: ^https?://[^/?#\s]+(/[^?#\s]*)?$
+                      type: string
+                    bedrock:
+                      description: BedrockSettings for Amazon Bedrock.
+                      properties:
+                        region:
+                          description: 'Region, e.g. eu-west-1. Default (agentgateway): us-east-1.'
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9-]+$
+                          type: string
+                      type: object
+                    credentialsRef:
+                      description: CredentialsRef, as in the Model.
+                      properties:
+                        name:
+                          minLength: 1
+                          type: string
+                      required:
+                      - name
+                      type: object
+                      x-kubernetes-validations:
+                      - message: credentialsRef must name a Secret called ambit-llm-<something>
+                        rule: self.name.startsWith('ambit-llm-')
+                    vertexai:
+                      description: VertexAISettings name the Google Cloud project; agentgateway builds the endpoint from them.
+                      properties:
+                        projectId:
+                          description: ProjectID of the Google Cloud project, e.g. acme-ml (or a legacy domain-scoped ID, example.com:acme-ml).
+                          maxLength: 64
+                          pattern: ^([a-z0-9][a-z0-9.-]*[a-z0-9]:)?[a-z][a-z0-9-]{4,28}[a-z0-9]$
+                          type: string
+                        region:
+                          description: 'Region (location): global, the multi-regions us and eu, or a region such as europe-west4. Default
+
+                            (agentgateway): global. Whether a model is offered there shows only at request time.'
+                          pattern: ^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$
+                          type: string
+                      required:
+                      - projectId
+                      type: object
+                  type: object
+                maxItems: 7
+                type: array
               azure:
                 description: Azure OpenAI or Azure AI Foundry resource. Required with provider Azure, refused otherwise.
                 properties:
@@ -130,6 +219,20 @@ spec:
               displayName:
                 description: DisplayName is shown in the console.
                 type: string
+              fallback:
+                description: 'Fallback names other Models (in this namespace), in order, that answer when every server of this Model fails
+
+                  with 5xx or 429. Clients still ask for this Model. A person is answered by a fallback only if the AccessRules allow
+
+                  them to use both this Model and the fallback; otherwise they get 403, also while this Model works. The fallback is billed at its own price. A fallback''s own
+
+                  fallback list is not followed.'
+                items:
+                  minLength: 1
+                  type: string
+                maxItems: 4
+                type: array
+                x-kubernetes-list-type: set
               formats:
                 description: 'Formats are the APIs the server at baseURL implements (provider OpenAI only); agentgateway converts requests
 
@@ -233,6 +336,18 @@ spec:
               rule: '!has(self.baseURL) || !(self.provider in [''Azure'', ''Bedrock'', ''VertexAI''])'
             - message: vertexai settings are required with provider VertexAI and only there
               rule: has(self.vertexai) == (self.provider == 'VertexAI')
+            - message: every additional endpoint needs azure settings with provider Azure, and only there
+              rule: '!has(self.additionalEndpoints) || self.additionalEndpoints.all(e, has(e.azure) == (self.provider == ''Azure''))'
+            - message: bedrock settings are only for provider Bedrock
+              rule: '!has(self.additionalEndpoints) || self.additionalEndpoints.all(e, !has(e.bedrock) || self.provider == ''Bedrock'')'
+            - message: every additional endpoint needs vertexai settings with provider VertexAI, and only there
+              rule: '!has(self.additionalEndpoints) || self.additionalEndpoints.all(e, has(e.vertexai) == (self.provider == ''VertexAI''))'
+            - message: every additional endpoint needs credentialsRef (only Bedrock and VertexAI may use the gateway's cloud identity)
+              rule: '!has(self.additionalEndpoints) || self.additionalEndpoints.all(e, has(e.credentialsRef) || self.provider in [''Bedrock'', ''VertexAI''])'
+            - message: 'baseURL is not used with Azure, Bedrock or VertexAI: their settings define the endpoint'
+              rule: '!has(self.additionalEndpoints) || self.additionalEndpoints.all(e, !has(e.baseURL) || !(self.provider in [''Azure'', ''Bedrock'', ''VertexAI'']))'
+            - message: 'the Model has a baseURL, so every additional endpoint needs its own baseURL: without one it would go to the provider''s public server'
+              rule: '!has(self.baseURL) || !has(self.additionalEndpoints) || self.additionalEndpoints.all(e, has(e.baseURL))'
           status:
             properties:
               allowAllSignedIn:

@@ -80,6 +80,14 @@ spec:
           annotations:
             summary: "Result compression failed or ran out of time for server {{`{{ $labels.server }}`}} ({{`{{ $value | printf \"%.0f\" }}`}} results in 30 minutes)"
             description: "The guard passed the original text, so no call failed. Set resultCompression.mode to off on the Server if it keeps happening, and read the guard log: kubectl -n {{ $ns }} logs deploy/ambit-guard"
+        {{- if .Values.evidence.enabled }}
+        - alert: AmbitGuardRecordsDropped
+          expr: sum by (namespace, reason) (increase(ambit_guard_record_dropped_total{namespace="{{ $ns }}"}[30m])) > 0
+          labels: { severity: warning }
+          annotations:
+            summary: "The guard dropped compression records ({{`{{ $value | printf \"%.0f\" }}`}} in 30 minutes, reason {{`{{ $labels.reason }}`}})"
+            description: "No call failed. The Savings page counts fewer compressed results than there were. send_failed: the collector was not reachable (kubectl -n {{ $ns }} logs deploy/ambit-otel-collector). queue_full: more records than the guard can send. no_groups: the gateway sent no groups."
+        {{- end }}
         {{- end }}
 {{- if and .Values.mcp.enabled .Values.protection.enabled }}
 ---

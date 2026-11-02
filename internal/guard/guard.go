@@ -60,6 +60,9 @@ type Guard struct {
 	// Compression, when set, compresses the text of tool results of servers that opted in (see compress.go).
 	// It runs before masking, so the masker always has the last word.
 	Compression CompressionSource
+	// Records, when set, receives one record per compressed text (server, type, sizes, the caller's groups; no
+	// content, no email). It feeds the Savings page. Delivery is best effort and never fails a call.
+	Records RecordSink
 }
 
 func pass() *extmcp.McpRequestResult {
@@ -234,7 +237,7 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 	// The decoded form is the only copy we need. Release the raw message now: a large result is held
 	// several times over while it is masked and encoded again, and the guard has a small memory limit.
 	resp.McpResponse = nil
-	compressed := g.compressContent(ctx, resp.ServiceNames, result)
+	compressed := g.compressContent(ctx, resp.ServiceNames, resp.MetadataContext, result)
 	var texts []string
 	var set []func(string)
 	var walk func(v any, put func(string))
@@ -296,7 +299,7 @@ func (g *Guard) maskTexts(ctx context.Context, texts []string) ([]string, int, e
 // compressContent compresses content[].text of a result in place, for a server that opted in, and reports
 // whether any text changed. Results with isError, non-text content and structuredContent (it must keep the
 // tool's output schema) are not touched. A problem in a compressor never fails the call: the original text stays.
-func (g *Guard) compressContent(ctx context.Context, services []string, result map[string]any) bool {
+func (g *Guard) compressContent(ctx context.Context, services []string, meta *structpb.Struct, result map[string]any) bool {
 	if g.Compression == nil || len(services) != 1 {
 		return false
 	}
@@ -336,9 +339,25 @@ func (g *Guard) compressContent(ctx context.Context, services []string, result m
 		compressBytesOut.WithLabelValues(server, typ).Add(float64(len(out)))
 		compressOmitted.WithLabelValues(server, typ).Add(float64(omitted))
 		slog.Info("guard: compressed tool result", "server", server, "type", typ, "mode", cfg.Mode, "bytes_in", len(text), "bytes_out", len(out), "omitted", omitted)
+		g.record(meta, server, typ, cfg.Mode, len(text), len(out), omitted)
 		m["text"], changed = out, true
 	}
 	return changed
+}
+
+// record hands one compressed text to the record sink. Without the caller's groups there is no row to
+// count it in, so it is dropped (and counted) rather than filed under a made-up group.
+func (g *Guard) record(meta *structpb.Struct, server, typ, mode string, in, out, omitted int) {
+	if g.Records == nil {
+		return
+	}
+	groups, ok := metadataStrings(meta, "groups")
+	if !ok {
+		recordDropped.WithLabelValues(dropNoGroups).Inc()
+		slog.Warn("guard: no groups from the gateway; compression record dropped", "server", server)
+		return
+	}
+	g.Records.Record(CompressionRecord{Server: server, Type: typ, Mode: mode, BytesIn: in, BytesOut: out, Omitted: omitted, Groups: groups})
 }
 
 func (g *Guard) hasPresidio() bool {

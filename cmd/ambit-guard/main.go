@@ -47,8 +47,19 @@ func main() {
 			Language: os.Getenv("AMBIT_PRESIDIO_LANGUAGE"), Timeout: timeout}}
 		slog.Info("masking with Presidio", "analyzer", a)
 	}
+	var records guard.RecordSink // nil unless the audit trail is on: no collector, no records
+	if ep := os.Getenv("AMBIT_OTLP_ENDPOINT"); ep != "" {
+		rec, err := guard.NewRecorder(ep)
+		if err != nil {
+			slog.Error("AMBIT_OTLP_ENDPOINT", "err", err)
+			os.Exit(1)
+		}
+		defer rec.Close()
+		records = rec
+		slog.Info("writing compression records", "collector", ep)
+	}
 	srv := grpc.NewServer(guard.ServerOptions()...)
-	extmcp.RegisterExtMcpServer(srv, &guard.Guard{Pins: guard.KubePins{Client: mgr.GetClient(), Namespace: ns}, Masker: masker,
+	extmcp.RegisterExtMcpServer(srv, &guard.Guard{Records: records, Pins: guard.KubePins{Client: mgr.GetClient(), Namespace: ns}, Masker: masker,
 		Rules: guard.KubeRules{Client: mgr.GetClient(), Namespace: ns}, Compression: guard.KubeCompression{Client: mgr.GetClient(), Namespace: ns}})
 	lis, err := net.Listen("tcp", ":9090")
 	if err != nil {

@@ -187,6 +187,14 @@ func TestPresidioRecallColumnarVersusPlain(t *testing.T) {
 			return o
 		}},
 	}
+	// The text the guard sends to Presidio when compression is on and Presidio is set (issue #207): the JSON is left as it is.
+	formList = append(formList, forms{"guard (on)", func(s string) string {
+		o, typ, _, outcome := compressText(t.Context(), s, ModeShorten, true)
+		if typ != "json" || outcome != outPresidio || o != s {
+			t.Fatalf("guard changed JSON while Presidio is set: type %s, outcome %s", typ, outcome)
+		}
+		return o
+	}})
 	types := []string{"PERSON", "EMAIL_ADDRESS", "PHONE_NUMBER", "LOCATION"}
 	recall := map[string]map[string][2]int{} // form -> type -> {found, total}
 	for _, f := range formList {
@@ -229,6 +237,9 @@ func TestPresidioRecallColumnarVersusPlain(t *testing.T) {
 			c := recall[f.name][ty]
 			pct[f.name] = 100 * float64(c[0]) / float64(c[1])
 			fmt.Fprintf(&out, " %17.1f%%", pct[f.name])
+		}
+		if d := pct["original (pretty)"] - pct["guard (on)"]; d > 1.0 {
+			t.Errorf("%s: recall with compression on is %.1f points below the original (limit 1)", ty, d)
 		}
 		drop := pct["plain (minified)"] - pct["columnar"]
 		worst = max(worst, drop)

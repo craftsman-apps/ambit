@@ -2,6 +2,7 @@ package guard
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"runtime/debug"
@@ -46,6 +47,7 @@ const (
 	outUnknown    = "skipped_unknown"
 	outTooLarge   = "skipped_too_large"
 	outBusy       = "skipped_busy"
+	outPresidio   = "skipped_presidio"
 	outNoGain     = "no_gain"
 	outTimeout    = "timeout"
 	outError      = "error"
@@ -57,10 +59,16 @@ var detectText = detect
 var compressing = make(chan struct{}, maxCompressing)
 
 // detect compresses text with the first compressor whose type matches. typ is "unknown" when none does.
-// columnar is false while Presidio is set: `make test-presidio` measured lower address recall in the column form (decision D7).
+// While Presidio is set, JSON is not compressed: `make test-presidio` measured that removing the spaces after ":" and ","
+// lowers name recall from 93.2% to 10.0% (issue #207). detect then gives typ "json" and no output, and compressText
+// reports skipped_presidio. The other types are compressed as before.
 // It stops at once when ctx is done and then also gives "unknown".
-func detect(ctx context.Context, text string, shorten, columnar bool) (out, typ string, omitted int) {
-	if o, ok := compressJSON(ctx, text, columnar); ok {
+func detect(ctx context.Context, text string, shorten, presidio bool) (out, typ string, omitted int) {
+	if presidio {
+		if t := trimJSON(text); len(t) > 0 && (t[0] == '{' || t[0] == '[') && json.Valid(t) {
+			return "", "json", 0
+		}
+	} else if o, ok := compressJSON(ctx, text, true); ok {
 		return o, "json", 0
 	}
 	if ctx.Err() != nil {
@@ -115,7 +123,7 @@ func kb(n int) string { return fmt.Sprintf("%d KB", (n+1023)/1024) }
 // compressText returns the text to use and what happened. It never fails: a fault gives the original text.
 // The compressors run in their own goroutine with a context that ends at the deadline. They look at it between
 // lines, rows or tokens and return at once, so the memory and the slot are released soon after the deadline.
-func compressText(ctx context.Context, text string, mode string, columnar bool) (out, typ string, omitted int, outcome string) {
+func compressText(ctx context.Context, text string, mode string, presidio bool) (out, typ string, omitted int, outcome string) {
 	select {
 	case compressing <- struct{}{}:
 	default:
@@ -141,7 +149,7 @@ func compressText(ctx context.Context, text string, mode string, columnar bool) 
 				done <- res{panicked: true}
 			}
 		}()
-		o, t, n := detectText(cctx, text, mode == ModeShorten, columnar)
+		o, t, n := detectText(cctx, text, mode == ModeShorten, presidio)
 		done <- res{out: o, typ: t, omitted: n}
 	}()
 	var r res
@@ -155,6 +163,8 @@ func compressText(ctx context.Context, text string, mode string, columnar bool) 
 		return text, "unknown", 0, outError
 	case r.typ == "unknown":
 		return text, "unknown", 0, outUnknown
+	case presidio && r.typ == "json":
+		return text, "json", 0, outPresidio
 	}
 	if r.omitted > 0 {
 		prefix := ""

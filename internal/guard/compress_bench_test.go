@@ -35,9 +35,9 @@ func BenchmarkCompress(b *testing.B) {
 				b.Run(fmt.Sprintf("%s/%s/%dKB", tc.name, mode, size>>10), func(b *testing.B) {
 					b.SetBytes(int64(len(text)))
 					for range b.N {
-						detect(b.Context(), text, mode == ModeShorten, true)
+						detect(b.Context(), text, mode == ModeShorten, false)
 					}
-					out, _, _ := detect(b.Context(), text, mode == ModeShorten, true)
+					out, _, _ := detect(b.Context(), text, mode == ModeShorten, false)
 					b.ReportMetric(100*float64(len(out))/float64(len(text)), "%size")
 				})
 			}

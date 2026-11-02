@@ -166,7 +166,7 @@ func TestNoPersonalDataSurvivesCompressThenMask(t *testing.T) {
 		for name, text := range map[string]string{"json": "[\n" + strings.Join(rows, ",\n") + "\n]", "logs": logs.String(), "csv": csvText.String()} {
 			for _, mode := range []string{ModeLossless, ModeShorten} {
 				g := &Guard{Masker: Builtin{}, Compression: on(mode)}
-				compressed, _, _, _ := compressText(t.Context(), text, mode, true)
+				compressed, _, _, _ := compressText(t.Context(), text, mode, false)
 				res := call(t, g, textResult(text))
 				final := textOf(t, res)
 				for _, s := range items {
@@ -184,18 +184,41 @@ func TestNoPersonalDataSurvivesCompressThenMask(t *testing.T) {
 	}
 }
 
-func TestPresidioSetTurnsColumnarOff(t *testing.T) {
+// While Presidio is set, JSON keeps its layout byte for byte (issue #207: removing the spaces after ":" and ","
+// lowers name recall from 93.2% to 10.0%), the outcome is counted, and the other types are still compressed.
+func TestPresidioSetLeavesJSONUnchanged(t *testing.T) {
 	f := newFakeAnalyzer(t, map[string]string{})
-	in := textResult(queryRows(300))
-	cols := func(m Masker) bool {
-		out := textOf(t, call(t, &Guard{Masker: m, Compression: on(ModeLossless)}, in))
-		return strings.Contains(out, `"columns"`)
+	pm := BuiltinThenPresidio{Presidio: &Presidio{AnalyzerURL: f.srv.URL}}
+	count := func(typ, outcome string) float64 {
+		return testutil.ToFloat64(compressResults.WithLabelValues("crm", typ, outcome))
 	}
-	if !cols(Builtin{}) {
-		t.Error("columnar form expected with the built-in masks")
+	for name, in := range map[string]string{
+		"array":  queryRows(300),
+		"object": "{\n  \"rows\": " + strings.ReplaceAll(queryRows(300), "\n", "\n  ") + "\n}",
+		"dupkey": "{\n  \"a\": " + strings.Repeat("1", 9000) + ",\n  \"a\": 2\n}",
+	} {
+		before, builtinBefore := count("json", outPresidio), count("json", outCompressed)
+		if call(t, &Guard{Masker: pm, Compression: on(ModeShorten)}, textResult(in)).GetPass() == nil {
+			t.Errorf("%s: JSON text changed while Presidio is set", name)
+		}
+		if count("json", outPresidio) != before+1 || count("json", outCompressed) != builtinBefore {
+			t.Errorf("%s: want one skipped_presidio and no compressed", name)
+		}
+		if name != "dupkey" && call(t, &Guard{Masker: Builtin{}, Compression: on(ModeShorten)}, textResult(in)).GetPass() != nil {
+			t.Errorf("%s: control: JSON must be compressed without Presidio", name)
+		}
 	}
-	if cols(BuiltinThenPresidio{Presidio: &Presidio{AnalyzerURL: f.srv.URL}}) {
-		t.Error("columnar form must be off while Presidio is set")
+	// Other types are compressed as before.
+	for name, in := range map[string]string{"markdown": markdownTable(300), "yaml": podYAML(300), "logs": serviceLog(2000, 3)} {
+		r := call(t, &Guard{Masker: pm, Compression: on(ModeShorten)}, textResult(in))
+		if r.GetPass() != nil {
+			t.Errorf("%s: not compressed while Presidio is set (%d bytes)", name, len(in))
+			continue
+		}
+		got := textOf(t, r)
+		if len(got) >= len(in) {
+			t.Errorf("%s: not compressed while Presidio is set (%d -> %d bytes)", name, len(in), len(got))
+		}
 	}
 }
 

@@ -309,7 +309,7 @@ func (g *Guard) compressContent(ctx context.Context, services []string, result m
 		return false
 	}
 	items, _ := result["content"].([]any)
-	columnar := !g.hasPresidio()
+	presidio := g.hasPresidio()
 	changed := false
 	for _, it := range items {
 		m, _ := it.(map[string]any)
@@ -326,7 +326,7 @@ func (g *Guard) compressContent(ctx context.Context, services []string, result m
 			continue
 		}
 		start := time.Now()
-		out, typ, omitted, outcome := compressText(ctx, text, cfg.Mode, columnar)
+		out, typ, omitted, outcome := compressText(ctx, text, cfg.Mode, presidio)
 		compressSeconds.WithLabelValues(typ).Observe(time.Since(start).Seconds())
 		compressResults.WithLabelValues(server, typ, outcome).Inc()
 		if outcome != outCompressed {

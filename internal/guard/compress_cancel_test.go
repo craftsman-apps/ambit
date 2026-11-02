@@ -24,7 +24,10 @@ func TestCompressorsStopAtTheDeadline(t *testing.T) {
 		{"csv", sized(csvExport, size), func(c context.Context, s string) bool { _, ok := compressTable(c, s); return ok }},
 		{"markdown", sized(markdownTable, size), func(c context.Context, s string) bool { _, ok := compressTable(c, s); return ok }},
 		{"yaml-shorten", sized(podYAML, size), func(c context.Context, s string) bool { _, _, ok := compressYAML(c, s, true); return ok }},
-		{"detect", sized(podYAML, size), func(c context.Context, s string) bool { _, typ, _ := detect(c, s, true, true); return typ != "unknown" }},
+		{"detect", sized(podYAML, size), func(c context.Context, s string) bool {
+			_, typ, _ := detect(c, s, true, false)
+			return typ != "unknown"
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			begin := time.Now()
@@ -51,7 +54,7 @@ func TestCompressorsStopAtTheDeadline(t *testing.T) {
 func TestSlotIsFreeAfterTimeout(t *testing.T) {
 	big := sized(queryRows, 4<<20)
 	begin := time.Now()
-	detect(t.Context(), big, true, true)
+	detect(t.Context(), big, true, false)
 	// 20 ms, or more on a slower build (the race detector), in proportion to a full run.
 	slotFreeWithin := max(20*time.Millisecond, time.Since(begin)/4)
 	var wg sync.WaitGroup
@@ -61,7 +64,7 @@ func TestSlotIsFreeAfterTimeout(t *testing.T) {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(t.Context(), time.Millisecond)
 			defer cancel()
-			if _, _, _, outcome := compressText(ctx, big, ModeShorten, true); outcome != outTimeout {
+			if _, _, _, outcome := compressText(ctx, big, ModeShorten, false); outcome != outTimeout {
 				t.Errorf("outcome %q; want %q", outcome, outTimeout)
 			}
 		}()
@@ -70,7 +73,7 @@ func TestSlotIsFreeAfterTimeout(t *testing.T) {
 	small := serviceLog(300, 1)
 	deadline := time.Now().Add(slotFreeWithin)
 	for {
-		_, _, _, outcome := compressText(t.Context(), small, ModeShorten, true)
+		_, _, _, outcome := compressText(t.Context(), small, ModeShorten, false)
 		if outcome != outBusy {
 			return
 		}
@@ -91,7 +94,7 @@ func TestCompressTextCancelRace(t *testing.T) {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(t.Context(), time.Duration(i)*200*time.Microsecond)
 			defer cancel()
-			compressText(ctx, texts[i%len(texts)], ModeShorten, true)
+			compressText(ctx, texts[i%len(texts)], ModeShorten, false)
 		}()
 	}
 	wg.Wait()

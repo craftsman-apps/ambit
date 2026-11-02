@@ -43,7 +43,7 @@ func TestTokenRatios(t *testing.T) {
 			if f.typ == "test" && len(f.text) < 8192 {
 				continue // below minBytes, never compressed
 			}
-			out, typ, _, outcome := compressText(t.Context(), f.text, mode, true)
+			out, typ, _, outcome := compressText(t.Context(), f.text, mode, false)
 			if outcome != outCompressed {
 				out, typ = f.text, f.typ
 			}

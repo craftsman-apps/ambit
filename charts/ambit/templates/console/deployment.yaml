@@ -72,8 +72,8 @@ spec:
             {{- end }}
             {{- if .Values.evidence.enabled }}
             - { name: AMBIT_CLICKHOUSE_ADDR, value: {{ include "ambit.clickhouse.http" . | quote }} }
-            - { name: AMBIT_SUMMARY_RETENTION, value: {{ .Values.evidence.summaryRetention | quote }} }
-            {{- with .Values.console.savings.referenceInputPricePerMillion }}
+            - { name: AMBIT_SUMMARY_RETENTION, value: {{ .Values.evidence.summaryRetention | default "26280h" | quote }} }
+            {{- with (.Values.console.savings | default dict).referenceInputPricePerMillion }}
             - { name: AMBIT_SAVINGS_REFERENCE_PRICE, value: {{ . | quote }} }
             {{- end }}
             {{- with .Values.evidence.clickhouse.external }}{{ if .host }}

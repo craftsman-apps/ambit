@@ -13,6 +13,7 @@ import { OffboardingPage } from "@/routes/offboarding";
 import { AppsPage } from "@/routes/apps";
 import { AppPresetPage } from "@/routes/app-preset";
 import { AuditPage, UsagePage } from "@/routes/audit";
+import { SavingsPage } from "@/routes/savings";
 import { BudgetsPage } from "@/routes/budgets";
 import { DependenciesPage } from "@/routes/dependencies";
 import { KeysPage } from "@/routes/keys";
@@ -46,6 +47,7 @@ const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/keys", component: SettingsKeysPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/audit", component: AuditPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/usage", component: UsagePage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/savings", component: SavingsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/budgets", component: BudgetsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/dependencies", component: DependenciesPage }),
 ]);

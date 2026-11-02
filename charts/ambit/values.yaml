@@ -50,6 +50,11 @@ console:
   testPresets: false
   # Test-only endpoints (expire a key on demand); never enable in production.
   testHooks: false
+  savings:
+    # The Savings page prices tool-result compression with each group's own average input price (from its LLM
+    # requests through Ambit). A group without priced LLM requests uses this price, in US dollars per million input
+    # tokens, for example "3.00". Empty: such a group is shown in tokens only.
+    referenceInputPricePerMillion: ""
 
 bootstrapAdmin:
   # Local password sign-in (admin@ambit.local) for first setup. Set false once SSO works:
@@ -156,13 +161,19 @@ evidence:
   # in the console (Audit, Usage). Every call is kept, denied ones included, for `retention`.
   enabled: false
   retention: 8760h  # one year
+  # How long the daily summaries behind the Savings page are kept (counts only: no email, no content; group names are
+  # the only identifying text). Rounded up to whole days, at least 24h. A change applies at the next console start.
+  summaryRetention: 26280h  # three years
   clickhouse:
     image: clickhouse/clickhouse-server:26.3.36.6@sha256:5b10577fc3382ee6b26c4916a1d915d90543ade66e85fc29e3a78c4ce08daeb3
     storage: 10Gi
     resources: { requests: { cpu: 100m, memory: 512Mi }, limits: { memory: 1536Mi } }
     # Use an existing ClickHouse (e.g. ClickHouse Cloud) instead of installing one: set host. The collector
     # writes over the native protocol, the console reads over HTTP(S). The user needs CREATE TABLE in the
-    # database once (the collector creates otel_logs with the retention above), then INSERT and SELECT.
+    # database once (the collector creates otel_logs with the retention above), then INSERT and SELECT. For the
+    # Savings page the console also creates two summary tables and two materialized views in the same database
+    # (names ambit_llm_daily_v1, ambit_compress_daily_v1 and their _mv views): the user needs CREATE TABLE,
+    # CREATE VIEW, ALTER MODIFY TTL, INSERT and SELECT on that database, and SELECT on system.tables.
     external:
       host: ""
       tls: true

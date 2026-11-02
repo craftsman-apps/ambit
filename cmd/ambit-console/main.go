@@ -2,6 +2,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -262,6 +263,26 @@ func run(ctx context.Context) error {
 			}
 			return pricing.ByModel(l.Items)
 		}
+		audit.Routers = func(ctx context.Context) []console.RouterInfo { // as they are now, for the Savings baseline
+			var rl v1.ModelRouterList
+			var ml v1.ModelList
+			if objects.List(ctx, &rl, client.InNamespace(ns)) != nil || objects.List(ctx, &ml, client.InNamespace(ns)) != nil {
+				return nil
+			}
+			return console.RouterInfos(rl.Items, ml.Items)
+		}
+		if v := os.Getenv("AMBIT_SAVINGS_REFERENCE_PRICE"); v != "" {
+			p, err := strconv.ParseFloat(v, 64)
+			if err != nil || p < 0 {
+				return fmt.Errorf("AMBIT_SAVINGS_REFERENCE_PRICE %q is not a price in US dollars per million tokens", v)
+			}
+			audit.ReferenceInputPrice = &p
+		}
+		days, err := console.SummaryDays(cmp.Or(os.Getenv("AMBIT_SUMMARY_RETENTION"), "26280h"))
+		if err != nil {
+			return err
+		}
+		go audit.RunSummaries(ctx, days, 15*time.Second) // retries until the collector has created otel_logs
 	}
 	var budgets *console.Budgets
 	if addr := os.Getenv("AMBIT_VALKEY_ADDR"); addr != "" {

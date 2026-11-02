@@ -77,9 +77,9 @@ test("the group chart shows each group's share of the total, and says the shares
   await expect(page.getByRole("heading", { name: "Share of the total saved, per group (estimated)" })).toBeVisible();
   await expect(page.getByText("add up to more than 100%")).toBeVisible();
   const chart = page.getByRole("img", { name: /Estimated share of the total dollars saved/ });
-  await expect(chart.getByText("100%")).toBeVisible(); // eng: all of the total
-  await expect(chart.getByText("50%")).toBeVisible(); // support
-  await expect(chart.getByText(/\$/)).toHaveCount(0); // no dollar label that could be read against the total tile
+  await expect(chart.getByText("100%", { exact: true })).toBeVisible(); // eng: all of the total
+  await expect(chart.getByText("50%", { exact: true })).toBeVisible(); // support
+  await expect(chart.locator("text", { hasText: /\$/ })).toHaveCount(0); // no dollar label that could be read against the total tile
   await expect(page.getByRole("table", { name: "Savings by group" })).toContainText("~$14.50"); // plain dollars stay in the table
 });
 

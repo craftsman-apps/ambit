@@ -36,7 +36,7 @@ env:
 
 func TestCompressYAMLLosslessKeepsEveryValue(t *testing.T) {
 	for name, in := range map[string]string{"pods": podYAML(50), "helm values": helmValues} {
-		out, _, ok := compressYAML(in, false)
+		out, _, ok := compressYAML(t.Context(), in, false)
 		if !ok {
 			t.Fatalf("%s: not detected", name)
 		}
@@ -47,7 +47,7 @@ func TestCompressYAMLLosslessKeepsEveryValue(t *testing.T) {
 			t.Errorf("%s: not smaller", name)
 		}
 	}
-	out, _, _ := compressYAML(helmValues, false)
+	out, _, _ := compressYAML(t.Context(), helmValues, false)
 	if !strings.Contains(out, "# Default values") || !strings.Contains(out, "echo one\n\n  echo two   \n") {
 		t.Errorf("comments or block scalar changed:\n%s", out)
 	}
@@ -55,7 +55,7 @@ func TestCompressYAMLLosslessKeepsEveryValue(t *testing.T) {
 
 func TestCompressYAMLShortenDropsCommentsAndManagedFields(t *testing.T) {
 	in := podYAML(50)
-	out, omitted, ok := compressYAML(in, true)
+	out, omitted, ok := compressYAML(t.Context(), in, true)
 	if !ok || omitted != 50 || strings.Count(out, "[ambit: managedFields omitted here]") != 50 {
 		t.Fatalf("omitted %d ok %v", omitted, ok)
 	}
@@ -66,7 +66,7 @@ func TestCompressYAMLShortenDropsCommentsAndManagedFields(t *testing.T) {
 		t.Errorf("ratio %.2f", r)
 	}
 	parseYAML(t, out) // still valid
-	c, _, _ := compressYAML(helmValues, true)
+	c, _, _ := compressYAML(t.Context(), helmValues, true)
 	if strings.Contains(c, "# Default values") {
 		t.Error("full-line comment kept")
 	}
@@ -74,7 +74,7 @@ func TestCompressYAMLShortenDropsCommentsAndManagedFields(t *testing.T) {
 
 func TestCompressYAMLNotYAMLIsUnknown(t *testing.T) {
 	for _, in := range []string{htmlPage, "just some prose.\nmore prose.\n\nThree.\nFour.\nFive.\n"} {
-		if _, _, ok := compressYAML(in, true); ok {
+		if _, _, ok := compressYAML(t.Context(), in, true); ok {
 			t.Errorf("compressed %.40q", in)
 		}
 	}
@@ -83,7 +83,7 @@ func TestCompressYAMLNotYAMLIsUnknown(t *testing.T) {
 func FuzzCompressYAML(f *testing.F) {
 	f.Add(helmValues)
 	f.Fuzz(func(t *testing.T, in string) {
-		if out, _, ok := compressYAML(in, true); ok && len(out) > len(in)+64*len(strings.Split(in, "\n")) {
+		if out, _, ok := compressYAML(t.Context(), in, true); ok && len(out) > len(in)+64*len(strings.Split(in, "\n")) {
 			t.Fatalf("grew a lot")
 		}
 	})

@@ -16,7 +16,7 @@ func readAll(in string, comma rune) ([][]string, error) {
 
 func TestCompressTableCSVKeepsEveryCell(t *testing.T) {
 	in := csvExport(5000)
-	out, ok := compressTable(in)
+	out, ok := compressTable(t.Context(), in)
 	if !ok {
 		t.Fatal("not detected")
 	}
@@ -32,7 +32,7 @@ func TestCompressTableCSVKeepsEveryCell(t *testing.T) {
 
 func TestCompressTableCSVDropsBlankLines(t *testing.T) {
 	in := "a,b\n\n1,2\n\n\n3,4\n5,6\n7,8\n"
-	out, ok := compressTable(in)
+	out, ok := compressTable(t.Context(), in)
 	if !ok || out != "a,b\n1,2\n3,4\n5,6\n7,8\n" {
 		t.Fatalf("got %q %v", out, ok)
 	}
@@ -40,7 +40,7 @@ func TestCompressTableCSVDropsBlankLines(t *testing.T) {
 
 func TestCompressTableMarkdownKeepsCellsDropsPadding(t *testing.T) {
 	in := markdownTable(100)
-	out, ok := compressTable(in)
+	out, ok := compressTable(t.Context(), in)
 	if !ok {
 		t.Fatal("not detected")
 	}
@@ -60,7 +60,7 @@ func TestCompressTableMarkdownKeepsCellsDropsPadding(t *testing.T) {
 
 func TestCompressTableEscapedPipeStaysInItsCell(t *testing.T) {
 	in := "| a | b |\n|---|---|\n| x \\| y | 1 |\n| p | 2 |\n| q | 3 |\n| r | 4 |\n"
-	out, ok := compressTable(in)
+	out, ok := compressTable(t.Context(), in)
 	if !ok || !strings.Contains(out, "x \\| y|1") {
 		t.Fatalf("got %q %v", out, ok)
 	}
@@ -68,7 +68,7 @@ func TestCompressTableEscapedPipeStaysInItsCell(t *testing.T) {
 
 func TestCompressTableCSVKeepsSpacesInCells(t *testing.T) {
 	in := "a,b\n1,\" x\"\n2,y \n3,\"z\"\n4,\" \"\n5,w\n"
-	out, ok := compressTable(in)
+	out, ok := compressTable(t.Context(), in)
 	if !ok {
 		t.Fatal("not detected")
 	}
@@ -81,7 +81,7 @@ func TestCompressTableCSVKeepsSpacesInCells(t *testing.T) {
 
 func TestCompressTablePipeCellTextIsNeverChanged(t *testing.T) {
 	in := "| a | b |\n|---|---|\n| x\\\\|y | 1 |\n| p | 2 |\n| q | 3 |\n| r | 4 |\n"
-	out, ok := compressTable(in)
+	out, ok := compressTable(t.Context(), in)
 	// Either the row is left as it is (a ragged row makes the text unknown) or the cell text is unchanged.
 	if ok && !strings.Contains(out, "x\\\\|y|1") {
 		t.Fatalf("got %q", out)
@@ -90,7 +90,7 @@ func TestCompressTablePipeCellTextIsNeverChanged(t *testing.T) {
 
 func TestCompressTableRaggedIsUnknown(t *testing.T) {
 	in := "a,b,c\n1,2,3\n4,5\n6,7,8\n9,10,11\n12,13,14\n"
-	if _, ok := compressTable(in); ok {
+	if _, ok := compressTable(t.Context(), in); ok {
 		t.Error("ragged CSV must not be compressed")
 	}
 }
@@ -99,7 +99,7 @@ func FuzzCompressTable(f *testing.F) {
 	f.Add(csvExport(6))
 	f.Add(markdownTable(6))
 	f.Fuzz(func(t *testing.T, in string) {
-		out, ok := compressTable(in)
+		out, ok := compressTable(t.Context(), in)
 		if !ok {
 			return
 		}

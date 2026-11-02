@@ -8,7 +8,7 @@ import (
 
 func TestCompressLogsLosslessRemovesOnlyLayout(t *testing.T) {
 	in := "\x1b[32m" + strings.ReplaceAll(serviceLog(300, 3), "INFO", "INFO\x1b[0m")
-	out, omitted, ok := compressLogs(in, false)
+	out, omitted, ok := compressLogs(t.Context(), in, false)
 	if !ok || omitted != 0 {
 		t.Fatalf("ok %v omitted %d", ok, omitted)
 	}
@@ -26,7 +26,7 @@ func TestCompressLogsLosslessRemovesOnlyLayout(t *testing.T) {
 
 func TestCompressLogsShortenKeepsErrorsAndMarksCuts(t *testing.T) {
 	in := serviceLog(3000, 12)
-	out, omitted, ok := compressLogs(in, true)
+	out, omitted, ok := compressLogs(t.Context(), in, true)
 	if !ok {
 		t.Fatal("not detected")
 	}
@@ -54,10 +54,10 @@ func TestCompressLogsShortenKeepsErrorsAndMarksCuts(t *testing.T) {
 }
 
 func TestCompressLogsBelowDetectionIsUnknown(t *testing.T) {
-	if _, _, ok := compressLogs(serviceLog(10, 0), true); ok {
+	if _, _, ok := compressLogs(t.Context(), serviceLog(10, 0), true); ok {
 		t.Error("10 lines must not be treated as a log")
 	}
-	if _, _, ok := compressLogs(strings.Repeat("some prose without a time\n", 50), true); ok {
+	if _, _, ok := compressLogs(t.Context(), strings.Repeat("some prose without a time\n", 50), true); ok {
 		t.Error("prose is not a log")
 	}
 }
@@ -65,7 +65,7 @@ func TestCompressLogsBelowDetectionIsUnknown(t *testing.T) {
 func FuzzCompressLogs(f *testing.F) {
 	f.Add(serviceLog(40, 1))
 	f.Fuzz(func(t *testing.T, in string) {
-		if out, _, ok := compressLogs(in, true); ok && len(out) > len(in)+64*len(strings.Split(in, "\n")) {
+		if out, _, ok := compressLogs(t.Context(), in, true); ok && len(out) > len(in)+64*len(strings.Split(in, "\n")) {
 			t.Fatal("grew a lot")
 		}
 	})

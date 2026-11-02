@@ -57,7 +57,7 @@ var detectText = detect
 var compressing = make(chan struct{}, maxCompressing)
 
 // detect compresses text with the first compressor whose type matches. typ is "unknown" when none does.
-// columnar is false while Presidio is set (it reads names better with their keys next to them).
+// columnar is false while Presidio is set: `make test-presidio` measured lower address recall in the column form (decision D7).
 func detect(text string, shorten, columnar bool) (out, typ string, omitted int) {
 	if o, ok := compressJSON(text, columnar); ok {
 		return o, "json", 0

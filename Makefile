@@ -89,6 +89,19 @@ install: $(DEPS) install-crds
 	helm upgrade --install ambit-crds charts/ambit-crds -n $(NS) --create-namespace --wait
 	helm upgrade --install ambit charts/ambit -n $(NS) -f charts/ambit/values-kind.yaml --wait --timeout 5m
 
+# Presidio recall test for columnar JSON (decision D7, issue #204). Starts the pinned Presidio analyzer in
+# Docker (the first start takes about a minute), runs the test against it and removes the container.
+# It holds the shared kind lock because the machine has memory for one such set at a time.
+PRESIDIO_IMAGE ?= mcr.microsoft.com/presidio-analyzer:2.2.362
+PRESIDIO_PORT ?= 5302
+test-presidio:
+	lockf /tmp/ambit-kind.lock sh -c 'docker rm -f ambit-presidio-test >/dev/null 2>&1; \
+	  trap "docker rm -f ambit-presidio-test >/dev/null 2>&1" EXIT; \
+	  docker run -d --name ambit-presidio-test -p 127.0.0.1:$(PRESIDIO_PORT):3000 $(PRESIDIO_IMAGE) >/dev/null && \
+	  for i in $$(seq 1 90); do curl -sf http://127.0.0.1:$(PRESIDIO_PORT)/health >/dev/null && break; sleep 2; done && \
+	  curl -sf http://127.0.0.1:$(PRESIDIO_PORT)/health >/dev/null && \
+	  AMBIT_PRESIDIO_TEST_URL=http://127.0.0.1:$(PRESIDIO_PORT) go test -count=1 -v -run TestPresidioRecall ./internal/guard'
+
 STEPS ?= 0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 8 9 10 12 keys ext args fallback compress
 # make test            -> every step; make test STEPS=3b -> one step (each sets up what it needs)
 test:

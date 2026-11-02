@@ -102,7 +102,7 @@ test-presidio:
 	  curl -sf http://127.0.0.1:$(PRESIDIO_PORT)/health >/dev/null && \
 	  AMBIT_PRESIDIO_TEST_URL=http://127.0.0.1:$(PRESIDIO_PORT) go test -count=1 -v -run TestPresidioRecall ./internal/guard'
 
-STEPS ?= 0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 8 9 10 12 keys ext args fallback compress
+STEPS ?= 0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 8 9 10 12 keys ext args fallback compress savings
 # make test            -> every step; make test STEPS=3b -> one step (each sets up what it needs)
 test:
 	@for s in $(STEPS); do ./test/step$$s.sh $(NS) || exit 1; done

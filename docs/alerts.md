@@ -17,6 +17,7 @@ alerts:
 | AmbitMemoryNearLimit | warning | a container used over 90% of its memory limit for 15 minutes | as above, before the kill |
 | AmbitWorkloadUnavailable | warning | a Deployment or StatefulSet had fewer ready pods than it should for 10 minutes | `kubectl -n <ns> get events --sort-by=.lastTimestamp` |
 | AmbitGuardCompressionFailing | warning | result compression of a server had an error or ran out of time in the last 30 minutes (only with `protection.enabled`). No call failed: the guard passed the original text | set `resultCompression.mode: off` on the Server if it continues, and read `kubectl -n <ns> logs deploy/ambit-guard` |
+| AmbitGuardRecordsDropped | warning | the guard dropped compression records in the last 30 minutes (only with `protection.enabled` and `evidence.enabled`). No call failed. The Savings figures are lower than the real ones | `send_failed`: the collector was not reachable, read `kubectl -n <ns> logs deploy/ambit-otel-collector`. `queue_full`: more records than the guard can send. `no_groups`: the gateway sent no groups for the call |
 | AmbitBudgetStoreDown | critical | the ratelimit service or Valkey had no ready pod for 1 minute (only with `limits.enabled`) | with `FailClosed` the gateway refuses LLM and MCP requests; with `FailOpen` requests pass uncounted |
 | AmbitAuditLogsDropped | critical | audit records failed to reach ClickHouse, or the collector refused them, in the last 10 minutes (only with `evidence.enabled`) | check ClickHouse first |
 

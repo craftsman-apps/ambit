@@ -45,6 +45,10 @@ spec:
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
             # Makes Go collect garbage before the container limit, so a large result does not end in an out-of-memory kill.
             - { name: GOMEMLIMIT, value: "{{ div (mul .Values.protection.memoryLimitMiB 80) 100 }}MiB" }
+            {{- if .Values.evidence.enabled }}
+            # One record per compressed tool result text (sizes and groups) for the Savings page.
+            - { name: AMBIT_OTLP_ENDPOINT, value: "ambit-otel-collector:4317" }
+            {{- end }}
             {{- with .Values.protection.presidio }}{{ if .analyzerURL }}
             - { name: AMBIT_PRESIDIO_ANALYZER_URL, value: {{ .analyzerURL | quote }} }
             - { name: AMBIT_PRESIDIO_ANONYMIZER_URL, value: {{ .anonymizerURL | quote }} }

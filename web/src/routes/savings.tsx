@@ -140,7 +140,7 @@ function DayChart({ s, later }: { s: Savings; later: number }) {
       )}
       {days.length > 0 && (
         <table className="w-full max-w-3xl border-collapse text-small" aria-label="Dollars saved per day">
-          <thead><tr className="border-b border-line"><th className={th}>Day</th><th className={th}>Tokens saved</th><th className={th}>Compression $</th><th className={th}>Routing $</th></tr></thead>
+          <thead><tr className="border-b border-line"><th className={th}>Day</th><th className={th}>Tokens saved (est.)</th><th className={th}>Compression $ (est.)</th><th className={th}>Routing $ (est.)</th></tr></thead>
           <tbody>{days.map((d) => (
             <tr key={d.day} className="border-b border-line-soft"><td className="px-3 py-1 font-mono">{d.day}</td><td className={td}>{d.tokens.toLocaleString()}</td>
               <td className={td}>{priced ? `~${usd(d.comp)}` : "–"}</td><td className={td}>{priced ? `~${usd(d.route)}` : "–"}</td></tr>
@@ -199,7 +199,7 @@ function GroupTable({ s, later }: { s: Savings; later: number }) {
       </div>
       {rows.length === 0 ? <p className="text-muted">No data in this period.</p> : (
         <table className="w-full border-collapse text-small" aria-label="Savings by group">
-          <thead><tr className="border-b border-line"><th className={th}>Group</th><th className={th}>Tokens saved</th><th className={th}>Compression $</th><th className={th}>Routed requests</th><th className={th}>Routing $</th></tr></thead>
+          <thead><tr className="border-b border-line"><th className={th}>Group</th><th className={th}>Tokens saved (est.)</th><th className={th}>Compression $ (est.)</th><th className={th}>Routed requests</th><th className={th}>Routing $ (est.)</th></tr></thead>
           <tbody>{rows.map((r) => (
             <tr key={r.group} className="border-b border-line-soft"><td className="px-3 py-1">{r.group}</td><td className={td}>{r.tokens.toLocaleString()}</td>
               <td className={td}>{r.hasCompPrice ? `~${usd(r.comp)}` : <span className="text-muted">tokens only</span>}</td>

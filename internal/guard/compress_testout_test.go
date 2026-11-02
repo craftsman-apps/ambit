@@ -48,7 +48,7 @@ Test Suites: 1 failed, 1 passed, 2 total
 
 func TestCompressTestOutputShortenKeepsFailuresAndSummary(t *testing.T) {
 	in := goTestVerbose(400, 2)
-	out, omitted, ok := compressTestOutput(in, true)
+	out, omitted, ok := compressTestOutput(t.Context(), in, true)
 	if !ok || omitted != 1 {
 		t.Fatalf("ok %v omitted %d", ok, omitted)
 	}
@@ -66,11 +66,11 @@ func TestCompressTestOutputShortenKeepsFailuresAndSummary(t *testing.T) {
 }
 
 func TestCompressTestOutputPytestAndJest(t *testing.T) {
-	out, _, ok := compressTestOutput(pytestRun, true)
+	out, _, ok := compressTestOutput(t.Context(), pytestRun, true)
 	if !ok || strings.Contains(out, "PASSED") || !strings.Contains(out, "assert 3 == 4") || !strings.Contains(out, "1 failed, 4 passed") || !strings.Contains(out, "[ambit: 4 passing tests omitted here]") {
 		t.Errorf("pytest:\n%s", out)
 	}
-	out, _, ok = compressTestOutput(jestRun, true)
+	out, _, ok = compressTestOutput(t.Context(), jestRun, true)
 	if !ok || strings.Contains(out, "✓") || !strings.Contains(out, `Received: "a "`) || !strings.Contains(out, "Tests:       1 failed") || !strings.Contains(out, "FAIL src/b.test.js") {
 		t.Errorf("jest:\n%s", out)
 	}
@@ -78,14 +78,14 @@ func TestCompressTestOutputPytestAndJest(t *testing.T) {
 
 func TestCompressTestOutputLosslessRemovesColorOnly(t *testing.T) {
 	in := "\x1b[31m--- FAIL: TestX (0.00s)\x1b[0m\n"
-	out, omitted, ok := compressTestOutput(in, false)
+	out, omitted, ok := compressTestOutput(t.Context(), in, false)
 	if !ok || omitted != 0 || out != "--- FAIL: TestX (0.00s)\n" {
 		t.Fatalf("%q %d %v", out, omitted, ok)
 	}
 }
 
 func TestCompressTestOutputNotATestRunIsUnknown(t *testing.T) {
-	if _, _, ok := compressTestOutput(htmlPage, true); ok {
+	if _, _, ok := compressTestOutput(t.Context(), htmlPage, true); ok {
 		t.Error("html")
 	}
 }
@@ -93,7 +93,7 @@ func TestCompressTestOutputNotATestRunIsUnknown(t *testing.T) {
 func FuzzCompressTestOutput(f *testing.F) {
 	f.Add(goTestVerbose(3, 1))
 	f.Fuzz(func(t *testing.T, in string) {
-		if out, _, ok := compressTestOutput(in, true); ok && len(out) > len(in)+64 {
+		if out, _, ok := compressTestOutput(t.Context(), in, true); ok && len(out) > len(in)+64 {
 			t.Fatal("grew")
 		}
 	})

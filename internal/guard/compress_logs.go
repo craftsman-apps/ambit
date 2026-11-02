@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
@@ -62,7 +63,8 @@ const (
 // earlier line (compared without timestamp and numbers), except the first 20 and last 20 lines, every
 // WARN/ERROR/FATAL/panic line and the stack that follows it, and 2 lines of context around them. One marker
 // stands for each run of dropped lines; omitted counts the markers.
-func compressLogs(in string, shorten bool) (out string, omitted int, ok bool) {
+func compressLogs(ctx context.Context, in string, shorten bool) (out string, omitted int, ok bool) {
+	p := &poll{ctx: ctx}
 	if strings.Contains(in, "\x1b") {
 		in = ansiRe.ReplaceAllString(in, "")
 	}
@@ -73,6 +75,9 @@ func compressLogs(in string, shorten bool) (out string, omitted int, ok bool) {
 	}
 	for rest := in; rest != ""; { // count without copying the lines: most texts are not logs
 		var l string
+		if p.hit() {
+			return "", 0, false
+		}
 		l, rest, _ = strings.Cut(rest, "\n")
 		if logStart(l) {
 			start++
@@ -83,6 +88,9 @@ func compressLogs(in string, shorten bool) (out string, omitted int, ok bool) {
 	}
 	lines := strings.Split(in, "\n")
 	for i, l := range lines {
+		if p.hit() {
+			return "", 0, false
+		}
 		lines[i] = strings.TrimRight(l, " \t\r")
 	}
 	if !shorten {
@@ -94,6 +102,9 @@ func compressLogs(in string, shorten bool) (out string, omitted int, ok bool) {
 	}
 	important := false
 	for i, l := range lines {
+		if p.hit() {
+			return "", 0, false
+		}
 		isStart := logStart(l)
 		switch {
 		case isImportant(l):
@@ -120,6 +131,9 @@ func compressLogs(in string, shorten bool) (out string, omitted int, ok bool) {
 		}
 	}
 	for i, l := range lines {
+		if p.hit() {
+			return "", 0, false
+		}
 		key = logKey(key[:0], l)
 		repeat := seen[string(key)] // no allocation for a lookup
 		if !repeat {

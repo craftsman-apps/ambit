@@ -58,23 +58,50 @@ var compressing = make(chan struct{}, maxCompressing)
 
 // detect compresses text with the first compressor whose type matches. typ is "unknown" when none does.
 // columnar is false while Presidio is set (it reads names better with their keys next to them).
-func detect(text string, shorten, columnar bool) (out, typ string, omitted int) {
-	if o, ok := compressJSON(text, columnar); ok {
+// It stops at once when ctx is done and then also gives "unknown".
+func detect(ctx context.Context, text string, shorten, columnar bool) (out, typ string, omitted int) {
+	if o, ok := compressJSON(ctx, text, columnar); ok {
 		return o, "json", 0
 	}
-	if o, n, ok := compressLogs(text, shorten); ok {
+	if ctx.Err() != nil {
+		return "", "unknown", 0
+	}
+	if o, n, ok := compressLogs(ctx, text, shorten); ok {
 		return o, "logs", n
 	}
-	if o, n, ok := compressTestOutput(text, shorten); ok {
+	if ctx.Err() != nil {
+		return "", "unknown", 0
+	}
+	if o, n, ok := compressTestOutput(ctx, text, shorten); ok {
 		return o, "test", n
 	}
-	if o, ok := compressTable(text); ok {
+	if ctx.Err() != nil {
+		return "", "unknown", 0
+	}
+	if o, ok := compressTable(ctx, text); ok {
 		return o, "table", 0
 	}
-	if o, n, ok := compressYAML(text, shorten); ok {
+	if ctx.Err() != nil {
+		return "", "unknown", 0
+	}
+	if o, n, ok := compressYAML(ctx, text, shorten); ok {
 		return o, "yaml", n
 	}
 	return "", "unknown", 0
+}
+
+// poll lets a compressor look at its context only now and then: hit is true once in pollEvery calls when ctx is
+// done. A compressor calls it once per line, row or token, and returns at once when it is true.
+type poll struct {
+	ctx context.Context
+	n   uint
+}
+
+const pollEvery = 256
+
+func (p *poll) hit() bool {
+	p.n++
+	return p.n%pollEvery == 0 && p.ctx.Err() != nil
 }
 
 // hint is the one fixed line shorten appends when it left content out. It holds sizes only.
@@ -86,8 +113,8 @@ func hint(before, after int, prefix string) string {
 func kb(n int) string { return fmt.Sprintf("%d KB", (n+1023)/1024) }
 
 // compressText returns the text to use and what happened. It never fails: a fault gives the original text.
-// The compressors run in their own goroutine, so a slow one is abandoned after the deadline (its memory is
-// held until it ends, and the semaphore counts it until then).
+// The compressors run in their own goroutine with a context that ends at the deadline. They look at it between
+// lines, rows or tokens and return at once, so the memory and the slot are released soon after the deadline.
 func compressText(ctx context.Context, text string, mode string, columnar bool) (out, typ string, omitted int, outcome string) {
 	select {
 	case compressing <- struct{}{}:
@@ -99,6 +126,12 @@ func compressText(ctx context.Context, text string, mode string, columnar bool) 
 		omitted  int
 		panicked bool
 	}
+	deadline := 100 * time.Millisecond
+	if len(text) > 1<<20 {
+		deadline = 400 * time.Millisecond
+	}
+	cctx, cancel := context.WithTimeout(ctx, deadline)
+	defer cancel()
 	done := make(chan res, 1)
 	go func() {
 		defer func() { <-compressing }()
@@ -108,21 +141,13 @@ func compressText(ctx context.Context, text string, mode string, columnar bool) 
 				done <- res{panicked: true}
 			}
 		}()
-		o, t, n := detectText(text, mode == ModeShorten, columnar)
+		o, t, n := detectText(cctx, text, mode == ModeShorten, columnar)
 		done <- res{out: o, typ: t, omitted: n}
 	}()
-	deadline := 100 * time.Millisecond
-	if len(text) > 1<<20 {
-		deadline = 400 * time.Millisecond
-	}
-	timer := time.NewTimer(deadline)
-	defer timer.Stop()
 	var r res
 	select {
 	case r = <-done:
-	case <-timer.C:
-		return text, "unknown", 0, outTimeout
-	case <-ctx.Done():
+	case <-cctx.Done():
 		return text, "unknown", 0, outTimeout
 	}
 	switch {

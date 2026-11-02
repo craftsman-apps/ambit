@@ -239,7 +239,7 @@ func TestLimitsOfCompression(t *testing.T) {
 	}
 }
 
-func withDetect(t *testing.T, f func(string, bool, bool) (string, string, int)) {
+func withDetect(t *testing.T, f func(context.Context, string, bool, bool) (string, string, int)) {
 	old := detectText
 	detectText = f
 	t.Cleanup(func() { detectText = old })
@@ -247,10 +247,10 @@ func withDetect(t *testing.T, f func(string, bool, bool) (string, string, int)) 
 
 func TestCompressorFaultsPassTheOriginal(t *testing.T) {
 	text := "{\n  \"a\": \"" + strings.Repeat("padding ", 1500) + " kim@acme.example\"\n}"
-	for name, f := range map[string]func(string, bool, bool) (string, string, int){
-		"panic":   func(string, bool, bool) (string, string, int) { panic("boom") },
-		"garbage": func(s string, _, _ bool) (string, string, int) { return s + s, "json", 0 },
-		"slow": func(s string, _, _ bool) (string, string, int) {
+	for name, f := range map[string]func(context.Context, string, bool, bool) (string, string, int){
+		"panic":   func(context.Context, string, bool, bool) (string, string, int) { panic("boom") },
+		"garbage": func(_ context.Context, s string, _, _ bool) (string, string, int) { return s + s, "json", 0 },
+		"slow": func(_ context.Context, s string, _, _ bool) (string, string, int) {
 			time.Sleep(300 * time.Millisecond)
 			return "x", "json", 0
 		},
@@ -314,7 +314,7 @@ func TestCompressMemoryBound(t *testing.T) {
 			var before, after runtime.MemStats
 			runtime.GC()
 			runtime.ReadMemStats(&before)
-			detect(text, mode == ModeShorten, true)
+			detect(t.Context(), text, mode == ModeShorten, true)
 			runtime.ReadMemStats(&after)
 			if got := after.TotalAlloc - before.TotalAlloc; got > 8*uint64(len(text)) {
 				t.Errorf("%s/%s: allocated %d bytes for %d bytes of input (%.1f times)", name, mode, got, len(text), float64(got)/float64(len(text)))

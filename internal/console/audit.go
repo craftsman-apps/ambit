@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -24,6 +25,14 @@ type Audit struct {
 	DB *sql.DB
 	// Prices returns each model's price by the name clients send (from Model objects); nil means none.
 	Prices func(ctx context.Context) map[string]v1.ModelPrice
+	// Routers returns the ModelRouters as they are now (for the routing baseline of the Savings page); nil means none.
+	Routers func(ctx context.Context) []RouterInfo
+	// ReferenceInputPrice is the admin's price per million input tokens for compression dollars of a group without
+	// priced LLM traffic; nil means none (console.savings.referenceInputPricePerMillion).
+	ReferenceInputPrice *float64
+
+	sumMu sync.Mutex
+	sum   summaryState
 }
 
 // ClickHouse is where the audit store is: the chart's own (plain HTTP inside the cluster) or an external
@@ -344,6 +353,7 @@ func (a *Audit) register(mux *http.ServeMux, admin func(func(http.ResponseWriter
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"from": from, "to": to, "usage": u})
 	}))
+	mux.HandleFunc("GET /api/savings", admin(a.savings))
 }
 
 // storeErr reports a failed ClickHouse query with its cause (admins only see these pages), so an

@@ -186,7 +186,7 @@ Limits: one model, one task, synthetic data, 3 runs per cell, and results that f
 
 **Compression records.** With `evidence.enabled`, the guard also writes one record to the audit trail for each text it compressed (OpenTelemetry log, sent to `ambit-otel-collector:4317`, the same collector the gateway uses). The record holds the Server name, the type, the mode, the bytes before and after, the number of cuts and the caller's groups (`ambit.kind` is `compression`). It holds no email and no content. Sending is best effort: when the collector is down or the queue (1,000 records) is full, the record is dropped, `ambit_guard_record_dropped_total` goes up and the call is not changed. Audit and Usage ignore these records.
 
-Bytes saved for a server are `bytes_in` minus `bytes_out`. These are bytes, not tokens. The guard also writes one log line for each compressed text with the sizes (never the content).
+Bytes saved for a server are `bytes_in` minus `bytes_out`. These are bytes, not tokens. The [Savings page](savings.md) turns the compression records into estimated tokens and dollars for each group. The guard also writes one log line for each compressed text with the sizes (never the content).
 
 ## Setup path
 

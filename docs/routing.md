@@ -147,6 +147,10 @@ Budgets charge the Model that answered, at its price, including streamed answers
 token counts. The Audit page shows routed calls as `auto → claude-sonnet`, with the label or reason for type
 LLM (`auto → claude-sonnet (coding)`, `auto → gemma (timeout)`), and the export carries the same text.
 
+## Savings
+
+The [Savings page](savings.md) shows what a router saved: for each request that went through a router, the cost of the most expensive priced Model the router can choose (`default` and every route), minus the cost of the Model that answered, with the same tokens. It is an estimate against the dearest choice, with the router and prices as they are now. It does not subtract the cost of the classifier.
+
 ## Conditions
 
 `kubectl get modelrouters` shows each router's `Ready` condition:

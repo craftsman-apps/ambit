@@ -133,9 +133,46 @@ Neither mode cuts rows of JSON or tables. Nothing tells Ambit which row the mode
 
 **What the model sees in `shorten`.** Each place where content was left out has one marker, for example `[ambit: 3940 repeated lines omitted here]`, and the end of the text has one line: `[ambit: this result was shortened from 250 KB to 5 KB. Parts were left out. If you need them, call the tool again with a narrower query (filters, a smaller range, a page number).]`. The wording is fixed and holds only numbers. This is the only way to get the left-out part: a narrower call. If the tool has no filter or paging, the same shortened result comes back. In that case set the `Server` back to `lossless` or `off`.
 
-**What is never compressed.** Results with `isError: true`, non-text content such as images, and `structuredContent` (it must keep the shape that the tool's output schema promises). If a client sends both `content` and `structuredContent` to the model, the saving is smaller.
+**What is never compressed.** Results with `isError: true`, non-text content such as images, and `structuredContent` (it must keep the shape that the tool's output schema promises). Which of the two a client sends to the model decides if compression helps; see [Measured savings](#measured-savings).
 
 **If compression fails.** A problem in a compressor never fails a call and never withholds a result: the guard passes the original text (masked as before). A compressor that is too slow (100 ms up to 1 MiB, 400 ms above) is abandoned, and at most 2 texts are compressed at the same time. A third text passes uncompressed. If masking fails, the result is withheld, as before.
+
+### Measured savings
+
+Measured on 2026-11-02 with real clients, on a kind cluster with Ambit built from `main`. Model: `openai/gpt-4.1-mini` at OpenRouter. Clients: opencode 2.1.4 and Codex 0.159.3. The test MCP server (`test/compressq`) returns synthetic data of 11 KB to 37 KB per result (a service log, `go test -v` output, issues as JSON, rows as JSON, pods as YAML), as text only. Token numbers are the input tokens that OpenRouter reports for the requests of one session, summed. Each cell is 3 runs (n = 3). The model is not deterministic, so the range is part of the result. Run it again with `test/compressq/run.py`.
+
+The task: call five tools one after another, then answer five questions. Input tokens per session:
+
+| Client | Mode | Median | Range | Saving vs `off` |
+|---|---|---|---|---|
+| opencode | `off` | 54,998 | 54,790 to 55,036 | |
+| opencode | `lossless` | 46,375 | 46,131 to 46,563 | 16% |
+| opencode | `shorten` | 27,787 | 27,787 to 27,823 | 49% |
+| Codex | `off` | 115,989 | 115,989 to 116,007 | |
+| Codex | `lossless` | 112,662 | 112,281 to 112,848 | 3% |
+| Codex | `shorten` | 80,301 | 80,283 to 89,588 | 31% |
+
+- `lossless` saves tokens only where there is layout to remove. Here that was the two JSON results (23.7 KB to 12.7 KB, and 19.3 KB to 6.1 KB). The log, the test output, the CSV and the YAML had no layout to remove, so they did not change.
+- `shorten` saved the most on the log (36.7 KB to 5.1 KB) and the test output (11.6 KB to 0.5 KB).
+- Codex saves less because, in these runs, it cut every tool result larger than about 12 KB (12,021 bytes) before it sent it, also with `off`. The client had already cut such a result, so compression removes fewer tokens there.
+
+**Which part of a result the client sends.** A tool that returns both `content[].text` and `structuredContent` (different content in the test) showed this, in 3 runs each:
+
+| Client | What the model request holds |
+|---|---|
+| Codex | `structuredContent` only. The text is not sent. Compression of the text has no effect for such a tool. |
+| opencode (`codemode: false` on the MCP server) | `content[].text` only. `structuredContent` is not sent. |
+| opencode (default in 2.x, Code Mode) | Neither. The model writes code that calls the tool, and only what that code returns goes into the next request. Compression does not change the tokens. |
+
+A tool that returns only text is sent as text by both clients (the token table above). Ambit compresses only `content[].text`. For a tool that also returns `structuredContent`, expect no saving with Codex.
+
+**Answer quality.** 20 questions over the same fixtures (`test/compressq/questions.go`: counts, one row, errors in a log, failed tests, a count printed in a marker, and one question about a line that `shorten` removes), modes `off`, `lossless` and `shorten`, 3 runs each, with opencode. Correct answers in 60 runs per mode: `off` 41, `lossless` 43, `shorten` 43. The difference is within the noise of the model; `gpt-4.1-mini` miscounts some lists (for example it counts 6 or 7 ERROR lines where the log has 8) in every mode.
+
+- No question was lost in `lossless`: every question the model answered correctly in the majority of runs in `off` was also answered correctly in `lossless`.
+- `shorten` did as well as `off` on the questions about a failure (9 of 9 runs in both modes), about an error line (10 of 12 runs, `off` 9 of 12) and about a count printed in a marker (3 of 3 runs; `off` 0 of 3, because the marker states the number of omitted passing tests).
+- The question about a line that `shorten` had removed was answered "not shown" in 3 of 3 runs, never with a guess. In `off` and `lossless` it was answered correctly.
+
+Limits: one model, one task, synthetic data, 3 runs per cell, and results that fit in the client. Measure your own tools before you move a server to `shorten`. Anthropic's token counting API was not used.
 
 **Counters.** The guard serves Prometheus metrics on port 8081 at `/metrics`. With `alerts.enabled` the chart adds a `PodMonitor` for them.
 

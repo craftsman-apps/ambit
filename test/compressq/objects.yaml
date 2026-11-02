@@ -1,0 +1,38 @@
+# Fixture MCP server for the answer-quality check (test/compressq/run.py), the model, and the rules.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: compressq, labels: { app: compressq } }
+spec:
+  selector: { matchLabels: { app: compressq } }
+  template:
+    metadata: { labels: { app: compressq } }
+    spec:
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: compressq
+          image: ambit-whoami:dev
+          imagePullPolicy: Never
+          command: [/compressq]
+          ports: [{ containerPort: 8080 }]
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: compressq }
+spec:
+  selector: { app: compressq }
+  ports: [{ port: 8080 }]
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: Server
+metadata: { name: cq }
+spec:
+  displayName: Compression fixtures (test)
+  url: http://compressq.ambit-system.svc:8080/mcp
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: AccessRule
+metadata: { name: cq-everyone }
+spec:
+  allSignedIn: true
+  servers: [{ name: cq }]

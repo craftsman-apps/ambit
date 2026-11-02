@@ -60,7 +60,7 @@ func TestCompressJSONKeepsEveryValue(t *testing.T) {
 		"unicode escapes": {"{\n  \"q\": \"say \\\"hi\\\" \\u00e9 \\\\ 한국어\",\n  \"n\": 12345678901234567890.123456789e-5\n}", false, 0.95},
 	} {
 		t.Run(name, func(t *testing.T) {
-			out, ok := compressJSON(tc.in, tc.columnar)
+			out, ok := compressJSON(t.Context(), tc.in, tc.columnar)
 			if !ok {
 				t.Fatal("not compressed")
 			}
@@ -70,7 +70,7 @@ func TestCompressJSONKeepsEveryValue(t *testing.T) {
 			if got, want := uncolumn(decodeExact(t, out)), decodeExact(t, tc.in); !reflect.DeepEqual(got, want) {
 				t.Errorf("information changed")
 			}
-			again, _ := compressJSON(tc.in, tc.columnar)
+			again, _ := compressJSON(t.Context(), tc.in, tc.columnar)
 			if again != out {
 				t.Error("not deterministic")
 			}
@@ -79,7 +79,7 @@ func TestCompressJSONKeepsEveryValue(t *testing.T) {
 }
 
 func TestCompressJSONKeepsKeyOrderAndRawNumbers(t *testing.T) {
-	out, ok := compressJSON("{ \"z\": 1.0, \"a\": 12345678901234567890.123456789, \"m\": [ 1e3 , \"s p\" ] }", false)
+	out, ok := compressJSON(t.Context(), "{ \"z\": 1.0, \"a\": 12345678901234567890.123456789, \"m\": [ 1e3 , \"s p\" ] }", false)
 	if !ok || out != `{"z":1.0,"a":12345678901234567890.123456789,"m":[1e3,"s p"]}` {
 		t.Fatalf("got %q", out)
 	}
@@ -87,19 +87,19 @@ func TestCompressJSONKeepsKeyOrderAndRawNumbers(t *testing.T) {
 
 func TestCompressJSONColumnarOnlyForUniformArrays(t *testing.T) {
 	mixed := `[{"a":1,"b":2},{"a":1,"b":2},{"a":1,"b":2},{"a":1,"b":2},{"a":1,"c":2}]`
-	out, _ := compressJSON(mixed, true)
+	out, _ := compressJSON(t.Context(), mixed, true)
 	if strings.Contains(out, `"columns"`) {
 		t.Errorf("mixed keys must not become columnar: %s", out)
 	}
 	short := `[{"a":1},{"a":2},{"a":3},{"a":4}]`
-	if out, _ := compressJSON(short, true); strings.Contains(out, `"columns"`) {
+	if out, _ := compressJSON(t.Context(), short, true); strings.Contains(out, `"columns"`) {
 		t.Errorf("4 rows must not become columnar: %s", out)
 	}
 	uniform := `[{"a":1},{"a":2},{"a":3},{"a":4},{"a":5}]`
-	if out, _ := compressJSON(uniform, true); out != `{"columns":["a"],"rows":[[1],[2],[3],[4],[5]]}` {
+	if out, _ := compressJSON(t.Context(), uniform, true); out != `{"columns":["a"],"rows":[[1],[2],[3],[4],[5]]}` {
 		t.Errorf("got %s", out)
 	}
-	if out, _ := compressJSON(uniform, false); strings.Contains(out, `"columns"`) {
+	if out, _ := compressJSON(t.Context(), uniform, false); strings.Contains(out, `"columns"`) {
 		t.Errorf("columnar off (Presidio set): %s", out)
 	}
 }
@@ -113,7 +113,7 @@ func TestCompressJSONRefusesWhatItCannotKeep(t *testing.T) {
 		"prose":           "hello world",
 		"empty":           "",
 	} {
-		if out, ok := compressJSON(in, true); ok {
+		if out, ok := compressJSON(t.Context(), in, true); ok {
 			t.Errorf("%s: compressed to %q", name, out)
 		}
 	}
@@ -123,7 +123,7 @@ func FuzzCompressJSON(f *testing.F) {
 	f.Add(`{"a": [1, 2, {"b": null}]}`)
 	f.Add(queryRows(6))
 	f.Fuzz(func(t *testing.T, in string) {
-		out, ok := compressJSON(in, true)
+		out, ok := compressJSON(t.Context(), in, true)
 		if !ok {
 			return
 		}

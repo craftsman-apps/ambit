@@ -2,6 +2,7 @@ package guard
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 )
 
@@ -10,12 +11,21 @@ import (
 // order are copied byte for byte (no float round trip), so the inverse is exact. It works on the bytes
 // of valid JSON and never builds a tree. ok is false for text that is not a JSON object or array, or that has
 // a duplicate key in one object (a columnar form would hide it).
-func compressJSON(in string, columnar bool) (out string, ok bool) {
+// It looks at ctx between tokens and returns ok false when it is done.
+func compressJSON(ctx context.Context, in string, columnar bool) (out string, ok bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			if r != errJSONCanceled {
+				panic(r)
+			}
+			out, ok = "", false
+		}
+	}()
 	t := trimJSON(in)
 	if len(t) == 0 || (t[0] != '{' && t[0] != '[') || !json.Valid(t) {
 		return "", false
 	}
-	c := &jsonCompactor{in: t, columnar: columnar, buf: bytes.NewBuffer(make([]byte, 0, len(t)))}
+	c := &jsonCompactor{p: poll{ctx: ctx}, in: t, columnar: columnar, buf: bytes.NewBuffer(make([]byte, 0, len(t)))}
 	c.value(0)
 	if c.dup {
 		return "", false
@@ -28,11 +38,21 @@ func trimJSON(in string) []byte { return bytes.Trim([]byte(in), " \t\r\n") }
 
 const minColumnarRows = 5
 
+// errJSONCanceled unwinds the recursive walk when the context is done; compressJSON recovers it.
+var errJSONCanceled = &struct{ s string }{"json compression canceled"}
+
 type jsonCompactor struct {
+	p        poll
 	in       []byte
 	buf      *bytes.Buffer
 	columnar bool
 	dup      bool
+}
+
+func (c *jsonCompactor) check() {
+	if c.p.hit() {
+		panic(errJSONCanceled)
+	}
 }
 
 func (c *jsonCompactor) ws(i int) int {
@@ -61,10 +81,13 @@ func (c *jsonCompactor) end(i int) int {
 		for depth := 0; ; i++ {
 			switch c.in[i] {
 			case '"':
+				c.check()
 				i = c.str(i) - 1
 			case '{', '[':
+				c.check()
 				depth++
 			case '}', ']':
+				c.check()
 				if depth--; depth == 0 {
 					return i + 1
 				}
@@ -81,6 +104,7 @@ func (c *jsonCompactor) end(i int) int {
 func (c *jsonCompactor) members(i int, f func(key []byte, v int)) int {
 	i = c.ws(i + 1)
 	for c.in[i] != '}' {
+		c.check()
 		k := i
 		i = c.str(i)
 		key := c.in[k:i]
@@ -127,6 +151,7 @@ func (c *jsonCompactor) value(i int) int {
 		c.buf.WriteByte('[')
 		j := c.ws(i + 1)
 		for first := true; c.in[j] != ']'; first = false {
+			c.check()
 			if !first {
 				c.buf.WriteByte(',')
 			}
@@ -152,6 +177,7 @@ func (c *jsonCompactor) table(i int) (keys [][]byte, ends int) {
 	rows := 0
 	j := c.ws(i + 1)
 	for ; c.in[j] != ']'; rows++ {
+		c.check()
 		if c.in[j] != '{' {
 			return nil, 0
 		}
@@ -194,6 +220,7 @@ func (c *jsonCompactor) writeTable(i int, keys [][]byte) {
 	c.buf.WriteString(`],"rows":[`)
 	j := c.ws(i + 1)
 	for first := true; c.in[j] != ']'; first = false {
+		c.check()
 		if !first {
 			c.buf.WriteByte(',')
 		}

@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"context"
 	"regexp"
 	"strings"
 )
@@ -39,10 +40,14 @@ func yamlLine(l string) bool {
 // Always: it removes trailing spaces and blank lines outside block scalars (inside one they are content).
 // With shorten it also removes full-line comments and metadata.managedFields blocks, each with a marker.
 // omitted counts the markers.
-func compressYAML(in string, shorten bool) (out string, omitted int, ok bool) {
+func compressYAML(ctx context.Context, in string, shorten bool) (out string, omitted int, ok bool) {
 	in = strings.TrimRight(in, "\n")
 	content, matching := 0, 0
+	p := &poll{ctx: ctx}
 	for rest := in; rest != ""; {
+		if p.hit() {
+			return "", 0, false
+		}
 		var l string
 		l, rest, _ = strings.Cut(rest, "\n")
 		if t := strings.TrimSpace(l); t != "" && !strings.HasPrefix(t, "#") {
@@ -62,6 +67,9 @@ func compressYAML(in string, shorten bool) (out string, omitted int, ok bool) {
 	block := -1 // indent of the line that opened a block scalar, or -1
 	skip := -1  // indent of a managedFields key being dropped, or -1
 	for rest := in; rest != ""; {
+		if p.hit() {
+			return "", 0, false
+		}
 		var l string
 		l, rest, _ = strings.Cut(rest, "\n")
 		ind := len(l) - len(strings.TrimLeft(l, " "))

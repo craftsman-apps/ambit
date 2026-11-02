@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
@@ -28,7 +29,7 @@ func isTestOutput(in string) bool {
 // compressTestOutput: lossless removes ANSI color codes only. shorten also drops the lines of passing tests
 // (go test -v, pytest -v, jest), keeps everything else (failures with their messages and stacks, the
 // summary), and says how many passing tests it left out in one marker where the first one was.
-func compressTestOutput(in string, shorten bool) (out string, omitted int, ok bool) {
+func compressTestOutput(ctx context.Context, in string, shorten bool) (out string, omitted int, ok bool) {
 	in = ansiRe.ReplaceAllString(in, "")
 	if !isTestOutput(in) {
 		return "", 0, false
@@ -39,7 +40,11 @@ func compressTestOutput(in string, shorten bool) (out string, omitted int, ok bo
 	lines := strings.Split(strings.TrimRight(in, "\n"), "\n")
 	passing, at := 0, -1
 	kept := make([]string, 0, len(lines))
+	p := &poll{ctx: ctx}
 	for _, l := range lines {
+		if p.hit() {
+			return "", 0, false
+		}
 		switch {
 		case passRe.MatchString(l):
 			passing++

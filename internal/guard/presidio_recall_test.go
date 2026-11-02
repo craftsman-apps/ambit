@@ -177,9 +177,9 @@ func TestPresidioRecallColumnarVersusPlain(t *testing.T) {
 	docs, truth := fixtureSet(300)
 	formList := []forms{
 		{"original (pretty)", func(s string) string { return s }},
-		{"plain (minified)", func(s string) string { o, ok := compressJSON(s, false); must(t, ok); return o }},
+		{"plain (minified)", func(s string) string { o, ok := compressJSON(t.Context(), s, false); must(t, ok); return o }},
 		{"columnar", func(s string) string {
-			o, ok := compressJSON(s, true)
+			o, ok := compressJSON(t.Context(), s, true)
 			must(t, ok)
 			if !strings.Contains(o, `"columns"`) {
 				t.Fatalf("fixture did not become columnar: %.200s", o)

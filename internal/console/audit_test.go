@@ -135,6 +135,7 @@ func TestUsageSplit(t *testing.T) {
 		{"summary covers the whole period", "2026-10-01 00:00", "2026-10-05 10:30", "2026-11-02 12:00", true, false, "2026-10-05 00:00", "2026-11-02 00:00", "2026-11-02 12:00"},
 		{"summary began in the middle of the period", "2026-10-20 00:00", "2026-10-05 10:30", "2026-11-02 12:00", true, true, "2026-10-20 00:00", "2026-11-02 00:00", "2026-10-20 00:00"},
 		{"summary not complete for any day of the period", "2026-11-03 00:00", "2026-10-05 10:30", "2026-11-02 12:00", false, true, "2026-11-03 00:00", "2026-11-02 00:00", "2026-11-02 12:00"},
+		{"first complete day is the end of the period: scan only, no double count", "2026-11-01 00:00", "2026-10-05 10:30", "2026-11-01 00:00", false, true, "", "", "2026-11-01 00:00"},
 		{"period ends at midnight: that day is not in it", "2026-10-01 00:00", "2026-10-30 00:00", "2026-11-01 00:00", true, false, "2026-10-30 00:00", "2026-10-31 00:00", "2026-11-01 00:00"},
 	}
 	for _, c := range cases {

@@ -108,9 +108,9 @@ func TestSummariesOnClickHouse(t *testing.T) {
 	}
 	d1, d2 := time.Date(2026, 10, 30, 23, 59, 59, 0, time.UTC), time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)
 
-	// Before any guard record: the Audit page's answer for alice and the mark-missing count.
+	// Before any guard record: the Audit page's answer for user1 and the mark-missing count.
 	audit := func() (int, int) {
-		calls, err := a.Calls(ctx, "alice@acme.test", d1.Add(-48*time.Hour), d2.Add(48*time.Hour), 100)
+		calls, err := a.Calls(ctx, "user1@example.com", d1.Add(-48*time.Hour), d2.Add(48*time.Hour), 100)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -121,12 +121,12 @@ func TestSummariesOnClickHouse(t *testing.T) {
 		return len(calls), mm
 	}
 	// A person in two groups, two requests across midnight, a router request, an empty group list, a missing key.
-	insertLog(t, a, d1, llm("alice@acme.test", `["eng","ml-research"]`, "claude-sonnet", "", 1000, 200))
-	insertLog(t, a, d2, llm("alice@acme.test", `["eng","ml-research"]`, "claude-sonnet", "claude-sonnet", 2000, 300)) // router equals model: direct
-	insertLog(t, a, d2, llm("alice@acme.test", `["eng"]`, "gemma", "auto", 500, 50))                                  // routed
-	insertLog(t, a, d2, llm("nobody@acme.test", `[]`, "gemma", "", 70, 7))                                            // no group
-	insertLog(t, a, d2, llm("legacy@acme.test", "", "gemma", "", 9999, 9999))                                         // no jwt.groups key: in neither
-	insertLog(t, a, d2, map[string]string{"mcp.method.name": "tools/call", "mcp.target": "crm", "jwt.email": "alice@acme.test", "http.status": "200", "jwt.groups": `["eng"]`})
+	insertLog(t, a, d1, llm("user1@example.com", `["eng","ml-research"]`, "claude-sonnet", "", 1000, 200))
+	insertLog(t, a, d2, llm("user1@example.com", `["eng","ml-research"]`, "claude-sonnet", "claude-sonnet", 2000, 300)) // router equals model: direct
+	insertLog(t, a, d2, llm("user1@example.com", `["eng"]`, "gemma", "auto", 500, 50))                                  // routed
+	insertLog(t, a, d2, llm("user2@example.com", `[]`, "gemma", "", 70, 7))                                             // no group
+	insertLog(t, a, d2, llm("user3@example.com", "", "gemma", "", 9999, 9999))                                          // no jwt.groups key: in neither
+	insertLog(t, a, d2, map[string]string{"mcp.method.name": "tools/call", "mcp.target": "crm", "jwt.email": "user1@example.com", "http.status": "200", "jwt.groups": `["eng"]`})
 	callsBefore, mmBefore := audit()
 
 	insertLog(t, a, d1, guardRecord("crm", "json", `["eng","ml-research"]`, 29000, 10000))
@@ -141,16 +141,28 @@ func TestSummariesOnClickHouse(t *testing.T) {
 
 	// T1: the LLM summary equals the Usage query for requests and tokens, per day, group and model.
 	prices := testPrices
-	usage, err := a.Usage(ctx, d1.Add(-time.Hour), d2.Add(time.Hour), prices)
+	usage, err := a.usageScan(ctx, d1.Add(-time.Hour), d2.Add(time.Hour), prices)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Issue #215: the Usage page reads the summary and gives the same answer as the scan of otel_logs. The records are
+	// older than the views, so the summary counts from the oldest row and answers every day.
+	fromSummary, err := a.Usage(ctx, d1.Add(-time.Hour), d2.Add(time.Hour), prices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(fromSummary) != fmt.Sprint(usage) || len(usage) == 0 {
+		t.Errorf("Usage from the summary and from the scan differ:\n summary %+v\n scan    %+v", fromSummary, usage)
+	}
+	if cov, err := a.summaryCover(ctx, llmTable, llmView); err != nil || cov.Since.Format("2006-01-02") != "2026-10-30" || cov.Full.Format("2006-01-02") != "2026-10-30" {
+		t.Errorf("cover %+v %v: want the oldest row, 2026-10-30", cov, err)
 	}
 	llmRows, compRows, since, err := a.SummaryRows(ctx, d1.Add(-24*time.Hour), d2.Add(24*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if since == "" {
-		t.Error("no since date")
+	if since != "2026-10-30" { // the oldest summary row, which is older than the views
+		t.Errorf("since %q, want 2026-10-30", since)
 	}
 	type k struct{ day, group string }
 	fromView, fromUsage := map[k][3]int64{}, map[k][3]int64{}

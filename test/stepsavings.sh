@@ -104,8 +104,10 @@ if [[ "${SAVINGS_BENCH:-}" == 1 ]]; then
   ch "SYSTEM FLUSH LOGS" >/dev/null
   echo "query_log (log_comment, runs, read_rows, read_bytes, query_duration_ms, memory_usage):"
   ch "SELECT log_comment, count(), any(read_rows), any(read_bytes), round(avg(query_duration_ms)), max(memory_usage) FROM system.query_log WHERE type = 'QueryFinish' AND log_comment LIKE 'savings-%' GROUP BY log_comment ORDER BY log_comment"
+  echo "Usage page after #215 (all its queries, average of 3 runs: rows, bytes, ms):"
+  ch "SELECT round(sum(read_rows) / 3), round(sum(read_bytes) / 3), round(sum(query_duration_ms) / 3) FROM system.query_log WHERE type = 'QueryFinish' AND log_comment = 'usage-new'"
   echo "per run (cold first):"
-  ch "SELECT log_comment, read_rows, read_bytes, query_duration_ms FROM system.query_log WHERE type = 'QueryFinish' AND log_comment IN ('savings-old', 'savings-new') ORDER BY event_time_microseconds"
+  ch "SELECT log_comment, read_rows, read_bytes, query_duration_ms FROM system.query_log WHERE type = 'QueryFinish' AND log_comment IN ('savings-old', 'savings-new', 'usage-new') ORDER BY event_time_microseconds"
   echo "parts and sizes:"
   ch "SELECT table, count() AS parts, sum(rows) AS rows, formatReadableSize(sum(data_compressed_bytes)) AS compressed, formatReadableSize(sum(data_uncompressed_bytes)) AS uncompressed FROM system.parts WHERE database IN ('savings_bench', 'savings_bench_card') AND active GROUP BY table ORDER BY table"
   ch "DROP DATABASE IF EXISTS savings_bench SYNC" >/dev/null || true

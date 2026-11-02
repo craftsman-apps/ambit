@@ -26,9 +26,10 @@ The console keeps two small summary tables in ClickHouse, filled by materialized
 
 The page reads about 30 days of summary rows instead of every record of the month. The summaries hold counts only: no email, no tool content, no prompt. Group names are the only identifying text in them.
 
-- **Counted since.** The views see only records written after the console created them. There is no backfill, because a copy from `otel_logs` cannot be exact (the table has no insert time, so a copy can miss records or count one twice). The page shows the date the counting began. Compression has no earlier history anyway.
+- **Counted since.** The views see only records written after the console created them. There is no backfill, because a copy from `otel_logs` cannot be exact (the table has no insert time, so a copy can miss records or count one twice). The page shows the date the counting began: the day the views were created, or the day of the oldest summary row if that is earlier. Compression has no earlier history anyway.
 - **Retention.** `evidence.summaryRetention`, default `26280h` (three years). It is rounded up to whole days and must be at least `24h`. A new value applies at the next console start. Raw records follow `evidence.retention`.
 - **ClickHouse rights.** The console creates the tables and views itself, once, and retries until the collector has created `otel_logs`. With the chart's own ClickHouse nothing is needed. With an external ClickHouse the user needs `CREATE TABLE`, `CREATE VIEW`, `ALTER` (to change the retention), `INSERT` and `SELECT` in the database, and `SELECT` on `system.tables`. If the creation fails, the Savings page shows the error; Usage and Audit are not affected.
+- **Usage page.** It reads `ambit_llm_daily_v1` (group rows only) for every day the summary holds completely: the days after the creation day, which is partial. Older days still come from `otel_logs`, so the page shows the same numbers as before an upgrade and the scan shrinks each day until it is gone. The summary is per UTC day, so the first day of a period counts whole.
 - **Query cost.** The page reads the summaries, not `otel_logs`. The pull request that added them records the measured rows, bytes and time of both queries for a seeded 30-day data set.
 
 ## Tokens from bytes (compression)
@@ -96,7 +97,7 @@ What this means, and what it does not:
 
 ## Groups and totals
 
-A person in two groups counts toward **both** groups, as on the Usage page. So the group rows can add up to more than the total. The tiles, the daily chart and the server and router tables read one row per request (the all-groups row), so no total counts anyone twice. The group chart shows the top ten groups; the table lists all of them.
+A person in two groups counts toward **both** groups, as on the Usage page. So the group rows can add up to more than the total, and the page says so: the group chart shows each group's share of the total (for example 50%), and the shares of all groups can add up to more than 100%. The CSV export has plain numbers. The tiles, the daily chart and the server and router tables read one row per request (the all-groups row), so no total counts anyone twice. The group chart shows the top ten groups; the table lists all of them.
 
 ## What the page does not show
 

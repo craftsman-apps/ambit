@@ -309,16 +309,16 @@ func TestSavingsAdminOnly(t *testing.T) {
 	auth := &Auth{codec: Codec{Key: []byte("0123456789abcdef0123456789abcdef")}, ttl: time.Hour, Sessions: NewSessionStore()}
 	h := NewServer(auth, testSPA, LoginOptions{}, &Catalog{Client: fake.NewClientBuilder().WithScheme(runtime.NewScheme()).Build(), Namespace: testNS, Audit: &Audit{}})
 	for _, role := range []string{RoleViewer, RoleApprover} {
-		if rec := do(t, h, "GET", "/api/savings", user(auth, "x@acme.test", role), nil); rec.Code != http.StatusForbidden {
+		if rec := do(t, h, "GET", "/api/savings", user(auth, "user1@example.com", role), nil); rec.Code != http.StatusForbidden {
 			t.Errorf("%s: %d", role, rec.Code)
 		}
 	}
 	// The summaries are not created: a clear 503 that names the cause, not an empty page.
-	rec := do(t, h, "GET", "/api/savings", user(auth, "priya@acme.test", RoleAdmin), nil)
+	rec := do(t, h, "GET", "/api/savings", user(auth, "admin@example.com", RoleAdmin), nil)
 	if rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "not created yet") {
 		t.Errorf("admin: %d %s", rec.Code, rec.Body)
 	}
-	if rec := do(t, h, "GET", "/api/savings?from=2026-04-01&to=2026-03-01", user(auth, "priya@acme.test", RoleAdmin), nil); rec.Code != http.StatusBadRequest {
+	if rec := do(t, h, "GET", "/api/savings?from=2026-04-01&to=2026-03-01", user(auth, "admin@example.com", RoleAdmin), nil); rec.Code != http.StatusBadRequest {
 		t.Errorf("bad period: %d", rec.Code)
 	}
 }

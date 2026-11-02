@@ -120,3 +120,27 @@ func TestKeysLastUsedSQL(t *testing.T) {
 		t.Fatal(got, err) // no ids, no query (DB is nil)
 	}
 }
+
+// Usage reads the LLM summary for the days it holds completely and the scan for older days (issue #215).
+func TestUsageSplit(t *testing.T) {
+	d := func(s string) time.Time { x, _ := time.Parse("2006-01-02 15:04", s); return x }
+	cases := []struct {
+		name           string
+		full           string // first complete day
+		from, to       string
+		summary, scan  bool
+		sumFrom, sumTo string
+		scanTo         string
+	}{
+		{"summary covers the whole period", "2026-10-01 00:00", "2026-10-05 10:30", "2026-11-02 12:00", true, false, "2026-10-05 00:00", "2026-11-02 00:00", "2026-11-02 12:00"},
+		{"summary began in the middle of the period", "2026-10-20 00:00", "2026-10-05 10:30", "2026-11-02 12:00", true, true, "2026-10-20 00:00", "2026-11-02 00:00", "2026-10-20 00:00"},
+		{"summary not complete for any day of the period", "2026-11-03 00:00", "2026-10-05 10:30", "2026-11-02 12:00", false, true, "2026-11-03 00:00", "2026-11-02 00:00", "2026-11-02 12:00"},
+		{"period ends at midnight: that day is not in it", "2026-10-01 00:00", "2026-10-30 00:00", "2026-11-01 00:00", true, false, "2026-10-30 00:00", "2026-10-31 00:00", "2026-11-01 00:00"},
+	}
+	for _, c := range cases {
+		p := usageSplit(cover{Full: d(c.full)}, d(c.from), d(c.to))
+		if p.summary != c.summary || p.scan != c.scan || (c.summary && (!p.sumFrom.Equal(d(c.sumFrom)) || !p.sumTo.Equal(d(c.sumTo)))) || (c.scan && !p.scanTo.Equal(d(c.scanTo))) {
+			t.Errorf("%s: %+v", c.name, p)
+		}
+	}
+}

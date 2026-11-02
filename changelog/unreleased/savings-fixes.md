@@ -1,0 +1,2 @@
+- Savings page: the group chart now shows each group's share of the total instead of dollars that looked larger than the total, and says that people in several groups count in each group. "Counted since" now shows the oldest day the summaries hold, so it never conflicts with the chart.
+- Usage page: reads the daily LLM summary table for the days it holds completely, instead of scanning every audit record. The numbers are the same; the page is much faster with a large audit trail. Days before the summary began still come from the audit records.

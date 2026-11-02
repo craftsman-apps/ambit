@@ -30,12 +30,12 @@ func envInt(name string, def int) int {
 func seedSQL(day string, offset, n, total, groups int) string {
 	return fmt.Sprintf(`INSERT INTO otel_logs (Timestamp, LogAttributes)
 WITH number + %[3]d AS i, i %% 1000 AS u, intDiv(i, 1000) AS k,
-     if(u %% 3 = 0, concat('["g', toString(u %% %[4]d), '","g', toString((u * 7 + 1) %% %[4]d), '"]'), concat('["g', toString(u %% %[4]d), '"]')) AS groups,
+     if(u %% 10 = 0, concat('["g', toString(u %% %[4]d), '","g', toString((u * 7 + 1) %% %[4]d), '"]'), concat('["g', toString(u %% %[4]d), '"]')) AS groups,
      arrayElement(['gemma','claude-sonnet','gemini-pro','gpt-small','llama','qwen','mistral','claude-haiku'], 1 + (i %% 8)) AS model,
      cityHash64(i) AS h
 SELECT toDateTime64('%[1]s 00:00:00', 9, 'UTC') + toIntervalMillisecond(intDiv((number + %[3]d) * 86400000, %[5]d)),
   map(
-    'jwt.email', concat('user', toString(u), '@acme.test'), 'jwt.sub', concat('sub-', toString(u)), 'jwt.groups', groups,
+    'jwt.email', concat('user', toString(u), '@example.com'), 'jwt.sub', concat('sub-', toString(u)), 'jwt.groups', groups,
     'ambit.identity', 'jwt', 'ambit.accessMode', 'enforce', 'ambit.rulesVersion', '3f9a1c2b7d10',
     'http.method', 'POST', 'http.path', if(i %% 20 < 11, '/v1/chat/completions', '/mcp'), 'http.status', '200',
     'http.response.status_code', '200', 'duration', toString(h %% 5000), 'request.id', hex(h), 'trace.id', hex(cityHash64(h)),
@@ -80,7 +80,7 @@ func TestQueryCost(t *testing.T) {
 	from, to := end.AddDate(0, 0, -29), end.Add(23*time.Hour+59*time.Minute)
 	for i := 0; i < 3; i++ { // the first run is cold; all three are in the query log
 		ctx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"log_comment": "savings-old"}))
-		u, err := a.Usage(ctx, from, to.Add(time.Hour), nil)
+		u, err := a.usageScan(ctx, from, to.Add(time.Hour), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -96,6 +96,16 @@ func TestQueryCost(t *testing.T) {
 		}
 		if i == 0 {
 			t.Logf("new summary queries: %d LLM rows, %d compression rows", len(l), len(c))
+		}
+	}
+	for i := 0; i < 3; i++ { // the Usage page after issue #215
+		ctx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"log_comment": "usage-new"}))
+		u, err := a.Usage(ctx, from, to.Add(time.Hour), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			t.Logf("new Usage: %d rows", len(u))
 		}
 	}
 }

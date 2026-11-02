@@ -62,3 +62,9 @@ export function groupRows(s: Savings, later: number): GroupRow[] {
 
 // The chart shows the top groups only. The rest are in the table; they are not summed into "others", because groups overlap.
 export const topGroups = (rows: GroupRow[], n: number): GroupRow[] => rows.filter((r) => r.total > 0).slice(0, n);
+
+// A group's part of the total, as "34%" ("<1%" under one percent). Groups overlap, so the shares of all groups add up to more than 100%.
+export function share(part: number, total: number): string {
+  const p = (part / total) * 100;
+  return p > 0 && p < 1 ? "<1%" : `${Math.round(p)}%`;
+}

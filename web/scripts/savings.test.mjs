@@ -1,7 +1,7 @@
 // Savings page rules that run in the browser: the "later turns" control and the number formats. Pure functions.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { withResend, resend, groupRows, topGroups, usd, compact, bytes, add } from "../src/lib/savings.ts";
+import { withResend, resend, groupRows, topGroups, share, usd, compact, bytes, add } from "../src/lib/savings.ts";
 
 const comp = { results: 40, bytesIn: 1_000_000, bytesOut: 400_000, tokensSaved: 206_897, tokensLow: 155_172, tokensHigh: 258_621,
   dollars: 0.62, dollarsLow: 0.47, dollarsHigh: 0.78, priceSource: "llm" };
@@ -53,4 +53,12 @@ test("number formats", () => {
   assert.equal(compact(950), "950");
   assert.equal(bytes(41 * 2 ** 20), "41.0 MiB");
   assert.equal(bytes(512), "512 B");
+});
+
+test("a group's share of the total; overlapping groups add up to more than 100%", () => {
+  assert.equal(share(79, 158.59), "50%");
+  assert.equal(share(0.5, 158.59), "<1%");
+  assert.equal(share(158.59, 158.59), "100%");
+  const shares = [79, 60, 40].map((d) => (d / 158.59) * 100);
+  assert.ok(shares.reduce((a, b) => a + b) > 100); // a person in two groups counts in both
 });

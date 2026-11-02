@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Shell } from "@/components/shell";
 import { getJSON } from "@/api";
 import { csvRow } from "@/lib/csv";
-import { bytes, compact, groupRows, resend, topGroups, usd, withResend, type Savings } from "@/lib/savings";
+import { bytes, compact, groupRows, resend, share, topGroups, usd, withResend, type Savings } from "@/lib/savings";
 
 type Response = { from: string; to: string; since: string; savings: Savings };
 
@@ -26,7 +26,7 @@ export function SavingsPage() {
           <h1 className="text-h1 font-semibold tracking-tight">Savings</h1>
           <p className="text-muted">
             What Ambit saved in the last 30 days (UTC){since && <>, counted since {since}</>}. <strong className="font-medium text-body">All figures are estimates.</strong>{" "}
-            Dollars use the current Model prices. A person in two groups counts toward both groups, never twice in a total.
+            Dollars use the current Model prices. A person in several groups counts in each group, but only once in a total.
           </p>
         </div>
         {res.isLoading && <p className="text-muted">Loading…</p>}
@@ -69,8 +69,8 @@ function Body({ s, later, setLater }: { s: Savings; later: number; setLater: (n:
         <ul className="space-y-1 text-small text-warn" aria-label="Notes">{s.notes.map((n) => <li key={n}>{n}</li>)}</ul>
       )}
       <DayChart s={s} later={later} />
-      <GroupChart s={s} later={later} />
-      <GroupTable s={s} later={later} />
+      <GroupChart s={s} later={later} total={total} />
+      <GroupTable s={s} later={later} total={total} />
       <ServerTable s={s} later={later} />
       <RouterTable s={s} />
       <ul className="space-y-1 text-small text-muted" aria-label="What is not counted">
@@ -140,7 +140,7 @@ function DayChart({ s, later }: { s: Savings; later: number }) {
       )}
       {days.length > 0 && (
         <table className="w-full max-w-3xl border-collapse text-small" aria-label="Dollars saved per day">
-          <thead><tr className="border-b border-line"><th className={th}>Day</th><th className={th}>Tokens saved (est.)</th><th className={th}>Compression $ (est.)</th><th className={th}>Routing $ (est.)</th></tr></thead>
+          <thead><tr className="border-b border-line"><th className={th}>Day</th><th className={th}>Tokens saved (est.)</th><th className={th}>Compression $ (est.)</th><th className={th}>Routing $ (est.)</th><th className={th}>Share of total</th></tr></thead>
           <tbody>{days.map((d) => (
             <tr key={d.day} className="border-b border-line-soft"><td className="px-3 py-1 font-mono">{d.day}</td><td className={td}>{d.tokens.toLocaleString()}</td>
               <td className={td}>{priced ? `~${usd(d.comp)}` : "–"}</td><td className={td}>{priced ? `~${usd(d.route)}` : "–"}</td></tr>
@@ -151,36 +151,37 @@ function DayChart({ s, later }: { s: Savings; later: number }) {
   );
 }
 
-function GroupChart({ s, later }: { s: Savings; later: number }) {
-  const rows = groupRows(s, later);
-  const top = topGroups(rows, 10);
-  const max = Math.max(0.01, ...top.map((r) => r.total));
-  const W = 640, row = 24, L = 150, H = top.length * row + 8;
+function GroupChart({ s, later, total }: { s: Savings; later: number; total: number | null }) {
+  const top = topGroups(groupRows(s, later), 10);
+  const W = 640, row = 24, L = 150, H = top.length * row + 8, full = W - L - 70; // a bar of `full` width is 100% of the total
   return (
     <div className="space-y-2">
-      <h2 className="text-h2 font-semibold">Dollars saved per group (estimated)</h2>
-      {top.length === 0 ? <p className="text-muted">No data in this period.</p> : (
+      <h2 className="text-h2 font-semibold">Share of the total saved, per group (estimated)</h2>
+      {top.length === 0 || !total ? <p className="text-muted">No data in this period.</p> : (
         <>
+          <p className="text-small text-muted">Each bar is the group's part of the total above. A person in several groups counts in each of them, so the shares add up to more than 100%.</p>
           <Legend />
-          <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Estimated dollars saved for the top groups, compression and routing. The table below has the same numbers." className="w-full max-w-3xl">
-            {top.map((r, i) => (
-              <g key={r.group}>
-                <title>{`${r.group}: compression ~${usd(r.comp)}, routing ~${usd(r.route)} (estimated)`}</title>
-                <text x={L - 8} y={i * row + 16} textAnchor="end" fontSize="12" fill="var(--color-ink)">{r.group.length > 22 ? r.group.slice(0, 21) + "…" : r.group}</text>
-                <rect x={L} y={i * row + 4} height={16} width={(r.comp / max) * (W - L - 70)} fill={COMPRESSION} />
-                <rect x={L + (r.comp / max) * (W - L - 70)} y={i * row + 4} height={16} width={(r.route / max) * (W - L - 70)} fill={ROUTING} />
-                <text x={L + (r.total / max) * (W - L - 70) + 6} y={i * row + 16} fontSize="11" fill="var(--color-muted)">~{usd(r.total)}</text>
-              </g>
-            ))}
+          <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Estimated share of the total dollars saved, for the top groups, compression and routing. The table below has the same numbers." className="w-full max-w-3xl">
+            {top.map((r, i) => {
+              const k = Math.min(1, 1 / total); // a share above 100% (a group price above the average) is drawn at 100%
+              return (
+                <g key={r.group}>
+                  <title>{`${r.group}: ${share(r.total, total)} of the total; compression ~${usd(r.comp)}, routing ~${usd(r.route)} (estimated)`}</title>
+                  <text x={L - 8} y={i * row + 16} textAnchor="end" fontSize="12" fill="var(--color-ink)">{r.group.length > 22 ? r.group.slice(0, 21) + "…" : r.group}</text>
+                  <rect x={L} y={i * row + 4} height={16} width={Math.min(r.comp * k, 1) * full} fill={COMPRESSION} />
+                  <rect x={L + Math.min(r.comp * k, 1) * full} y={i * row + 4} height={16} width={Math.max(0, Math.min(r.total * k, 1) - Math.min(r.comp * k, 1)) * full} fill={ROUTING} />
+                  <text x={L + Math.min(r.total * k, 1) * full + 6} y={i * row + 16} fontSize="11" fill="var(--color-muted)">{share(r.total, total)}</text>
+                </g>
+              );
+            })}
           </svg>
-          {rows.length > top.length && <p className="text-small text-muted">Top {top.length} of {rows.length} groups. A person in two groups counts in both, so group bars do not add up to the total.</p>}
         </>
       )}
     </div>
   );
 }
 
-function GroupTable({ s, later }: { s: Savings; later: number }) {
+function GroupTable({ s, later, total }: { s: Savings; later: number; total: number | null }) {
   const rows = groupRows(s, later);
   const csv = () => {
     const lines = [csvRow(["group", "tokens saved (estimated)", "compression USD (estimated)", "routing requests", "routing USD (estimated)"]),
@@ -199,11 +200,12 @@ function GroupTable({ s, later }: { s: Savings; later: number }) {
       </div>
       {rows.length === 0 ? <p className="text-muted">No data in this period.</p> : (
         <table className="w-full border-collapse text-small" aria-label="Savings by group">
-          <thead><tr className="border-b border-line"><th className={th}>Group</th><th className={th}>Tokens saved (est.)</th><th className={th}>Compression $ (est.)</th><th className={th}>Routed requests</th><th className={th}>Routing $ (est.)</th></tr></thead>
+          <thead><tr className="border-b border-line"><th className={th}>Group</th><th className={th}>Tokens saved (est.)</th><th className={th}>Compression $ (est.)</th><th className={th}>Routed requests</th><th className={th}>Routing $ (est.)</th><th className={th}>Share of total</th></tr></thead>
           <tbody>{rows.map((r) => (
             <tr key={r.group} className="border-b border-line-soft"><td className="px-3 py-1">{r.group}</td><td className={td}>{r.tokens.toLocaleString()}</td>
               <td className={td}>{r.hasCompPrice ? `~${usd(r.comp)}` : <span className="text-muted">tokens only</span>}</td>
-              <td className={td}>{r.requests.toLocaleString()}</td><td className={td}>{r.hasRoutePrice ? `~${usd(r.route)}` : <span className="text-muted">–</span>}</td></tr>
+              <td className={td}>{r.requests.toLocaleString()}</td><td className={td}>{r.hasRoutePrice ? `~${usd(r.route)}` : <span className="text-muted">–</span>}</td>
+              <td className={td}>{total ? share(r.total, total) : "–"}</td></tr>
           ))}</tbody>
         </table>
       )}

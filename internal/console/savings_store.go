@@ -103,7 +103,11 @@ func SummaryDays(s string) (int, error) {
 	if d < MinSummaryRetention {
 		return 0, fmt.Errorf("evidence.summaryRetention %q is below 24h", s)
 	}
-	return int((d + 24*time.Hour - 1) / (24 * time.Hour)), nil
+	days := int(d / (24 * time.Hour))
+	if d%(24*time.Hour) != 0 { // round up without adding to d, which could overflow
+		days++
+	}
+	return days, nil
 }
 
 type execer interface {

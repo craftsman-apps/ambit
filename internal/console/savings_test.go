@@ -150,6 +150,14 @@ func TestRoutingBaseline(t *testing.T) {
 	}
 }
 
+// The routed Model is not in the router's candidate list any more (the router was edited after the request): the
+// baseline is still the dearest priced candidate, so the saving is positive and the answering model is priced.
+func TestRoutingRoutedModelNotACandidate(t *testing.T) {
+	llm := []SavingsLLMRow{{Day: "2026-10-30", Router: "auto", Model: "gemma", In: 1_000_000, Out: 200_000, Requests: 5}}
+	s := aggregateSavings(llm, nil, testPrices, []RouterInfo{router("auto", "sonnet", "pro")}, SavingsSettings{})
+	near(t, "routing", s.Totals.Routing.Dollars, 5.86)
+}
+
 // T6: a routed Model without a price is excluded and named; a deleted router and a deleted Model give an unpriced row.
 func TestRoutingUnpricedAndDeleted(t *testing.T) {
 	llm := []SavingsLLMRow{
@@ -203,6 +211,9 @@ func TestSummaryDays(t *testing.T) {
 		if got, err := SummaryDays(in); err != nil || got != want {
 			t.Errorf("%s = %d %v, want %d", in, got, err, want)
 		}
+	}
+	if got, err := SummaryDays("2562047h"); err != nil || got != 106752 { // the largest whole number of hours in a Go duration
+		t.Errorf("largest: %d %v", got, err)
 	}
 	for _, bad := range []string{"23h", "0", "1h", "", "3 years", "-24h"} {
 		if _, err := SummaryDays(bad); err == nil {

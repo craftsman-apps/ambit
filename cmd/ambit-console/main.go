@@ -266,7 +266,12 @@ func run(ctx context.Context) error {
 		audit.Routers = func(ctx context.Context) []console.RouterInfo { // as they are now, for the Savings baseline
 			var rl v1.ModelRouterList
 			var ml v1.ModelList
-			if objects.List(ctx, &rl, client.InNamespace(ns)) != nil || objects.List(ctx, &ml, client.InNamespace(ns)) != nil {
+			if err := objects.List(ctx, &rl, client.InNamespace(ns)); err != nil {
+				slog.Warn("savings: cannot list ModelRouters; routing is not priced", "err", err)
+				return nil
+			}
+			if err := objects.List(ctx, &ml, client.InNamespace(ns)); err != nil {
+				slog.Warn("savings: cannot list Models; routing is not priced", "err", err)
 				return nil
 			}
 			return console.RouterInfos(rl.Items, ml.Items)

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -108,9 +109,9 @@ func TestSummariesOnClickHouse(t *testing.T) {
 	}
 	d1, d2 := time.Date(2026, 10, 30, 23, 59, 59, 0, time.UTC), time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)
 
-	// Before any guard record: the Audit page's answer for alice and the mark-missing count.
+	// Before any guard record: the Audit page's answer for user1 and the mark-missing count.
 	audit := func() (int, int) {
-		calls, err := a.Calls(ctx, "alice@acme.test", d1.Add(-48*time.Hour), d2.Add(48*time.Hour), 100)
+		calls, err := a.Calls(ctx, "user1@example.com", d1.Add(-48*time.Hour), d2.Add(48*time.Hour), 100)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -121,12 +122,12 @@ func TestSummariesOnClickHouse(t *testing.T) {
 		return len(calls), mm
 	}
 	// A person in two groups, two requests across midnight, a router request, an empty group list, a missing key.
-	insertLog(t, a, d1, llm("alice@acme.test", `["eng","ml-research"]`, "claude-sonnet", "", 1000, 200))
-	insertLog(t, a, d2, llm("alice@acme.test", `["eng","ml-research"]`, "claude-sonnet", "claude-sonnet", 2000, 300)) // router equals model: direct
-	insertLog(t, a, d2, llm("alice@acme.test", `["eng"]`, "gemma", "auto", 500, 50))                                  // routed
-	insertLog(t, a, d2, llm("nobody@acme.test", `[]`, "gemma", "", 70, 7))                                            // no group
-	insertLog(t, a, d2, llm("legacy@acme.test", "", "gemma", "", 9999, 9999))                                         // no jwt.groups key: in neither
-	insertLog(t, a, d2, map[string]string{"mcp.method.name": "tools/call", "mcp.target": "crm", "jwt.email": "alice@acme.test", "http.status": "200", "jwt.groups": `["eng"]`})
+	insertLog(t, a, d1, llm("user1@example.com", `["eng","ml-research"]`, "claude-sonnet", "", 1000, 200))
+	insertLog(t, a, d2, llm("user1@example.com", `["eng","ml-research"]`, "claude-sonnet", "claude-sonnet", 2000, 300)) // router equals model: direct
+	insertLog(t, a, d2, llm("user1@example.com", `["eng"]`, "gemma", "auto", 500, 50))                                  // routed
+	insertLog(t, a, d2, llm("user2@example.com", `[]`, "gemma", "", 70, 7))                                             // no group
+	insertLog(t, a, d2, llm("user3@example.com", "", "gemma", "", 9999, 9999))                                          // no jwt.groups key: in neither
+	insertLog(t, a, d2, map[string]string{"mcp.method.name": "tools/call", "mcp.target": "crm", "jwt.email": "user1@example.com", "http.status": "200", "jwt.groups": `["eng"]`})
 	callsBefore, mmBefore := audit()
 
 	insertLog(t, a, d1, guardRecord("crm", "json", `["eng","ml-research"]`, 29000, 10000))
@@ -141,16 +142,28 @@ func TestSummariesOnClickHouse(t *testing.T) {
 
 	// T1: the LLM summary equals the Usage query for requests and tokens, per day, group and model.
 	prices := testPrices
-	usage, err := a.Usage(ctx, d1.Add(-time.Hour), d2.Add(time.Hour), prices)
+	usage, err := a.usageScan(ctx, d1.Add(-time.Hour), d2.Add(time.Hour), prices)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Issue #215: the Usage page reads the summary and gives the same answer as the scan of otel_logs. The records are
+	// older than the views, so the summary counts from the oldest row and answers every day.
+	fromSummary, err := a.Usage(ctx, d1.Add(-time.Hour), d2.Add(time.Hour), prices)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(fromSummary, usage) || len(usage) == 0 {
+		t.Errorf("Usage from the summary and from the scan differ:\n summary %+v\n scan    %+v", fromSummary, usage)
+	}
+	if cov, err := a.summaryCover(ctx, llmTable, llmView); err != nil || cov.Since.Format("2006-01-02") != "2026-10-30" || cov.Full.Format("2006-01-02") != "2026-10-30" {
+		t.Errorf("cover %+v %v: want the oldest row, 2026-10-30", cov, err)
 	}
 	llmRows, compRows, since, err := a.SummaryRows(ctx, d1.Add(-24*time.Hour), d2.Add(24*time.Hour))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if since == "" {
-		t.Error("no since date")
+	if since != "2026-10-30" { // the oldest summary row, which is older than the views
+		t.Errorf("since %q, want 2026-10-30", since)
 	}
 	type k struct{ day, group string }
 	fromView, fromUsage := map[k][3]int64{}, map[k][3]int64{}
@@ -221,4 +234,26 @@ func TestSummariesOnClickHouse(t *testing.T) {
 		t.Errorf("the changed retention was not applied: %v %s", err, ttl)
 	}
 	_ = sql.ErrNoRows
+}
+
+// With records of today only, the summary counts from the day the views were created, and that day is partial: the
+// Usage page reads it from otel_logs, so a record written before the views existed would still show (issue #215).
+func TestSinceIsTheViewCreationDay(t *testing.T) {
+	a := clickhouseTestDB(t, "savings_since")
+	ctx := context.Background()
+	now := time.Now().UTC()
+	insertLog(t, a, now.Add(-time.Hour), llm("user1@example.com", `["eng"]`, "gemma", "", 100, 10)) // before the views exist
+	if err := EnsureSummaries(ctx, a.DB, 365); err != nil {
+		t.Fatal(err)
+	}
+	insertLog(t, a, now, llm("user2@example.com", `["eng"]`, "gemma", "", 200, 20))
+	cov, err := a.summaryCover(ctx, llmTable, llmView, compressTable, compressView)
+	today := now.Truncate(24 * time.Hour)
+	if err != nil || !cov.Since.Equal(today) || !cov.Full.Equal(today.AddDate(0, 0, 1)) {
+		t.Fatalf("cover %+v %v, want since %s and full %s", cov, err, today, today.AddDate(0, 0, 1))
+	}
+	u, err := a.Usage(ctx, now.AddDate(0, 0, -3), now.Add(time.Minute), nil)
+	if err != nil || len(u) != 1 || u[0].Requests != 2 || u[0].InputTokens != 300 {
+		t.Fatalf("Usage %+v %v: want both records, the one before the views too", u, err)
+	}
 }

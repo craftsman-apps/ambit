@@ -168,9 +168,6 @@ GROUP BY day, grp, router, model`
 	compressDailySQL = `SELECT toString(day), grp, server, type, sum(results), sum(bytes_in), sum(bytes_out), sum(omitted)
 FROM ` + compressTable + ` WHERE day >= {from:Date} AND day <= {to:Date}
 GROUP BY day, grp, server, type`
-	// The views were created when the summaries began to count.
-	sinceSQL = `SELECT toString(max(metadata_modification_time)) FROM system.tables
-WHERE database = currentDatabase() AND name IN ('` + llmView + `', '` + compressView + `')`
 )
 
 // SummaryRows reads both summaries for the UTC days from..to (inclusive). It always sums, because a SummingMergeTree
@@ -213,8 +210,49 @@ func (a *Audit) SummaryRows(ctx context.Context, from, to time.Time) ([]SavingsL
 	}
 	rows.Close()
 	var since string
-	_ = a.DB.QueryRowContext(ctx, sinceSQL).Scan(&since) // a failure leaves "": the page then omits the date
+	if c, err := a.summaryCover(ctx, llmTable, llmView, compressTable, compressView); err == nil { // a failure leaves "": the page then omits the date
+		since = c.Since.Format("2006-01-02")
+	}
 	return llm, comp, since, nil
+}
+
+// cover says from which UTC days the summaries hold what happened.
+type cover struct {
+	Since time.Time // the oldest day a row or a view exists for; the date the page shows
+	Full  time.Time // the first day that is complete: the day after the views were created (that day is partial)
+}
+
+// summaryCover reads the creation day of the views and the oldest row of the tables, given as (table, view) pairs.
+// A row older than the views can only come from a copy or a test, so the summary then counts from that row.
+func (a *Audit) summaryCover(ctx context.Context, pairs ...string) (cover, error) {
+	var created, oldest time.Time
+	for i := 0; i < len(pairs); i += 2 {
+		var c time.Time
+		if err := a.DB.QueryRowContext(ctx, `SELECT toDate(min(metadata_modification_time), 'UTC') FROM system.tables WHERE database = currentDatabase() AND name = '`+pairs[i+1]+`'`).Scan(&c); err != nil {
+			return cover{}, err
+		}
+		var r sql.NullTime
+		if err := a.DB.QueryRowContext(ctx, `SELECT minOrNull(day) FROM `+pairs[i]).Scan(&r); err != nil {
+			return cover{}, err
+		}
+		if c.Year() < 2000 {
+			return cover{}, fmt.Errorf("the summary view %s does not exist", pairs[i+1])
+		}
+		if created.IsZero() || c.Before(created) {
+			created = c
+		}
+		if r.Valid && (oldest.IsZero() || r.Time.Before(oldest)) {
+			oldest = r.Time
+		}
+	}
+	created = time.Date(created.Year(), created.Month(), created.Day(), 0, 0, 0, 0, time.UTC)
+	if !oldest.IsZero() {
+		oldest = time.Date(oldest.Year(), oldest.Month(), oldest.Day(), 0, 0, 0, 0, time.UTC)
+		if oldest.Before(created) {
+			return cover{Since: oldest, Full: oldest}, nil
+		}
+	}
+	return cover{Since: created, Full: created.AddDate(0, 0, 1)}, nil
 }
 
 // routerInfos lists the ModelRouters as they are now, with the Models they can pick. models maps a Model object name

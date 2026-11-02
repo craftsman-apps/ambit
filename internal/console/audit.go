@@ -220,7 +220,7 @@ type usageRow struct {
 }
 
 const usageSQL = `
-SELECT toString(toDate(Timestamp)) AS day,
+SELECT toString(toDate(Timestamp, 'UTC')) AS day,
        arrayJoin(if(empty(JSONExtract(LogAttributes['jwt.groups'], 'Array(String)')), ['(no group)'], JSONExtract(LogAttributes['jwt.groups'], 'Array(String)'))) AS grp,
        LogAttributes['gen_ai.request.model'] AS model,
        count(),
@@ -232,11 +232,17 @@ WHERE LogAttributes['protocol'] = 'llm' AND LogAttributes['jwt.groups'] != ''
 GROUP BY day, grp, model
 ORDER BY day DESC, grp, model`
 
-// Usage reads LLM use per group per day; prices maps the model name clients send to its price.
-func (a *Audit) Usage(ctx context.Context, from, to time.Time, prices map[string]v1.ModelPrice) ([]GroupUsage, error) {
-	ctx = clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{
-		"from": from.UTC().Format("2006-01-02 15:04:05.000000000"), "to": to.UTC().Format("2006-01-02 15:04:05.000000000")}))
-	rows, err := a.DB.QueryContext(ctx, usageSQL)
+// usageSummarySQL reads the LLM daily summary (group rows only: grp ” is the all-groups row). It has the columns
+// and the order of usageSQL.
+const usageSummarySQL = `
+SELECT toString(day), grp, model, sum(requests), sum(input_tokens), sum(output_tokens)
+FROM ` + llmTable + `
+WHERE grp != '' AND day >= {dfrom:Date} AND day <= {dto:Date}
+GROUP BY day, grp, model
+ORDER BY day DESC, grp, model`
+
+func (a *Audit) usageRows(ctx context.Context, q string, params clickhouse.Parameters) ([]usageRow, error) {
+	rows, err := a.DB.QueryContext(clickhouse.Context(ctx, clickhouse.WithParameters(params)), q)
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +255,67 @@ func (a *Audit) Usage(ctx context.Context, from, to time.Time, prices map[string
 		}
 		all = append(all, u)
 	}
-	if err := rows.Err(); err != nil {
+	return all, rows.Err()
+}
+
+// Usage reads LLM use per group per day; prices maps the model name clients send to its price. Days the LLM summary
+// holds completely come from it (tens of rows per day); older days, and everything while the summary does not exist,
+// come from the scan of otel_logs. The summary is per UTC day, so the first day of the period counts whole.
+func (a *Audit) Usage(ctx context.Context, from, to time.Time, prices map[string]v1.ModelPrice) ([]GroupUsage, error) {
+	cov, err := a.summaryCover(ctx, llmTable, llmView)
+	if err != nil {
+		return a.usageScan(ctx, from, to, prices) // the summary is not there (yet)
+	}
+	sp := usageSplit(cov, from, to)
+	var all []usageRow
+	if sp.summary {
+		all, err = a.usageRows(ctx, usageSummarySQL, clickhouse.Parameters{"dfrom": sp.sumFrom.Format("2006-01-02"), "dto": sp.sumTo.Format("2006-01-02")})
+		if err != nil {
+			return nil, err
+		}
+	}
+	if sp.scan {
+		old, err := a.usageRows(ctx, usageSQL, clickhouse.Parameters{"from": from.UTC().Format("2006-01-02 15:04:05.000000000"), "to": sp.scanTo.UTC().Format("2006-01-02 15:04:05.000000000")})
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, old...) // older days after newer ones: the order of usageSQL (day DESC)
+	}
+	return aggregateUsage(all, prices), nil
+}
+
+// usagePlan says which part of the period the summary answers (whole UTC days sumFrom..sumTo) and which part the scan
+// answers (from `from` until scanTo).
+type usagePlan struct {
+	summary, scan  bool
+	sumFrom, sumTo time.Time
+	scanTo         time.Time
+}
+
+func usageSplit(cov cover, from, to time.Time) usagePlan {
+	day := func(t time.Time) time.Time {
+		t = t.UTC()
+		return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+	}
+	fromDay, toDay := day(from), day(to.Add(-time.Nanosecond))
+	p := usagePlan{sumFrom: fromDay, sumTo: toDay, scanTo: to}
+	if cov.Full.After(p.sumFrom) {
+		p.sumFrom = cov.Full
+	}
+	p.summary = !p.sumFrom.After(toDay)
+	if cov.Full.After(fromDay) { // days before the summary is complete
+		p.scan = true
+		if cov.Full.Before(to) {
+			p.scanTo = cov.Full
+		}
+	}
+	return p
+}
+
+// usageScan is the whole answer from otel_logs: the fallback, and the reference the tests compare the summary to.
+func (a *Audit) usageScan(ctx context.Context, from, to time.Time, prices map[string]v1.ModelPrice) ([]GroupUsage, error) {
+	all, err := a.usageRows(ctx, usageSQL, clickhouse.Parameters{"from": from.UTC().Format("2006-01-02 15:04:05.000000000"), "to": to.UTC().Format("2006-01-02 15:04:05.000000000")})
+	if err != nil {
 		return nil, err
 	}
 	return aggregateUsage(all, prices), nil

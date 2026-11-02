@@ -57,17 +57,29 @@ func fixtureSet(n int) (docs []string, truth [][]known) {
 			}
 		}
 	}
-	phone := func(korean bool) string {
-		if korean {
-			return fmt.Sprintf("+82 10-%04d-%04d", 1000+r.Intn(9000), r.Intn(10000))
+	unique := func(make func() string) string { // the test finds a value by its text, so no value may repeat
+		for {
+			if v := make(); !used[v] {
+				used[v] = true
+				return v
+			}
 		}
-		return fmt.Sprintf("(%d) %03d-%04d", 201+r.Intn(780), 200+r.Intn(800), r.Intn(10000))
+	}
+	phone := func(korean bool) string {
+		return unique(func() string {
+			if korean {
+				return fmt.Sprintf("+82 10-%04d-%04d", 1000+r.Intn(9000), r.Intn(10000))
+			}
+			return fmt.Sprintf("(%d) %03d-%04d", 201+r.Intn(780), 200+r.Intn(800), r.Intn(10000))
+		})
 	}
 	address := func(korean bool) string {
-		if korean {
-			return fmt.Sprintf("%d %s, %s", 1+r.Intn(400), korRoads[r.Intn(len(korRoads))], korAreas[r.Intn(len(korAreas))])
-		}
-		return fmt.Sprintf("%d %s, %s", 10+r.Intn(9000), usStreets[r.Intn(len(usStreets))], usCities[r.Intn(len(usCities))])
+		return unique(func() string {
+			if korean {
+				return fmt.Sprintf("%d %s, %s", 1+r.Intn(400), korRoads[r.Intn(len(korRoads))], korAreas[r.Intn(len(korAreas))])
+			}
+			return fmt.Sprintf("%d %s, %s", 10+r.Intn(9000), usStreets[r.Intn(len(usStreets))], usCities[r.Intn(len(usCities))])
+		})
 	}
 	const perDoc = 30
 	for kind := 0; kind < 3; kind++ {

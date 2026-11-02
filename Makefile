@@ -11,7 +11,7 @@ CRDS := charts/ambit-crds
 KIND_CLUSTER ?= ambit
 IMAGE ?= ambit-console:dev
 
-.PHONY: preset-live verify-upgrade restore-pins contracts kind-up kind-down deps lint web test-go envtest-assets argocd metrics-server proto image install install-crds test test-ui generate vendor-crds
+.PHONY: preset-live verify-upgrade restore-pins contracts kind-up kind-down deps lint web test-go envtest-assets argocd metrics-server proto image install install-crds test test-ui test-presidio generate vendor-crds
 
 # Browser tests (Playwright) against the running kind install; needs the LLM test catalog (make test STEPS=3).
 test-ui:

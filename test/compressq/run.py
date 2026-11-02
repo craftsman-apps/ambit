@@ -3,8 +3,12 @@
 
 It drives opencode or codex against an Ambit gateway whose Server `cq` serves the fixtures of test/compressq
 (kubectl apply -f test/compressq/objects.yaml), through a small capture proxy that sits between the client and the
-gateway. The proxy forwards each model request unchanged and records sizes and the provider's usage numbers, never
-the text of a prompt, a tool result or an answer.
+gateway. The proxy forwards each model request unchanged and records sizes and the provider's usage numbers, not
+the text of a prompt or a tool result (only with CQ_DUMP=1 it also writes whole request bodies: use it with fixtures
+only). Answers (300 characters) go to quality.jsonl and tokens.jsonl. Keep OUT private: it holds the API key.
+`setup` makes a new key each time it runs; revoke old ones in the console.
+A run counts as a measurement only if the model request holds a tool result of 400 bytes or more (tokens: five of them);
+a client run where the MCP tools were not connected in time is run again, up to 3 times. The record keeps `tool_called`.
 
   run.py setup              sign in as the bootstrap admin, create a key, apply the fixtures      (writes OUT/key)
   run.py content            which of content[].text and structuredContent does the client send? (tool `both`)
@@ -316,7 +320,7 @@ def run_client(label, prompt):
             cmd = ["codex", "exec", "--skip-git-repo-check", "--sandbox", "read-only", "-C", work, "-o", last, prompt]
             r = subprocess.run(cmd, cwd=work, env=env, capture_output=True, text=True, timeout=ARGS.timeout, stdin=subprocess.DEVNULL)
             answer = open(last).read() if os.path.exists(last) else ""
-        with open(os.path.join(OUT, "stderr.log"), "a") as f:  # tails only, for debugging; they hold no key
+        with open(os.path.join(OUT, "stderr.log"), "a") as f:  # the last lines of the client's stderr, for debugging; keep OUT private
             f.write(f"--- {label} rc={r.returncode}\n{r.stderr[-600:]}\n")
         return answer.strip(), r.returncode, time.time() - t0
     except subprocess.TimeoutExpired:
@@ -345,11 +349,16 @@ def norm(s):
     return re.sub(r"[*`,]", "", s.lower())
 
 
+def has(a, e):
+    """e appears in a without more digits around it: '8' does not match '18' or '8.5', but matches '8 ERROR lines'."""
+    return re.search(r"(?<![\d.])" + re.escape(e) + r"(?!\d|\.\d)", a) is not None
+
+
 def grade(q, answer):
     a = norm(answer)
     if q["class"] == "omitted" and re.search(q["notShown"], a):
         return "not_shown"
-    return "correct" if all(norm(e) in a for e in q["expect"]) else "wrong"
+    return "correct" if all(has(a, norm(e)) for e in q["expect"]) else "wrong"
 
 
 def load_questions():
@@ -358,6 +367,9 @@ def load_questions():
         raise SystemExit("cannot read the questions: " + out.stderr[:300])
     qs = json.loads(out.stdout)
     want = [x for x in ARGS.questions.split(",") if x]
+    unknown = set(want) - {q["id"] for q in qs}
+    if unknown:
+        raise SystemExit(f"unknown question ids: {sorted(unknown)}")
     return [q for q in qs if not want or q["id"] in want]
 
 
@@ -496,6 +508,9 @@ def cmd_report():
             sv = "-" if mode == "off" or not base else f"{(1 - med / base) * 100:.0f}%"
             print(f"| {mode} | {len(v)} | {med:,.0f} | {v[0]:,} to {v[-1]:,} | {sv} | {statistics.median(r['requests'] for r in xs):.0f} |")
     q = rows("quality.jsonl")
+    qd = {x["id"]: x for x in load_questions()}
+    for r in q:  # grade again from the stored answer, so a changed grader applies to old runs
+        r["grade"] = grade(qd[r["q"]], r["answer"] or "")
     for client in sorted({r["client"] for r in q}):
         print(f"\n### Answer quality, {client}: correct runs of 3 (majority = 2 or more)\n\n| Q | Class | off | lossless | shorten | Gate |\n|---|---|---|---|---|---|")
         lost_ll, lost_sh = [], []

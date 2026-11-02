@@ -154,7 +154,7 @@ The task: call five tools one after another, then answer five questions. Input t
 
 - `lossless` saves tokens only where there is layout to remove. Here that was the two JSON results (23.7 KB to 12.7 KB, and 19.3 KB to 6.1 KB). The log, the test output, the CSV and the YAML had no layout to remove, so they did not change.
 - `shorten` saved the most on the log (36.7 KB to 5.1 KB) and the test output (11.6 KB to 0.5 KB).
-- Codex saves less because it cuts every tool result to about 12 KB (12,021 bytes in this run) before it sends it, also with `off`. A result larger than that is already cut by the client, so compression makes the part that Codex keeps more useful, but it removes fewer tokens.
+- Codex saves less because, in these runs, it cut every tool result larger than about 12 KB (12,021 bytes) before it sent it, also with `off`. The client had already cut such a result, so compression removes fewer tokens there.
 
 **Which part of a result the client sends.** A tool that returns both `content[].text` and `structuredContent` (different content in the test) showed this, in 3 runs each:
 
@@ -164,12 +164,12 @@ The task: call five tools one after another, then answer five questions. Input t
 | opencode (`codemode: false` on the MCP server) | `content[].text` only. `structuredContent` is not sent. |
 | opencode (default in 2.x, Code Mode) | Neither. The model writes code that calls the tool, and only what that code returns goes into the next request. Compression does not change the tokens. |
 
-A tool that returns only text, as most servers do, is sent as text by both clients. Ambit compresses only `content[].text`, so it saves tokens for Codex only if the server does not also send `structuredContent`.
+A tool that returns only text is sent as text by both clients (the token table above). Ambit compresses only `content[].text`. For a tool that also returns `structuredContent`, expect no saving with Codex.
 
 **Answer quality.** 20 questions over the same fixtures (`test/compressq/questions.go`: counts, one row, errors in a log, failed tests, a count printed in a marker, and one question about a line that `shorten` removes), modes `off`, `lossless` and `shorten`, 3 runs each, with opencode. Correct answers in 60 runs per mode: `off` 41, `lossless` 43, `shorten` 43. The difference is within the noise of the model; `gpt-4.1-mini` miscounts some lists (for example it counts 6 or 7 ERROR lines where the log has 8) in every mode.
 
 - No question was lost in `lossless`: every question the model answered correctly in the majority of runs in `off` was also answered correctly in `lossless`.
-- `shorten` matched `off` on every question about a failure (9 of 9 runs), an error (10 of 12 runs, against 9 of 12) and a count printed in a marker (3 of 3 runs, against 0 of 3, because the marker states the number of omitted passing tests).
+- `shorten` did as well as `off` on the questions about a failure (9 of 9 runs in both modes), about an error line (10 of 12 runs, `off` 9 of 12) and about a count printed in a marker (3 of 3 runs; `off` 0 of 3, because the marker states the number of omitted passing tests).
 - The question about a line that `shorten` had removed was answered "not shown" in 3 of 3 runs, never with a guess. In `off` and `lossless` it was answered correctly.
 
 Limits: one model, one task, synthetic data, 3 runs per cell, and results that fit in the client. Measure your own tools before you move a server to `shorten`. Anthropic's token counting API was not used.

@@ -231,3 +231,44 @@ func TestRecorderCollectorDown(t *testing.T) {
 	rec2.Record(CompressionRecord{Server: "crm"})
 	rec2.Close()
 }
+
+// A collector that never answers must not slow the callers: Record returns at once, and Close returns within its limit.
+func TestRecorderBlockedCollectorDoesNotBlockCallers(t *testing.T) {
+	release := make(chan struct{})
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := grpc.NewServer()
+	collogs.RegisterLogsServiceServer(s, &blockedCollector{release: release})
+	go func() { _ = s.Serve(lis) }()
+	defer func() { close(release); s.Stop() }()
+	rec, _ := NewRecorder(lis.Addr().String())
+	start := time.Now()
+	for range 5 * recordQueue {
+		rec.Record(CompressionRecord{Server: "crm", Groups: []string{"eng"}})
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("%d Record calls took %v with a collector that does not answer", 5*recordQueue, d)
+	}
+	closed := make(chan struct{})
+	go func() { rec.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(recordTimeout + 3*time.Second):
+		t.Fatal("Close did not return")
+	}
+}
+
+type blockedCollector struct {
+	collogs.UnimplementedLogsServiceServer
+	release chan struct{}
+}
+
+func (b *blockedCollector) Export(ctx context.Context, _ *collogs.ExportLogsServiceRequest) (*collogs.ExportLogsServiceResponse, error) {
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+	}
+	return &collogs.ExportLogsServiceResponse{}, nil
+}

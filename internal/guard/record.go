@@ -87,10 +87,14 @@ func (r *Recorder) Record(rec CompressionRecord) {
 	}
 }
 
-// Close sends what is queued (up to recordTimeout per batch) and stops.
+// Close sends what is queued and stops. It waits at most recordTimeout: with the collector down every batch would
+// take that long, and the guard must still exit. Records not sent by then are lost, as when the collector is down.
 func (r *Recorder) Close() {
 	r.once.Do(func() { close(r.queue) })
-	<-r.done
+	select {
+	case <-r.done:
+	case <-time.After(recordTimeout):
+	}
 	_ = r.conn.Close()
 }
 

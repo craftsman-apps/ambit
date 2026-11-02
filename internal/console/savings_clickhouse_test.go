@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -151,7 +152,7 @@ func TestSummariesOnClickHouse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fmt.Sprint(fromSummary) != fmt.Sprint(usage) || len(usage) == 0 {
+	if !reflect.DeepEqual(fromSummary, usage) || len(usage) == 0 {
 		t.Errorf("Usage from the summary and from the scan differ:\n summary %+v\n scan    %+v", fromSummary, usage)
 	}
 	if cov, err := a.summaryCover(ctx, llmTable, llmView); err != nil || cov.Since.Format("2006-01-02") != "2026-10-30" || cov.Full.Format("2006-01-02") != "2026-10-30" {
@@ -233,4 +234,26 @@ func TestSummariesOnClickHouse(t *testing.T) {
 		t.Errorf("the changed retention was not applied: %v %s", err, ttl)
 	}
 	_ = sql.ErrNoRows
+}
+
+// With records of today only, the summary counts from the day the views were created, and that day is partial: the
+// Usage page reads it from otel_logs, so a record written before the views existed would still show (issue #215).
+func TestSinceIsTheViewCreationDay(t *testing.T) {
+	a := clickhouseTestDB(t, "savings_since")
+	ctx := context.Background()
+	now := time.Now().UTC()
+	insertLog(t, a, now.Add(-time.Hour), llm("user1@example.com", `["eng"]`, "gemma", "", 100, 10)) // before the views exist
+	if err := EnsureSummaries(ctx, a.DB, 365); err != nil {
+		t.Fatal(err)
+	}
+	insertLog(t, a, now, llm("user2@example.com", `["eng"]`, "gemma", "", 200, 20))
+	cov, err := a.summaryCover(ctx, llmTable, llmView, compressTable, compressView)
+	today := now.Truncate(24 * time.Hour)
+	if err != nil || !cov.Since.Equal(today) || !cov.Full.Equal(today.AddDate(0, 0, 1)) {
+		t.Fatalf("cover %+v %v, want since %s and full %s", cov, err, today, today.AddDate(0, 0, 1))
+	}
+	u, err := a.Usage(ctx, now.AddDate(0, 0, -3), now.Add(time.Minute), nil)
+	if err != nil || len(u) != 1 || u[0].Requests != 2 || u[0].InputTokens != 300 {
+		t.Fatalf("Usage %+v %v: want both records, the one before the views too", u, err)
+	}
 }

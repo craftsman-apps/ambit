@@ -1,0 +1,32 @@
+# Models and a ModelRouter with prices, for the Savings page seed (test/savings-seed/seed.sh). The console only reads
+# them (names, wire names and prices); no gateway or provider is needed.
+apiVersion: ambitproject.dev/v1alpha1
+kind: Model
+metadata: { name: model-small }
+spec:
+  displayName: Small model
+  provider: OpenAI
+  model: model-small
+  baseURL: http://mock-llm.ambit-system.svc.cluster.local:8080/v1
+  credentialsRef: { name: ambit-llm-seed }
+  price: { inputPerMillionTokens: "0.15", outputPerMillionTokens: "0.60" }
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: Model
+metadata: { name: model-large }
+spec:
+  displayName: Large model
+  provider: OpenAI
+  model: model-large
+  baseURL: http://mock-llm.ambit-system.svc.cluster.local:8080/v1
+  credentialsRef: { name: ambit-llm-seed }
+  price: { inputPerMillionTokens: "3.00", outputPerMillionTokens: "15.00" }
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: ModelRouter
+metadata: { name: auto }
+spec:
+  default: model-small
+  classifier: { type: Rules }
+  routes:
+    - { model: model-large, keywords: [refactor, architecture] }

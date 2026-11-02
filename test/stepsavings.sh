@@ -95,6 +95,9 @@ kubectl -n "$NS" exec -i "$CH_POD" -- sh -c 'cat > /tmp/otel_logs.sql' < "$W/ote
 scratch savings_test
 out=$(gotest savings_test '^TestSummariesOnClickHouse$' 2>&1) || { echo "$out" | tail -30; fail "3 summary views on ClickHouse"; }
 grep -q -- "--- PASS: TestSummariesOnClickHouse" <<<"$out" || fail "3 test did not run: $(tail -5 <<<"$out")"
+scratch savings_since
+out=$(gotest savings_since '^TestSinceIsTheViewCreationDay$' 2>&1) || { echo "$out" | tail -30; fail "3 since / Usage on the creation day"; }
+grep -q -- "--- PASS: TestSinceIsTheViewCreationDay" <<<"$out" || fail "3 since test did not run: $(tail -5 <<<"$out")"
 pass "3 summary views: equal to the Usage query, one all-groups row, router rows, guard records leave Audit unchanged (ClickHouse $(ch 'SELECT version()'))"
 
 # 4 · query cost (slow; a few GB of disk): SAVINGS_BENCH=1

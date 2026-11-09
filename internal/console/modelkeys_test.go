@@ -384,7 +384,9 @@ func fakeGoogleKeyFile(typ string) string {
 }
 
 func TestModelKeysEntries(t *testing.T) {
-	aws := func(a, s, tok string) ModelKeys { return ModelKeys{AWSKeys: &AWSKeys{AccessKey: a, SecretKey: s, SessionToken: tok}} }
+	aws := func(a, s, tok string) ModelKeys {
+		return ModelKeys{AWSKeys: &AWSKeys{AccessKey: a, SecretKey: s, SessionToken: tok}}
+	}
 	cases := []struct {
 		name, provider string
 		in             ModelKeys

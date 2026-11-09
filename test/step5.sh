@@ -98,7 +98,7 @@ pass "3 mira -> '$m'; alice -> '$a' (no cross-user token)"
 node=${KIND_NODE:-${KIND_CLUSTER:-ambit}-control-plane}
 dg=$(docker exec "$node" crictl images --digests -o json | uv run --no-project python -c 'import json,sys
 for i in json.load(sys.stdin)["images"]:
-    if any(t.endswith("/ambit-tokenhash:dev") for t in i["repoTags"]) and i["repoDigests"]:
+    if any(t.endswith("ambit-tokenhash:dev") for t in i["repoTags"]) and i["repoDigests"]:
         print(i["repoDigests"][0].split("@")[1]); break')
 [[ "$dg" =~ ^sha256:[a-f0-9]{64}$ ]] || fail "3b the node has no digest for ambit-tokenhash:dev (run make image): '$dg'"
 docker exec "$node" ctr -n k8s.io images tag --force docker.io/library/ambit-tokenhash:dev "docker.io/library/ambit-tokenhash@$dg" >/dev/null
@@ -125,7 +125,8 @@ for _ in $(seq 1 30); do ha=$(call_hash "$(token alice)"); [[ "$ha" != "not list
 hm=$(call_hash "$(token mira)"); ha2=$(call_hash "$(token alice)")
 [[ "$ha" == sha256:*" user=alice" && "$hm" == sha256:*" user=mira" ]] || fail "3b the image server received alice='$ha' mira='$hm'"
 [[ "${ha%% *}" != "${hm%% *}" && "$ha" == "$ha2" ]] || fail "3b hashes: alice='$ha' mira='$hm' alice again='$ha2'"
-[[ $(call_hash "$(token priya)") == "not listed" ]] || fail "3b priya has no saas grant, yet reached the image server"
+hp=$(call_hash "$(token priya)")
+[[ "$hp" == "not listed" ]] || fail "3b priya has no saas grant, but the image server was not withheld from her: '$hp'"
 pass "3b image server over HTTP: alice -> '$ha'; mira -> '$hm'; no grant -> withheld (each person's own token reaches the container)"
 
 # 4 · the broker is reachable only from the gateway; grants are not readable in the Secrets

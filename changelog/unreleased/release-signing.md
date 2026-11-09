@@ -1,0 +1,2 @@
+- Release images are signed with cosign (keyless, Sigstore) from 0.4.0. `docs/compliance.md` (Supply chain) shows the `cosign verify` command.
+- The release publishes the npm packages through npm trusted publishing (GitHub OIDC); the stored npm token stays only as a fallback until a release has published without it.

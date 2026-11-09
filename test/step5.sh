@@ -20,6 +20,12 @@ call_whoami() { # call_whoami TOKEN: prints the whoami tool's answer, or "not li
   mcp_send '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"whoami_whoami","arguments":{}}}' |
     uv run --no-project python -c 'import json,sys;d=json.loads(sys.stdin.read());print(d["result"]["content"][0]["text"] if "result" in d else "error "+d["error"]["message"])'
 }
+call_hash() { # call_hash TOKEN: the tokenhash image server's answer (a hash of the bearer token it received), or "not listed"
+  tools "$1"
+  [[ " $TOOLS " == *" tokenhash_token_hash "* ]] || { echo "not listed"; return; }
+  mcp_send '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"tokenhash_token_hash","arguments":{}}}' |
+    uv run --no-project python -c 'import json,sys;d=json.loads(sys.stdin.read());print(d["result"]["content"][0]["text"] if "result" in d else "error "+d["error"]["message"])'
+}
 kc_admin() {
   local tok; tok=$(command curl -s -d grant_type=password -d client_id=admin-cli -d username=admin -d password=admin \
     "$KC/realms/master/protocol/openid-connect/token" | uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)["access_token"])')
@@ -33,6 +39,8 @@ cleanup_preset() {
   kubectl -n "$GRANTS" delete secret ambit-conn-whoami-p --ignore-not-found >/dev/null 2>&1 || true
 }
 cleanup() {
+  kubectl -n "$NS" delete "accessrules.$G" tokenhash-users --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete "servers.$G" tokenhash --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" delete -f test/connections/objects.yaml --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$GRANTS" delete secret -l ambitproject.dev/connection=saas --ignore-not-found >/dev/null 2>&1 || true
   cleanup_preset
@@ -83,6 +91,42 @@ connect_saas mira mira-saas-pass
 m=$(call_whoami "$(token mira)"); a=$(call_whoami "$(token alice)")
 [[ "$m" == "mira @ $KC/realms/saas" && "$a" == "alice @ $KC/realms/saas" ]] || fail "3 mira=$m alice=$a"
 pass "3 mira -> '$m'; alice -> '$a' (no cross-user token)"
+
+# 3b · An image that talks HTTP also gets each person's own token, through ToolHive's proxy. The image
+#      (test/tokenhash) is loaded on the node by `make image`; a Server names an image by digest, so the
+#      node's digest for it is read and given a name that the digest reference finds.
+node=${KIND_NODE:-${KIND_CLUSTER:-ambit}-control-plane}
+dg=$(docker exec "$node" crictl images --digests -o json | uv run --no-project python -c 'import json,sys
+for i in json.load(sys.stdin)["images"]:
+    if any(t.endswith("/ambit-tokenhash:dev") for t in i["repoTags"]) and i["repoDigests"]:
+        print(i["repoDigests"][0].split("@")[1]); break')
+[[ "$dg" =~ ^sha256:[a-f0-9]{64}$ ]] || fail "3b the node has no digest for ambit-tokenhash:dev (run make image): '$dg'"
+docker exec "$node" ctr -n k8s.io images tag --force docker.io/library/ambit-tokenhash:dev "docker.io/library/ambit-tokenhash@$dg" >/dev/null
+kubectl -n "$NS" apply -f - >/dev/null <<YAML
+apiVersion: $G/v1alpha1
+kind: Server
+metadata: { name: tokenhash }
+spec:
+  displayName: Token hash (test image)
+  image: docker.io/library/ambit-tokenhash@$dg
+  transport: streamable-http
+  mcpPort: 8080
+  connection: saas
+---
+apiVersion: $G/v1alpha1
+kind: AccessRule
+metadata: { name: tokenhash-users }
+spec:
+  groups: [eng, ml-research]
+  servers: [{ name: tokenhash }]
+YAML
+kubectl -n "$NS" wait "servers.$G" tokenhash --for=condition=Ready --timeout=240s >/dev/null || fail "3b tokenhash image server not Ready: $(kubectl -n "$NS" get "servers.$G" tokenhash -o jsonpath='{.status.conditions}')"
+for _ in $(seq 1 30); do ha=$(call_hash "$(token alice)"); [[ "$ha" != "not listed" ]] && break; sleep 3; done
+hm=$(call_hash "$(token mira)"); ha2=$(call_hash "$(token alice)")
+[[ "$ha" == sha256:*" user=alice" && "$hm" == sha256:*" user=mira" ]] || fail "3b the image server received alice='$ha' mira='$hm'"
+[[ "${ha%% *}" != "${hm%% *}" && "$ha" == "$ha2" ]] || fail "3b hashes: alice='$ha' mira='$hm' alice again='$ha2'"
+[[ $(call_hash "$(token priya)") == "not listed" ]] || fail "3b priya has no saas grant, yet reached the image server"
+pass "3b image server over HTTP: alice -> '$ha'; mira -> '$hm'; no grant -> withheld (each person's own token reaches the container)"
 
 # 4 · the broker is reachable only from the gateway; grants are not readable in the Secrets
 probe() {

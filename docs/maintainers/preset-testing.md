@@ -60,12 +60,21 @@ the release unless all of this holds:
   fields of the catalog.
 - The catalog hash matches the one in `results.json`.
 - Every preset with `verified: true` passed at its current `version`.
-- All 18 initial presets are verified: github, linear, asana, monday, airtable, dropbox, canva, gmail,
-  google-calendar, google-drive, google-docs, google-sheets, slack, zoom, hubspot, docusign, databricks,
-  pagerduty.
+- These 16 of the 18 initial presets are verified: github, linear, asana, monday, airtable, dropbox, canva, gmail,
+  google-calendar, google-drive, google-docs, google-sheets, slack, zoom, hubspot, docusign.
 - The clone is not shallow. Any Git error fails the gate; it never skips the check.
 
 Setting `verified: false` is a deliberate change in Git. The release never does it.
+
+Not verified since 2026-11-09 (owner decision before 0.3.0), so the gate does not require them:
+
+| Preset | Why |
+|---|---|
+| databricks | The test workspace's trial ended: sign-in works, but the read-only SQL call fails with `BAD_REQUEST: The request could not be processed by the warehouse` (the only warehouse is stopped). |
+| pagerduty | A new sign-in issues a token, but `mcp.pagerduty.com` refuses it on `initialize` with `Unauthorized`. The nightly contract check still passes. Most likely the test account lost the plan or Advanced Permissions access that the MCP server needs. |
+
+To verify one again: get a working test account, run `make preset-live APP=<id>`, set `verified: true` and
+`verifiedOn`, add it back to `required` in `cmd/presetcheck/gate.go`, and run `make preset-live` before the release.
 
 ### Adding a new preset
 

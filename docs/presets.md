@@ -197,13 +197,18 @@ Maintainers: see [Preset testing](https://github.com/craftsman-apps/ambit/blob/m
 | salesforce | Salesforce | api.salesforce.com | yes | Enterprise Edition or above, or a Developer Edition org | not yet |
 | docusign | Docusign | mcp.docusign.com | no | Integration key (Go-Live review for production) | 2026-10-07 |
 | servicenow | ServiceNow | your instance (service-now.com) | yes | MCP Server Console, Zurich Patch 9 or Australia Patch 2 or later | not yet |
-| databricks | Databricks | your workspace host | no | SQL warehouse; account admin creates the app connection | 2026-10-07 |
-| pagerduty | PagerDuty | mcp.pagerduty.com | yes | Advanced Permissions | 2026-10-07 |
+| databricks | Databricks | your workspace host | no | SQL warehouse; account admin creates the app connection | not now (see below) |
+| pagerduty | PagerDuty | mcp.pagerduty.com | yes | Advanced Permissions | not now (see below) |
 | gmail | Gmail | gmailmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | 2026-10-08 |
 | google-calendar | Google Calendar | calendarmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | 2026-10-08 |
 | google-drive | Google Drive | drivemcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | 2026-10-08 |
 | google-docs | Google Docs | docsmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | 2026-10-08 |
 | google-sheets | Google Sheets | sheetsmcp.googleapis.com | yes | Google Workspace Developer Preview Program; Workspace organization (Internal consent screen) | 2026-10-08 |
+
+Databricks and PagerDuty passed the live check on 2026-10-07, but are not offered in the console since 0.3.0: their
+test accounts stopped working (the Databricks trial ended; PagerDuty refuses the test account's token), so they could
+not be checked again before the release. A `Server` you already made from either preset is not changed. They come
+back when they pass the live check again.
 
 PayPal is not in the initial list: its MCP server accepts only clients that register themselves (dynamic client
 registration), which Ambit adds in phase 2.

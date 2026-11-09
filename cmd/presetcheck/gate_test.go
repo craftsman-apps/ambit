@@ -171,11 +171,12 @@ func TestChangedSinceInRealHistory(t *testing.T) {
 	}
 }
 
-// The initial release ships 18 presets; PayPal, Salesforce, Box, Webex and ServiceNow wait for phase 2.
-func TestRequiredAreTheInitial18(t *testing.T) {
+// The initial release shipped 18 presets; PayPal, Salesforce, Box, Webex and ServiceNow wait for phase 2. Databricks
+// and PagerDuty are not required since 2026-11-09 (their test accounts stopped working).
+func TestRequiredAreTheInitial16(t *testing.T) {
 	want := []string{"github", "linear", "asana", "monday", "airtable", "dropbox", "canva", "gmail",
 		"google-calendar", "google-drive", "google-docs", "google-sheets", "slack", "zoom", "hubspot",
-		"docusign", "databricks", "pagerduty"}
+		"docusign"}
 	if !slices.Equal(required, want) {
 		t.Fatalf("required = %v", required)
 	}

@@ -60,12 +60,21 @@ the release unless all of this holds:
   fields of the catalog.
 - The catalog hash matches the one in `results.json`.
 - Every preset with `verified: true` passed at its current `version`.
-- All 18 initial presets are verified: github, linear, asana, monday, airtable, dropbox, canva, gmail,
-  google-calendar, google-drive, google-docs, google-sheets, slack, zoom, hubspot, docusign, databricks,
-  pagerduty.
+- These 16 of the 18 initial presets are verified: github, linear, asana, monday, airtable, dropbox, canva, gmail,
+  google-calendar, google-drive, google-docs, google-sheets, slack, zoom, hubspot, docusign.
 - The clone is not shallow. Any Git error fails the gate; it never skips the check.
 
 Setting `verified: false` is a deliberate change in Git. The release never does it.
+
+Not verified since 2026-11-09 (owner decision before 0.3.0), so the gate does not require them:
+
+| Preset | Why |
+|---|---|
+| databricks | The test workspace's trial ended: sign-in works, but the read-only SQL call fails with `BAD_REQUEST: The request could not be processed by the warehouse` (the only warehouse is stopped). |
+| pagerduty | A new sign-in issues a token, but `mcp.pagerduty.com` refuses it on `initialize` with `Unauthorized`. The nightly contract check still passes. Most likely the test account lost the plan or Advanced Permissions access that the MCP server needs. |
+
+To verify one again: get a working test account, run `make preset-live APP=<id>`, set `verified: true` and
+`verifiedOn`, add it back to `required` in `cmd/presetcheck/gate.go`, and run `make preset-live` before the release.
 
 ### Adding a new preset
 
@@ -85,7 +94,7 @@ Claude does not sign up for or sign in to vendor accounts; the maintainer does s
 7. Set `verified: true` and `verifiedOn: <date>`. Both are left out of the catalog hash, so the live result
    stays valid. Add the vendor's row to the table below. Commit with `test/presets`.
 8. If a vendor refuses access (the Google preview program, Canva) or its server does not work with a
-   company-registered client, stop, write the reason in this file, and tell the product owner. "All 18" then
-   needs a decision.
+   company-registered client, stop, write the reason in this file, and tell the product owner. Whether the gate
+   still requires that preset then needs a decision (as for Databricks and PagerDuty above).
 
 Changing an existing preset needs a higher `version`; CI checks this.

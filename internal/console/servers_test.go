@@ -227,11 +227,16 @@ func TestRemoteServerRequest(t *testing.T) {
 		{RequestInput{ServerName: "jira", URL: "https://mcp.atlassian.example/v1/mcp?token=x"}, "URL"},
 		{RequestInput{ServerName: "jira", URL: "https://mcp.atlassian.example/v1/mcp", Transport: "stdio"}, "streamable-http or sse"},
 		{RequestInput{ServerName: "jira", URL: "https://mcp.atlassian.example/v1/mcp", Connection: "confluence"}, "no connection named"},
-		{RequestInput{ServerName: "tool", Image: echoDigest, Connection: "jira"}, "only for servers reached by URL"},
+		{RequestInput{ServerName: "tool", Image: echoDigest, Connection: "jira"}, "image that talks streamable-http or sse"},
+		{RequestInput{ServerName: "tool", Image: echoDigest, Transport: "stdio", Connection: "jira"}, "image that talks streamable-http or sse"},
 	} {
 		if r := do(t, h, "POST", "/api/server-requests", user01, tc.in); r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), tc.want) {
 			t.Errorf("%+v: %d %s", tc.in, r.Code, r.Body)
 		}
+	}
+	// An image that talks HTTP can receive the person's token.
+	if r := do(t, h, "POST", "/api/server-requests", user01, RequestInput{ServerName: "workspace", Image: echoDigest, Transport: "streamable-http", Connection: "jira"}); r.Code != http.StatusCreated {
+		t.Fatalf("image with connection: %d %s", r.Code, r.Body)
 	}
 	// In-cluster services may use plain HTTP.
 	if r := do(t, h, "POST", "/api/server-requests", user01, RequestInput{ServerName: "crm", URL: "http://crm.tools.svc:8080/mcp"}); r.Code != http.StatusCreated {

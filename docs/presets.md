@@ -59,6 +59,38 @@ lists these as unfinished additions with "Finish" and "Remove".
 - Removing a complete addition is refused; use "Remove app" instead.
 - In GitOps mode "Remove" is offered only when no open or merged pull request uses the branch.
 
+## Run a server from an image
+
+A server with `connection` can also be an `image` that talks HTTP, for example an open-source MCP server that you
+run in your cluster and that reads the user's token from the `Authorization` header instead of keeping its own
+sign-in. Set `transport: streamable-http` (or `sse`) and `mcpPort`. A `stdio` image with `connection` is refused
+(`connection needs a remote server (url), or an image whose transport is streamable-http or sse`).
+
+```yaml
+apiVersion: ambitproject.dev/v1alpha1
+kind: Server
+metadata: { name: workspace }
+spec:
+  image: ghcr.io/example/workspace-mcp@sha256:<64 hex>
+  transport: streamable-http
+  mcpPort: 8000
+  connection: google
+```
+
+Each call reaches the container through ToolHive's proxy with the calling person's own token in
+`Authorization: Bearer <token>`. The server must accept that token and must not ask the person to sign in again.
+
+Limits:
+
+- The `Connection` must not have a `serverURL`. A bound Connection belongs to one URL, and an image server has no
+  URL, so it is refused with `ConnectionBound`.
+- The tool reader does not work for an image server, so Ambit does not list its tools. Name the tools in the
+  access rule, or grant the whole server.
+- A `Server` has no field for environment variables or arguments. The image must be configured by its own
+  defaults, for example a derived image that sets them.
+- The server is added to the gateway once its proxy answers. It does not need a token for that: any answer below
+  HTTP 500, including 401, counts.
+
 ## The tool reader
 
 A per-user server has no shared account, so Ambit cannot list its tools by itself. An admin lends their own

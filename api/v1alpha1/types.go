@@ -299,7 +299,7 @@ type AccessRuleList struct {
 // ServerSpec is an MCP server in the Ambit catalog: an image that ToolHive runs in a pod, or a remote
 // server at a URL. Clients reach its tools only through the gateway, as "<server name>_<tool>".
 // +kubebuilder:validation:XValidation:rule="has(self.image) != has(self.url)",message="set either image (run by ToolHive) or url (a remote server), not both"
-// +kubebuilder:validation:XValidation:rule="!has(self.connection) || has(self.url)",message="connection needs a remote server (url): a per-user token cannot reach a stdio server"
+// +kubebuilder:validation:XValidation:rule="!has(self.connection) || has(self.url) || (has(self.transport) && self.transport != 'stdio')",message="connection needs a remote server (url), or an image whose transport is streamable-http or sse: a per-user token cannot reach a stdio server"
 type ServerSpec struct {
 	// Image pinned by digest, e.g. ghcr.io/org/server@sha256:<64 hex>. A tag can later point to
 	// different code; a digest cannot, so what was reviewed is what runs.

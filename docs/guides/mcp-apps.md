@@ -128,6 +128,8 @@ An admin adds an app in the console:
 
 Each person who uses the app then connects their own account. A call without a connection gets a link to connect. The access rule works as in this guide: groups and tools.
 
+A `Server` with a `connection` can also be an `image` that talks HTTP (`transport: streamable-http` or `sse`), not only a `url`. See [Run a server from an image](../presets.md#run-a-server-from-an-image).
+
 ## Related
 
 - [Ask for an MCP app and approve it](request-an-app.md): how a person asks for an MCP app and how an approver decides.

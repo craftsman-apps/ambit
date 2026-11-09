@@ -1,2 +1,0 @@
-- A `Server` that runs an image can now set `env` (inline values, or a key of a Secret) and `args` for its container. Names that ToolHive sets are refused.
-- A `Server` that runs an image and has a `connection` can now have its tools listed: bind the Connection (`serverURL`) to the address of the server's ToolHive proxy (`http://mcp-<name>-proxy.<namespace>.svc:8080/mcp`). Before, such a server was refused by a bound Connection and its tools could not be read. The console is now allowed to reach the proxy of a server for this.

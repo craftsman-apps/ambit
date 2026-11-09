@@ -1,1 +1,0 @@
-- Docs: Compressing tool results now has measured savings with opencode and Codex, and says which part of a tool result each client sends to the model: Codex sends `structuredContent` and not `content[].text`, so compression of the text does not help for a tool that returns both.

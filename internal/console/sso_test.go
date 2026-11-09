@@ -41,20 +41,20 @@ func ssoFixture(t *testing.T) (http.Handler, client.Client, *Auth) {
 	_ = v1.AddToScheme(scheme)
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 	auth := &Auth{codec: Codec{Key: []byte("0123456789abcdef0123456789abcdef")}, ttl: time.Hour, Sessions: NewSessionStore()}
-	return NewServer(auth, testSPA, LoginOptions{}, &Catalog{Client: c, Namespace: testNS, PublicURL: "https://console.acme.test",
+	return NewServer(auth, testSPA, LoginOptions{}, &Catalog{Client: c, Namespace: testNS, PublicURL: "https://console.example.com",
 		Connectors: []Connector{{ID: "keycloak", Name: "Acme (Keycloak)"}}}), c, auth
 }
 
 func TestCheckIssuerFindsTheMistakesDexWouldHit(t *testing.T) {
 	h, _, a := ssoFixture(t)
-	admin := user(a, "priya@acme.test", RoleAdmin)
+	admin := user(a, "user10@example.com", RoleAdmin)
 	good := fakeIdP(t, func(self string) string { return self })
 	r := do(t, h, "POST", "/api/sso/check", admin, map[string]string{"issuer": good.URL + "/realms/acme"})
 	if r.Code != 200 {
 		t.Fatalf("good issuer: %d %s", r.Code, r.Body)
 	}
 	got := decodeAs[IssuerCheck](t, r.Body.String())
-	if got.RedirectURI != "https://console.acme.test/dex/callback" || !got.GroupsClaim || !strings.HasSuffix(got.TokenEndpoint, "/token") {
+	if got.RedirectURI != "https://console.example.com/dex/callback" || !got.GroupsClaim || !strings.HasSuffix(got.TokenEndpoint, "/token") {
 		t.Fatalf("%+v", got)
 	}
 	liar := fakeIdP(t, func(self string) string { return self + "/" })
@@ -62,21 +62,21 @@ func TestCheckIssuerFindsTheMistakesDexWouldHit(t *testing.T) {
 		{liar.URL + "/realms/acme", "a trailing slash counts"},
 		{good.URL + "/realms/other", "no OpenID Connect discovery document"},
 		{"http://127.0.0.1:1/realms/acme", "could not reach"},
-		{"login.acme.test", "must be a URL"},
+		{"login.example.com", "must be a URL"},
 	} {
 		r := do(t, h, "POST", "/api/sso/check", admin, map[string]string{"issuer": tc.issuer})
 		if r.Code != 400 || !strings.Contains(r.Body.String(), tc.want) {
 			t.Errorf("%s: %d %s", tc.issuer, r.Code, r.Body)
 		}
 	}
-	if r := do(t, h, "POST", "/api/sso/check", user(a, "alice@acme.test", RoleViewer), map[string]string{"issuer": good.URL}); r.Code != 403 {
+	if r := do(t, h, "POST", "/api/sso/check", user(a, "user01@example.com", RoleViewer), map[string]string{"issuer": good.URL}); r.Code != 403 {
 		t.Fatalf("viewer: %d", r.Code)
 	}
 }
 
 func TestConnectStoresTheSecretAndNeverReturnsIt(t *testing.T) {
 	h, c, a := ssoFixture(t)
-	admin := user(a, "priya@acme.test", RoleAdmin)
+	admin := user(a, "user10@example.com", RoleAdmin)
 	idp := fakeIdP(t, func(self string) string { return self })
 	const secret = "s3cr3t-client-value-9f2c"
 	in := SSOInput{ID: "okta", Name: "Acme (Okta)", Issuer: idp.URL + "/realms/acme", ClientID: "ambit", ClientSecret: secret, Groups: true}
@@ -121,7 +121,7 @@ func TestConnectStoresTheSecretAndNeverReturnsIt(t *testing.T) {
 		t.Fatalf("scopes %v: a groups scope the provider lacks would break sign-in", cn.Config["scopes"])
 	}
 	if cn.Type != "oidc" || cn.ID != "okta" || cn.Config["clientSecret"] != "$SSO_OKTA_CLIENT_SECRET" ||
-		cn.Config["redirectURI"] != "https://console.acme.test/dex/callback" || cn.Config["insecureEnableGroups"] != true {
+		cn.Config["redirectURI"] != "https://console.example.com/dex/callback" || cn.Config["insecureEnableGroups"] != true {
 		t.Fatalf("connector %+v", cn)
 	}
 	ev := v.Dex.EnvVars[0]

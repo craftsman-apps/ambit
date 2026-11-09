@@ -1,11 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 
-// Documentation screenshots of every console page, signed in as priya (an admin, through the test
+// Documentation screenshots of every console page, signed in as user10 (an admin, through the test
 // identity provider). Skipped unless SCREENSHOTS=1; writes PNGs to SCREENSHOT_DIR. Adds a budget for
 // eng and a remote server request through the UI first, so the pages show real data.
 const dir = process.env.SCREENSHOT_DIR ?? "screenshots";
-const user = process.env.SCREENSHOT_USER ?? "priya";
-const pass = process.env.SCREENSHOT_PASSWORD ?? "priya-test-pass"; // test/keycloak/keycloak.yaml
+const user = process.env.SCREENSHOT_USER ?? "user10";
+const pass = process.env.SCREENSHOT_PASSWORD ?? "user10-test-pass"; // test/keycloak/keycloak.yaml
 
 test.use({ viewport: { width: 1440, height: 900 }, colorScheme: "light" });
 
@@ -66,7 +66,7 @@ test("console screenshots", async ({ page }) => {
   await nav(page, "Budgets");
   await shot(page, "budgets");
   await nav(page, "Audit");
-  await page.getByLabel("Email").fill("alice@acme.test");
+  await page.getByLabel("Email").fill("user01@example.com");
   await page.getByRole("button", { name: "Search" }).click();
   await expect(page.getByText(/tool and model calls/)).toBeVisible();
   await shot(page, "audit");

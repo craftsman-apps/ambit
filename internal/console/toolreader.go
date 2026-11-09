@@ -65,7 +65,7 @@ func (t *ToolReader) bound(ctx context.Context, s *v1.Server) error {
 	if err != nil {
 		return err
 	}
-	if conn.Spec.ServerURL == "" || conn.Spec.ServerURL != s.Spec.URL {
+	if conn.Spec.ServerURL == "" || conn.Spec.ServerURL != controller.Endpoint(*s) {
 		return errNotBound
 	}
 	return nil
@@ -83,7 +83,7 @@ func usableFor(g *Grant, s *v1.Server) error {
 	if g == nil || g.State != grantConnectedState {
 		return consentErr("connect " + s.Spec.Connection + " with your own account first")
 	}
-	if g.ServerURL != s.Spec.URL {
+	if g.ServerURL != controller.Endpoint(*s) {
 		return consentErr("your connection to " + s.Spec.Connection + " was made for another server; reconnect it")
 	}
 	return nil
@@ -230,7 +230,7 @@ func (t *ToolReader) token(ctx context.Context, who string, s *v1.Server) (strin
 	if err != nil { // a token may still come with the error (save failed, or a transient failure before expiry)
 		slog.Warn("tool reader: grant renewal", "connection", g.Connection, "user", who, "err", redactTokens(err.Error(), g))
 	}
-	if tok == "" || g2 == nil || g2.ServerURL != s.Spec.URL {
+	if tok == "" || g2 == nil || g2.ServerURL != controller.Endpoint(*s) {
 		return "", nil, ErrNoReader
 	}
 	return tok, g2, nil
@@ -256,7 +256,7 @@ func (t *ToolReader) Tools(ctx context.Context, server string) (ToolsResult, err
 	if !ok {
 		return ToolsResult{}, ErrNoReader
 	}
-	key := string(s.UID) + "\n" + s.Spec.URL + "\n" + who
+	key := string(s.UID) + "\n" + controller.Endpoint(*s) + "\n" + who
 	t.mu.Lock()
 	gen := t.gen
 	if r, ok := t.cache[key]; ok && time.Since(r.ReadAt) < t.TTL {
@@ -268,9 +268,9 @@ func (t *ToolReader) Tools(ctx context.Context, server string) (ToolsResult, err
 	if err != nil {
 		return ToolsResult{}, err
 	}
-	tools, err := t.List(ctx, nil, s.Spec.URL, s.Spec.Transport, tok)
+	tools, err := t.List(ctx, nil, controller.Endpoint(*s), s.Spec.Transport, tok)
 	if err != nil {
-		return ToolsResult{}, fmt.Errorf("list tools of %s: %s", s.Spec.URL, redactTokens(err.Error(), g))
+		return ToolsResult{}, fmt.Errorf("list tools of %s: %s", controller.Endpoint(*s), redactTokens(err.Error(), g))
 	}
 	// Consent may have ended while reading (disconnect, offboarding): then the result is neither cached nor returned.
 	t.mu.Lock()

@@ -1,7 +1,7 @@
 package controller
 
 import (
-	"k8s.io/apimachinery/pkg/api/meta"
+	"fmt"
 	"net/url"
 	"slices"
 	"sort"
@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/utils/ptr"
@@ -137,6 +138,20 @@ func ServerCEL(servers []v1.Server, rules []v1.AccessRule, name string) string {
 		return strings.Join(c, " || ")
 	}
 	return "false"
+}
+
+// Endpoint is the address a server's calls go to: its url, or for an image the Service of ToolHive's proxy.
+// A Connection bound to a server (serverURL) names this address, and the token broker and the tool reader
+// compare against it.
+func Endpoint(s v1.Server) string {
+	if s.Spec.URL != "" {
+		return s.Spec.URL
+	}
+	path := "/mcp"
+	if s.Spec.Transport == "sse" {
+		path = "/sse"
+	}
+	return fmt.Sprintf("http://mcp-%s-proxy.%s.svc:%d%s", s.Name, s.Namespace, proxyPort, path)
 }
 
 // target is where the gateway sends one server's MCP traffic: ToolHive's proxy, or the remote URL.
@@ -276,6 +291,28 @@ func mcpServer(s v1.Server) *unstructured.Unstructured {
 	}
 	if s.Spec.MCPPort != 0 {
 		spec["mcpPort"] = int64(s.Spec.MCPPort)
+	}
+	var env, secrets []any
+	for _, e := range s.Spec.Env {
+		if e.SecretKeyRef != nil {
+			// ToolHive mounts the key into the container as the variable named targetEnvName.
+			secrets = append(secrets, map[string]any{"name": e.SecretKeyRef.Name, "key": e.SecretKeyRef.Key, "targetEnvName": e.Name})
+			continue
+		}
+		env = append(env, map[string]any{"name": e.Name, "value": e.Value})
+	}
+	if len(env) > 0 {
+		spec["env"] = env
+	}
+	if len(secrets) > 0 {
+		spec["secrets"] = secrets
+	}
+	if len(s.Spec.Args) > 0 {
+		args := make([]any, len(s.Spec.Args)) // unstructured holds []any, not []string
+		for i, a := range s.Spec.Args {
+			args[i] = a
+		}
+		spec["args"] = args
 	}
 	o := generated("toolhive.stacklok.dev/v1beta1", "MCPServer", s.Name, s.Namespace, spec)
 	o.SetOwnerReferences([]metav1.OwnerReference{{

@@ -83,7 +83,8 @@ envtest-assets:
 image:
 	docker build -t $(IMAGE) .
 	docker build -t ambit-whoami:dev -f test/whoami/Dockerfile .  # test-only MCP server (step 5)
-	kind load docker-image $(IMAGE) ambit-whoami:dev --name $(KIND_CLUSTER)
+	docker build -t ambit-tokenhash:dev -f test/tokenhash/Dockerfile .  # test-only MCP image server (step 5)
+	kind load docker-image $(IMAGE) ambit-whoami:dev ambit-tokenhash:dev --name $(KIND_CLUSTER)
 
 install: $(DEPS) install-crds
 	helm upgrade --install ambit-crds charts/ambit-crds -n $(NS) --create-namespace --wait

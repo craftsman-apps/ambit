@@ -104,7 +104,7 @@ Example output (made-up names; the columns are those of the `ServerRequest` defi
 
 ```text
 NAME              SERVER   REQUESTED BY      DECISION   DECIDED BY
-jira-x7k2p        jira     marta@acme.test   Approved   priya@acme.test
+jira-x7k2p        jira     user08@example.com   Approved   user10@example.com
 ```
 
 The **Audit** page does not list requests and decisions. It lists the calls that pass the gateway. After approval, calls to the new server's tools appear there. To answer "who approved this server and which image?", use the `ServerRequest`, the `Server` annotations or the **Decisions** list.

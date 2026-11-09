@@ -70,7 +70,7 @@ func (f *keysFixture) create(t *testing.T, ck *http.Cookie, scope string, days i
 
 func TestKeysAPI(t *testing.T) {
 	f := newKeysFixture(t)
-	ck := f.cookie("mira@acme.com", RoleViewer)
+	ck := f.cookie("user09@acme.com", RoleViewer)
 	created := f.create(t, ck, "both", 90)
 	if !strings.HasPrefix(created.Key, "ambit_") || created.View["prefix"] != created.Key[:10] || created.View["scope"] != "both" {
 		t.Fatalf("%+v", created)
@@ -114,7 +114,7 @@ func TestKeysAPINeedsSignIn(t *testing.T) {
 func TestKeysAPINotLeader(t *testing.T) {
 	f := newKeysFixture(t)
 	f.keys.EndTerm()
-	r := f.call(t, "POST", "/api/keys", f.cookie("mira@acme.com", RoleViewer), map[string]any{"name": "x", "scope": "llm", "days": 30})
+	r := f.call(t, "POST", "/api/keys", f.cookie("user09@acme.com", RoleViewer), map[string]any{"name": "x", "scope": "llm", "days": 30})
 	if r.Code != 503 || r.Header().Get("Retry-After") == "" {
 		t.Fatal(r.Code, r.Header())
 	}
@@ -135,7 +135,7 @@ func TestKeyErrorMapping(t *testing.T) {
 
 func TestAdminKeysNeedAdmin(t *testing.T) {
 	f := newKeysFixture(t)
-	v := f.cookie("mira@acme.com", RoleViewer)
+	v := f.cookie("user09@acme.com", RoleViewer)
 	for _, p := range []string{"/api/admin/keys", "/api/admin/key-events"} {
 		if r := f.call(t, "GET", p, v, nil); r.Code != http.StatusForbidden {
 			t.Errorf("%s: %d", p, r.Code)
@@ -148,13 +148,13 @@ func TestAdminKeysNeedAdmin(t *testing.T) {
 
 func TestAdminSeesAndRevokesEveryKey(t *testing.T) {
 	f := newKeysFixture(t)
-	c := f.create(t, f.cookie("mira@acme.com", RoleViewer), "llm", 30)
+	c := f.create(t, f.cookie("user09@acme.com", RoleViewer), "llm", 30)
 	id := c.View["id"].(string)
 	admin := f.cookie("root@acme.com", RoleAdmin)
 	r := f.call(t, "GET", "/api/admin/keys", admin, nil)
 	var all struct{ Keys []map[string]any }
 	json.Unmarshal(r.Body.Bytes(), &all)
-	if r.Code != 200 || len(all.Keys) != 1 || all.Keys[0]["owner"] != "mira@acme.com" || strings.Contains(r.Body.String(), c.Key) {
+	if r.Code != 200 || len(all.Keys) != 1 || all.Keys[0]["owner"] != "user09@acme.com" || strings.Contains(r.Body.String(), c.Key) {
 		t.Fatal(r.Code, r.Body.String())
 	}
 	if r := f.call(t, "DELETE", "/api/admin/keys/"+id, admin, nil); r.Code != 204 {
@@ -168,15 +168,15 @@ func TestAdminSeesAndRevokesEveryKey(t *testing.T) {
 
 func TestPeopleCannotRevokeOthersKeys(t *testing.T) {
 	f := newKeysFixture(t)
-	c := f.create(t, f.cookie("mira@acme.com", RoleViewer), "llm", 30)
-	if r := f.call(t, "DELETE", "/api/keys/"+c.View["id"].(string), f.cookie("bob@acme.com", RoleViewer), nil); r.Code != 404 {
+	c := f.create(t, f.cookie("user09@acme.com", RoleViewer), "llm", 30)
+	if r := f.call(t, "DELETE", "/api/keys/"+c.View["id"].(string), f.cookie("user02@acme.com", RoleViewer), nil); r.Code != 404 {
 		t.Fatal(r.Code)
 	}
 }
 
 func TestKeySettingsEndpoint(t *testing.T) {
 	f := newKeysFixture(t)
-	r := f.call(t, "GET", "/api/settings/keys", f.cookie("mira@acme.com", RoleViewer), nil)
+	r := f.call(t, "GET", "/api/settings/keys", f.cookie("user09@acme.com", RoleViewer), nil)
 	if r.Code != 200 || strings.TrimSpace(r.Body.String()) != `{"enabled":true,"inactivityDays":30,"maxDays":365,"lastUsedAvailable":false}` {
 		t.Fatal(r.Code, r.Body.String())
 	}
@@ -186,7 +186,7 @@ func TestCreateKeyRefusesFormPosts(t *testing.T) {
 	f := newKeysFixture(t)
 	req := httptest.NewRequest("POST", "/api/keys", strings.NewReader("name=x"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(f.cookie("mira@acme.com", RoleViewer))
+	req.AddCookie(f.cookie("user09@acme.com", RoleViewer))
 	w := httptest.NewRecorder()
 	f.h.ServeHTTP(w, req)
 	if w.Code != http.StatusUnsupportedMediaType {
@@ -196,7 +196,7 @@ func TestCreateKeyRefusesFormPosts(t *testing.T) {
 
 func TestCreateKeyRejectsUnknownFieldsAndBigBodies(t *testing.T) {
 	f := newKeysFixture(t)
-	ck := f.cookie("mira@acme.com", RoleViewer)
+	ck := f.cookie("user09@acme.com", RoleViewer)
 	if r := f.call(t, "POST", "/api/keys", ck, map[string]any{"name": "x", "scope": "llm", "days": 30, "admin": true}); r.Code != 400 {
 		t.Fatal("unknown field:", r.Code)
 	}
@@ -220,7 +220,7 @@ func TestKeyViewFillsLastUsed(t *testing.T) {
 			return m, nil
 		}}
 	h := NewServer(f.auth, testSPA, LoginOptions{}, cat)
-	ck := f.cookie("mira@acme.com", RoleViewer)
+	ck := f.cookie("user09@acme.com", RoleViewer)
 	f.create(t, ck, "llm", 30)
 	body := do(t, h, "GET", "/api/keys", ck, nil).Body.String()
 	if !strings.Contains(body, `"lastUsed":"2026-10-11T10:00:00Z"`) {
@@ -240,11 +240,11 @@ func TestExpireHookOnlyWithTestHooks(t *testing.T) {
 func TestExpireHook(t *testing.T) {
 	t.Setenv("AMBIT_TEST_HOOKS", "true")
 	f := newKeysFixture(t)
-	c := f.create(t, f.cookie("mira@acme.com", RoleViewer), "llm", 30)
+	c := f.create(t, f.cookie("user09@acme.com", RoleViewer), "llm", 30)
 	id := c.View["id"].(string)
 	until := t0.Add(72 * time.Hour)
 	body := map[string]any{"until": until.Format(time.RFC3339)}
-	if r := f.call(t, "POST", "/api/test/keys/"+id+"/expire", f.cookie("mira@acme.com", RoleViewer), body); r.Code != 403 {
+	if r := f.call(t, "POST", "/api/test/keys/"+id+"/expire", f.cookie("user09@acme.com", RoleViewer), body); r.Code != 403 {
 		t.Fatal("viewer:", r.Code)
 	}
 	admin := f.cookie("root@acme.com", RoleAdmin)
@@ -254,7 +254,7 @@ func TestExpireHook(t *testing.T) {
 	if r := f.call(t, "POST", "/api/test/keys/"+id+"/expire", admin, body); r.Code != 204 {
 		t.Fatal(r.Code, r.Body.String())
 	}
-	ks, _ := f.keys.List(context.Background(), "mira@acme.com")
+	ks, _ := f.keys.List(context.Background(), "user09@acme.com")
 	if !ks[0].Until.Equal(until) {
 		t.Fatalf("%+v", ks[0])
 	}
@@ -273,11 +273,11 @@ func TestResetLimitsHook(t *testing.T) {
 	t.Setenv("AMBIT_TEST_HOOKS", "true")
 	f = newKeysFixture(t)
 	admin = f.cookie("root@acme.com", RoleAdmin)
-	mira := f.cookie("mira@acme.com", RoleViewer)
+	user09 := f.cookie("user09@acme.com", RoleViewer)
 	body := map[string]any{"name": "x", "scope": "llm", "days": 30}
 	n := 0
 	for ; n < 30; n++ {
-		r := f.call(t, "POST", "/api/keys", mira, body)
+		r := f.call(t, "POST", "/api/keys", user09, body)
 		if r.Code == http.StatusTooManyRequests {
 			break
 		}
@@ -288,13 +288,13 @@ func TestResetLimitsHook(t *testing.T) {
 	if n != 10 {
 		t.Fatal("hourly limit hit after", n)
 	}
-	if r := f.call(t, "POST", "/api/test/keys/reset-limits", mira, map[string]any{}); r.Code != 403 {
+	if r := f.call(t, "POST", "/api/test/keys/reset-limits", user09, map[string]any{}); r.Code != 403 {
 		t.Fatal("viewer:", r.Code)
 	}
 	if r := f.call(t, "POST", "/api/test/keys/reset-limits", admin, map[string]any{}); r.Code != 204 {
 		t.Fatal(r.Code)
 	}
-	if r := f.call(t, "POST", "/api/keys", mira, body); r.Code != http.StatusCreated {
+	if r := f.call(t, "POST", "/api/keys", user09, body); r.Code != http.StatusCreated {
 		t.Fatal("after reset:", r.Code, r.Body.String())
 	}
 }
@@ -320,7 +320,7 @@ func TestKeyListWithoutLastUse(t *testing.T) {
 	cat := &Catalog{Client: f.k8s, Namespace: f.keys.Namespace, Keys: f.keys,
 		LastUsed: func(context.Context, []string, time.Time) (map[string]time.Time, error) { queries++; return nil, nil }}
 	h := NewServer(f.auth, testSPA, LoginOptions{}, cat)
-	ck := f.cookie("mira@acme.com", RoleViewer)
+	ck := f.cookie("user09@acme.com", RoleViewer)
 	f.create(t, ck, "llm", 30)
 	r := do(t, h, "GET", "/api/keys?lastUsed=false", ck, nil)
 	if r.Code != 200 || !strings.Contains(r.Body.String(), `"lastUsed":null`) || queries != 0 {
@@ -334,7 +334,7 @@ func TestKeyListWithoutLastUse(t *testing.T) {
 // Sessions created before the upgrade carry no sign-in time: the person is told to sign in again.
 func TestCreateWithASessionFromBeforeTheUpgrade(t *testing.T) {
 	f := newKeysFixture(t)
-	s := Session{ID: randomString(), Email: "mira@acme.com", Role: RoleViewer, Exp: time.Now().Add(time.Hour).Unix()}
+	s := Session{ID: randomString(), Email: "user09@acme.com", Role: RoleViewer, Exp: time.Now().Add(time.Hour).Unix()}
 	f.auth.Sessions.Add(s.ID, s.Email, s.Exp)
 	ck := &http.Cookie{Name: SessionCookie, Value: f.auth.codec.Encode(s)}
 	r := f.call(t, "POST", "/api/keys", ck, map[string]any{"name": "laptop", "scope": "llm", "days": 30})
@@ -346,7 +346,7 @@ func TestCreateWithASessionFromBeforeTheUpgrade(t *testing.T) {
 // Each key shows why and when it stops: inactivity of its owner (until before its end date) or its end date.
 func TestKeyStatus(t *testing.T) {
 	f := newKeysFixture(t)
-	ck := f.cookie("mira@acme.com", RoleViewer)
+	ck := f.cookie("user09@acme.com", RoleViewer)
 	f.create(t, ck, "llm", 30)  // until = end date = t0+30d
 	f.create(t, ck, "llm", 365) // until = sign-in + 30d, before the end date
 	status := func(now time.Time) []string {
@@ -376,7 +376,7 @@ func TestKeyStatus(t *testing.T) {
 // The created-key screen shows its "first request" line only when the console can tell a key's last use.
 func TestKeySettingsSayWhetherLastUseIsKnown(t *testing.T) {
 	f := newKeysFixture(t)
-	ck := f.cookie("mira@acme.com", RoleViewer)
+	ck := f.cookie("user09@acme.com", RoleViewer)
 	avail := func() bool {
 		var out struct {
 			Settings map[string]any `json:"settings"`

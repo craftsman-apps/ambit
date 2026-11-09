@@ -351,7 +351,7 @@ func TestStreamNotARouterSetsNothing(t *testing.T) {
 func TestUsersMatchByEmail(t *testing.T) {
 	llm := &fakeLLM{answer: "coding"}
 	pilot := auto
-	pilot.Groups, pilot.Users = nil, []string{"alice@acme.com"}
+	pilot.Groups, pilot.Users = nil, []string{"user01@acme.com"}
 	cfg := cfgOf(pilot)
 	h := handler(llm, cfg)
 	attrs := func(email string) Attrs {
@@ -359,11 +359,11 @@ func TestUsersMatchByEmail(t *testing.T) {
 		return attrsOf(st)
 	}
 	for email, want := range map[string]string{
-		" Alice@Acme.com ": "classified",
-		"bob@acme.com":     "denied",
-		"":                 "denied",
-		"alice":            "denied", // a subject, not an email
-		"alice@acme.co":    "denied", // exact, no prefix or domain match
+		" User01@Acme.com ": "classified",
+		"user02@acme.com":   "denied",
+		"":                  "denied",
+		"user01":            "denied", // a subject, not an email
+		"user01@acme.co":    "denied", // exact, no prefix or domain match
 	} {
 		if r := h.decide(t.Context(), time.Now(), h.Store.Snapshot(), attrs(email), body("auto", "code")); r.Reason != want {
 			t.Errorf("email %q: %+v, want %s", email, r, want)

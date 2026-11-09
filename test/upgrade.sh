@@ -145,7 +145,7 @@ note "component     $COMP   $FROM → $VER"
 # gateway_ready: a pod can report ready before its configuration has arrived; wait until tools/list
 # answers correctly 5 times in a row.
 gateway_ready() {
-  local ok=0 t; t=$(token alice)
+  local ok=0 t; t=$(token user01)
   for _ in $(seq 1 90); do
     if [[ -n "$( (tools "$t" >/dev/null 2>&1 && echo "$TOOLS") )" ]]; then ok=$((ok + 1)); else ok=0; fi
     (( ok >= 5 )) && return 0; sleep 2
@@ -164,7 +164,7 @@ out=$(./test/contracts.sh "$NS" 2>&1) || fail "baseline: the pinned install does
 note "baseline      PASS  pinned versions healthy, 2 gateway replicas"
 
 # 2b · state created on the pinned versions, checked again after the upgrade
-A=$(token alice); M=$(token mira)
+A=$(token user01); M=$(token user09)
 tools "$A"
 t0=$(date -u +%s); call time_get_current_time '{"timezone":"UTC"}' >/dev/null; t1=$(( $(date -u +%s) + 1 ))
 kubectl -n "$NS" apply -f - >/dev/null <<YAML
@@ -173,7 +173,7 @@ kind: Budget
 metadata: { name: upgrade-eng }
 spec: { group: eng, userRequestsPerDay: 100000 }
 YAML
-day=$(( t0 / 86400 * 86400 )); key="ambit-llm_group_eng_user_alice@acme.test_$day"
+day=$(( t0 / 86400 * 86400 )); key="ambit-llm_group_eng_user_user01@example.com_$day"
 count=""
 for _ in $(seq 1 60); do
   command curl -s -o /dev/null -H "Authorization: Bearer $A" -H 'Content-Type: application/json' \
@@ -184,12 +184,12 @@ done
 [[ -n "$count" ]] || fail "state: no budget counter before the upgrade"
 mcp_open "$M"; sid=$SID
 pins=$(kubectl -n "$NS" get "servers.$G" -o jsonpath='{range .items[*]}{.metadata.name}={range .status.conditions[?(@.type=="ToolsPinned")]}{.status}{end} {end}')
-note "state         recorded: alice's call at $t0, budget count $count, mira's open MCP session, tool pins ($pins)"
+note "state         recorded: user01's call at $t0, budget count $count, user09's open MCP session, tool pins ($pins)"
 
 # 3 · upgrade in place under steady MCP traffic
-( ok=0; bad=0; tok=$(token mira); tt=$SECONDS
+( ok=0; bad=0; tok=$(token user09); tt=$SECONDS
   while [[ ! -f "$CAND/stop" ]]; do
-    (( SECONDS - tt > 60 )) && { tok=$(token mira); tt=$SECONDS; }
+    (( SECONDS - tt > 60 )) && { tok=$(token user09); tt=$SECONDS; }
     c=$(command curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer $tok" -H 'Content-Type: application/json' \
       -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"upgrade","version":"1"}}}' "$MCP")
     if [[ "$c" == 200 ]]; then ok=$((ok + 1)); else bad=$((bad + 1)); echo "$c" >> "$CAND/bad"; fi
@@ -216,17 +216,17 @@ else failed=$((failed + 1)); note "upgrade       FAIL  $ok requests, $bad failed
 
 # 3b · the state from before the upgrade still works
 state=()
-SID=$sid; TOK=$(token mira)  # a fresh token for the same person; the session is what is checked
+SID=$sid; TOK=$(token user09)  # a fresh token for the same person; the session is what is checked
 r=$(mcp_send '{"jsonrpc":"2.0","id":7,"method":"tools/list"}' | head -c 200)
-[[ "$r" == *'"tools"'* ]] || state+=("mira's open MCP session no longer answers: ${r:-no response}")
+[[ "$r" == *'"tools"'* ]] || state+=("user09's open MCP session no longer answers: ${r:-no response}")
 now=$(kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "$key" 2>/dev/null || true)
 [[ -n "$now" && "$now" -ge "$count" ]] || state+=("budget count went from $count to '${now}'")
 pins_now=$(kubectl -n "$NS" get "servers.$G" -o jsonpath='{range .items[*]}{.metadata.name}={range .status.conditions[?(@.type=="ToolsPinned")]}{.status}{end} {end}')
 [[ "$pins_now" == "$pins" ]] || state+=("tool pins changed: $pins → $pins_now")
-sign_in keycloak priya priya-test-pass
+sign_in keycloak user10 user10-test-pass
 from=$(date -u -r "$((t0 - 120))" +%Y-%m-%d 2>/dev/null || date -u -d "@$((t0 - 120))" +%Y-%m-%d)
 next=$(date -u -v+1d +%Y-%m-%d 2>/dev/null || date -u -d tomorrow +%Y-%m-%d)
-if [[ $(api GET "/api/audit?email=alice@acme.test&from=$from&to=$next") == 200 ]]; then
+if [[ $(api GET "/api/audit?email=user01@example.com&from=$from&to=$next") == 200 ]]; then
   # The call recorded above, by its time window, not any earlier call of the same tool.
   kept=$(uv run --no-project python - "$W/api" "$t0" "$t1" <<'PY'
 import json, re, sys
@@ -239,10 +239,10 @@ def ts(s):  # RFC 3339 with any number of fractional digits
 print(sum(1 for c in d["calls"] if c["tool"] == "get_current_time" and t0 - 1 <= ts(c["time"]) <= t1))
 PY
 )
-  [[ "$kept" -ge 1 ]] || state+=("the audit lost alice's call made at $t0")
+  [[ "$kept" -ge 1 ]] || state+=("the audit lost user01's call made at $t0")
 else state+=("audit search failed: $(head -c 150 "$W/api")"); fi
 kubectl -n "$NS" delete "budgets.$G" upgrade-eng --ignore-not-found >/dev/null
-if (( ${#state[@]} == 0 )); then note "state         PASS  session, budget count ($now), tool pins and alice's audited call survived"
+if (( ${#state[@]} == 0 )); then note "state         PASS  session, budget count ($now), tool pins and user01's audited call survived"
 else failed=$((failed + 1)); note "state         FAIL  ${state[*]}"; fi
 
 # 4 · contracts, 5 · acceptance steps and UI — all on the candidate; failures are collected, not fatal

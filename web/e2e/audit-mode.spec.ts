@@ -13,7 +13,7 @@ const audit: Config = { mode: "direct", accessMode: "audit", modeSince: "2026-10
 const enforce: Config = { mode: "direct", accessMode: "enforce", modeSince: "2026-10-01T00:00:00Z", rulesVersion: "3f9a1c2b7d10", rulesSince: "2026-10-01T00:00:00Z" };
 
 const call = (time: string, extra: Record<string, unknown> = {}) => ({
-  time, email: "alice@acme.test", route: "ambit/llm", method: "", server: "", tool: "", model: "gpt-4o", status: "200", error: "",
+  time, email: "user01@example.com", route: "ambit/llm", method: "", server: "", tool: "", model: "gpt-4o", status: "200", error: "",
   inputTokens: 120, outputTokens: 40, router: "", label: "", labelReason: "", accessMode: "audit", mark: "allow", rulesVersion: "3f9a1c2b7d10", outcome: "allow", ...extra,
 });
 const calls = [
@@ -39,10 +39,10 @@ async function setup(page: Page, o: { role?: string; config: Config; summary?: o
   await page.clock.setFixedTime(NOW);
   const json = (route: Route, body: unknown) => route.fulfill({ contentType: "application/json", body: JSON.stringify(body) });
   await page.route("**/api/**", (r) => json(r, []));
-  await page.route("**/api/me", (r) => json(r, { email: "priya@acme.test", name: "Priya", role: o.role ?? "admin", bootstrap: false }));
+  await page.route("**/api/me", (r) => json(r, { email: "user10@example.com", name: "User10", role: o.role ?? "admin", bootstrap: false }));
   await page.route("**/api/keys*", (r) => json(r, { settings: { enabled: true }, keys: [] }));
   await page.route("**/api/config", (r) => json(r, o.config));
-  await page.route("**/api/audit?*", (r) => json(r, { email: "alice@acme.test", calls: o.calls ?? calls, limited: false }));
+  await page.route("**/api/audit?*", (r) => json(r, { email: "user01@example.com", calls: o.calls ?? calls, limited: false }));
   await page.route("**/api/audit/would-refuse*", (r) => { o.seen?.push(new URL(r.request().url()).search); return json(r, o.summary ?? summary); });
 }
 
@@ -55,7 +55,7 @@ async function snap(page: Page, name: string) {
 
 async function search(page: Page) {
   await page.goto("/audit");
-  await page.locator("#audit-email").fill("alice@acme.test");
+  await page.locator("#audit-email").fill("user01@example.com");
   await page.getByRole("button", { name: "Search" }).click();
   await expect(page.getByRole("row", { name: /tools\/call · create_issue/ })).toBeVisible();
 }
@@ -292,7 +292,7 @@ test("in enforce mode the Audit page is as before", async ({ page }) => {
   const plain = [call("2026-10-15T09:00:00Z", { accessMode: "enforce", mark: "", outcome: "n/a" }), call("2026-10-15T08:00:00Z", { status: "403", accessMode: "enforce", mark: "", outcome: "n/a", error: "authorization failed" })];
   await setup(page, { config: enforce, calls: plain, summary: { ...summary, newest: null, requests: 0, groups: [] } });
   await page.goto("/audit");
-  await page.locator("#audit-email").fill("alice@acme.test");
+  await page.locator("#audit-email").fill("user01@example.com");
   await page.getByRole("button", { name: "Search" }).click();
   await expect(page.getByText("OK (200)")).toBeVisible();
   await expect(page.getByText("Refused by policy (403)")).toBeVisible();

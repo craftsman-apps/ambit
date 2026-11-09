@@ -82,8 +82,8 @@ func TestUsageConditionNeverFails(t *testing.T) {
 	}
 	prg, _ := env.Program(ast)
 	chat := map[string]any{"path": "/v1/chat/completions"}
-	key := map[string]any{"keyId": "k1", "email": "alice@acme.com", "groups": []any{"ml-research"}, "until": "2099-01-01T00:00:00Z"}
-	otherKey := map[string]any{"keyId": "k2", "email": "bob@acme.com", "groups": []any{"eng"}, "until": "2099-01-01T00:00:00Z"}
+	key := map[string]any{"keyId": "k1", "email": "user01@acme.com", "groups": []any{"ml-research"}, "until": "2099-01-01T00:00:00Z"}
+	otherKey := map[string]any{"keyId": "k2", "email": "user02@acme.com", "groups": []any{"eng"}, "until": "2099-01-01T00:00:00Z"}
 	for name, c := range map[string]struct {
 		llm, jwt, apiKey map[string]any
 		want             bool

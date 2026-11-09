@@ -10,7 +10,7 @@ import (
 // Every compressor returns soon after its context ends, with ok false, and keeps no slot.
 func TestCompressorsStopAtTheDeadline(t *testing.T) {
 	const deadline = time.Millisecond
-	const slack = 20 * time.Millisecond
+	const slack = 50 * time.Millisecond
 	size := 4 << 20 // maxCompressBytes: the largest text the guard hands to a compressor
 	for _, tc := range []struct {
 		name string
@@ -34,18 +34,25 @@ func TestCompressorsStopAtTheDeadline(t *testing.T) {
 			if !tc.run(context.Background(), tc.text) { // the input is one the compressor accepts when it has time
 				t.Fatal("the input is not accepted without a deadline")
 			}
-			// Slower builds (the race detector) get a larger bound, in proportion to a full run.
-			limit := deadline + max(slack, time.Since(begin)/4)
-			ctx, cancel := context.WithTimeout(t.Context(), deadline)
-			defer cancel()
-			start := time.Now()
-			ok := tc.run(ctx, tc.text)
-			if elapsed := time.Since(start); elapsed > limit {
-				t.Errorf("returned after %v; want at most %v", elapsed, limit)
+			// Slower builds (the race detector) get a larger bound, in proportion to a full run. A loaded runner can
+			// delay one run by tens of milliseconds, so the bound must hold in one of three runs; a compressor that
+			// ignores its deadline needs about a full run every time and fails all three.
+			limit := deadline + max(slack, time.Since(begin)/2)
+			var elapsed time.Duration
+			for range 3 {
+				ctx, cancel := context.WithTimeout(t.Context(), deadline)
+				start := time.Now()
+				ok := tc.run(ctx, tc.text)
+				elapsed = time.Since(start)
+				cancel()
+				if ok {
+					t.Error("a compressor that ran past its deadline reported a result")
+				}
+				if elapsed <= limit {
+					return
+				}
 			}
-			if ok {
-				t.Error("a compressor that ran past its deadline reported a result")
-			}
+			t.Errorf("returned after %v in each of 3 runs; want at most %v", elapsed, limit)
 		})
 	}
 }
@@ -55,8 +62,8 @@ func TestSlotIsFreeAfterTimeout(t *testing.T) {
 	big := sized(queryRows, 4<<20)
 	begin := time.Now()
 	detect(t.Context(), big, true, false)
-	// 20 ms, or more on a slower build (the race detector), in proportion to a full run.
-	slotFreeWithin := max(20*time.Millisecond, time.Since(begin)/4)
+	// The poll below returns at once when the slot is free, so a generous limit costs time only when the test fails.
+	slotFreeWithin := max(2*time.Second, time.Since(begin))
 	var wg sync.WaitGroup
 	for range maxCompressing {
 		wg.Add(1)

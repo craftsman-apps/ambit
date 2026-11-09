@@ -14,8 +14,8 @@ A `Budget` belongs to one group. It can limit **requests**, **estimated dollars*
 You need:
 
 - the cluster from the [Quick start](../quick-start.md), installed with budgets on (`limits.enabled: true`). [Different models for different teams](models-per-team.md) shows the upgrade command;
-- the groups and people of that guide: Alice and Dan in `engineering`, Bob in `sales`;
-- the models of that guide, `free-model` for engineering and `sales-model` for sales, and a personal API key for each person ([Connect your coding agents](coding-tools.md)). Save the keys in `ALICE_KEY`, `DAN_KEY` and `BOB_KEY`.
+- the groups and people of that guide: User01 and User04 in `engineering`, User02 in `sales`;
+- the models of that guide, `free-model` for engineering and `sales-model` for sales, and a personal API key for each person ([Connect your coding agents](coding-tools.md)). Save the keys in `USER01_KEY`, `USER04_KEY` and `USER02_KEY`.
 
 Budgets count requests and dollars once a day, in UTC. If you repeat this guide on the same day, the counters keep their values until midnight UTC. Use new limits or wait.
 
@@ -82,26 +82,26 @@ ask() { # ask KEY MODEL
 }
 ```
 
-**Per person.** Alice calls four times. The fourth call is over her limit of 3.
+**Per person.** User01 calls four times. The fourth call is over the limit of 3.
 
 ```sh
-for i in 1 2 3 4; do ask "$ALICE_KEY" nvidia/nemotron-3-super-120b-a12b:free | cut -c1-200; done
+for i in 1 2 3 4; do ask "$USER01_KEY" nvidia/nemotron-3-super-120b-a12b:free | cut -c1-200; done
 ```
 
 The first three calls end with `HTTP 200`. The fourth is refused with `HTTP 429` and an error body in the format of the API you called (here OpenAI's; Anthropic's for `/v1/messages`). The body says that a request limit or a spending limit was reached, but not which one. The last step below shows a full refusal.
 
-**Per group.** Dan has made no call yet, so his own count is 0. He calls three times:
+**Per group.** User04 has made no call yet, so the count of that person is 0. User04 calls three times:
 
 ```sh
-for i in 1 2 3; do ask "$DAN_KEY" nvidia/nemotron-3-super-120b-a12b:free | cut -c1-200; done
+for i in 1 2 3; do ask "$USER04_KEY" nvidia/nemotron-3-super-120b-a12b:free | cut -c1-200; done
 ```
 
-His first two calls end with `HTTP 200`. The third is refused with `HTTP 429`. The group limit of 5 is used up, because the whole group shares it: Alice's three answers and Dan's two. Refused requests do not count, so Alice's fourth call used none of the five.
+The first two calls end with `HTTP 200`. The third is refused with `HTTP 429`. The group limit of 5 is used up, because the whole group shares it: User01's three answers and User04's two. Refused requests do not count, so User01's fourth call used none of the five.
 
-**Dollars.** Bob calls the sales model three times:
+**Dollars.** User02 calls the sales model three times:
 
 ```sh
-for i in 1 2 3; do ask "$BOB_KEY" nvidia/nemotron-3.5-lightning:free | cut -c1-200; sleep 3; done
+for i in 1 2 3; do ask "$USER02_KEY" nvidia/nemotron-3.5-lightning:free | cut -c1-200; sleep 3; done
 ```
 
 The first call ends with `HTTP 200`. It costs more than the limit of $0.001 for one person, so the second and third calls are refused with `HTTP 429`. Ambit checks the total before a request and adds the cost after the answer. A call that starts while the person is under the limit finishes and is charged in full.
@@ -109,7 +109,7 @@ The first call ends with `HTTP 200`. It costs more than the limit of $0.001 for 
 The headers of a refused request tell the client how long to wait. `retry-after` is the number of seconds until midnight UTC:
 
 ```sh
-curl -s -i http://llm.localtest.me:8080/v1/chat/completions -H "Authorization: Bearer $BOB_KEY" -H 'Content-Type: application/json' \
+curl -s -i http://llm.localtest.me:8080/v1/chat/completions -H "Authorization: Bearer $USER02_KEY" -H 'Content-Type: application/json' \
   -d '{"model":"nvidia/nemotron-3.5-lightning:free","messages":[{"role":"user","content":"hi"}]}'
 ```
 

@@ -57,8 +57,8 @@ func TestOffIsByteIdenticalToToday(t *testing.T) {
 	big := strings.Repeat("a line of text\n", 1000)
 	inputs := map[string][]byte{
 		"nothing to mask":    textResult(big),
-		"email in text":      textResult(big + "mail me: kim@acme.example"),
-		"structuredContent":  []byte(`{"content":[{"type":"text","text":"ok"}],"structuredContent":{"mail":"kim@acme.example"}}`),
+		"email in text":      textResult(big + "mail me: user05@acme.example"),
+		"structuredContent":  []byte(`{"content":[{"type":"text","text":"ok"}],"structuredContent":{"mail":"user05@acme.example"}}`),
 		"image and big text": []byte(`{"content":[{"type":"image","mimeType":"image/png","data":"AAAA"},{"type":"text","text":` + string(mustJSON(big)) + `}]}`),
 	}
 	for name, in := range inputs {
@@ -255,9 +255,9 @@ func TestLimitsOfCompression(t *testing.T) {
 		t.Error("structuredContent must not be compressed")
 	}
 	// A text above the cap passes uncompressed, and is still masked.
-	huge := "{\n  \"a\": \"" + strings.Repeat("x", maxCompressBytes) + " kim@acme.example\"\n}"
+	huge := "{\n  \"a\": \"" + strings.Repeat("x", maxCompressBytes) + " user05@acme.example\"\n}"
 	out := textOf(t, call(t, g, textResult(huge)))
-	if len(out) < maxCompressBytes || strings.Contains(out, "kim@acme") || !strings.Contains(out, "<EMAIL>") || !strings.Contains(out, "{\n  \"a\"") {
+	if len(out) < maxCompressBytes || strings.Contains(out, "user05@acme") || !strings.Contains(out, "<EMAIL>") || !strings.Contains(out, "{\n  \"a\"") {
 		t.Errorf("too-large text: len %d", len(out))
 	}
 }
@@ -269,7 +269,7 @@ func withDetect(t *testing.T, f func(context.Context, string, bool, bool) (strin
 }
 
 func TestCompressorFaultsPassTheOriginal(t *testing.T) {
-	text := "{\n  \"a\": \"" + strings.Repeat("padding ", 1500) + " kim@acme.example\"\n}"
+	text := "{\n  \"a\": \"" + strings.Repeat("padding ", 1500) + " user05@acme.example\"\n}"
 	for name, f := range map[string]func(context.Context, string, bool, bool) (string, string, int){
 		"panic":   func(context.Context, string, bool, bool) (string, string, int) { panic("boom") },
 		"garbage": func(_ context.Context, s string, _, _ bool) (string, string, int) { return s + s, "json", 0 },
@@ -329,6 +329,9 @@ func TestShortenHintHoldsOnlySizes(t *testing.T) {
 
 // B/op of the compress step: at most 8 times the input.
 func TestCompressMemoryBound(t *testing.T) {
+	if raceEnabled {
+		t.Skip("the race detector multiplies the allocation count (about 500 times the input), so the bound does not apply")
+	}
 	for name, text := range map[string]string{
 		"json": queryRows(2500), "logs": serviceLog(8000, 12), "test": goTestVerbose(6000, 2),
 		"csv": csvExport(8000), "markdown": markdownTable(6000), "yaml": podYAML(1200),

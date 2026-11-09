@@ -16,11 +16,11 @@ import (
 func TestAdminAddsAndRemovesAnApp(t *testing.T) {
 	conns, c := connFixture(t, newFakeSaaS(t))
 	a := testAuthOnly()
-	h := NewServer(a, testSPA, LoginOptions{}, &Catalog{Client: c, Namespace: testNS, Conns: conns, PublicURL: "https://console.acme.test"})
-	admin := user(a, "priya@acme.test", RoleAdmin)
+	h := NewServer(a, testSPA, LoginOptions{}, &Catalog{Client: c, Namespace: testNS, Conns: conns, PublicURL: "https://console.example.com"})
+	admin := user(a, "user10@example.com", RoleAdmin)
 	good := AppInput{Name: "github", DisplayName: "GitHub", AuthorizationURL: "https://github.com/login/oauth/authorize",
 		TokenURL: "https://github.com/login/oauth/access_token", ClientID: "Iv1.abc", ClientSecret: "s3cret-value", Scopes: []string{"repo", "read:org"}}
-	if r := do(t, h, "POST", "/api/apps", user(a, "alice@acme.test", RoleViewer), good); r.Code != http.StatusForbidden {
+	if r := do(t, h, "POST", "/api/apps", user(a, "user01@example.com", RoleViewer), good); r.Code != http.StatusForbidden {
 		t.Fatalf("viewer: %d", r.Code)
 	}
 	r := do(t, h, "POST", "/api/apps", admin, good)
@@ -32,7 +32,7 @@ func TestAdminAddsAndRemovesAnApp(t *testing.T) {
 	}
 	var conn v1.Connection
 	if err := c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "github"}, &conn); err != nil || conn.Spec.ClientSecretRef.Name != "ambit-conn-github" ||
-		conn.Spec.ClientID != "Iv1.abc" || len(conn.Spec.Scopes) != 2 || conn.Annotations[createdByKey] != "priya@acme.test" {
+		conn.Spec.ClientID != "Iv1.abc" || len(conn.Spec.Scopes) != 2 || conn.Annotations[createdByKey] != "user10@example.com" {
 		t.Fatalf("connection %+v %v", conn, err)
 	}
 	var sec corev1.Secret
@@ -44,7 +44,7 @@ func TestAdminAddsAndRemovesAnApp(t *testing.T) {
 		CallbackURL string    `json:"callbackURL"`
 		Apps        []AppView `json:"apps"`
 	}](t, do(t, h, "GET", "/api/apps", admin, nil).Body.String())
-	if list.CallbackURL != "https://console.acme.test/connections/callback" || len(list.Apps) != 2 {
+	if list.CallbackURL != "https://console.example.com/connections/callback" || len(list.Apps) != 2 {
 		t.Fatalf("list %+v", list)
 	}
 	for name, in := range map[string]AppInput{
@@ -76,8 +76,8 @@ func TestAppSecretIsNotAGrantAndRemovalEndsGrants(t *testing.T) {
 	saas := newFakeSaaS(t)
 	conns, c := connFixture(t, saas)
 	a := testAuthOnly()
-	h := NewServer(a, testSPA, LoginOptions{}, &Catalog{Client: c, Namespace: testNS, Conns: conns, PublicURL: "https://console.acme.test"})
-	admin := user(a, "priya@acme.test", RoleAdmin)
+	h := NewServer(a, testSPA, LoginOptions{}, &Catalog{Client: c, Namespace: testNS, Conns: conns, PublicURL: "https://console.example.com"})
+	admin := user(a, "user10@example.com", RoleAdmin)
 	in := AppInput{Name: "github", DisplayName: "GitHub", AuthorizationURL: "https://github.com/login/oauth/authorize",
 		TokenURL: "https://github.com/login/oauth/access_token", ClientID: "Iv1.abc", ClientSecret: "first"}
 	if r := do(t, h, "POST", "/api/apps", admin, in); r.Code != http.StatusCreated {
@@ -98,21 +98,21 @@ func TestAppSecretIsNotAGrantAndRemovalEndsGrants(t *testing.T) {
 	if err := c.Get(t.Context(), client.ObjectKey{Namespace: "ambit-grants", Name: "ambit-conn-github"}, &sec); err != nil || string(sec.Data["clientSecret"]) != "first" {
 		t.Fatalf("secret replaced: %v %s", err, sec.Data["clientSecret"])
 	}
-	// jira (from the fixture) has alice's grant; removing the app revokes it at the provider and forgets it.
-	connect(t, conns, a, "alice@acme.test", "alice")
-	if tok, _, err := conns.Token(t.Context(), "alice@acme.test", "jira"); err != nil || tok == "" {
+	// jira (from the fixture) has user01's grant; removing the app revokes it at the provider and forgets it.
+	connect(t, conns, a, "user01@example.com", "user01")
+	if tok, _, err := conns.Token(t.Context(), "user01@example.com", "jira"); err != nil || tok == "" {
 		t.Fatalf("token before removal: %q %v", tok, err)
 	}
 	if r := do(t, h, "DELETE", "/api/apps/jira", admin, nil); r.Code != http.StatusNoContent {
 		t.Fatalf("delete: %d %s", r.Code, r.Body)
 	}
-	if g, _ := conns.Store.Get(t.Context(), "alice@acme.test", "jira"); g != nil {
-		t.Fatal("alice's grant survived the app's removal")
+	if g, _ := conns.Store.Get(t.Context(), "user01@example.com", "jira"); g != nil {
+		t.Fatal("user01's grant survived the app's removal")
 	}
-	if len(saas.revoked) != 1 || saas.revoked[0] != "rt-alice" {
+	if len(saas.revoked) != 1 || saas.revoked[0] != "rt-user01" {
 		t.Fatalf("revoked at provider: %v", saas.revoked)
 	}
-	if tok, _, _ := conns.Token(t.Context(), "alice@acme.test", "jira"); tok != "" {
+	if tok, _, _ := conns.Token(t.Context(), "user01@example.com", "jira"); tok != "" {
 		t.Fatal("a token is still handed out for a removed app")
 	}
 }
@@ -129,11 +129,11 @@ func TestAppURLsMustParse(t *testing.T) {
 func TestCustomAppRefusesReservedAuthorizeParams(t *testing.T) {
 	conns, c := connFixture(t, newFakeSaaS(t))
 	a := testAuthOnly()
-	h := NewServer(a, testSPA, LoginOptions{}, &Catalog{Client: c, Namespace: testNS, Conns: conns, PublicURL: "https://console.acme.test"})
+	h := NewServer(a, testSPA, LoginOptions{}, &Catalog{Client: c, Namespace: testNS, Conns: conns, PublicURL: "https://console.example.com"})
 	in := AppInput{Name: "github", DisplayName: "GitHub", AuthorizationURL: "https://github.com/login/oauth/authorize",
 		TokenURL: "https://github.com/login/oauth/access_token", ClientID: "Iv1.abc", ClientSecret: "s3cret-value",
 		AuthorizeParams: map[string]string{"redirect_uri": "x"}}
-	r := do(t, h, "POST", "/api/apps", user(a, "priya@acme.test", RoleAdmin), in)
+	r := do(t, h, "POST", "/api/apps", user(a, "user10@example.com", RoleAdmin), in)
 	if r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), "redirect_uri") {
 		t.Fatalf("%d %s", r.Code, r.Body)
 	}

@@ -55,15 +55,15 @@ func decodeAs[T any](t *testing.T, body string) T {
 
 func TestRequestApproveCreatesServer(t *testing.T) {
 	h, c, a := serversFixture(t)
-	alice := user(a, "alice@acme.test", RoleViewer, "eng")
-	sam := user(a, "sam@acme.test", RoleApprover)
+	user01 := user(a, "user01@example.com", RoleViewer, "eng")
+	user11 := user(a, "user11@example.com", RoleApprover)
 
-	r := do(t, h, "POST", "/api/server-requests", alice, RequestInput{ServerName: "everything", Image: echoDigest, Reason: "reference server for tests"})
+	r := do(t, h, "POST", "/api/server-requests", user01, RequestInput{ServerName: "everything", Image: echoDigest, Reason: "reference server for tests"})
 	if r.Code != http.StatusCreated {
 		t.Fatalf("request: %d %s", r.Code, r.Body)
 	}
 	req := decodeAs[RequestView](t, r.Body.String())
-	if req.RequestedBy != "alice@acme.test" || req.Transport != "stdio" || req.Decision != "" || !strings.HasPrefix(req.Name, "everything-") {
+	if req.RequestedBy != "user01@example.com" || req.Transport != "stdio" || req.Decision != "" || !strings.HasPrefix(req.Name, "everything-") {
 		t.Fatalf("request view %+v", req)
 	}
 	// Nothing runs before approval.
@@ -71,36 +71,36 @@ func TestRequestApproveCreatesServer(t *testing.T) {
 	if err := c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "everything"}, &srv); err == nil {
 		t.Fatal("server exists before approval")
 	}
-	if r := do(t, h, "POST", "/api/server-requests/"+req.Name+"/approve", alice, DecisionInput{}); r.Code != http.StatusForbidden {
+	if r := do(t, h, "POST", "/api/server-requests/"+req.Name+"/approve", user01, DecisionInput{}); r.Code != http.StatusForbidden {
 		t.Fatalf("viewer approved: %d", r.Code)
 	}
-	if r := do(t, h, "POST", "/api/server-requests/"+req.Name+"/approve", sam, DecisionInput{Comment: "digest checked"}); r.Code != 200 {
+	if r := do(t, h, "POST", "/api/server-requests/"+req.Name+"/approve", user11, DecisionInput{Comment: "digest checked"}); r.Code != 200 {
 		t.Fatalf("approve: %d %s", r.Code, r.Body)
 	}
 	if err := c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "everything"}, &srv); err != nil {
 		t.Fatal(err)
 	}
-	if srv.Spec.Image != echoDigest || srv.Annotations[approvedByKey] != "sam@acme.test" || srv.Annotations[requestedByKey] != "alice@acme.test" || srv.Annotations[requestKey] != req.Name {
+	if srv.Spec.Image != echoDigest || srv.Annotations[approvedByKey] != "user11@example.com" || srv.Annotations[requestedByKey] != "user01@example.com" || srv.Annotations[requestKey] != req.Name {
 		t.Fatalf("server %+v %v", srv.Spec, srv.Annotations)
 	}
 	var q v1.ServerRequest
 	if err := c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: req.Name}, &q); err != nil {
 		t.Fatal(err)
 	}
-	if q.Status.Decision != "Approved" || q.Status.DecidedBy != "sam@acme.test" || q.Status.Comment != "digest checked" || q.Status.DecidedAt == nil {
+	if q.Status.Decision != "Approved" || q.Status.DecidedBy != "user11@example.com" || q.Status.Comment != "digest checked" || q.Status.DecidedAt == nil {
 		t.Fatalf("status %+v", q.Status)
 	}
-	if r := do(t, h, "POST", "/api/server-requests/"+req.Name+"/deny", sam, DecisionInput{}); r.Code != http.StatusConflict {
+	if r := do(t, h, "POST", "/api/server-requests/"+req.Name+"/deny", user11, DecisionInput{}); r.Code != http.StatusConflict {
 		t.Fatalf("second decision: %d", r.Code)
 	}
 }
 
 func TestNobodyApprovesTheirOwnRequest(t *testing.T) {
 	h, c, a := serversFixture(t)
-	priya := user(a, "priya@acme.test", RoleAdmin, "ambit-admins")
-	r := do(t, h, "POST", "/api/server-requests", priya, RequestInput{ServerName: "everything", Image: echoDigest})
+	user10 := user(a, "user10@example.com", RoleAdmin, "ambit-admins")
+	r := do(t, h, "POST", "/api/server-requests", user10, RequestInput{ServerName: "everything", Image: echoDigest})
 	req := decodeAs[RequestView](t, r.Body.String())
-	if r := do(t, h, "POST", "/api/server-requests/"+req.Name+"/approve", priya, DecisionInput{}); r.Code != http.StatusForbidden {
+	if r := do(t, h, "POST", "/api/server-requests/"+req.Name+"/approve", user10, DecisionInput{}); r.Code != http.StatusForbidden {
 		t.Fatalf("admin approved own request: %d %s", r.Code, r.Body)
 	}
 	var srv v1.Server
@@ -111,16 +111,16 @@ func TestNobodyApprovesTheirOwnRequest(t *testing.T) {
 
 func TestDenyLeavesNoServer(t *testing.T) {
 	h, c, a := serversFixture(t)
-	r := do(t, h, "POST", "/api/server-requests", user(a, "alice@acme.test", RoleViewer), RequestInput{ServerName: "everything", Image: echoDigest})
+	r := do(t, h, "POST", "/api/server-requests", user(a, "user01@example.com", RoleViewer), RequestInput{ServerName: "everything", Image: echoDigest})
 	req := decodeAs[RequestView](t, r.Body.String())
-	if r := do(t, h, "POST", "/api/server-requests/"+req.Name+"/deny", user(a, "sam@acme.test", RoleApprover), DecisionInput{Comment: "use the internal fork"}); r.Code != 200 {
+	if r := do(t, h, "POST", "/api/server-requests/"+req.Name+"/deny", user(a, "user11@example.com", RoleApprover), DecisionInput{Comment: "use the internal fork"}); r.Code != 200 {
 		t.Fatalf("deny: %d %s", r.Code, r.Body)
 	}
 	var srv v1.Server
 	if err := c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "everything"}, &srv); err == nil {
 		t.Fatal("denied request created a server")
 	}
-	list := decodeAs[[]RequestView](t, do(t, h, "GET", "/api/server-requests", user(a, "x@acme.test", RoleViewer), nil).Body.String())
+	list := decodeAs[[]RequestView](t, do(t, h, "GET", "/api/server-requests", user(a, "x@example.com", RoleViewer), nil).Body.String())
 	if len(list) != 1 || list[0].Decision != "Denied" || list[0].Comment != "use the internal fork" {
 		t.Fatalf("history %+v", list)
 	}
@@ -128,7 +128,7 @@ func TestDenyLeavesNoServer(t *testing.T) {
 
 func TestInvalidRequestsAreRefusedWithReason(t *testing.T) {
 	h, _, a := serversFixture(t)
-	alice := user(a, "alice@acme.test", RoleViewer)
+	user01 := user(a, "user01@example.com", RoleViewer)
 	for _, tc := range []struct {
 		in   RequestInput
 		want string
@@ -138,22 +138,22 @@ func TestInvalidRequestsAreRefusedWithReason(t *testing.T) {
 		{RequestInput{ServerName: "everything", Image: echoDigest, Transport: "websocket"}, "transport"},
 		{RequestInput{ServerName: "time", Image: timeDigest}, "already exists"},
 	} {
-		r := do(t, h, "POST", "/api/server-requests", alice, tc.in)
+		r := do(t, h, "POST", "/api/server-requests", user01, tc.in)
 		if r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), tc.want) {
 			t.Errorf("%+v: %d %s", tc.in, r.Code, r.Body)
 		}
 	}
-	if r := do(t, h, "POST", "/api/server-requests", alice, RequestInput{ServerName: "everything", Image: echoDigest}); r.Code != http.StatusCreated {
+	if r := do(t, h, "POST", "/api/server-requests", user01, RequestInput{ServerName: "everything", Image: echoDigest}); r.Code != http.StatusCreated {
 		t.Fatalf("first: %d", r.Code)
 	}
-	if r := do(t, h, "POST", "/api/server-requests", alice, RequestInput{ServerName: "everything", Image: echoDigest}); r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), "already waiting") {
+	if r := do(t, h, "POST", "/api/server-requests", user01, RequestInput{ServerName: "everything", Image: echoDigest}); r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), "already waiting") {
 		t.Fatalf("duplicate: %d %s", r.Code, r.Body)
 	}
 }
 
 func TestServersListShowsToolsAndRules(t *testing.T) {
 	h, _, a := serversFixture(t)
-	list := decodeAs[[]ServerView](t, do(t, h, "GET", "/api/servers", user(a, "alice@acme.test", RoleViewer), nil).Body.String())
+	list := decodeAs[[]ServerView](t, do(t, h, "GET", "/api/servers", user(a, "user01@example.com", RoleViewer), nil).Body.String())
 	if len(list) != 1 || list[0].Name != "time" || len(list[0].Tools) != 2 || list[0].Ready != "True" || len(list[0].Rules) != 1 || list[0].Rules[0] != "eng-time" {
 		t.Fatalf("%+v", list)
 	}
@@ -161,7 +161,7 @@ func TestServersListShowsToolsAndRules(t *testing.T) {
 
 func TestAdminEditsToolsInARule(t *testing.T) {
 	h, c, a := serversFixture(t)
-	admin := user(a, "priya@acme.test", RoleAdmin)
+	admin := user(a, "user10@example.com", RoleAdmin)
 	in := RuleInput{Name: "ml-time", Groups: []string{"ml-research"}, Servers: []v1.ServerAccess{{Name: "time"}}}
 	if r := do(t, h, "POST", "/api/access-rules", admin, in); r.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", r.Code, r.Body)
@@ -195,14 +195,14 @@ func TestAdminEditsToolsInARule(t *testing.T) {
 
 func TestMyAccessExplainsWhatAUserMayUse(t *testing.T) {
 	h, _, a := serversFixture(t)
-	got := decodeAs[MyAccess](t, do(t, h, "GET", "/api/me/access", user(a, "alice@acme.test", RoleViewer, "eng"), nil).Body.String())
+	got := decodeAs[MyAccess](t, do(t, h, "GET", "/api/me/access", user(a, "user01@example.com", RoleViewer, "eng"), nil).Body.String())
 	if len(got.Servers) != 1 || got.Servers[0].Server != "time" || got.Servers[0].AllTools || len(got.Servers[0].Tools) != 1 ||
 		got.Servers[0].Tools[0] != "get_current_time" || got.Servers[0].Rules[0] != "eng-time" {
-		t.Fatalf("alice: %+v", got)
+		t.Fatalf("user01: %+v", got)
 	}
-	none := decodeAs[MyAccess](t, do(t, h, "GET", "/api/me/access", user(a, "mira@acme.test", RoleViewer, "ml-research"), nil).Body.String())
+	none := decodeAs[MyAccess](t, do(t, h, "GET", "/api/me/access", user(a, "user09@example.com", RoleViewer, "ml-research"), nil).Body.String())
 	if len(none.Servers) != 0 || len(none.Models) != 0 {
-		t.Fatalf("mira: %+v", none)
+		t.Fatalf("user09: %+v", none)
 	}
 }
 
@@ -215,8 +215,8 @@ func TestRemoteServerRequest(t *testing.T) {
 			ClientID: "ambit", ClientSecretRef: v1.SecretRef{Name: "ambit-conn-jira"}}}); err != nil {
 		t.Fatal(err)
 	}
-	alice := user(a, "alice@acme.test", RoleViewer, "eng")
-	sam := user(a, "sam@acme.test", RoleApprover)
+	user01 := user(a, "user01@example.com", RoleViewer, "eng")
+	user11 := user(a, "user11@example.com", RoleApprover)
 	for _, tc := range []struct {
 		in   RequestInput
 		want string
@@ -227,17 +227,22 @@ func TestRemoteServerRequest(t *testing.T) {
 		{RequestInput{ServerName: "jira", URL: "https://mcp.atlassian.example/v1/mcp?token=x"}, "URL"},
 		{RequestInput{ServerName: "jira", URL: "https://mcp.atlassian.example/v1/mcp", Transport: "stdio"}, "streamable-http or sse"},
 		{RequestInput{ServerName: "jira", URL: "https://mcp.atlassian.example/v1/mcp", Connection: "confluence"}, "no connection named"},
-		{RequestInput{ServerName: "tool", Image: echoDigest, Connection: "jira"}, "only for servers reached by URL"},
+		{RequestInput{ServerName: "tool", Image: echoDigest, Connection: "jira"}, "image that talks streamable-http or sse"},
+		{RequestInput{ServerName: "tool", Image: echoDigest, Transport: "stdio", Connection: "jira"}, "image that talks streamable-http or sse"},
 	} {
-		if r := do(t, h, "POST", "/api/server-requests", alice, tc.in); r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), tc.want) {
+		if r := do(t, h, "POST", "/api/server-requests", user01, tc.in); r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), tc.want) {
 			t.Errorf("%+v: %d %s", tc.in, r.Code, r.Body)
 		}
 	}
+	// An image that talks HTTP can receive the person's token.
+	if r := do(t, h, "POST", "/api/server-requests", user01, RequestInput{ServerName: "workspace", Image: echoDigest, Transport: "streamable-http", Connection: "jira"}); r.Code != http.StatusCreated {
+		t.Fatalf("image with connection: %d %s", r.Code, r.Body)
+	}
 	// In-cluster services may use plain HTTP.
-	if r := do(t, h, "POST", "/api/server-requests", alice, RequestInput{ServerName: "crm", URL: "http://crm.tools.svc:8080/mcp"}); r.Code != http.StatusCreated {
+	if r := do(t, h, "POST", "/api/server-requests", user01, RequestInput{ServerName: "crm", URL: "http://crm.tools.svc:8080/mcp"}); r.Code != http.StatusCreated {
 		t.Fatalf("in-cluster: %d %s", r.Code, r.Body)
 	}
-	r := do(t, h, "POST", "/api/server-requests", alice, RequestInput{ServerName: "jira", DisplayName: "Jira", URL: "https://mcp.atlassian.example/v1/mcp", Connection: "jira"})
+	r := do(t, h, "POST", "/api/server-requests", user01, RequestInput{ServerName: "jira", DisplayName: "Jira", URL: "https://mcp.atlassian.example/v1/mcp", Connection: "jira"})
 	if r.Code != http.StatusCreated {
 		t.Fatalf("request: %d %s", r.Code, r.Body)
 	}
@@ -245,7 +250,7 @@ func TestRemoteServerRequest(t *testing.T) {
 	if req.URL != "https://mcp.atlassian.example/v1/mcp" || req.Connection != "jira" || req.Transport != "streamable-http" || req.Image != "" {
 		t.Fatalf("request view %+v", req)
 	}
-	if r := do(t, h, "POST", "/api/server-requests/"+req.Name+"/approve", sam, DecisionInput{}); r.Code != 200 {
+	if r := do(t, h, "POST", "/api/server-requests/"+req.Name+"/approve", user11, DecisionInput{}); r.Code != 200 {
 		t.Fatalf("approve: %d %s", r.Code, r.Body)
 	}
 	var srv v1.Server
@@ -253,7 +258,7 @@ func TestRemoteServerRequest(t *testing.T) {
 		t.Fatalf("server %+v %v", srv.Spec, err)
 	}
 	var list []ServerView
-	list = decodeAs[[]ServerView](t, do(t, h, "GET", "/api/servers", alice, nil).Body.String())
+	list = decodeAs[[]ServerView](t, do(t, h, "GET", "/api/servers", user01, nil).Body.String())
 	for _, s := range list {
 		if s.Name == "jira" && (s.URL != req.URL || s.Connection != "jira") {
 			t.Fatalf("server view %+v", s)
@@ -263,9 +268,9 @@ func TestRemoteServerRequest(t *testing.T) {
 
 func TestRemoteServerURLMustParse(t *testing.T) {
 	h, _, a := serversFixture(t)
-	alice := user(a, "alice@acme.test", RoleViewer)
+	user01 := user(a, "user01@example.com", RoleViewer)
 	for _, u := range []string{"https://example.com:bad/mcp", "https://example.com/%zz", "https://:443/mcp"} {
-		if r := do(t, h, "POST", "/api/server-requests", alice, RequestInput{ServerName: "x", URL: u}); r.Code != http.StatusBadRequest {
+		if r := do(t, h, "POST", "/api/server-requests", user01, RequestInput{ServerName: "x", URL: u}); r.Code != http.StatusBadRequest {
 			t.Errorf("%s: %d %s", u, r.Code, r.Body)
 		}
 	}
@@ -275,15 +280,15 @@ func TestRemoteServerURLMustParse(t *testing.T) {
 func TestMyAccessByEmail(t *testing.T) {
 	h, c, a := serversFixture(t)
 	if err := c.Create(t.Context(), &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "pilot", Namespace: testNS},
-		Spec: v1.AccessRuleSpec{Users: []string{"mira@acme.test"}, Servers: []v1.ServerAccess{{Name: "time"}}}}); err != nil {
+		Spec: v1.AccessRuleSpec{Users: []string{"user09@example.com"}, Servers: []v1.ServerAccess{{Name: "time"}}}}); err != nil {
 		t.Fatal(err)
 	}
-	got := decodeAs[MyAccess](t, do(t, h, "GET", "/api/me/access", user(a, "Mira@Acme.test", RoleViewer, "ml-research"), nil).Body.String())
+	got := decodeAs[MyAccess](t, do(t, h, "GET", "/api/me/access", user(a, "User09@example.com", RoleViewer, "ml-research"), nil).Body.String())
 	if len(got.Servers) != 1 || got.Servers[0].Server != "time" || !got.Servers[0].AllTools {
-		t.Fatalf("mira: %+v", got)
+		t.Fatalf("user09: %+v", got)
 	}
-	other := decodeAs[MyAccess](t, do(t, h, "GET", "/api/me/access", user(a, "bob@acme.test", RoleViewer, "ml-research"), nil).Body.String())
+	other := decodeAs[MyAccess](t, do(t, h, "GET", "/api/me/access", user(a, "user02@example.com", RoleViewer, "ml-research"), nil).Body.String())
 	if len(other.Servers) != 0 {
-		t.Fatalf("bob: %+v", other)
+		t.Fatalf("user02: %+v", other)
 	}
 }

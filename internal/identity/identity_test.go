@@ -12,14 +12,14 @@ func TestCanonicalEmail(t *testing.T) {
 		in, want string
 		ok       bool
 	}{
-		{"alice@acme.com", "alice@acme.com", true},
-		{"  Alice@Acme.COM ", "alice@acme.com", true},
-		{"ÄLICE@acme.com", "Älice@acme.com", true}, // ASCII-only folding, like CEL lowerAscii()
+		{"user01@acme.com", "user01@acme.com", true},
+		{"  User01@Acme.COM ", "user01@acme.com", true},
+		{"ÄUSER01@acme.com", "Äuser01@acme.com", true}, // ASCII-only folding, like CEL lowerAscii()
 		{"", "", false},
-		{"alice", "", false},
+		{"user01", "", false},
 		{"a@b@c", "", false},
 		{"al ice@acme.com", "", false},
-		{"alice@", "", false},
+		{"user01@", "", false},
 		{"@acme.com", "", false},
 	} {
 		got, ok := CanonicalEmail(c.in)
@@ -68,7 +68,7 @@ func TestEmailRuleParity(t *testing.T) {
 		return p
 	}
 	has, canon := prog(HasEmail()), prog(`jwt.email.trim().lowerAscii()`)
-	for _, in := range []string{"alice@acme.com", "  Alice@Acme.COM ", "ÄLICE@acme.com", "o'brien@acme.com", "", "alice", "a@b@c", "al ice@acme.com", "alice@", "@acme.com"} {
+	for _, in := range []string{"user01@acme.com", "  User01@Acme.COM ", "ÄUSER01@acme.com", "o'brien@acme.com", "", "user01", "a@b@c", "al ice@acme.com", "user01@", "@acme.com"} {
 		want, wantOK := CanonicalEmail(in)
 		act := map[string]any{"jwt": map[string]any{"email": in}}
 		v, _, err := has.Eval(act)
@@ -104,17 +104,17 @@ func TestPrincipalEmail(t *testing.T) {
 		jwt, key map[string]any
 		want     string
 	}{
-		{true, map[string]any{"sub": "u1", "email": " Alice@Acme.com ", "email_verified": true}, map[string]any{}, "alice@acme.com"},
-		{true, map[string]any{"sub": "u1", "email": "alice@acme.com", "email_verified": false}, map[string]any{}, ""},
-		{true, map[string]any{"sub": "u1", "email": "alice@acme.com", "email_verified": "true"}, map[string]any{}, ""},
-		{true, map[string]any{"sub": "u1", "email": "alice@acme.com"}, map[string]any{}, ""},
-		{false, map[string]any{"sub": "u1", "email": "alice@acme.com"}, map[string]any{}, "alice@acme.com"},
-		{false, map[string]any{"sub": "u1", "email": " Alice@Acme.com ", "email_verified": false}, map[string]any{}, "alice@acme.com"},
-		{true, map[string]any{"sub": "alice@acme.com", "email_verified": true}, map[string]any{}, ""},
-		{false, map[string]any{"sub": "alice@acme.com"}, map[string]any{}, ""},
+		{true, map[string]any{"sub": "u1", "email": " User01@Acme.com ", "email_verified": true}, map[string]any{}, "user01@acme.com"},
+		{true, map[string]any{"sub": "u1", "email": "user01@acme.com", "email_verified": false}, map[string]any{}, ""},
+		{true, map[string]any{"sub": "u1", "email": "user01@acme.com", "email_verified": "true"}, map[string]any{}, ""},
+		{true, map[string]any{"sub": "u1", "email": "user01@acme.com"}, map[string]any{}, ""},
+		{false, map[string]any{"sub": "u1", "email": "user01@acme.com"}, map[string]any{}, "user01@acme.com"},
+		{false, map[string]any{"sub": "u1", "email": " User01@Acme.com ", "email_verified": false}, map[string]any{}, "user01@acme.com"},
+		{true, map[string]any{"sub": "user01@acme.com", "email_verified": true}, map[string]any{}, ""},
+		{false, map[string]any{"sub": "user01@acme.com"}, map[string]any{}, ""},
 		{false, map[string]any{"sub": "u1", "email": "not-an-email"}, map[string]any{}, ""},
-		{true, map[string]any{}, map[string]any{"keyId": "k1", "email": "bob@acme.com"}, "bob@acme.com"},
-		{false, map[string]any{}, map[string]any{"keyId": "k1", "email": "bob@acme.com"}, "bob@acme.com"},
+		{true, map[string]any{}, map[string]any{"keyId": "k1", "email": "user02@acme.com"}, "user02@acme.com"},
+		{false, map[string]any{}, map[string]any{"keyId": "k1", "email": "user02@acme.com"}, "user02@acme.com"},
 	} {
 		ast, iss := env.Compile(PrincipalEmail(c.verified))
 		if iss.Err() != nil {

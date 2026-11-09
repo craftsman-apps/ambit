@@ -29,11 +29,11 @@ func scimFixture(t *testing.T) (*http.ServeMux, *SCIM, *fakeSaaS, client.Client)
 	saas := newFakeSaaS(t)
 	conns, c := connFixture(t, saas)
 	a := testAuthOnly()
-	connect(t, conns, a, "bob@acme.test", "bob")
-	connect(t, conns, a, "alice@acme.test", "alice")
+	connect(t, conns, a, "user02@example.com", "user02")
+	connect(t, conns, a, "user01@example.com", "user01")
 	sessions := NewSessionStore()
-	sessions.Add("s1", "bob@acme.test", time.Now().Add(time.Hour).Unix())
-	sessions.Add("s2", "bob@acme.test", time.Now().Add(time.Hour).Unix())
+	sessions.Add("s1", "user02@example.com", time.Now().Add(time.Hour).Unix())
+	sessions.Add("s2", "user02@example.com", time.Now().Add(time.Hour).Unix())
 	s := &SCIM{Client: c, Namespace: testNS, Token: scimToken, Conns: conns, Sessions: sessions, Keys: scimKeys(t, c)}
 	mux := http.NewServeMux()
 	s.register(mux)
@@ -93,12 +93,12 @@ func TestSCIMNeedsTheToken(t *testing.T) {
 
 func TestSCIMProvisionAndFilter(t *testing.T) {
 	mux, _, _, _ := scimFixture(t)
-	id := provision(t, mux, "bob@acme.test")
-	r := scimDo(t, mux, "GET", `/scim/v2/Users?filter=userName+eq+%22BOB@acme.test%22`, scimToken, nil)
+	id := provision(t, mux, "user02@example.com")
+	r := scimDo(t, mux, "GET", `/scim/v2/Users?filter=userName+eq+%22USER02@example.com%22`, scimToken, nil)
 	if !strings.Contains(r.Body.String(), `"totalResults":1`) || !strings.Contains(r.Body.String(), id) {
 		t.Fatalf("filter: %s", r.Body)
 	}
-	if r := scimDo(t, mux, "POST", "/scim/v2/Users", scimToken, map[string]any{"userName": "bob@acme.test"}); r.Code != http.StatusConflict {
+	if r := scimDo(t, mux, "POST", "/scim/v2/Users", scimToken, map[string]any{"userName": "user02@example.com"}); r.Code != http.StatusConflict {
 		t.Fatalf("duplicate: %d", r.Code)
 	}
 }
@@ -106,25 +106,25 @@ func TestSCIMProvisionAndFilter(t *testing.T) {
 // Entra ID sends {"op":"Replace","path":"active","value":"False"}.
 func TestDeactivationOffboardsEverything(t *testing.T) {
 	mux, s, saas, c := scimFixture(t)
-	id := provision(t, mux, "bob@acme.test")
+	id := provision(t, mux, "user02@example.com")
 	r := scimDo(t, mux, "PATCH", "/scim/v2/Users/"+id, scimToken, map[string]any{"schemas": []string{scimPatchOp},
 		"Operations": []any{map[string]any{"op": "Replace", "path": "active", "value": "False"}}})
 	if r.Code != 200 || !strings.Contains(r.Body.String(), `"active":false`) {
 		t.Fatalf("patch: %d %s", r.Code, r.Body)
 	}
-	if len(saas.revoked) != 1 || saas.revoked[0] != "rt-bob" {
+	if len(saas.revoked) != 1 || saas.revoked[0] != "rt-user02" {
 		t.Fatalf("revoked at provider: %v", saas.revoked)
 	}
-	if g, _ := s.Conns.Store.Get(t.Context(), "bob@acme.test", "jira"); g != nil {
-		t.Fatal("bob's grant kept")
+	if g, _ := s.Conns.Store.Get(t.Context(), "user02@example.com", "jira"); g != nil {
+		t.Fatal("user02's grant kept")
 	}
-	if g, _ := s.Conns.Store.Get(t.Context(), "alice@acme.test", "jira"); g == nil {
-		t.Fatal("alice's grant was removed too")
+	if g, _ := s.Conns.Store.Get(t.Context(), "user01@example.com", "jira"); g == nil {
+		t.Fatal("user01's grant was removed too")
 	}
 	if s.Sessions.Valid("s1") || s.Sessions.Valid("s2") {
-		t.Fatal("bob's console sessions still valid")
+		t.Fatal("user02's console sessions still valid")
 	}
-	if b := blocked(t, c); b != `["bob@acme.test"]` {
+	if b := blocked(t, c); b != `["user02@example.com"]` {
 		t.Fatalf("gateway block list %s", b)
 	}
 	recs, err := s.Records(t.Context())
@@ -133,8 +133,8 @@ func TestDeactivationOffboardsEverything(t *testing.T) {
 		t.Fatalf("record %+v %v", recs, err)
 	}
 	// Okta reactivates with PUT: the gateway block is lifted.
-	r = scimDo(t, mux, "PUT", "/scim/v2/Users/"+id, scimToken, map[string]any{"userName": "bob@acme.test", "active": true,
-		"emails": []any{map[string]any{"value": "bob@acme.test", "primary": true}}})
+	r = scimDo(t, mux, "PUT", "/scim/v2/Users/"+id, scimToken, map[string]any{"userName": "user02@example.com", "active": true,
+		"emails": []any{map[string]any{"value": "user02@example.com", "primary": true}}})
 	if r.Code != 200 || blocked(t, c) != `[]` {
 		t.Fatalf("reactivate: %d, block list %s", r.Code, blocked(t, c))
 	}
@@ -142,11 +142,11 @@ func TestDeactivationOffboardsEverything(t *testing.T) {
 
 func TestDeleteOffboardsAnActiveUser(t *testing.T) {
 	mux, _, saas, c := scimFixture(t)
-	id := provision(t, mux, "alice@acme.test")
+	id := provision(t, mux, "user01@example.com")
 	if r := scimDo(t, mux, "DELETE", "/scim/v2/Users/"+id, scimToken, nil); r.Code != http.StatusNoContent {
 		t.Fatalf("delete: %d", r.Code)
 	}
-	if len(saas.revoked) != 1 || saas.revoked[0] != "rt-alice" || blocked(t, c) != `["alice@acme.test"]` {
+	if len(saas.revoked) != 1 || saas.revoked[0] != "rt-user01" || blocked(t, c) != `["user01@example.com"]` {
 		t.Fatalf("revoked %v block %s", saas.revoked, blocked(t, c))
 	}
 	if r := scimDo(t, mux, "GET", "/scim/v2/Users/"+id, scimToken, nil); r.Code != 404 {
@@ -190,8 +190,8 @@ func userActive(t *testing.T, s *SCIM, id string) bool {
 func TestOffboardingDeletesKeys(t *testing.T) {
 	_, s, _, _ := scimFixture(t)
 	ctx := context.Background()
-	newKey(t, s, "bob@acme.test")
-	rec := s.Offboard(ctx, "Bob@Acme.test", "scim PATCH active=false")
+	newKey(t, s, "user02@example.com")
+	rec := s.Offboard(ctx, "User02@example.com", "scim PATCH active=false")
 	if rec.KeysDeleted != 1 || !rec.CompleteSuccess || rec.KeysError != "" {
 		t.Fatalf("%+v", rec)
 	}
@@ -203,7 +203,7 @@ func TestOffboardingDeletesKeys(t *testing.T) {
 func TestOffboardingReportsKeyFailure(t *testing.T) {
 	_, s, _, _ := scimFixture(t)
 	s.Keys.EndTermForTest()
-	rec := s.Offboard(context.Background(), "bob@acme.test", "scim DELETE")
+	rec := s.Offboard(context.Background(), "user02@example.com", "scim DELETE")
 	if rec.CompleteSuccess || !rec.GatewayBlocked || rec.KeysError == "" {
 		t.Fatalf("a key failure must mark the record incomplete, and the gateway block must still apply: %+v", rec)
 	}
@@ -212,8 +212,8 @@ func TestOffboardingReportsKeyFailure(t *testing.T) {
 func TestSCIMDeactivationRetriesUntilKeysAreGone(t *testing.T) {
 	mux, s, _, c := scimFixture(t)
 	ctx := context.Background()
-	id := provision(t, mux, "bob@acme.test")
-	newKey(t, s, "bob@acme.test")
+	id := provision(t, mux, "user02@example.com")
+	newKey(t, s, "user02@example.com")
 	s.Keys.EndTermForTest()
 	if r := patchActive(t, mux, id, false); r.Code != http.StatusServiceUnavailable || !strings.Contains(r.Body.String(), scimErrSchema) {
 		t.Fatalf("first: %d %s", r.Code, r.Body)
@@ -237,7 +237,7 @@ func TestSCIMDeactivationRetriesUntilKeysAreGone(t *testing.T) {
 	recs, _ := s.Records(ctx)
 	complete := 0
 	for _, r := range recs {
-		if r.Email == "bob@acme.test" && r.CompleteSuccess {
+		if r.Email == "user02@example.com" && r.CompleteSuccess {
 			complete++
 		}
 	}
@@ -249,7 +249,7 @@ func TestSCIMDeactivationRetriesUntilKeysAreGone(t *testing.T) {
 
 func TestSCIMDeleteAndPutWithKeyFailureAre503(t *testing.T) {
 	mux, s, _, _ := scimFixture(t)
-	id := provision(t, mux, "bob@acme.test")
+	id := provision(t, mux, "user02@example.com")
 	s.Keys.EndTermForTest()
 	if r := scimDo(t, mux, "DELETE", "/scim/v2/Users/"+id, scimToken, nil); r.Code != 503 {
 		t.Fatalf("delete: %d", r.Code)
@@ -257,8 +257,8 @@ func TestSCIMDeleteAndPutWithKeyFailureAre503(t *testing.T) {
 	if _, err := s.load(context.Background(), id); err != nil {
 		t.Fatal("user deleted although keys remain")
 	}
-	r := scimDo(t, mux, "PUT", "/scim/v2/Users/"+id, scimToken, map[string]any{"userName": "bob@acme.test", "active": false,
-		"emails": []any{map[string]any{"value": "bob@acme.test", "primary": true}}})
+	r := scimDo(t, mux, "PUT", "/scim/v2/Users/"+id, scimToken, map[string]any{"userName": "user02@example.com", "active": false,
+		"emails": []any{map[string]any{"value": "user02@example.com", "primary": true}}})
 	if r.Code != 503 || !userActive(t, s, id) {
 		t.Fatalf("put: %d", r.Code)
 	}
@@ -267,7 +267,7 @@ func TestSCIMDeleteAndPutWithKeyFailureAre503(t *testing.T) {
 func TestInactivePOSTWithKeyFailureIs503(t *testing.T) {
 	mux, s, _, _ := scimFixture(t)
 	s.Keys.EndTermForTest()
-	body := map[string]any{"userName": "carol@acme.test", "active": false, "emails": []any{map[string]any{"value": "carol@acme.test", "primary": true}}}
+	body := map[string]any{"userName": "user03@example.com", "active": false, "emails": []any{map[string]any{"value": "user03@example.com", "primary": true}}}
 	if r := scimDo(t, mux, "POST", "/scim/v2/Users", scimToken, body); r.Code != 503 {
 		t.Fatalf("%d %s", r.Code, r.Body)
 	}
@@ -287,13 +287,13 @@ func TestInactivePOSTWithKeyFailureIs503(t *testing.T) {
 func TestProvisionWithoutKeyTermIs201(t *testing.T) {
 	mux, s, _, _ := scimFixture(t)
 	s.Keys.EndTermForTest()
-	provision(t, mux, "carol@acme.test")
+	provision(t, mux, "user03@example.com")
 }
 
 // An offboarded person's reactivation needs a key write: without the Lease it is a 503 and the user is not saved.
 func TestReactivationWithoutKeyTermIs503(t *testing.T) {
 	mux, s, _, _ := scimFixture(t)
-	id := provision(t, mux, "bob@acme.test")
+	id := provision(t, mux, "user02@example.com")
 	if r := patchActive(t, mux, id, false); r.Code != 200 {
 		t.Fatalf("%d", r.Code)
 	}
@@ -305,17 +305,17 @@ func TestReactivationWithoutKeyTermIs503(t *testing.T) {
 
 func TestSCIMReactivationAllowsNewKeys(t *testing.T) {
 	mux, s, _, c := scimFixture(t)
-	id := provision(t, mux, "bob@acme.test")
+	id := provision(t, mux, "user02@example.com")
 	if r := patchActive(t, mux, id, false); r.Code != 200 {
 		t.Fatalf("%d", r.Code)
 	}
-	if _, _, err := s.Keys.Create(context.Background(), Session{Email: "bob@acme.test", SignedIn: time.Now().Unix()}, "x", ScopeLLM, 90); err == nil {
+	if _, _, err := s.Keys.Create(context.Background(), Session{Email: "user02@example.com", SignedIn: time.Now().Unix()}, "x", ScopeLLM, 90); err == nil {
 		t.Fatal("offboarded person created a key")
 	}
 	if r := patchActive(t, mux, id, true); r.Code != 200 {
 		t.Fatalf("%d", r.Code)
 	}
-	newKey(t, s, "bob@acme.test")
+	newKey(t, s, "user02@example.com")
 	if b := blocked(t, c); b != "[]" {
 		t.Fatalf("still blocked: %s", b)
 	}
@@ -324,7 +324,7 @@ func TestSCIMReactivationAllowsNewKeys(t *testing.T) {
 func TestReactivationFailureIs503AndRetrySucceeds(t *testing.T) {
 	mux, s, _, c := scimFixture(t)
 	ctx := context.Background()
-	id := provision(t, mux, "bob@acme.test")
+	id := provision(t, mux, "user02@example.com")
 	if r := patchActive(t, mux, id, false); r.Code != 200 {
 		t.Fatalf("%d", r.Code)
 	}
@@ -348,14 +348,14 @@ func TestReactivationFailureIs503AndRetrySucceeds(t *testing.T) {
 	if !userActive(t, s, id) || blocked(t, c) != "[]" {
 		t.Fatal("retry did not finish")
 	}
-	if o, err := s.Keys.owner(ctx, "bob@acme.test"); err != nil || o.Offboarded {
+	if o, err := s.Keys.owner(ctx, "user02@example.com"); err != nil || o.Offboarded {
 		t.Fatalf("owner flag not cleared: %+v %v", o, err)
 	}
 }
 
 func TestUnusableEmailDoesNotLoop(t *testing.T) {
 	mux, s, _, _ := scimFixture(t)
-	id := provision(t, mux, "bob@acme.test")
+	id := provision(t, mux, "user02@example.com")
 	u, _ := s.load(context.Background(), id)
 	u.Email = "not an email"
 	if err := s.save(context.Background(), u); err != nil {
@@ -370,18 +370,18 @@ func TestUnusableEmailDoesNotLoop(t *testing.T) {
 func TestRehirePOSTUnblocksAndAllowsKeys(t *testing.T) {
 	mux, s, _, c := scimFixture(t)
 	ctx := context.Background()
-	id := provision(t, mux, "bob@acme.test")
+	id := provision(t, mux, "user02@example.com")
 	if r := scimDo(t, mux, "DELETE", "/scim/v2/Users/"+id, scimToken, nil); r.Code != 204 {
 		t.Fatalf("delete: %d", r.Code)
 	}
-	if !strings.Contains(blocked(t, c), "bob@acme.test") {
+	if !strings.Contains(blocked(t, c), "user02@example.com") {
 		t.Fatal("setup: not blocked after DELETE")
 	}
-	id = provision(t, mux, "bob@acme.test")
-	if strings.Contains(blocked(t, c), "bob@acme.test") {
+	id = provision(t, mux, "user02@example.com")
+	if strings.Contains(blocked(t, c), "user02@example.com") {
 		t.Fatalf("rehired person still blocked: %s", blocked(t, c))
 	}
-	newKey(t, s, "bob@acme.test")
+	newKey(t, s, "user02@example.com")
 	if !userActive(t, s, id) {
 		t.Fatal("user not saved active")
 	}
@@ -390,10 +390,10 @@ func TestRehirePOSTUnblocksAndAllowsKeys(t *testing.T) {
 
 func TestRehirePOSTFailureIs503AndSavesNothing(t *testing.T) {
 	mux, s, _, _ := scimFixture(t)
-	id := provision(t, mux, "bob@acme.test")
+	id := provision(t, mux, "user02@example.com")
 	scimDo(t, mux, "DELETE", "/scim/v2/Users/"+id, scimToken, nil)
 	s.Keys.EndTermForTest()
-	body := map[string]any{"userName": "bob@acme.test", "active": true, "emails": []any{map[string]any{"value": "bob@acme.test", "primary": true}}}
+	body := map[string]any{"userName": "user02@example.com", "active": true, "emails": []any{map[string]any{"value": "user02@example.com", "primary": true}}}
 	if r := scimDo(t, mux, "POST", "/scim/v2/Users", scimToken, body); r.Code != 503 {
 		t.Fatalf("%d", r.Code)
 	}
@@ -405,17 +405,17 @@ func TestRehirePOSTFailureIs503AndSavesNothing(t *testing.T) {
 func TestPUTChangingEmailAndDeactivatingOffboardsTheOldEmail(t *testing.T) {
 	mux, s, _, c := scimFixture(t)
 	ctx := context.Background()
-	id := provision(t, mux, "old@acme.test")
-	newKey(t, s, "old@acme.test")
-	r := scimDo(t, mux, "PUT", "/scim/v2/Users/"+id, scimToken, map[string]any{"userName": "old@acme.test", "active": false,
-		"emails": []any{map[string]any{"value": "new@acme.test", "primary": true}}})
+	id := provision(t, mux, "old@example.com")
+	newKey(t, s, "old@example.com")
+	r := scimDo(t, mux, "PUT", "/scim/v2/Users/"+id, scimToken, map[string]any{"userName": "old@example.com", "active": false,
+		"emails": []any{map[string]any{"value": "new@example.com", "primary": true}}})
 	if r.Code != 200 {
 		t.Fatalf("%d %s", r.Code, r.Body)
 	}
 	if keys, _ := s.Keys.ListAll(ctx); len(keys) != 0 {
 		t.Fatal("keys under the old email survived")
 	}
-	if b := blocked(t, c); !strings.Contains(b, "old@acme.test") {
+	if b := blocked(t, c); !strings.Contains(b, "old@example.com") {
 		t.Fatalf("old email not blocked: %s", b)
 	}
 }
@@ -423,13 +423,13 @@ func TestPUTChangingEmailAndDeactivatingOffboardsTheOldEmail(t *testing.T) {
 func TestReactivationReplacesAnUnreadableOwnerRecord(t *testing.T) {
 	mux, s, _, c := scimFixture(t)
 	ctx := context.Background()
-	id := provision(t, mux, "bob@acme.test")
-	newKey(t, s, "bob@acme.test")
+	id := provision(t, mux, "user02@example.com")
+	newKey(t, s, "user02@example.com")
 	if r := patchActive(t, mux, id, false); r.Code != 200 {
 		t.Fatalf("%d", r.Code)
 	}
 	var sec corev1.Secret
-	if err := c.Get(ctx, client.ObjectKey{Namespace: testNS, Name: "ambit-key-owner-" + ownerHash("bob@acme.test")}, &sec); err != nil {
+	if err := c.Get(ctx, client.ObjectKey{Namespace: testNS, Name: "ambit-key-owner-" + ownerHash("user02@example.com")}, &sec); err != nil {
 		t.Fatal(err)
 	}
 	sec.Data["owner.json"] = []byte("not json")
@@ -439,7 +439,7 @@ func TestReactivationReplacesAnUnreadableOwnerRecord(t *testing.T) {
 	if r := patchActive(t, mux, id, true); r.Code != 200 {
 		t.Fatalf("%d %s", r.Code, r.Body)
 	}
-	if o, err := s.Keys.owner(ctx, "bob@acme.test"); err != nil || o.Offboarded {
+	if o, err := s.Keys.owner(ctx, "user02@example.com"); err != nil || o.Offboarded {
 		t.Fatalf("%+v %v", o, err)
 	}
 }
@@ -447,7 +447,7 @@ func TestReactivationReplacesAnUnreadableOwnerRecord(t *testing.T) {
 func TestRetryRecordKeepsTheGrantsRevokedByTheFirstAttempt(t *testing.T) {
 	mux, s, saas, _ := scimFixture(t)
 	ctx := context.Background()
-	id := provision(t, mux, "bob@acme.test")
+	id := provision(t, mux, "user02@example.com")
 	s.Keys.EndTermForTest()
 	if r := patchActive(t, mux, id, false); r.Code != 503 {
 		t.Fatalf("%d", r.Code)
@@ -463,7 +463,7 @@ func TestRetryRecordKeepsTheGrantsRevokedByTheFirstAttempt(t *testing.T) {
 	}
 	recs, _ := s.Records(ctx)
 	for _, r := range recs {
-		if r.Email == "bob@acme.test" && r.CompleteSuccess {
+		if r.Email == "user02@example.com" && r.CompleteSuccess {
 			if len(r.Grants) != 1 || !r.Grants[0].RevokedAtProvider {
 				t.Fatalf("complete record lost the grant evidence: %+v", r)
 			}
@@ -476,7 +476,7 @@ func TestRetryRecordKeepsTheGrantsRevokedByTheFirstAttempt(t *testing.T) {
 func TestSetBlockedNoChangeDoesNotWrite(t *testing.T) {
 	_, s, _, c := scimFixture(t)
 	ctx := context.Background()
-	if err := s.setBlocked(ctx, "bob@acme.test", true); err != nil {
+	if err := s.setBlocked(ctx, "user02@example.com", true); err != nil {
 		t.Fatal(err)
 	}
 	writes := 0
@@ -494,10 +494,10 @@ func TestSetBlockedNoChangeDoesNotWrite(t *testing.T) {
 			count(obj)
 			return c.Create(ctx, obj, opts...)
 		}})
-	if err := s.setBlocked(ctx, "carol@acme.test", false); err != nil { // absent: nothing to remove
+	if err := s.setBlocked(ctx, "user03@example.com", false); err != nil { // absent: nothing to remove
 		t.Fatal(err)
 	}
-	if err := s.setBlocked(ctx, "BOB@acme.test", true); err != nil { // already present
+	if err := s.setBlocked(ctx, "USER02@example.com", true); err != nil { // already present
 		t.Fatal(err)
 	}
 	if writes != 0 {
@@ -508,7 +508,7 @@ func TestSetBlockedNoChangeDoesNotWrite(t *testing.T) {
 func TestSetBlockedRetriesOnConflict(t *testing.T) {
 	_, s, _, c := scimFixture(t)
 	ctx := context.Background()
-	if err := s.setBlocked(ctx, "bob@acme.test", true); err != nil {
+	if err := s.setBlocked(ctx, "user02@example.com", true); err != nil {
 		t.Fatal(err)
 	}
 	conflicts := 1
@@ -520,10 +520,10 @@ func TestSetBlockedRetriesOnConflict(t *testing.T) {
 			}
 			return c.Update(ctx, obj, opts...)
 		}})
-	if err := s.setBlocked(ctx, "alice@acme.test", true); err != nil {
+	if err := s.setBlocked(ctx, "user01@example.com", true); err != nil {
 		t.Fatal(err)
 	}
-	if b := blocked(t, c); b != `["alice@acme.test","bob@acme.test"]` {
+	if b := blocked(t, c); b != `["user01@example.com","user02@example.com"]` {
 		t.Fatal(b)
 	}
 }
@@ -536,7 +536,7 @@ func TestConcurrentProvisioningSucceeds(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			e := fmt.Sprintf("user%d@acme.test", i)
+			e := fmt.Sprintf("user%d@example.com", i)
 			codes[i] = scimDo(t, mux, "POST", "/scim/v2/Users", scimToken, map[string]any{"userName": e, "active": true,
 				"emails": []any{map[string]any{"value": e, "primary": true}}}).Code
 		}()
@@ -552,12 +552,12 @@ func TestConcurrentProvisioningSucceeds(t *testing.T) {
 func TestActivePatchOnActiveUserUnblocks(t *testing.T) {
 	mux, s, _, c := scimFixture(t)
 	ctx := context.Background()
-	id := provision(t, mux, "bob@acme.test")
+	id := provision(t, mux, "user02@example.com")
 	// a deactivation that answered 503 earlier left the person blocked while the stored user stayed active
-	if err := s.setBlocked(ctx, "bob@acme.test", true); err != nil {
+	if err := s.setBlocked(ctx, "user02@example.com", true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Keys.OffboardKeys(ctx, "bob@acme.test", "test"); err != nil {
+	if _, err := s.Keys.OffboardKeys(ctx, "user02@example.com", "test"); err != nil {
 		t.Fatal(err)
 	}
 	if r := patchActive(t, mux, id, true); r.Code != 200 {
@@ -566,12 +566,12 @@ func TestActivePatchOnActiveUserUnblocks(t *testing.T) {
 	if b := blocked(t, c); b != "[]" {
 		t.Fatalf("still blocked: %s", b)
 	}
-	newKey(t, s, "bob@acme.test")
+	newKey(t, s, "user02@example.com")
 }
 
 func TestActivePatchOnActiveUserDoesNoWrites(t *testing.T) {
 	mux, s, _, c := scimFixture(t)
-	id := provision(t, mux, "bob@acme.test")
+	id := provision(t, mux, "user02@example.com")
 	writes := 0
 	count := func(obj client.Object) {
 		if _, ok := obj.(*corev1.ConfigMap); ok {
@@ -601,7 +601,7 @@ func TestActivePatchOnActiveUserDoesNoWrites(t *testing.T) {
 func TestSCIMUsesCanonicalEmails(t *testing.T) {
 	mux, s, _, c := scimFixture(t)
 	ctx := context.Background()
-	for _, email := range []string{"Carol@ACME.test", "Ärzte@Acme.test"} {
+	for _, email := range []string{"User03@example.com", "Ärzte@example.com"} {
 		id := provision(t, mux, email)
 		newKey(t, s, email)
 		if r := patchActive(t, mux, id, false); r.Code != 200 {
@@ -628,11 +628,11 @@ func TestSCIMUsesCanonicalEmails(t *testing.T) {
 func TestPUTChangingEmailDeletesKeysOfTheOldEmail(t *testing.T) {
 	mux, s, _, c := scimFixture(t)
 	ctx := context.Background()
-	id := provision(t, mux, "old@acme.test")
-	newKey(t, s, "old@acme.test")
+	id := provision(t, mux, "old@example.com")
+	newKey(t, s, "old@example.com")
 	put := func() *httptest.ResponseRecorder {
-		return scimDo(t, mux, "PUT", "/scim/v2/Users/"+id, scimToken, map[string]any{"userName": "old@acme.test", "active": true,
-			"emails": []any{map[string]any{"value": "New@acme.test", "primary": true}}})
+		return scimDo(t, mux, "PUT", "/scim/v2/Users/"+id, scimToken, map[string]any{"userName": "old@example.com", "active": true,
+			"emails": []any{map[string]any{"value": "New@example.com", "primary": true}}})
 	}
 	keysClient := s.Keys.Client
 	s.Keys.Client = interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{Delete: func(context.Context, client.WithWatch, client.Object, ...client.DeleteOption) error {
@@ -641,7 +641,7 @@ func TestPUTChangingEmailDeletesKeysOfTheOldEmail(t *testing.T) {
 	if r := put(); r.Code != http.StatusServiceUnavailable {
 		t.Fatalf("failure: %d %s", r.Code, r.Body)
 	}
-	if u, _ := s.load(ctx, id); u.Email != "old@acme.test" {
+	if u, _ := s.load(ctx, id); u.Email != "old@example.com" {
 		t.Fatal("email change saved although its keys were not deleted")
 	}
 	s.Keys.Client = keysClient
@@ -651,10 +651,10 @@ func TestPUTChangingEmailDeletesKeysOfTheOldEmail(t *testing.T) {
 	if keys, _ := s.Keys.ListAll(ctx); len(keys) != 0 {
 		t.Fatalf("keys under the old email survived: %+v", keys)
 	}
-	if b := blocked(t, c); strings.Contains(b, "acme.test") {
+	if b := blocked(t, c); strings.Contains(b, "example.com") {
 		t.Fatalf("an email change blocked someone at the gateway: %s", b)
 	}
-	newKey(t, s, "new@acme.test")
+	newKey(t, s, "new@example.com")
 	if r := put(); r.Code != 200 { // the same PUT again changes nothing
 		t.Fatalf("%d %s", r.Code, r.Body)
 	}

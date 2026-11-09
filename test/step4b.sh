@@ -27,62 +27,62 @@ done
 [[ "$n" == "convert_time get_current_time" ]] || fail "1 time tools in status: '$n'"
 pass "1 Server time lists its tools in status: $n"
 
-# 2 · alice (viewer) asks for a server; nothing runs yet
-sign_in keycloak alice alice-test-pass
+# 2 · user01 (viewer) asks for a server; nothing runs yet
+sign_in keycloak user01 user01-test-pass
 code=$(api POST /api/server-requests "{\"serverName\":\"time-b\",\"displayName\":\"Time, second copy\",\"image\":\"$IMAGE\",\"reason\":\"step 4b test\"}")
 [[ "$code" == 201 ]] || fail "2 request: $code $(cat "$W/api")"
 REQ=$(field 'd["name"]')
-[[ $(field 'd["requestedBy"]') == alice@acme.test ]] || fail "2 requestedBy: $(cat "$W/api")"
+[[ $(field 'd["requestedBy"]') == user01@example.com ]] || fail "2 requestedBy: $(cat "$W/api")"
 kubectl -n "$NS" get "servers.$G" time-b >/dev/null 2>&1 && fail "2 server exists before approval"
 code=$(api POST "/api/server-requests/$REQ/approve" '{}')
 [[ "$code" == 403 ]] || fail "2 viewer approved: $code"
 code=$(api POST /api/server-requests "{\"serverName\":\"time-c\",\"image\":\"ghcr.io/stacklok/dockyard/uvx/mcp-server-time:2026.8.18\"}")
 [[ "$code" == 400 && "$(cat "$W/api")" == *digest* ]] || fail "2 tag accepted: $code $(cat "$W/api")"
-pass "2 alice requested time-b ($REQ); no Server yet; she cannot approve; a tag-only image is refused"
+pass "2 user01 requested time-b ($REQ); no Server yet; she cannot approve; a tag-only image is refused"
 
 # 3 · separation of duties: an approver cannot approve their own request
-sign_in keycloak sam sam-test-pass
+sign_in keycloak user11 user11-test-pass
 code=$(api POST /api/server-requests "{\"serverName\":\"time-c\",\"image\":\"$IMAGE\"}")
-[[ "$code" == 201 ]] || fail "3 sam request: $code"
+[[ "$code" == 201 ]] || fail "3 user11 request: $code"
 OWN=$(field 'd["name"]')
 code=$(api POST "/api/server-requests/$OWN/approve" '{}')
 [[ "$code" == 403 && "$(cat "$W/api")" == *"another approver"* ]] || fail "3 own approval: $code $(cat "$W/api")"
-pass "3 sam (approver) cannot approve his own request: $(field 'd["error"]')"
+pass "3 user11 (approver) cannot approve his own request: $(field 'd["error"]')"
 
-# 4 · sam approves alice's request: the Server is created with the record, starts, and lists its tools
+# 4 · user11 approves user01's request: the Server is created with the record, starts, and lists its tools
 code=$(api POST "/api/server-requests/$REQ/approve" '{"comment":"digest matches the catalog"}')
 [[ "$code" == 200 ]] || fail "4 approve: $code $(cat "$W/api")"
-[[ $(kubectl -n "$NS" get "servers.$G" time-b -o jsonpath='{.metadata.annotations.ambitproject\.dev/approved-by} {.metadata.annotations.ambitproject\.dev/requested-by} {.spec.image}') == "sam@acme.test alice@acme.test $IMAGE" ]] ||
+[[ $(kubectl -n "$NS" get "servers.$G" time-b -o jsonpath='{.metadata.annotations.ambitproject\.dev/approved-by} {.metadata.annotations.ambitproject\.dev/requested-by} {.spec.image}') == "user11@example.com user01@example.com $IMAGE" ]] ||
   fail "4 server record: $(kubectl -n "$NS" get "servers.$G" time-b -o yaml)"
-[[ $(kubectl -n "$NS" get "serverrequests.$G" "$REQ" -o jsonpath='{.status.decision} {.status.decidedBy}') == "Approved sam@acme.test" ]] || fail "4 request status"
+[[ $(kubectl -n "$NS" get "serverrequests.$G" "$REQ" -o jsonpath='{.status.decision} {.status.decidedBy}') == "Approved user11@example.com" ]] || fail "4 request status"
 kubectl -n "$NS" wait "servers.$G" time-b --for=condition=Ready --timeout=300s >/dev/null || fail "4 time-b not Ready"
 for _ in $(seq 1 60); do n=$(kubectl -n "$NS" get "servers.$G" time-b -o jsonpath='{.status.tools[*].name}'); [[ -n "$n" ]] && break; sleep 1; done
 [[ "$n" == "convert_time get_current_time" ]] || fail "4 time-b tools: '$n'"
 code=$(api POST "/api/server-requests/$REQ/deny" '{}')
 [[ "$code" == 409 ]] || fail "4 second decision: $code"
-pass "4 sam approved; time-b created with requested-by alice, approved-by sam, exact digest; Running with tools: $n"
+pass "4 user11 approved; time-b created with requested-by user01, approved-by user11, exact digest; Running with tools: $n"
 
-# 5 · approval alone grants nothing: alice cannot see time-b's tools yet
-tools "$(token alice)"
-[[ "$TOOLS" != *time-b_* ]] || fail "5 alice sees time-b tools before any rule: $TOOLS"
-pass "5 approved server is still closed until a rule names it (alice: $TOOLS)"
+# 5 · approval alone grants nothing: user01 cannot see time-b's tools yet
+tools "$(token user01)"
+[[ "$TOOLS" != *time-b_* ]] || fail "5 user01 sees time-b tools before any rule: $TOOLS"
+pass "5 approved server is still closed until a rule names it (user01: $TOOLS)"
 
-# 6 · priya (admin) grants eng one tool of time-b in the rules form; alice sees it, and only it
-sign_in keycloak priya priya-test-pass
+# 6 · user10 (admin) grants eng one tool of time-b in the rules form; user01 sees it, and only it
+sign_in keycloak user10 user10-test-pass
 code=$(api PUT /api/access-rules/eng-time '{"groups":["eng"],"allSignedIn":false,"models":[],"servers":[{"name":"time","tools":["get_current_time"]},{"name":"time-b","tools":["convert_time"]}]}')
 [[ "$code" == 200 ]] || fail "6 rule update: $code $(cat "$W/api")"
 code=$(api GET /api/access-rules/eng-time)
 cel=$(field '[e["cel"] for e in d["effectiveServers"] if e["server"] == "time-b"][0]')
 [[ "$cel" == 'mcp.tool.target == "time-b" && mcp.tool.name == "convert_time" && (has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in ["eng"])' ]] ||
   fail "6 rule detail shows: $cel"
-for _ in $(seq 1 30); do tools "$(token alice)"; [[ "$TOOLS" == *time-b_convert_time* ]] && break; sleep 1; done
-[[ "$TOOLS" == "time-b_convert_time time_get_current_time" ]] || fail "6 alice sees: $TOOLS"
-pass "6 rule edited in the console -> alice sees exactly: $TOOLS"
+for _ in $(seq 1 30); do tools "$(token user01)"; [[ "$TOOLS" == *time-b_convert_time* ]] && break; sleep 1; done
+[[ "$TOOLS" == "time-b_convert_time time_get_current_time" ]] || fail "6 user01 sees: $TOOLS"
+pass "6 rule edited in the console -> user01 sees exactly: $TOOLS"
 
-# 7 · U3: alice can see what she may use and which rule grants it
-sign_in keycloak alice alice-test-pass
+# 7 · U3: user01 can see what she may use and which rule grants it
+sign_in keycloak user01 user01-test-pass
 code=$(api GET /api/me/access)
 got=$(field '" ".join(s["server"]+":"+",".join(s["tools"])+"@"+",".join(s["rules"]) for s in d["servers"])')
 [[ "$got" == "time:get_current_time@eng-time time-b:convert_time@eng-time" ]] || fail "7 my access: $got"
-pass "7 alice's own access page: $got"
+pass "7 user01's own access page: $got"
 done_step 4b

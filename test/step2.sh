@@ -20,7 +20,7 @@ kc_admin() { # kc_admin METHOD PATH: call the Keycloak admin API
 signed_in_as() { # signed_in_as USER PASSWORD ROLE
   sign_in keycloak "$1" "$2" || fail "$1: Keycloak login form not reached"
   [[ $(me_status) == 200 ]] || fail "$1: no session after SSO: $(cat "$W/me")"
-  [[ $(me_field role) == "\"$3\"" && $(me_field bootstrap) == false && $(me_field email) == "\"$1@acme.test\"" ]] \
+  [[ $(me_field role) == "\"$3\"" && $(me_field bootstrap) == false && $(me_field email) == "\"$1@example.com\"" ]] \
     || fail "$1: expected role $3, got $(cat "$W/me")"
 }
 
@@ -35,18 +35,18 @@ o=$(curl -s "$BASE/api/login-options")
 pass "1 login page offers Acme (Keycloak) and the bootstrap admin"
 
 # 2-4 · roles follow IdP groups
-signed_in_as priya priya-test-pass admin;    pass "2 priya (ambit-admins) is admin through SSO"
-signed_in_as sam sam-test-pass approver;     pass "3 sam (ambit-approvers) is approver"
-signed_in_as alice alice-test-pass viewer;   pass "4 alice (eng) is viewer"
+signed_in_as user10 user10-test-pass admin;    pass "2 user10 (ambit-admins) is admin through SSO"
+signed_in_as user11 user11-test-pass approver;     pass "3 user11 (ambit-approvers) is approver"
+signed_in_as user01 user01-test-pass viewer;   pass "4 user01 (eng) is viewer"
 
 # 5 · a group change in the IdP changes the role at the next sign-in
-uid=$(kc_admin GET "/users?username=priya&exact=true" | uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)[0]["id"])')
+uid=$(kc_admin GET "/users?username=user10&exact=true" | uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)[0]["id"])')
 gid=$(kc_admin GET "/groups?search=ambit-admins" | uv run --no-project python -c 'import json,sys;print([g["id"] for g in json.load(sys.stdin) if g["name"]=="ambit-admins"][0])')
 kc_admin DELETE "/users/$uid/groups/$gid" >/dev/null
-signed_in_as priya priya-test-pass viewer
+signed_in_as user10 user10-test-pass viewer
 kc_admin PUT "/users/$uid/groups/$gid" >/dev/null
-signed_in_as priya priya-test-pass admin
-pass "5 removing priya from ambit-admins in Keycloak makes her viewer at next sign-in; adding back restores admin"
+signed_in_as user10 user10-test-pass admin
+pass "5 removing user10 from ambit-admins in Keycloak makes her viewer at next sign-in; adding back restores admin"
 
 # 6 · turn the bootstrap admin off
 PW=$(kubectl -n "$NS" get secret ambit-initial-admin -o jsonpath='{.data.password}' | base64 -d)
@@ -56,7 +56,7 @@ o=$(curl -s "$BASE/api/login-options")
 kubectl -n "$NS" get secret ambit-initial-admin >/dev/null 2>&1 && fail "6 bootstrap password Secret still exists"
 sign_in local admin@ambit.local "$PW" || true
 [[ $(me_status) == 401 ]] || fail "6 bootstrap admin can still sign in"
-signed_in_as priya priya-test-pass admin
+signed_in_as user10 user10-test-pass admin
 pass "6 bootstrap admin off: no password Secret, local sign-in refused, SSO still works"
 
 # 7 · no secret value in the chart output; renders identically

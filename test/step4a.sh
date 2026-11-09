@@ -33,10 +33,10 @@ code=$(command curl -s -o /dev/null -w '%{http_code}' -H 'Content-Type: applicat
 [[ "$code" =~ ^40[13]$ ]] || fail "2 request without a token returned $code"
 pass "2 no token -> 401 or 403 (the Require rule answers 403: JWT auth is permissive)"
 
-# 3 · U5: alice (eng) sees exactly the one tool her rule names
-tools "$(token alice)"
-[[ "$TOOLS" == "time_get_current_time" ]] || fail "3 alice sees: $TOOLS"
-pass "3 alice (eng) tools/list: $TOOLS"
+# 3 · U5: user01 (eng) sees exactly the one tool her rule names
+tools "$(token user01)"
+[[ "$TOOLS" == "time_get_current_time" ]] || fail "3 user01 sees: $TOOLS"
+pass "3 user01 (eng) tools/list: $TOOLS"
 
 # 4 · allowed call works; tools outside her rule are refused, on the same server and on another
 r=$(call time_get_current_time '{"timezone":"Asia/Seoul"}')
@@ -44,24 +44,24 @@ r=$(call time_get_current_time '{"timezone":"Asia/Seoul"}')
 r1=$(call time_convert_time '{"source_timezone":"UTC","time":"12:00","target_timezone":"Asia/Seoul"}')
 r2=$(call everything_echo '{"message":"hello"}')
 [[ "$r1" == error* && "$r2" == error* ]] || fail "4 denied calls went through: $r1 / $r2"
-pass "4 alice: get_current_time ok; convert_time and everything_echo refused ($r1)"
+pass "4 user01: get_current_time ok; convert_time and everything_echo refused ($r1)"
 
-# 5 · mira (ml-research) gets every tool on both servers
-tools "$(token mira)"
+# 5 · user09 (ml-research) gets every tool on both servers
+tools "$(token user09)"
 n=$(wc -w <<<"$TOOLS" | tr -d ' ')
 [[ "$TOOLS" == *everything_echo* && "$TOOLS" == *time_convert_time* && "$TOOLS" == *time_get_current_time* && $n -ge 15 ]] ||
-  fail "5 mira sees: $TOOLS"
-r=$(call everything_echo '{"message":"hello from mira"}')
-[[ "$r" == ok*"hello from mira"* ]] || fail "5 mira echo: $r"
-pass "5 mira (ml-research) sees $n tools and calls everything_echo"
+  fail "5 user09 sees: $TOOLS"
+r=$(call everything_echo '{"message":"hello from user09"}')
+[[ "$r" == ok*"hello from user09"* ]] || fail "5 user09 echo: $r"
+pass "5 user09 (ml-research) sees $n tools and calls everything_echo"
 
-# 6 · deny by default: with no rule for her group, mira sees nothing
+# 6 · deny by default: with no rule for her group, user09 sees nothing
 kubectl -n "$NS" delete "accessrules.$G" ml-research-tools >/dev/null
 wait_for "6 policy still names ml-research after the rule was deleted" '[[ $(policy_expr) != *ml-research* ]]'
-wait_for "6 mira still sees tools: $TOOLS" 'try_tools "$(token mira)"; [[ -z "$TOOLS" ]]'
+wait_for "6 user09 still sees tools: $TOOLS" 'try_tools "$(token user09)"; [[ -z "$TOOLS" ]]'
 kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
 wait_for "6 rule not restored" '[[ $(policy_expr) == *ml-research* ]]'
-pass "6 no rule for ml-research -> mira's tools/list is empty; rule restored"
+pass "6 no rule for ml-research -> user09's tools/list is empty; rule restored"
 
 # 7 · a rule naming a missing server says which name
 kubectl -n "$NS" apply -f - >/dev/null <<YAML
@@ -130,11 +130,11 @@ spec: { image: "ghcr.io/stacklok/dockyard/uvx/mcp-server-time:2026.8.18" }
 YAML
 then fail "11 a Server with a tag instead of a digest was accepted"; fi
 # While a Server is deleted and created again, the other servers' users must keep working (risk 16: a Service
-# backendRef made agentgateway drop the whole shared backend, HTTP 500 for every user). alice may use only time.
+# backendRef made agentgateway drop the whole shared backend, HTTP 500 for every user). user01 may use only time.
 # A server joins the list only once it answers, so a booting one must not slow them either (it took ~10 s per
 # request: agentgateway introduces every new session to every target). A deleted server's pod may still hold its
 # connections for a moment (up to the 2 s connect timeout, twice per probe), hence 8 s, not less.
-AL=$(token alice); : > "$W/probes"
+AL=$(token user01); : > "$W/probes"
 ( set +e  # one timed-out curl must not end the probe loop (set -e is inherited)
   while :; do
     t0=$(perl -MTime::HiRes=time -e 'printf "%d", time*1000')
@@ -148,14 +148,14 @@ AL=$(token alice); : > "$W/probes"
   done ) & probes=$!
 kubectl -n "$NS" delete "servers.$G" everything >/dev/null
 wait_for "11 MCPServer everything not garbage-collected" '! kubectl -n "$NS" get mcpserver everything >/dev/null 2>&1'
-wait_for "11 mira still sees everything_* tools: $TOOLS" 'try_tools "$(token mira)"; [[ $TOOLS != *everything_* && $TOOLS == *time_get_current_time* ]]'
+wait_for "11 user09 still sees everything_* tools: $TOOLS" 'try_tools "$(token user09)"; [[ $TOOLS != *everything_* && $TOOLS == *time_get_current_time* ]]'
 kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
 kubectl -n "$NS" wait "servers.$G" --all --for=condition=Ready --timeout=300s >/dev/null || fail "11 everything not Ready again"
 sleep 10; kill "$probes" 2>/dev/null || true; wait "$probes" 2>/dev/null || true
 n=$(wc -l <"$W/probes" | tr -d ' '); bad=$(grep -c ' fail ' "$W/probes" || true)
 slowest=$(awk '$3>m{m=$3} END{print m+0}' "$W/probes")
-[[ "$slowest" -le 8000 ]] || fail "11 another Server's create or delete slowed alice's new sessions: slowest $slowest ms"
-[[ "$n" -ge 20 && "$bad" -eq 0 ]] || fail "11 alice's sessions failed while another Server was deleted and created: $bad of $n (codes: $(grep ' fail ' "$W/probes" | cut -d' ' -f1 | sort | uniq -c | tr -s ' \n' ' '))"
+[[ "$slowest" -le 8000 ]] || fail "11 another Server's create or delete slowed user01's new sessions: slowest $slowest ms"
+[[ "$n" -ge 20 && "$bad" -eq 0 ]] || fail "11 user01's sessions failed while another Server was deleted and created: $bad of $n (codes: $(grep ' fail ' "$W/probes" | cut -d' ' -f1 | sort | uniq -c | tr -s ' \n' ' '))"
 pass "11 tag-only image rejected: $(tr -d '\n' <"$W/err" | sed 's/.*spec.image//' | cut -c1-90); deleted Server's tools gone, restored; other users unaffected ($n sessions, 0 failed, slowest $slowest ms)"
 
 # 12 · chart renders identically with MCP on

@@ -39,7 +39,7 @@ func TestProposeObjectsOpensOnePullRequestAndValidatesEach(t *testing.T) {
 	g := &GitOps{Repo: repo, Branch: "main", Dir: "ambit"}
 	ok, _ := Manifest("AccessRule", "eng-time", nil, nil, map[string]any{"groups": []string{"eng"}, "models": []string{"gemma"}})
 	ok2, _ := Manifest("AccessRule", "ml-time", nil, nil, map[string]any{"groups": []string{"ml"}, "models": []string{"gemma"}})
-	pr, err := g.ProposeObjects(t.Context(), "ambit/add-x-1", "Ambit: add x", "priya@acme.test", []ProposedObject{
+	pr, err := g.ProposeObjects(t.Context(), "ambit/add-x-1", "Ambit: add x", "user10@example.com", []ProposedObject{
 		{Kind: "AccessRule", Plural: "accessrules", Name: "eng-time", Manifest: ok},
 		{Kind: "AccessRule", Plural: "accessrules", Name: "ml-time", Manifest: ok2},
 	})
@@ -66,7 +66,7 @@ func gitopsFixture(t *testing.T) (http.Handler, client.Client, *Auth, *recording
 
 func TestGitOpsRuleChangesBecomePullRequests(t *testing.T) {
 	h, c, a, repo := gitopsFixture(t)
-	admin := user(a, "priya@acme.test", RoleAdmin)
+	admin := user(a, "user10@example.com", RoleAdmin)
 	if cfg := decodeAs[Config](t, do(t, h, "GET", "/api/config", admin, nil).Body.String()); cfg.Mode != "gitops" || cfg.Repository != "acme/config" {
 		t.Fatalf("config %+v", cfg)
 	}
@@ -83,7 +83,7 @@ func TestGitOpsRuleChangesBecomePullRequests(t *testing.T) {
 	}
 	f := repo.files[0]
 	if f.Path != "ambit/accessrules/ml-time.yaml" || !strings.Contains(string(f.Content), "- ml-research") ||
-		!strings.Contains(string(f.Content), "ambitproject.dev/created-by: priya@acme.test") || strings.Contains(string(f.Content), "namespace:") {
+		!strings.Contains(string(f.Content), "ambitproject.dev/created-by: user10@example.com") || strings.Contains(string(f.Content), "namespace:") {
 		t.Fatalf("file %s:\n%s", f.Path, f.Content)
 	}
 
@@ -109,9 +109,9 @@ func TestGitOpsRuleChangesBecomePullRequests(t *testing.T) {
 
 func TestGitOpsApprovalOpensAPullRequestInsteadOfCreatingTheServer(t *testing.T) {
 	h, c, a, repo := gitopsFixture(t)
-	r := do(t, h, "POST", "/api/server-requests", user(a, "alice@acme.test", RoleViewer), RequestInput{ServerName: "everything", Image: echoDigest})
+	r := do(t, h, "POST", "/api/server-requests", user(a, "user01@example.com", RoleViewer), RequestInput{ServerName: "everything", Image: echoDigest})
 	req := decodeAs[RequestView](t, r.Body.String())
-	r = do(t, h, "POST", "/api/server-requests/"+req.Name+"/approve", user(a, "sam@acme.test", RoleApprover), DecisionInput{Comment: "ok"})
+	r = do(t, h, "POST", "/api/server-requests/"+req.Name+"/approve", user(a, "user11@example.com", RoleApprover), DecisionInput{Comment: "ok"})
 	if r.Code != http.StatusAccepted {
 		t.Fatalf("approve: %d %s", r.Code, r.Body)
 	}
@@ -121,19 +121,19 @@ func TestGitOpsApprovalOpensAPullRequestInsteadOfCreatingTheServer(t *testing.T)
 	}
 	f := repo.files[0]
 	if f.Path != "ambit/servers/everything.yaml" || !strings.Contains(string(f.Content), echoDigest) ||
-		!strings.Contains(string(f.Content), "ambitproject.dev/approved-by: sam@acme.test") {
+		!strings.Contains(string(f.Content), "ambitproject.dev/approved-by: user11@example.com") {
 		t.Fatalf("file %s:\n%s", f.Path, f.Content)
 	}
 	var q v1.ServerRequest
 	c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: req.Name}, &q)
-	if q.Status.Decision != "" || q.Status.PullRequestBy != "sam@acme.test" || q.Status.PullRequestBranch == "" || q.Status.PullRequest != "https://github.com/acme/config/pull/1" {
+	if q.Status.Decision != "" || q.Status.PullRequestBy != "user11@example.com" || q.Status.PullRequestBranch == "" || q.Status.PullRequest != "https://github.com/acme/config/pull/1" {
 		t.Fatalf("request status %+v", q.Status)
 	}
 }
 
 func TestDirectModeReportsItself(t *testing.T) {
 	h, _, a := serversFixture(t)
-	if cfg := decodeAs[Config](t, do(t, h, "GET", "/api/config", user(a, "x@acme.test", RoleViewer), nil).Body.String()); cfg.Mode != "direct" {
+	if cfg := decodeAs[Config](t, do(t, h, "GET", "/api/config", user(a, "x@example.com", RoleViewer), nil).Body.String()); cfg.Mode != "direct" {
 		t.Fatalf("%+v", cfg)
 	}
 }

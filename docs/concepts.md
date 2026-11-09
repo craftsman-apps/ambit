@@ -34,7 +34,7 @@ Rules are deny by default, except in audit-only mode (`access.mode: audit`, see 
 
 ### Server
 
-A `Server` is either a remote MCP server (`url`) or a container image that ToolHive runs inside your cluster (`image`, pinned by digest). A server with `connection` must be a remote server, because a per-person token cannot reach a container that speaks `stdio`. Ambit also keeps the definition of each tool when it first sees it (tool pinning). A tool whose definition changes later, and a new tool, is hidden and refused until an admin approves it again. An admin can also set `resultCompression` on a `Server` to make its tool results smaller (see [Compressing tool results](#compressing-tool-results)). See [MCP servers and apps](presets.md).
+A `Server` is either a remote MCP server (`url`) or a container image that ToolHive runs inside your cluster (`image`, pinned by digest). A server with `connection` is either a remote server (`url`) or an image that talks HTTP (`transport: streamable-http` or `sse`). It cannot be an image that speaks `stdio`, because ToolHive's proxy cannot pass a per-person token to a stdio process. See [Run a server from an image](presets.md#run-a-server-from-an-image). Ambit also keeps the definition of each tool when it first sees it (tool pinning). A tool whose definition changes later, and a new tool, is hidden and refused until an admin approves it again. An admin can also set `resultCompression` on a `Server` to make its tool results smaller (see [Compressing tool results](#compressing-tool-results)). See [MCP servers and apps](presets.md).
 
 ### Budget
 

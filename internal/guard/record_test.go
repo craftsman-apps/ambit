@@ -116,7 +116,7 @@ func TestRecordPerCompressedText(t *testing.T) {
 		{"type": "text", "text": rows}, {"type": "text", "text": rows}, {"type": "text", "text": "short"},
 		{"type": "text", "text": strings.Repeat("The quick brown fox jumps over the lazy dog. ", 400)}, // prose: no_gain
 	}})
-	callAs(t, g, groupsMeta("kim@acme.example", "eng", "ml-research"), body)
+	callAs(t, g, groupsMeta("user05@acme.example", "eng", "ml-research"), body)
 	if len(s.recs) != 2 {
 		t.Fatalf("want 2 records (two compressed texts), got %d", len(s.recs))
 	}
@@ -140,7 +140,7 @@ func TestRecordGroupsRules(t *testing.T) {
 	if len(s.recs) != 0 || testutil.ToFloat64(recordDropped.WithLabelValues(dropNoGroups))-before != 2 {
 		t.Errorf("missing groups: records=%d dropped=%v", len(s.recs), testutil.ToFloat64(recordDropped.WithLabelValues(dropNoGroups))-before)
 	}
-	callAs(t, g, groupsMeta("kim@acme.example"), body)
+	callAs(t, g, groupsMeta("user05@acme.example"), body)
 	if len(s.recs) != 1 || len(s.recs[0].Groups) != 0 {
 		t.Errorf("empty groups: %+v", s.recs)
 	}
@@ -149,7 +149,7 @@ func TestRecordGroupsRules(t *testing.T) {
 // The compressed result still reaches the caller when records are off or the sink is slow.
 func TestRecordDoesNotChangeTheResult(t *testing.T) {
 	body := mustJSON(map[string]any{"content": []map[string]any{{"type": "text", "text": issueList(100)}}})
-	meta := groupsMeta("kim@acme.example", "eng")
+	meta := groupsMeta("user05@acme.example", "eng")
 	run := func(g *Guard) string {
 		res, _ := g.CheckResponse(t.Context(), &extmcp.McpResponse{ServiceNames: []string{"crm"}, Method: "tools/call", McpResponse: body, MetadataContext: meta})
 		return textOf(t, res)
@@ -168,7 +168,7 @@ func TestRecorderSendsOTLP(t *testing.T) {
 	}
 	defer rec.Close()
 	g := &Guard{Masker: Builtin{}, Compression: on(ModeShorten), Records: rec}
-	callAs(t, g, groupsMeta("kim@acme.example", "eng", "ml-research"), mustJSON(map[string]any{"content": []map[string]any{{"type": "text", "text": issueList(100)}}}))
+	callAs(t, g, groupsMeta("user05@acme.example", "eng", "ml-research"), mustJSON(map[string]any{"content": []map[string]any{{"type": "text", "text": issueList(100)}}}))
 	waitFor(t, "the record", func() bool { return len(f.attrs()) == 1 })
 	a := f.attrs()[0]
 	want := map[string]string{"ambit.kind": "compression", "mcp.target": "crm", "ambit.compress.type": "json", "ambit.compress.mode": "shorten", "jwt.groups": `["eng","ml-research"]`}
@@ -184,7 +184,7 @@ func TestRecorderSendsOTLP(t *testing.T) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if s := f.got[0].String(); strings.Contains(s, "kim@acme") || strings.Contains(s, "jwt.email") || strings.Contains(s, "Fix flaky test") {
+	if s := f.got[0].String(); strings.Contains(s, "user05@acme") || strings.Contains(s, "jwt.email") || strings.Contains(s, "Fix flaky test") {
 		t.Errorf("record holds an email or content: %.300s", s)
 	}
 }

@@ -39,8 +39,8 @@ kubectl -n "$NS" delete -f test/protection/objects.yaml --ignore-not-found >/dev
 kubectl -n "$NS" apply -f test/protection/objects.yaml >/dev/null
 kubectl -n "$NS" rollout status deploy/crm deploy/ambit-guard --timeout=180s >/dev/null
 kubectl -n "$NS" wait "servers.$G" crm --for=condition=ToolsPinned --timeout=120s >/dev/null || fail "0 crm tools not pinned"
-for _ in $(seq 1 30); do tools "$(token alice)"; [[ "$TOOLS" == *crm_get_rows* ]] && break; sleep 2; done
-[[ "$TOOLS" == *crm_get_rows* && "$TOOLS" == *crm_get_log* && "$TOOLS" == *crm_get_page* ]] || fail "0 alice does not see the compression test tools: $TOOLS"
+for _ in $(seq 1 30); do tools "$(token user01)"; [[ "$TOOLS" == *crm_get_rows* ]] && break; sleep 2; done
+[[ "$TOOLS" == *crm_get_rows* && "$TOOLS" == *crm_get_log* && "$TOOLS" == *crm_get_page* ]] || fail "0 user01 does not see the compression test tools: $TOOLS"
 before=$(restarts)
 
 # 1 · no field: the result is as the tool sent it (pretty-printed, email masked)
@@ -112,17 +112,28 @@ pass "7 mode off: rows and log are back to their original sizes"
 set_mode shorten
 kubectl -n "$NS" rollout restart deploy/ambit-guard >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-guard --timeout=180s >/dev/null
-wait_for 120 'tools "$(token alice)"; [[ "$TOOLS" == *crm_get_log* ]]' || fail "8 tools not back after the guard restart"
+# rollout status returns while the old pod still ends; then .items[0] can be the old pod, whose cgroup is gone (#211).
+wait_for 120 '[[ $(kubectl -n "$NS" get pod -l "$GUARD" -o name | wc -l) -eq 1 ]]' || fail "8 the old guard pod did not end"
+wait_for 120 'tools "$(token user01)"; [[ "$TOOLS" == *crm_get_log* ]]' || fail "8 tools not back after the guard restart"
 until_size crm_get_log "$LOG" lt "$((log_base / 4))" || fail "8 shorten did not apply"
 before=$(restarts)
 # Each call has its own session and header file (mcp_open writes $W/mh).
-for i in 1 2; do ( out=$W/mem$i; W=$W/s$i; mkdir -p "$W"; mcp_open "$(token alice)"; raw crm_get_log '{"kib":4000}' | size >"$out" ) & done
+for i in 1 2; do ( out=$W/mem$i; W=$W/s$i; mkdir -p "$W"; mcp_open "$(token user01)"; raw crm_get_log '{"kib":4000}' | size >"$out" ) & done
 wait
 for i in 1 2; do [[ $(cat "$W/mem$i") -gt 0 && $(cat "$W/mem$i") -lt $((4000 * 1024 / 4)) ]] || fail "8 result $i was not shortened: $(cat "$W/mem$i")"; done
 [[ $(restarts) == "$before" ]] || fail "8 ambit-guard restarted: $(kubectl -n "$NS" get pod -l "$GUARD" -o jsonpath='{.items[0].status.containerStatuses[0].lastState}')"
 cid=$(kubectl -n "$NS" get pod -l "$GUARD" -o jsonpath='{.items[0].status.containerStatuses[0].containerID}'); cid=${cid#*://}
 node=${KIND_NODE:-${KIND_CLUSTER:-ambit}-control-plane}
-peak=$(docker exec "$node" sh -c 'cat "$(find /sys/fs/cgroup -type d -name "cri-containerd-$1.scope" | head -1)/memory.peak"' _ "$cid")
+# The kernel's peak counter is memory.peak (cgroup v2, Linux 5.19 or later) or memory.max_usage_in_bytes (cgroup v1).
+# The cgroup directory can appear a moment after the pod is Ready, so the lookup retries for 15 s.
+peak=$(docker exec "$node" sh -c '
+  for i in $(seq 15); do
+    d=$(find /sys/fs/cgroup -type d -name "cri-containerd-$1.scope" | head -1)
+    for f in memory.peak memory.max_usage_in_bytes; do [ -n "$d" ] && [ -r "$d/$f" ] && { cat "$d/$f"; exit 0; }; done
+    sleep 1
+  done
+  echo "no cgroup directory with memory.peak or memory.max_usage_in_bytes for container $1 on $(stat -fc %T /sys/fs/cgroup)" >&2
+  exit 1' _ "$cid") || fail "8 cannot read the peak memory: see the line above"
 limit=$(kubectl -n "$NS" get pod -l "$GUARD" -o jsonpath='{.items[0].spec.containers[0].resources.limits.memory}')
 pass "8 two 4000 KiB logs at once in shorten mode: sizes $(cat "$W/mem1") and $(cat "$W/mem2") bytes, peak memory $((peak >> 20)) MiB of $limit, no restart"
 done_step compress

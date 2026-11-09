@@ -32,7 +32,7 @@ func TestNewSecretKey(t *testing.T) {
 
 func TestKeySecretShape(t *testing.T) {
 	now := time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)
-	k := Key{ID: "7q2m4x9k1c3d", Name: "laptop", Prefix: "ambit_9fK2", Email: "alice@acme.com", Groups: []string{"eng"},
+	k := Key{ID: "7q2m4x9k1c3d", Name: "laptop", Prefix: "ambit_9fK2", Email: "user01@acme.com", Groups: []string{"eng"},
 		Scope: "both", Created: now, Expires: now.AddDate(0, 0, 90), SignedIn: now, Ceiling: now.AddDate(0, 0, 90),
 		Until: now.AddDate(0, 0, 30), Hash: "sha256:ab"}
 	s := k.Secret("ambit-system")
@@ -49,7 +49,7 @@ func TestKeySecretShape(t *testing.T) {
 	if e.KeyHash != "sha256:ab" || len(e.Metadata) != 4 || e.Metadata["until"] != "2026-11-10T09:00:00Z" || e.Metadata["keyId"] != "7q2m4x9k1c3d" {
 		t.Fatalf("entry %+v", e)
 	}
-	for l, v := range map[string]string{"ambitproject.dev/key": "true", "ambitproject.dev/key-llm": "true", "ambitproject.dev/key-mcp": "true", "ambitproject.dev/key-owner": ownerHash("alice@acme.com")} {
+	for l, v := range map[string]string{"ambitproject.dev/key": "true", "ambitproject.dev/key-llm": "true", "ambitproject.dev/key-mcp": "true", "ambitproject.dev/key-owner": ownerHash("user01@acme.com")} {
 		if s.Labels[l] != v {
 			t.Errorf("label %s = %q", l, s.Labels[l])
 		}
@@ -84,11 +84,11 @@ func TestUntilIsTheEarlierAndUTC(t *testing.T) {
 }
 
 func TestOwnerSecretIsNotAGatewayKey(t *testing.T) {
-	s := Owner{Email: "alice@acme.com", Groups: []string{"eng"}}.Secret("ambit-system")
+	s := Owner{Email: "user01@acme.com", Groups: []string{"eng"}}.Secret("ambit-system")
 	if s.Labels["ambitproject.dev/key-owner-record"] != "true" || s.Labels["ambitproject.dev/key"] != "" || s.Labels["ambitproject.dev/key-llm"] != "" {
 		t.Fatalf("labels %v", s.Labels)
 	}
-	if s.Name != "ambit-key-owner-"+ownerHash("alice@acme.com") {
+	if s.Name != "ambit-key-owner-"+ownerHash("user01@acme.com") {
 		t.Fatal(s.Name)
 	}
 }

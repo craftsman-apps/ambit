@@ -34,8 +34,8 @@ kubectl -n "$NS" apply -f test/protection/objects.yaml >/dev/null
 kubectl -n "$NS" rollout status deploy/crm deploy/ambit-guard deploy/ambit-otel-collector --timeout=240s >/dev/null
 kubectl -n "$NS" wait "servers.$G" crm --for=condition=ToolsPinned --timeout=120s >/dev/null || fail "0 crm tools not pinned"
 kubectl -n "$NS" get deploy ambit-guard -o jsonpath='{.spec.template.spec.containers[0].env[*].name}' | grep -q AMBIT_OTLP_ENDPOINT || fail "0 the guard has no AMBIT_OTLP_ENDPOINT"
-for _ in $(seq 1 30); do tools "$(token alice)"; [[ "$TOOLS" == *crm_get_rows* ]] && break; sleep 2; done
-[[ "$TOOLS" == *crm_get_rows* ]] || fail "0 alice does not see crm_get_rows: $TOOLS"
+for _ in $(seq 1 30); do tools "$(token user01)"; [[ "$TOOLS" == *crm_get_rows* ]] && break; sleep 2; done
+[[ "$TOOLS" == *crm_get_rows* ]] || fail "0 user01 does not see crm_get_rows: $TOOLS"
 
 # 1 · off: no record. Then lossless: one record for one compressed text.
 since=$(date -u +"%Y-%m-%d %H:%M:%S")
@@ -60,9 +60,9 @@ raw crm_get_rows '{"n":300}' >/dev/null   # a call after the views exist
 rows_of() { ch "SELECT toUInt64(sum(results)) FROM otel.ambit_compress_daily_v1 WHERE grp = '$1' AND server = 'crm'"; }
 wait_for 60 '[[ $(rows_of eng) -gt 0 ]]' || fail "2 the summary has no row for group eng and server crm"
 [[ $(rows_of '') -ge $(rows_of eng) ]] || fail "2 the all-groups row is smaller than a group row"
-sign_in keycloak alice alice-test-pass || fail "2 alice sign-in"
+sign_in keycloak user01 user01-test-pass || fail "2 user01 sign-in"
 [[ $(api GET /api/savings) == 403 ]] || fail "2 a viewer reached /api/savings"
-sign_in keycloak priya priya-test-pass || fail "2 priya sign-in"
+sign_in keycloak user10 user10-test-pass || fail "2 user10 sign-in"
 c=$(api GET /api/savings); [[ "$c" == 200 ]] || fail "2 admin /api/savings: $c $(head -c 300 "$W/api")"
 uv run --no-project python - "$W/api" <<'PY' || fail "2 /api/savings answer"
 import json, sys

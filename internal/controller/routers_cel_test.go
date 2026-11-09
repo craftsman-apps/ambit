@@ -17,7 +17,7 @@ func TestCategoryLineNeedsPublishedHash(t *testing.T) {
 		t.Fatal(err)
 	}
 	jwtOnly := map[string]any{"jwt": map[string]any{"groups": []any{"ml"}}, "apiKey": map[string]any{}}
-	byKey := map[string]any{"jwt": map[string]any{}, "apiKey": map[string]any{"keyId": "k1", "email": "alice@acme.com",
+	byKey := map[string]any{"jwt": map[string]any{}, "apiKey": map[string]any{"keyId": "k1", "email": "user01@acme.com",
 		"groups": []any{"ml"}, "until": "2099-01-01T00:00:00Z"}}
 	evalAs := func(act map[string]any, line string, headers map[string]any) bool {
 		t.Helper()

@@ -35,13 +35,13 @@ func TestGeneratorsUseRequestIdentity(t *testing.T) {
 func TestOffboardedIsAFailClosedRequireOnThePrincipal(t *testing.T) {
 	cm := &corev1.ConfigMap{}
 	cm.Namespace = "ambit-system"
-	o := offboardedPolicy(cm, []string{"alice@acme.com"}, []string{"ambit-mcp", "ambit-llm"})
+	o := offboardedPolicy(cm, []string{"user01@acme.com"}, []string{"ambit-mcp", "ambit-llm"})
 	a, _, _ := unstructured.NestedMap(o.Object, "spec", "traffic", "authorization")
 	if a["action"] != "Require" {
 		t.Fatalf("action %v", a["action"])
 	}
 	exprs, _, _ := unstructured.NestedStringSlice(a, "policy", "matchExpressions")
-	if want := `!(` + identity.Principal(true) + ` in ["alice@acme.com"])`; len(exprs) != 1 || exprs[0] != want {
+	if want := `!(` + identity.Principal(true) + ` in ["user01@acme.com"])`; len(exprs) != 1 || exprs[0] != want {
 		t.Fatalf("got %v, want %s", exprs, want)
 	}
 	empty := offboardedPolicy(cm, nil, []string{"ambit-llm"})
@@ -52,9 +52,9 @@ func TestOffboardedIsAFailClosedRequireOnThePrincipal(t *testing.T) {
 }
 
 func TestOffboardedEmailsUseTheSharedEmailRule(t *testing.T) {
-	cm := &corev1.ConfigMap{Data: map[string]string{"emails": `[" Alice@Acme.com ","bob o@x.com","o'brien@acme.com"]`}}
+	cm := &corev1.ConfigMap{Data: map[string]string{"emails": `[" User01@Acme.com ","user02 o@x.com","o'brien@acme.com"]`}}
 	ok, rejected := OffboardedEmails(cm)
-	if strings.Join(ok, ",") != "alice@acme.com,o'brien@acme.com" || len(rejected) != 1 {
+	if strings.Join(ok, ",") != "o'brien@acme.com,user01@acme.com" || len(rejected) != 1 {
 		t.Fatalf("ok %v rejected %v", ok, rejected)
 	}
 }

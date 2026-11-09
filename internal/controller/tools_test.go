@@ -161,3 +161,21 @@ func TestBearerClientKeepsCallerTimeout(t *testing.T) {
 		t.Fatal("caller's timeout was dropped")
 	}
 }
+
+func TestProbeAtCountsAnyAnswerBelow500(t *testing.T) {
+	for code, ok := range map[int]bool{200: true, 401: true, 405: true, 502: false, 503: false} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "" {
+				t.Error("the probe must not send a token")
+			}
+			w.WriteHeader(code)
+		}))
+		if err := probeAt(t.Context(), srv.URL); (err == nil) != ok {
+			t.Errorf("status %d: err %v, want ok=%v", code, err, ok)
+		}
+		srv.Close()
+	}
+	if err := probeAt(t.Context(), "http://127.0.0.1:1/mcp"); err == nil {
+		t.Error("a closed port must fail")
+	}
+}

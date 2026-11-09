@@ -72,7 +72,7 @@ print(" ".join(p["metadata"]["name"] + "/" + c["name"] for p in json.load(sys.st
 pass "0 gateway at 3 replicas with a PodDisruptionBudget (minAvailable 1); every container has a memory limit"
 
 # S1 · an open MCP session survives losing two of three gateway pods
-A=$(token alice)
+A=$(token user01)
 mcp_open "$A"
 before=$(call time_get_current_time '{"timezone":"UTC"}')
 for p in $(gw_pods | head -2); do kubectl -n "$NS" delete "$p" --wait=false >/dev/null; done
@@ -90,15 +90,15 @@ metadata: { name: eng }
 spec: { group: eng, userRequestsPerDay: 1 }
 YAML
 # The ConfigMap reaches the ratelimit pod on the kubelet's next sync (up to about two minutes):
-# wait until the gateway refuses alice (her first request uses her 1 request a day).
-A=$(token alice)
+# wait until the gateway refuses user01 (her first request uses her 1 request a day).
+A=$(token user01)
 for _ in $(seq 1 60); do [[ $(outcome "$A") == blocked ]] && break; sleep 3; done
 blocked=0; for _ in $(seq 1 10); do [[ $(outcome "$A") == blocked ]] && blocked=$((blocked + 1)); done
 [[ "$blocked" == 10 ]] || fail "S1 over budget but only $blocked of 10 requests refused across 3 replicas"
 pass "S1 over budget: 10 of 10 requests refused across 3 gateway replicas (shared counter)"
 
 # S2 · a rolling update of every Ambit Deployment under steady traffic fails no request
-M=$(token mira)
+M=$(token user09)
 ( ok=0; bad=0; end=$((SECONDS + 75))
   while (( SECONDS < end )); do
     c=$(command curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Authorization: Bearer $M" -H 'Content-Type: application/json' \
@@ -115,7 +115,7 @@ rollout deploy -l gateway.networking.k8s.io/gateway-name=ambit
 wait $traffic
 read -r ok bad <"$W/s2"
 [[ "$bad" == 0 && "$ok" -gt 50 ]] || fail "S2 rolling update: $ok ok, $bad failed ($(sort "$W/s2-bad" | uniq -c | tr '\n' ' '))"
-[[ $(outcome "$(token alice)") == blocked ]] || fail "S2 budget not enforced after the update"
+[[ $(outcome "$(token user01)") == blocked ]] || fail "S2 budget not enforced after the update"
 pass "S2 rolling restart of gateway, console, controller and guard under traffic: $ok MCP requests, 0 failed; budget still enforced"
 
 # S3 · soak: steady MCP and LLM traffic. No Ambit container restarts, ClickHouse accepts every write, and
@@ -143,7 +143,7 @@ r0=$(restarts); t0=$(date +%s)
 # Each round is a well-behaved MCP client (a fresh token, a session, tools/list, then DELETE of the session;
 # sessions left open cost the gateway about 7 KiB each until they expire) and one LLM answer from the mock.
 ( end=$((SECONDS + SOAK_SECONDS)); while (( SECONDS < end )); do
-    tools "$(token mira)" >/dev/null 2>&1 || true
+    tools "$(token user09)" >/dev/null 2>&1 || true
     command curl -s -o /dev/null -X DELETE -H "Authorization: Bearer $TOK" -H "Mcp-Session-Id: $SID" "$MCP" || true
     command curl -s -o /dev/null --max-time 30 -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
       -d '{"model":"mock/echo","messages":[{"role":"user","content":"hi"}]}' "$LLM" || true
@@ -198,7 +198,7 @@ pass "S3 ${SOAK_SECONDS}s soak (MCP and LLM traffic), no restarts, no refused Cl
 
 # S5 · rotate the gateway's session key (agentgateway keeps it in a Secret): new sessions work at once;
 #      sessions opened before the rotation are recorded as the finding (the key encrypts session IDs).
-A=$(token alice) # tokens last 5 minutes; the soak outlived the earlier one
+A=$(token user01) # tokens last 5 minutes; the soak outlived the earlier one
 mcp_open "$A"; old_sid=$SID
 secret=secret/ambit-session-key # created by the agentgateway controller from the AgentgatewayParameters
 kubectl -n "$NS" get "$secret" >/dev/null 2>&1 || fail "S5 no gateway session-key Secret $secret"

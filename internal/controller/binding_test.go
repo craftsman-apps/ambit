@@ -32,3 +32,20 @@ func TestDestinationHashLength(t *testing.T) {
 		t.Fatal("hash")
 	}
 }
+
+// An image server has no URL, so a Connection bound to a URL refuses it; an unbound Connection serves it.
+func TestBindServersImageServerNeedsUnboundConnection(t *testing.T) {
+	img := v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "workspace"}, Spec: v1.ServerSpec{Image: "ghcr.io/x/y@sha256:" + strings.Repeat("a", 64), Transport: "streamable-http", Connection: "google"}}
+	bound := []v1.Connection{{ObjectMeta: metav1.ObjectMeta{Name: "google"}, Spec: v1.ConnectionSpec{ServerURL: "https://mcp.google.test/mcp"}}}
+	if kept, refused := BindServers([]v1.Server{img}, bound); len(kept) != 0 || refused["workspace"] == "" {
+		t.Fatalf("bound Connection: kept %v refused %v", kept, refused)
+	}
+	unbound := []v1.Connection{{ObjectMeta: metav1.ObjectMeta{Name: "google"}}}
+	kept, refused := BindServers([]v1.Server{img}, unbound)
+	if len(kept) != 1 || len(refused) != 0 {
+		t.Fatalf("unbound Connection: kept %v refused %v", kept, refused)
+	}
+	if got := BrokerPath(kept[0], false); got != "/v1/connection/google" {
+		t.Fatalf("broker path %q", got)
+	}
+}

@@ -54,6 +54,9 @@ type Reconciler struct {
 	Route     RouteRef
 	// ListTools reads a running server's tools into Server.status.tools; nil turns this off.
 	ListTools ToolLister
+	// Probe asks an image server that needs a person's token (connection) whether it answers, without
+	// a token; nil: ProbeProxy. Its tools cannot be read at admission, so this stands in for ListTools.
+	Probe func(context.Context, v1.Server) error
 	// ToolsRefresh is how often tools are read again (0: 10 minutes).
 	ToolsRefresh time.Duration
 	// RateLimit is where Budgets are enforced; an empty Service turns budgets off.
@@ -670,6 +673,9 @@ func (r *Reconciler) readTools(ctx context.Context, s v1.Server) ([]v1.Tool, *me
 	if r.toolsRead == nil {
 		r.toolsRead = map[types.UID]time.Time{}
 	}
+	if s.Spec.Image != "" && s.Spec.Connection != "" {
+		return s.Status.Tools, nil // a person's token is needed and no admin's account can be bound to an image: tools stay unlisted
+	}
 	last := func() *metav1.Condition {
 		if s.Spec.Connection == "" {
 			return nil // the condition applies to per-user servers only
@@ -849,6 +855,14 @@ func (r *Reconciler) markRunning(ctx context.Context, servers []v1.Server) (time
 			defer wg.Done()
 			actx, cancel := context.WithTimeout(ctx, admissionTimeout)
 			defer cancel()
+			if s.Spec.Connection != "" {
+				probe := r.Probe
+				if probe == nil {
+					probe = ProbeProxy
+				}
+				answers[k].err = probe(actx, s)
+				return
+			}
 			answers[k].tools, answers[k].err = r.ListTools(actx, s)
 		}(k, servers[i])
 	}

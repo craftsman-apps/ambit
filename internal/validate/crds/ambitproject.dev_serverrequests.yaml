@@ -136,8 +136,8 @@ spec:
                 x-kubernetes-validations:
                 - message: set either image (run by ToolHive) or url (a remote server), not both
                   rule: has(self.image) != has(self.url)
-                - message: 'connection needs a remote server (url): a per-user token cannot reach a stdio server'
-                  rule: '!has(self.connection) || has(self.url)'
+                - message: 'connection needs a remote server (url), or an image whose transport is streamable-http or sse: a per-user token cannot reach a stdio server'
+                  rule: '!has(self.connection) || has(self.url) || (has(self.transport) && self.transport != ''stdio'')'
               serverName:
                 description: ServerName is the name the Server gets when the request is approved.
                 maxLength: 40

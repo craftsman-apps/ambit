@@ -129,6 +129,25 @@ func TestCRDRulesRejectUnsafeObjects(t *testing.T) {
 	}}
 	reject("empty tool list", raw, "should have at least 1 items")
 
+	// connection: a remote server, or an image that can receive the token header (streamable-http, sse); not stdio.
+	const wantMsg = "connection needs a remote server (url), or an image whose transport is streamable-http or sse"
+	reject("connection with a stdio image", &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "conn-stdio", Namespace: ns},
+		Spec: v1.ServerSpec{Image: digestImage, Transport: "stdio", Connection: "google"}}, wantMsg)
+	reject("connection with an image and no transport (default stdio)", &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "conn-default", Namespace: ns},
+		Spec: v1.ServerSpec{Image: digestImage, Connection: "google"}}, wantMsg)
+	for name, spec := range map[string]v1.ServerSpec{
+		"conn-image-http": {Image: digestImage, Transport: "streamable-http", MCPPort: 8000, Connection: "google"},
+		"conn-image-sse":  {Image: digestImage, Transport: "sse", MCPPort: 8000, Connection: "google"},
+		"conn-url":        {URL: "https://mcp.example.com/mcp", Transport: "streamable-http", Connection: "google"},
+		"plain-stdio":     {Image: digestImage, Transport: "stdio"},
+	} {
+		if err := envClient.Create(ctx, &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Spec: spec}); err != nil {
+			t.Errorf("%s refused: %v", name, err)
+		}
+	}
+	reject("connection with a stdio server request", &v1.ServerRequest{ObjectMeta: metav1.ObjectMeta{Name: "conn-req", Namespace: ns},
+		Spec: v1.ServerRequestSpec{ServerName: "conn-req", RequestedBy: "alice@acme.test", Server: v1.ServerSpec{Image: digestImage, Connection: "google"}}}, wantMsg)
+
 	q := &v1.ServerRequest{ObjectMeta: metav1.ObjectMeta{Name: "time-req", Namespace: ns},
 		Spec: v1.ServerRequestSpec{ServerName: "time", RequestedBy: "alice@acme.test", Server: v1.ServerSpec{Image: digestImage, Transport: "stdio"}}}
 	if err := envClient.Create(ctx, q); err != nil {
@@ -756,5 +775,74 @@ func TestEmptyToolListIsCached(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("an empty tool list was read %d times in 3 passes, want 1", calls)
+	}
+}
+
+// An image server with a connection cannot be asked for its tools at admission (they need a person's token):
+// it joins the backend once its proxy answers without one, and its per-person token policy is generated.
+func TestImageServerWithConnectionJoinsOnProbe(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-image-conn"
+	namespace(t, ns)
+	ctx := t.Context()
+	if err := envClient.Create(ctx, &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "gws", Namespace: ns},
+		Spec: v1.ServerSpec{Image: timeImage, Transport: "streamable-http", MCPPort: 8000, Connection: "google"}}); err != nil {
+		t.Fatal(err)
+	}
+	answers := false
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
+		Now: func() time.Time { return time.Now() },
+		ListTools: func(context.Context, v1.Server) ([]v1.Tool, error) {
+			t.Error("tools of a server that needs a person's token must not be read at admission")
+			return nil, errors.New("unexpected")
+		},
+		Probe: func(context.Context, v1.Server) error {
+			if !answers {
+				return errors.New("502")
+			}
+			return nil
+		}}
+	rec := func() {
+		t.Helper()
+		if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listed := func() string {
+		t.Helper()
+		b, err := genGet(ctx, ns, "AgentgatewayBackend", MCPBackendName)
+		if apierrors.IsNotFound(err) {
+			return ""
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(backendTargets(t, []*unstructured.Unstructured{b}), ",")
+	}
+	rec() // creates ToolHive's object
+	setMCPServerReady(t, ns, "gws", true)
+	rec()
+	if got := listed(); got != "" {
+		t.Fatalf("listed before it answers: %q", got)
+	}
+	answers = true
+	r.Now = func() time.Time { return time.Now().Add(admissionRetryMax) }
+	rec()
+	if got := listed(); got != "gws" {
+		t.Fatalf("not listed once the probe answers: %q", got)
+	}
+	p, err := genGet(ctx, ns, "AgentgatewayPolicy", "ambit-conn-gws")
+	if err != nil {
+		t.Fatalf("no token policy for the image server: %v", err)
+	}
+	if path, _, _ := unstructured.NestedString(p.Object, "spec", "backend", "extAuth", "http", "path"); path != `"/v1/connection/google"` {
+		t.Fatalf("broker path %q", path)
+	}
+	var s v1.Server
+	if err := envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "gws"}, &s); err != nil {
+		t.Fatal(err)
+	}
+	if c := meta.FindStatusCondition(s.Status.Conditions, "ToolsRead"); c != nil {
+		t.Fatalf("ToolsRead does not apply to an image server: %+v", c)
 	}
 }

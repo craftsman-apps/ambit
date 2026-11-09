@@ -27,8 +27,8 @@ func BindServers(servers []v1.Server, conns []v1.Connection) ([]v1.Server, map[s
 	var kept []v1.Server
 	refused := map[string]string{}
 	for _, s := range servers {
-		if want := bound[s.Spec.Connection]; s.Spec.Connection != "" && want != "" && s.Spec.URL != want {
-			refused[s.Name] = "connection " + s.Spec.Connection + " is bound to " + want + "; this server's url is " + s.Spec.URL
+		if want := bound[s.Spec.Connection]; s.Spec.Connection != "" && want != "" && Endpoint(s) != want {
+			refused[s.Name] = "connection " + s.Spec.Connection + " is bound to " + want + "; this server's address is " + Endpoint(s)
 			continue
 		}
 		kept = append(kept, s)
@@ -41,7 +41,7 @@ func BrokerPath(s v1.Server, bound bool) string {
 	if !bound {
 		return "/v1/connection/" + s.Spec.Connection
 	}
-	return "/v1/connection/" + url.PathEscape(s.Spec.Connection) + "/server/" + url.PathEscape(s.Name) + "/" + DestinationHash(s.Spec.URL)
+	return "/v1/connection/" + url.PathEscape(s.Spec.Connection) + "/server/" + url.PathEscape(s.Name) + "/" + DestinationHash(Endpoint(s))
 }
 
 // SetBrokerPaths gives every per-user server whose Connection has serverURL the destination-checked path.

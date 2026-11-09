@@ -97,3 +97,20 @@ func TestBrokerLegacyPathRefusesWhenConnectionLookupFails(t *testing.T) {
 		t.Fatalf("token given after a failed lookup: %q", h)
 	}
 }
+
+// An image server is bound by the address of its ToolHive proxy.
+func TestBrokerGivesTokenToImageServerBoundToItsProxy(t *testing.T) {
+	proxy := "http://mcp-gws-proxy." + testNS + ".svc:8080/mcp"
+	b := brokerFixture(t, proxy)
+	img := v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "gws", Namespace: testNS},
+		Spec: v1.ServerSpec{Image: "ghcr.io/x/y@sha256:" + "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0", Connection: "jira", Transport: "streamable-http"}}
+	if err := b.Conns.Client.Create(t.Context(), &img); err != nil {
+		t.Fatal(err)
+	}
+	if h := ask(b, "/v1/connection/jira/server/gws/"+controller.DestinationHash(proxy)); h != "Bearer at-user01" {
+		t.Fatalf("token refused for the image server: %q", h)
+	}
+	if h := ask(b, "/v1/connection/jira/server/gws/"+controller.DestinationHash("https://evil.test/mcp")); h != "" {
+		t.Fatal("token given for another destination")
+	}
+}

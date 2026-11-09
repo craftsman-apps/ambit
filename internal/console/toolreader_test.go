@@ -334,3 +334,30 @@ func TestServerViewShowsReader(t *testing.T) {
 		t.Fatalf("reader view: %+v", v)
 	}
 }
+
+// The tool reader reads an image server through its ToolHive proxy, with the reader's own token.
+func TestReaderReadsImageServerThroughItsProxy(t *testing.T) {
+	saas := newFakeSaaS(t)
+	conns, c := connFixture(t, saas)
+	proxy := "http://mcp-gws-proxy." + testNS + ".svc:8080/mcp"
+	var conn v1.Connection
+	_ = c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "jira"}, &conn)
+	conn.Spec.ServerURL = proxy
+	_ = c.Update(t.Context(), &conn)
+	connect(t, conns, testAuthOnly(), "admin@example.com", "admin")
+	_ = c.Create(t.Context(), &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "gws", Namespace: testNS, UID: "uid-gws"},
+		Spec: v1.ServerSpec{Image: "ghcr.io/x/y@sha256:" + strings.Repeat("a0", 32), Connection: "jira", Transport: "streamable-http"}})
+	var endpoints []string
+	tr := &ToolReader{Conns: conns, Namespace: testNS, TTL: time.Minute,
+		List: func(_ context.Context, _ *http.Client, endpoint, _, bearer string) ([]v1.Tool, error) {
+			endpoints = append(endpoints, endpoint+" "+bearer)
+			return []v1.Tool{{Name: "search_gmail_messages"}}, nil
+		}}
+	if err := tr.SetReader(t.Context(), "admin@example.com", "gws"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := tr.Tools(t.Context(), "gws")
+	if err != nil || len(res.Tools) != 1 || len(endpoints) != 1 || endpoints[0] != proxy+" at-admin" {
+		t.Fatalf("res %+v err %v endpoints %v", res, err, endpoints)
+	}
+}

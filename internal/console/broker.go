@@ -55,8 +55,8 @@ func (b *Broker) bound(w http.ResponseWriter, r *http.Request) {
 	var s v1.Server
 	err := b.Conns.Client.Get(r.Context(), client.ObjectKey{Namespace: b.Conns.Namespace, Name: server}, &s)
 	conn, cerr := b.Conns.connection(r.Context(), connName)
-	ok := err == nil && cerr == nil && s.Spec.Connection == connName && controller.DestinationHash(s.Spec.URL) == hash &&
-		(conn.Spec.ServerURL == "" || conn.Spec.ServerURL == s.Spec.URL)
+	ok := err == nil && cerr == nil && s.Spec.Connection == connName && controller.DestinationHash(controller.Endpoint(s)) == hash &&
+		(conn.Spec.ServerURL == "" || conn.Spec.ServerURL == controller.Endpoint(s))
 	if !ok {
 		slog.Warn("broker: destination does not match", "connection", connName, "server", server)
 		w.Header().Set("X-Ambit-Connect", staleConfig)

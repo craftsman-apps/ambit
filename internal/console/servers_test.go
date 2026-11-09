@@ -235,7 +235,7 @@ func TestRemoteServerRequest(t *testing.T) {
 		}
 	}
 	// An image that talks HTTP can receive the person's token.
-	if r := do(t, h, "POST", "/api/server-requests", alice, RequestInput{ServerName: "workspace", Image: echoDigest, Transport: "streamable-http", Connection: "jira"}); r.Code != http.StatusCreated {
+	if r := do(t, h, "POST", "/api/server-requests", user01, RequestInput{ServerName: "workspace", Image: echoDigest, Transport: "streamable-http", Connection: "jira"}); r.Code != http.StatusCreated {
 		t.Fatalf("image with connection: %d %s", r.Code, r.Body)
 	}
 	// In-cluster services may use plain HTTP.

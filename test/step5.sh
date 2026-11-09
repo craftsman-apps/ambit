@@ -96,10 +96,7 @@ pass "3 user09 -> '$m'; user01 -> '$a' (no cross-user token)"
 #      (test/tokenhash) is loaded on the node by `make image`; a Server names an image by digest, so the
 #      node's digest for it is read and given a name that the digest reference finds.
 node=${KIND_NODE:-${KIND_CLUSTER:-ambit}-control-plane}
-dg=$(docker exec "$node" crictl images --digests -o json | uv run --no-project python -c 'import json,sys
-for i in json.load(sys.stdin)["images"]:
-    if any(t.endswith("ambit-tokenhash:dev") for t in i["repoTags"]) and i["repoDigests"]:
-        print(i["repoDigests"][0].split("@")[1]); break')
+dg=$(docker exec "$node" ctr -n k8s.io images ls "name~=ambit-tokenhash:dev" | awk 'NR==2{print $3}')  # REF TYPE DIGEST ...
 [[ "$dg" =~ ^sha256:[a-f0-9]{64}$ ]] || fail "3b the node has no digest for ambit-tokenhash:dev (run make image): '$dg'"
 docker exec "$node" ctr -n k8s.io images tag --force docker.io/library/ambit-tokenhash:dev "docker.io/library/ambit-tokenhash@$dg" >/dev/null
 kubectl -n "$NS" apply -f - >/dev/null <<YAML

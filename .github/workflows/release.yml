@@ -9,7 +9,8 @@ jobs:
   # is published when it fails.
   publish:
     runs-on: ubuntu-latest
-    permissions: { contents: write, packages: write }  # contents: the GitHub release and its files
+    # contents: the GitHub release and its files. id-token: keyless cosign signatures of the image (Sigstore).
+    permissions: { contents: write, packages: write, id-token: write }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0 }
@@ -25,6 +26,7 @@ jobs:
         id: v
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
       - name: Console and controller image (amd64 + arm64)
+        id: image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -46,6 +48,14 @@ jobs:
           # Journey S6: an SBOM and build provenance travel with every image in the registry.
           sbom: true
           provenance: mode=max
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with: { cosign-release: v3.1.3 }
+      # Keyless: the signature is bound to this workflow's GitHub OIDC identity and logged in Sigstore's public
+      # transparency log (Rekor). Signed by digest, so the signature covers exactly the image index pushed above.
+      # docs/compliance.md (Supply chain) has the cosign verify command.
+      - name: Sign the image (cosign, keyless)
+        env: { DIGEST: "${{ steps.image.outputs.digest }}" }
+        run: cosign sign --yes "ghcr.io/${{ github.repository_owner }}/ambit-console@${DIGEST}"
       - name: Charts to GHCR (OCI)
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -155,10 +165,18 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Formula/ambit.rb
           git diff --cached --quiet || { git commit -m "ambit ${GITHUB_REF_NAME}" && git push; }
+      # Trusted publishing (#148) exchanges this job's GitHub OIDC token for a short-lived npm token, and needs npm
+      # 11.5.1 or newer.
+      - name: npm is 11.5.1 or newer (trusted publishing)
+        run: |
+          v=$(npm --version); echo "npm $v"
+          printf '11.5.1\n%s\n' "$v" | sort -V -C || { echo "::error::npm $v is older than 11.5.1, which trusted publishing needs"; exit 1; }
       - name: npm (@craftsman-apps/ambit and one package per platform)
         # Runs even when the tap step failed (both are safe to re-run), but never from archives that failed verification.
         if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
-        # NPM_TOKEN: a granular token with read and write on the @craftsman-apps scope, stored in release-channels.
-        # The first publish of a new package needs it; trusted publishing can replace it once the packages exist.
+        # npm first tries trusted publishing: each package names craftsman-apps/ambit, release.yml and the Environment
+        # release-channels as its trusted publisher on npmjs.com. npm uses NODE_AUTH_TOKEN only when that fails.
+        # NPM_TOKEN (a granular token on @craftsman-apps, in release-channels) stays as that fallback until one release
+        # has published through trusted publishing; then delete it (docs/maintainers/release-checklist.md).
         env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
         run: node scripts/npm/publish.mjs --dir rel --version "${GITHUB_REF_NAME#v}" --out npm-out --publish

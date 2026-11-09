@@ -30,6 +30,27 @@ deploys nothing.
    A prerelease tag (`v0.2.0-rc.1`) publishes to GitHub only and does not deploy the site.
 3. Approve the `cli-channels` job (Homebrew and npm) after the checksum check passes.
 
+4. After the release: `cosign verify` from `docs/compliance.md` (Supply chain) passes for the new image tag.
+
+## npm trusted publishing (#148)
+
+The npm step publishes through trusted publishing (GitHub OIDC, no stored token) and falls back to the secret
+`NPM_TOKEN` when npm refuses it. Do these steps once; the secret goes only after a release has published without it.
+
+1. On npmjs.com, for each of the seven packages (`@craftsman-apps/ambit`, `@craftsman-apps/ambit-darwin-arm64`,
+   `@craftsman-apps/ambit-darwin-x64`, `@craftsman-apps/ambit-linux-arm64`, `@craftsman-apps/ambit-linux-x64`,
+   `@craftsman-apps/ambit-win32-arm64`, `@craftsman-apps/ambit-win32-x64`): open the package, Settings, Trusted
+   Publisher, GitHub Actions. Enter organization `craftsman-apps`, repository `ambit`, workflow filename `release.yml`,
+   environment `release-channels`. Save.
+2. Release as usual. Then check one package: `npm view @craftsman-apps/ambit@<version> _npmUser`. A trusted publish
+   names GitHub Actions as the publisher; a publish with the token names the npm user who owns the token.
+3. When all seven show the trusted publisher: delete the secret `NPM_TOKEN` (GitHub, Settings, Environments,
+   `release-channels`), revoke the token on npmjs.com (Access Tokens), and remove the `NODE_AUTH_TOKEN` line from the
+   npm step of `.github/workflows/release.yml`. Optionally set each package to "Require two-factor authentication and
+   disallow tokens" (package Settings, Publishing access).
+
+A new package (a new platform) cannot use trusted publishing for its first publish; it needs a token once.
+
 If the `cli` job fails, the release stays not-latest (the `cli` job uploads the CLI archives, attests them, and only then marks
 the release as the latest), and `install.sh` and `install.ps1` keep installing the previous release. Re-run the job.
 If you fixed the cause by hand instead, run `gh release edit <tag> --latest`.

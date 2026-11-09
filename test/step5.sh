@@ -121,13 +121,13 @@ spec:
   servers: [{ name: tokenhash }]
 YAML
 kubectl -n "$NS" wait "servers.$G" tokenhash --for=condition=Ready --timeout=240s >/dev/null || fail "3b tokenhash image server not Ready: $(kubectl -n "$NS" get "servers.$G" tokenhash -o jsonpath='{.status.conditions}')"
-for _ in $(seq 1 30); do ha=$(call_hash "$(token alice)"); [[ "$ha" != "not listed" ]] && break; sleep 3; done
-hm=$(call_hash "$(token mira)"); ha2=$(call_hash "$(token alice)")
-[[ "$ha" == sha256:*" user=alice" && "$hm" == sha256:*" user=mira" ]] || fail "3b the image server received alice='$ha' mira='$hm'"
-[[ "${ha%% *}" != "${hm%% *}" && "$ha" == "$ha2" ]] || fail "3b hashes: alice='$ha' mira='$hm' alice again='$ha2'"
-hp=$(call_hash "$(token priya)")
-[[ "$hp" == "not listed" ]] || fail "3b priya has no saas grant, but the image server was not withheld from her: '$hp'"
-pass "3b image server over HTTP: alice -> '$ha'; mira -> '$hm'; no grant -> withheld (each person's own token reaches the container)"
+for _ in $(seq 1 30); do ha=$(call_hash "$(token user01)"); [[ "$ha" != "not listed" ]] && break; sleep 3; done
+hm=$(call_hash "$(token user09)"); ha2=$(call_hash "$(token user01)")
+[[ "$ha" == sha256:*" user=user01" && "$hm" == sha256:*" user=user09" ]] || fail "3b the image server received user01='$ha' user09='$hm'"
+[[ "${ha%% *}" != "${hm%% *}" && "$ha" == "$ha2" ]] || fail "3b hashes: user01='$ha' user09='$hm' user01 again='$ha2'"
+hp=$(call_hash "$(token user10)")
+[[ "$hp" == "not listed" ]] || fail "3b user10 has no saas grant, but the image server was not withheld from her: '$hp'"
+pass "3b image server over HTTP: user01 -> '$ha'; user09 -> '$hm'; no grant -> withheld (each person's own token reaches the container)"
 
 # 4 · the broker is reachable only from the gateway; grants are not readable in the Secrets
 probe() {

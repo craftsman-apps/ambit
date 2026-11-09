@@ -8,6 +8,95 @@ For upgrade steps in detail, read [docs/upgrading.md](docs/upgrading.md).
 
 Each pull request adds a file in changelog/unreleased/ (see its README); the release assembles them here.
 
+## 0.3.0 (2026-11-09)
+
+### What is new
+
+- **Model fallback and load sharing.** A Model can name other Models in `fallback` and extra servers in
+  `additionalEndpoints`. When a server answers 5xx or 429, the next server or Model answers the request. Several
+  servers of one Model share the requests. Access rules, budgets and the audit record follow the Model that
+  answered. See [Fallback and several servers](docs/providers.md#fallback-and-several-servers).
+- **Smaller MCP tool results.** An admin can set `resultCompression` on a `Server` (`off`, `lossless` or `shorten`).
+  Smaller tool results mean fewer input tokens in every later turn. Measured on 2026-11-02 with opencode 2.1.4 and
+  Codex 0.159.3 (model openai/gpt-4.1-mini, 3 runs): `shorten` used 49% fewer input tokens per session with opencode
+  and 31% fewer with Codex; `lossless` used 16% and 3% fewer. In 20 test questions, no answer was lost with
+  `lossless`, and `shorten` answered as well as no compression. It is off by default. See
+  [Compressing tool results](docs/concepts.md#compressing-tool-results).
+- **Savings page** (Evidence → Savings, admins only). It shows what compression and model routing saved in the last
+  30 days, in estimated tokens and dollars, by day, group, server and router. It needs `evidence.enabled`. See
+  [Savings](docs/savings.md).
+- **Servers from an image, with each person's own sign-in.** A `Server` that runs an image over HTTP can now have a
+  `connection`: each person signs in to the vendor with their own account, and Ambit passes that person's token to
+  the container through ToolHive's proxy. A Server that runs an image can also set `env` (values or Secret keys) and
+  `args` for its container.
+- **Masking handles large tool results.** `ambit-guard` accepts tool results up to 32 MiB (before: 4 MiB) and no
+  longer runs out of memory at about 12 MiB.
+- **Two privacy fixes for Presidio users.** (1) Setting Presidio no longer turns off the built-in masks (Korean
+  resident registration numbers, US Social Security numbers, card numbers, emails); the built-in masks run first
+  and Presidio adds to them (issue #189). (2) While Presidio is set, JSON tool results are not compressed, because
+  compressed JSON hid most names from Presidio: the share of names found fell from 93.2% to 10.0% (issue #207).
+- **Fixes:** the Zoom preset no longer fails the nightly contract check by mistake, and Codex no longer logs
+  `failed to decode models response` (the gateway answers its `/v1/models` request in the shape Codex reads).
+
+### Upgrade notes
+
+- **Upgrade both charts, `ambit-crds` first.** The CRDs of `Model`, `Server` and `ServerRequest` have new optional
+  fields: `fallback` and `additionalEndpoints` on a Model; `resultCompression`, `env` and `args` on a Server and in
+  the server part of a ServerRequest.
+  An older controller does not know them. Existing objects need no change.
+- **The `ambit-guard` memory limit is now 512 MiB** (before: 128 MiB), set by the new value
+  `protection.memoryLimitMiB`. The memory request stays 32 MiB, so scheduling does not change. A large tool result can
+  make the guard use up to 512 MiB on its node.
+- **New chart values** (all optional, with defaults): `protection.memoryLimitMiB` (512),
+  `protection.presidio.timeout` (`10s`), `evidence.summaryRetention` (`26280h`, three years),
+  `console.savings.referenceInputPricePerMillion` (empty). `protection.presidio.anonymizerURL` is no longer used; an
+  existing value is accepted.
+- **With an external ClickHouse**, the Savings page needs more rights for the ClickHouse user: `CREATE VIEW`,
+  `ALTER` (modify TTL) and `SELECT` on `system.tables`, in addition to what it had.
+- **A Model with `baseURL`** (a server you host) that lists `additionalEndpoints` must give each of those entries its
+  own `baseURL`. Ambit refuses the Model otherwise.
+
+### Known limits
+
+- The Savings page counts from the day the summaries are created after the upgrade. There is no backfill of older
+  days. All its numbers are estimates, and routing savings do not subtract the classifier's cost (issue #216).
+- Compression changes the text of a tool result. Codex sends the model `structuredContent`, not the text, so for a
+  tool that returns both, compression does not help with Codex. opencode 2.x in its default mode sends neither.
+- `ambit-guard` refuses tool results larger than 32 MiB.
+- A `Server` that runs a `stdio` image cannot have a `connection`.
+- The nightly contract check of the DocuSign preset fails, because DocuSign's server does not ask an unauthenticated
+  request to sign in (issue #222). The preset itself passed the live check for this release.
+- The console no longer offers the Databricks and PagerDuty presets: their test accounts stopped working, so they
+  could not pass the live check before this release (issue #244). A `Server` you already made from either preset is
+  not changed.
+
+### All changes
+
+- Changelog entries are one file per pull request in changelog/unreleased/.
+- CI: the image is built in its own job, and e2e runs in more parallel parts; a full run takes about 17 minutes instead of 26.
+- Docs: Compressing tool results now has measured savings with opencode and Codex, and says which part of a tool result each client sends to the model: Codex sends `structuredContent` and not `content[].text`, so compression of the text does not help for a tool that returns both.
+- A Model's `fallback` answers a request for the Model's name only for people who may use both Models. A person who may use the fallback but not the Model gets 403 for the Model's name, whether the Model works or fails.
+- When a Model has a `baseURL` (a server you host), every entry in `additionalEndpoints` needs its own `baseURL`. Ambit refuses the Model otherwise, so no prompt can reach the provider's public server by mistake.
+- Guard: with `evidence.enabled`, `ambit-guard` writes one record to the audit trail for each tool result text it compresses (Server, type, bytes before and after, the caller's groups; no email, no content). The coming Savings page counts them. A new `AmbitGuardRecordsDropped` alert (with `alerts.enabled`) shows when records were dropped. No call is changed or slowed by this.
+- Savings page (Evidence → Savings, admins only): what tool result compression and model routing saved in the last 30 days, in estimated tokens and dollars, for each day, group, server and router. Every figure is labelled as an estimate. Compression dollars use each group's own average input price, else `console.savings.referenceInputPricePerMillion`, else tokens only. One control, "Later turns that carry each result" (default 0), shows what a result that is sent again would add; Ambit does not measure that number. Routing is measured against the most expensive priced model each router can choose, and does not subtract the classifier's cost. It counts from the day the summaries were created; there is no backfill. See Savings in the docs.
+- Evidence: with `evidence.enabled`, the console creates two daily summary tables in ClickHouse (`ambit_llm_daily_v1` and `ambit_compress_daily_v1`) and a read-only admin API `GET /api/savings` that reads them. The summaries hold counts only (no email, no content) and are kept for the new value `evidence.summaryRetention` (default `26280h`, three years). They count from the day they are created. With an external ClickHouse, the user also needs `CREATE VIEW`, `ALTER` (modify TTL) and `SELECT` on `system.tables`. The new value `console.savings.referenceInputPricePerMillion` sets the price used for groups without priced LLM requests. The page that shows this comes in the next release note.
+- Tool result compression: an admin can set `resultCompression` (`mode: off`, `lossless` or `shorten`) on a `Server` to make its tool results smaller before the client stores them, so each later turn costs fewer tokens. It works on JSON, CSV and tables, YAML, logs and test output; other text is not changed. `lossless` removes only layout. `shorten` also leaves out repeated log lines, passing tests, YAML comments and `managedFields`, marks each cut, and tells the model to call the tool again with a narrower query. It is off by default, runs before masking, and a fault in a compressor never fails a call. See Compressing tool results in Concepts.
+- Guard: `ambit-guard` serves Prometheus metrics (`ambit_guard_compress_*`) on port 8081, the chart adds a `PodMonitor` for them and an `AmbitGuardCompressionFailing` alert when `alerts.enabled`, and a panic in the guard now fails one call instead of ending the process (which made every MCP call fail until the pod restarted).
+- Masking: ambit-guard now accepts tool results larger than 4 MiB (the gRPC limit is 32 MiB). With the default memory limit, results up to 10 MiB were masked in a test; larger ones can make the guard run out of memory (see Masking in Concepts).
+- Masking with Presidio: a tool result is sent to the analyzer in a few large calls instead of two calls per string, and Ambit replaces the findings itself. The anonymizer is no longer called. The new value `protection.presidio.timeout` (default 10 s) limits all analyzer calls of one result.
+- Masking with Presidio: the built-in masks (Korean resident registration numbers, US Social Security numbers, card numbers, emails) now run first, and Presidio adds to them. Before, setting Presidio turned the built-in masks off.
+- A Server can now have a `connection` (each person's own sign-in) and an `image`, when the image talks HTTP (`transport: streamable-http` or `sse`). Before, `connection` needed a `url`. A `stdio` image with a `connection` is still refused, with a clearer message. The person's token reaches the container through ToolHive's proxy. The console's "request an app" form accepts the same combination.
+- A `Server` that runs an image can now set `env` (inline values, or a key of a Secret) and `args` for its container. Names that ToolHive sets are refused.
+- A `Server` that runs an image and has a `connection` can now have its tools listed: bind the Connection (`serverURL`) to the address of the server's ToolHive proxy (`http://mcp-<name>-proxy.<namespace>.svc:8080/mcp`). Before, such a server was refused by a bound Connection and its tools could not be read. The console is now allowed to reach the proxy of a server for this.
+- A Model can list other Models in `fallback` and extra servers in `additionalEndpoints`: when a server returns a 5xx or 429 response, the request is answered by the next server or Model, and several servers of one Model share the requests. Access rules, budgets and the audit record follow the Model that answered. See Model providers.
+- Masking with Presidio: while `protection.presidio.analyzerURL` is set, the guard no longer compresses JSON tool results (issue #207). Removing the spaces in JSON lowered the share of names Presidio finds from 93.2% to 10.0%, so names reached the client unmasked. JSON now keeps its original layout; logs, tables, YAML and test output are still compressed. The new outcome `skipped_presidio` of `ambit_guard_compress_results_total` counts these results.
+- Masking: `ambit-guard` now uses less memory for a large tool result, and the new value `protection.memoryLimitMiB` (default 512) sets its memory limit. Before, a result of about 12 MiB made the guard run out of memory and restart, and every MCP call failed while it restarted. Results up to the 32 MiB message limit are now masked (see Masking in Concepts).
+- Preset check: the nightly contract check accepts resource metadata that the server names on another host (Zoom does this), if the metadata's `resource` is the server's URL or a parent of it and the address is https. This fixes the false failure for the Zoom preset.
+- Codex: the gateway answers Codex's request for the model list (`GET /v1/models?client_version=...`) with `{"models":[]}`, the shape Codex reads. Codex no longer logs `failed to decode models response`. Other clients get the same OpenAI list as before.
+- Savings page: the group chart now shows each group's share of the total instead of dollars that looked larger than the total, and says that people in several groups count in each group. "Counted since" now shows the oldest day the summaries hold, so it never conflicts with the chart.
+- Usage page: reads the daily LLM summary table for the days it holds completely, instead of scanning every audit record. The numbers are the same; the page is much faster with a large audit trail. Days before the summary began still come from the audit records.
+- The console no longer offers the Databricks and PagerDuty presets in its app list. Their test accounts stopped working, so they could not pass the live check before this release. A `Server` you already made from either preset is not changed. They come back when they pass the live check again.
+
 ## 0.2.3 (2026-10-18)
 
 - Access rules can name people (`users`, email addresses) as well as groups.

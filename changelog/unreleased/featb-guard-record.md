@@ -1,1 +1,0 @@
-- Guard: with `evidence.enabled`, `ambit-guard` writes one record to the audit trail for each tool result text it compresses (Server, type, bytes before and after, the caller's groups; no email, no content). The coming Savings page counts them. A new `AmbitGuardRecordsDropped` alert (with `alerts.enabled`) shows when records were dropped. No call is changed or slowed by this.

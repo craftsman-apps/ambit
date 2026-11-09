@@ -7,6 +7,7 @@ board_insights
 change_item_column_values
 connect_external_agent
 create_action
+create_agent
 create_automation
 create_board
 create_column
@@ -53,6 +54,7 @@ get_sprints_metadata
 get_type_details
 get_updates
 get_user_context
+get_workflow_editor_link
 get_workflow_run_once_status
 invoke_process_planner
 invoke_workflow_expert
@@ -61,13 +63,13 @@ list_automations
 list_users_and_teams
 list_workspaces
 manage_agent
+manage_agent_jobs
 manage_agent_knowledge
 manage_agent_skills
 manage_agent_tools
 manage_agent_triggers
 manage_automations
 move_object
-publish_workflow
 read_docs
 run_action
 run_workflow_once
@@ -78,6 +80,7 @@ show-battery
 show-chart
 show-monday
 show-table
+show-table-preview
 stop_workflow_run_once
 submit_bug_or_feature_request
 update_action
@@ -94,6 +97,7 @@ vibe_ask
 vibe_collaborators
 vibe_create
 vibe_delete
+vibe_duplicate
 vibe_get
 vibe_list
 vibe_publication

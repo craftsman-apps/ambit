@@ -23,6 +23,7 @@ get-design-thumbnail
 get-design-thumbnails
 get-export-formats
 get-generate-image-job
+get-logged-in-account-details
 get-presenter-notes
 get-separate-image-layers-job
 help

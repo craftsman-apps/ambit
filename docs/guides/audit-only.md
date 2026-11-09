@@ -83,6 +83,7 @@ The page sorts every request of audit mode into one of these outcomes, and never
 | **Would be refused** | The request was served, and the rules in force then would have refused it | Yes |
 | **Would use another model (unless a later route matched)** | A ModelRouter line was answered, the person may not use that line's model, and enforcing would send them to the default model | No |
 | **Mark missing** | A model request or a tool call was served but its record has no valid verdict. The rule expression failed, or the audit fields were not active yet | **No.** Counted on its own line: "Call records with a missing or failed mark" |
+| **Served, no verdict** | A model request or a tool call was served, and its mark is `n/a`: no access rule judges that model or tool (for example, no `Model` has that `spec.model`) | No |
 | Not a call | `tools/list`, `initialize` and other protocol messages | No. Hidden by default |
 
 A mark that is missing is a defect to fix, not a verdict: in enforce mode the same failure would refuse the request. The summary and `ambit check --production` both show the count of the last 24 hours (`ambit check` prints it as a line under `P11`, and warns above zero). If it stays above zero, report the rule that fails.

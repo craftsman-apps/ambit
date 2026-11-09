@@ -23,7 +23,7 @@ func brokerFixture(t *testing.T, serverURL string) *Broker {
 	if err := c.Update(t.Context(), &conn); err != nil {
 		t.Fatal(err)
 	}
-	connect(t, conns, testAuthOnly(), "alice@acme.test", "alice")
+	connect(t, conns, testAuthOnly(), "user01@example.com", "user01")
 	for _, s := range []v1.Server{
 		{ObjectMeta: metav1.ObjectMeta{Name: "jira-mcp", Namespace: testNS},
 			Spec: v1.ServerSpec{URL: "https://mcp.jira.test/mcp", Connection: "jira", Transport: "streamable-http"}},
@@ -41,7 +41,7 @@ func brokerFixture(t *testing.T, serverURL string) *Broker {
 
 func ask(b *Broker, path string) string {
 	req := httptest.NewRequest("GET", path, nil)
-	req.Header.Set(userHeader, "alice@acme.test")
+	req.Header.Set(userHeader, "user01@example.com")
 	rec := httptest.NewRecorder()
 	b.Handler().ServeHTTP(rec, req)
 	return rec.Header().Get("Authorization")
@@ -49,7 +49,7 @@ func ask(b *Broker, path string) string {
 
 func TestBrokerGivesTokenForBoundDestination(t *testing.T) {
 	b := brokerFixture(t, "https://mcp.jira.test/mcp")
-	if h := ask(b, "/v1/connection/jira/server/jira-mcp/"+controller.DestinationHash("https://mcp.jira.test/mcp")); h != "Bearer at-alice" {
+	if h := ask(b, "/v1/connection/jira/server/jira-mcp/"+controller.DestinationHash("https://mcp.jira.test/mcp")); h != "Bearer at-user01" {
 		t.Fatalf("token refused: %q", h)
 	}
 }
@@ -71,7 +71,7 @@ func TestBrokerRefusesStaleDestination(t *testing.T) {
 
 func TestBrokerLegacyPathForUnboundConnection(t *testing.T) {
 	b := brokerFixture(t, "")
-	if h := ask(b, "/v1/connection/jira"); h != "Bearer at-alice" {
+	if h := ask(b, "/v1/connection/jira"); h != "Bearer at-user01" {
 		t.Fatalf("legacy path refused: %q", h)
 	}
 }

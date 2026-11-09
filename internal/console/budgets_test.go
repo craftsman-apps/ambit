@@ -91,11 +91,11 @@ func TestBudgetViewReadsTodaysCounters(t *testing.T) {
 	day := strconv.FormatInt(time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC).Unix(), 10)
 	yesterday := strconv.FormatInt(time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC).Unix(), 10)
 	addr := fakeValkey(t, map[string]string{
-		"ambit-llm_group_eng_" + day:                             "7",
-		"ambit-llm_group_eng_user_alice@acme.test_" + day:        "5",
-		"ambit-llm_group_eng_user_bob_smith@acme.test_" + day:    "2",
-		"ambit-llm_group_eng_user_alice@acme.test_" + yesterday:  "40",
-		"ambit-llm_group_ml-research_user_mira@acme.test_" + day: "3",
+		"ambit-llm_group_eng_" + day:                                 "7",
+		"ambit-llm_group_eng_user_user01@example.com_" + day:         "5",
+		"ambit-llm_group_eng_user_user02_smith@example.com_" + day:   "2",
+		"ambit-llm_group_eng_user_user01@example.com_" + yesterday:   "40",
+		"ambit-llm_group_ml-research_user_user09@example.com_" + day: "3",
 	})
 	scheme := runtime.NewScheme()
 	_ = v1.AddToScheme(scheme)
@@ -106,8 +106,8 @@ func TestBudgetViewReadsTodaysCounters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].GroupUsed != 7 || len(got[0].Users) != 2 || got[0].Users[0].Email != "alice@acme.test" || got[0].Users[0].Used != 5 ||
-		got[0].Users[1].Email != "bob_smith@acme.test" || !got[0].ResetsAt.Equal(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)) {
+	if len(got) != 1 || got[0].GroupUsed != 7 || len(got[0].Users) != 2 || got[0].Users[0].Email != "user01@example.com" || got[0].Users[0].Used != 5 ||
+		got[0].Users[1].Email != "user02_smith@example.com" || !got[0].ResetsAt.Equal(time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)) {
 		t.Fatalf("%+v", got)
 	}
 	// Valkey down: the view still answers, marked incomplete.
@@ -129,7 +129,7 @@ func TestBudgetViewOverTLSWithPassword(t *testing.T) {
 		t.Fatal(err)
 	}
 	day := strconv.FormatInt(time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC).Unix(), 10)
-	serveValkey(t, ln, map[string]string{"ambit-llm_group_eng_user_alice@acme.test_" + day: "4"}, "s3cret")
+	serveValkey(t, ln, map[string]string{"ambit-llm_group_eng_user_user01@example.com_" + day: "4"}, "s3cret")
 	roots := x509.NewCertPool()
 	roots.AddCert(srv.Certificate())
 	scheme := runtime.NewScheme()
@@ -156,10 +156,10 @@ func TestBudgetViewShowsSpend(t *testing.T) {
 	now := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
 	day := strconv.FormatInt(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC).Unix(), 10)
 	addr := fakeValkey(t, map[string]string{
-		"ambit-llm_spend_group_ml-research_" + day:                           "3120000",
-		"ambit-llm_spend_group_ml-research_spend_user_mira@acme.test_" + day: "300000",
-		"ambit-llm_spend_group_ml-research_spend_user_kim@acme.test_" + day:  "3",
-		"ambit-llm_group_ml-research_user_mira@acme.test_" + day:             "4",
+		"ambit-llm_spend_group_ml-research_" + day:                               "3120000",
+		"ambit-llm_spend_group_ml-research_spend_user_user09@example.com_" + day: "300000",
+		"ambit-llm_spend_group_ml-research_spend_user_user05@example.com_" + day: "3",
+		"ambit-llm_group_ml-research_user_user09@example.com_" + day:             "4",
 	})
 	scheme := runtime.NewScheme()
 	_ = v1.AddToScheme(scheme)
@@ -179,7 +179,7 @@ func TestBudgetViewShowsSpend(t *testing.T) {
 	for _, u := range v.Users {
 		spent[u.Email], used[u.Email] = u.Spent, u.Used
 	}
-	if spent["mira@acme.test"] != 3 || spent["kim@acme.test"] != 0.00003 || used["mira@acme.test"] != 4 {
+	if spent["user09@example.com"] != 3 || spent["user05@example.com"] != 0.00003 || used["user09@example.com"] != 4 {
 		t.Fatalf("users %+v", v.Users)
 	}
 }
@@ -190,7 +190,7 @@ func TestBudgetViewSpendReadFailure(t *testing.T) {
 	day := strconv.FormatInt(time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC).Unix(), 10)
 	for name, data := range map[string]map[string]string{
 		"group":  {"ambit-llm_spend_group_ml-research_" + day: "not a number"},
-		"person": {"ambit-llm_spend_group_ml-research_spend_user_mira@acme.test_" + day: "not a number"},
+		"person": {"ambit-llm_spend_group_ml-research_spend_user_user09@example.com_" + day: "not a number"},
 	} {
 		scheme := runtime.NewScheme()
 		_ = v1.AddToScheme(scheme)

@@ -19,7 +19,7 @@ func TestConsoleToolsForPerUserServer(t *testing.T) {
 	console := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/tools/jira-mcp":
-			w.Write([]byte(`{"tools":[{"name":"get_issue","fingerprint":"f1"}],"reader":"admin@acme.test"}`))
+			w.Write([]byte(`{"tools":[{"name":"get_issue","fingerprint":"f1"}],"reader":"admin@example.com"}`))
 		case "/v1/tools/unbound":
 			w.WriteHeader(409)
 			w.Write([]byte(`{"reason":"server is not bound to its connection"}`))

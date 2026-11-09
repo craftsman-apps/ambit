@@ -1,10 +1,10 @@
 # Test identity provider for step 2. NOT part of the Ambit package; stands in for a customer's Okta.
 # The realm's user profile makes email optional, so user noemail can get a token without an email claim.
-# Test-only credentials: priya/priya-test-pass (ambit-admins), sam/sam-test-pass (ambit-approvers),
-# alice/alice-test-pass (eng), mira/mira-test-pass (ml-research), noemail/noemail-test-pass (eng, no email), keytest/keytest-test-pass (eng; the key tests' offboarding user). Keycloak admin: admin/admin.
+# Test-only credentials: user10/user10-test-pass (ambit-admins), user11/user11-test-pass (ambit-approvers),
+# user01/user01-test-pass (eng), user09/user09-test-pass (ml-research), noemail/noemail-test-pass (eng, no email), keytest/keytest-test-pass (eng; the key tests' offboarding user). Keycloak admin: admin/admin.
 # Client ambit-cli-test: password grant for tests only; access tokens carry groups and aud=ambit-gateway.
-# Realm saas (step 5) stands in for a SaaS app such as Jira: its own accounts alice/alice-saas-pass and
-# mira/mira-saas-pass, and the confidential client ambit-connect that Ambit's Connection uses (password grant on, so a test can get a token with the whoami audience).
+# Realm saas (step 5) stands in for a SaaS app such as Jira: its own accounts user01/user01-saas-pass and
+# user09/user09-saas-pass, and the confidential client ambit-connect that Ambit's Connection uses (password grant on, so a test can get a token with the whoami audience).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -90,16 +90,16 @@ data:
       ],
       "users": [
         {
-          "username": "priya",
-          "email": "priya@acme.test",
+          "username": "user10",
+          "email": "user10@example.com",
           "emailVerified": true,
-          "firstName": "Priya",
+          "firstName": "User10",
           "lastName": "Test",
           "enabled": true,
           "credentials": [
             {
               "type": "password",
-              "value": "priya-test-pass",
+              "value": "user10-test-pass",
               "temporary": false
             }
           ],
@@ -108,16 +108,16 @@ data:
           ]
         },
         {
-          "username": "sam",
-          "email": "sam@acme.test",
+          "username": "user11",
+          "email": "user11@example.com",
           "emailVerified": true,
-          "firstName": "Sam",
+          "firstName": "User11",
           "lastName": "Test",
           "enabled": true,
           "credentials": [
             {
               "type": "password",
-              "value": "sam-test-pass",
+              "value": "user11-test-pass",
               "temporary": false
             }
           ],
@@ -144,7 +144,7 @@ data:
         },
         {
           "username": "keytest",
-          "email": "keytest@acme.test",
+          "email": "keytest@example.com",
           "emailVerified": true,
           "firstName": "Key",
           "lastName": "Test",
@@ -161,16 +161,16 @@ data:
           ]
         },
         {
-          "username": "alice",
-          "email": "alice@acme.test",
+          "username": "user01",
+          "email": "user01@example.com",
           "emailVerified": true,
-          "firstName": "Alice",
+          "firstName": "User01",
           "lastName": "Test",
           "enabled": true,
           "credentials": [
             {
               "type": "password",
-              "value": "alice-test-pass",
+              "value": "user01-test-pass",
               "temporary": false
             }
           ],
@@ -179,16 +179,16 @@ data:
           ]
         },
         {
-          "username": "mira",
-          "email": "mira@acme.test",
+          "username": "user09",
+          "email": "user09@example.com",
           "emailVerified": true,
-          "firstName": "Mira",
+          "firstName": "User09",
           "lastName": "Test",
           "enabled": true,
           "credentials": [
             {
               "type": "password",
-              "value": "mira-test-pass",
+              "value": "user09-test-pass",
               "temporary": false
             }
           ],
@@ -233,10 +233,10 @@ data:
         }
       ],
       "users": [
-        { "username": "alice", "email": "alice@saas.test", "emailVerified": true, "firstName": "Alice", "lastName": "SaaS", "enabled": true,
-          "credentials": [{ "type": "password", "value": "alice-saas-pass", "temporary": false }] },
-        { "username": "mira", "email": "mira@saas.test", "emailVerified": true, "firstName": "Mira", "lastName": "SaaS", "enabled": true,
-          "credentials": [{ "type": "password", "value": "mira-saas-pass", "temporary": false }] }
+        { "username": "user01", "email": "user01@saas.test", "emailVerified": true, "firstName": "User01", "lastName": "SaaS", "enabled": true,
+          "credentials": [{ "type": "password", "value": "user01-saas-pass", "temporary": false }] },
+        { "username": "user09", "email": "user09@saas.test", "emailVerified": true, "firstName": "User09", "lastName": "SaaS", "enabled": true,
+          "credentials": [{ "type": "password", "value": "user09-saas-pass", "temporary": false }] }
       ]
     }
 ---

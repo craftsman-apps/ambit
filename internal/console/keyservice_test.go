@@ -58,8 +58,8 @@ func newKeySvcWith(t *testing.T, f interceptor.Funcs, objs ...client.Object) (*K
 	return s, clk
 }
 
-func alice(groups ...string) Session {
-	return Session{Email: "Alice@Acme.com", Groups: groups, SignedIn: t0.Unix()}
+func user01(groups ...string) Session {
+	return Session{Email: "User01@Acme.com", Groups: groups, SignedIn: t0.Unix()}
 }
 
 func isKeySecret(obj client.Object) bool {
@@ -69,15 +69,15 @@ func isKeySecret(obj client.Object) bool {
 
 func TestCreateWritesOwnerFirstAndAKey(t *testing.T) {
 	s, _ := newKeySvc(t)
-	plain, k, err := s.Create(context.Background(), alice("eng"), "laptop", ScopeBoth, 90)
+	plain, k, err := s.Create(context.Background(), user01("eng"), "laptop", ScopeBoth, 90)
 	if err != nil || plain == "" {
 		t.Fatal(err)
 	}
-	if k.Email != "alice@acme.com" || !k.Until.Equal(t0.AddDate(0, 0, 30)) || !k.Ceiling.Equal(t0.AddDate(0, 0, 90)) {
+	if k.Email != "user01@acme.com" || !k.Until.Equal(t0.AddDate(0, 0, 30)) || !k.Ceiling.Equal(t0.AddDate(0, 0, 90)) {
 		t.Fatalf("key %+v", k)
 	}
 	var o corev1.Secret
-	if err := s.Client.Get(context.Background(), client.ObjectKey{Namespace: "ambit-system", Name: "ambit-key-owner-" + ownerHash("alice@acme.com")}, &o); err != nil {
+	if err := s.Client.Get(context.Background(), client.ObjectKey{Namespace: "ambit-system", Name: "ambit-key-owner-" + ownerHash("user01@acme.com")}, &o); err != nil {
 		t.Fatal("owner record missing:", err)
 	}
 	if ev, _ := keyChanges(s); len(ev) != 1 || ev[0].Action != "create" || ev[0].KeyID != k.ID {
@@ -93,18 +93,18 @@ func TestCreateWritesOwnerBeforeKey(t *testing.T) {
 		}
 		return c.Create(ctx, obj, opts...)
 	}})
-	_, k, err := s.Create(context.Background(), alice("eng"), "laptop", ScopeLLM, 90)
+	_, k, err := s.Create(context.Background(), user01("eng"), "laptop", ScopeLLM, 90)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(order) != 2 || order[0] != "ambit-key-owner-"+ownerHash("alice@acme.com") || order[1] != "ambit-key-"+k.ID {
+	if len(order) != 2 || order[0] != "ambit-key-owner-"+ownerHash("user01@acme.com") || order[1] != "ambit-key-"+k.ID {
 		t.Fatalf("write order %v", order)
 	}
 }
 
 func TestCreateRefusals(t *testing.T) {
 	s, _ := newKeySvc(t, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: OffboardedConfigMap, Namespace: "ambit-system"},
-		Data: map[string]string{"emails": `["bob@acme.com"]`}})
+		Data: map[string]string{"emails": `["user02@acme.com"]`}})
 	ctx := context.Background()
 	for _, c := range []struct {
 		sess  Session
@@ -113,14 +113,14 @@ func TestCreateRefusals(t *testing.T) {
 		days  int
 		want  error
 	}{
-		{alice(), "", ScopeLLM, 90, ErrBadInput},
-		{alice(), "   ", ScopeLLM, 90, ErrBadInput},
-		{alice(), strings.Repeat("n", 101), ScopeLLM, 90, ErrBadInput},
-		{alice(), "x", "all", 90, ErrBadInput},
-		{alice(), "x", ScopeLLM, 60, ErrBadInput},
-		{alice(), "x", ScopeLLM, 0, ErrBadInput},
-		{Session{Email: "alice@acme.com"}, "x", ScopeLLM, 90, ErrSignInAgain}, // a session from before the upgrade
-		{Session{Email: "Bob@ACME.com", SignedIn: t0.Unix()}, "x", ScopeLLM, 90, ErrOffboarded},
+		{user01(), "", ScopeLLM, 90, ErrBadInput},
+		{user01(), "   ", ScopeLLM, 90, ErrBadInput},
+		{user01(), strings.Repeat("n", 101), ScopeLLM, 90, ErrBadInput},
+		{user01(), "x", "all", 90, ErrBadInput},
+		{user01(), "x", ScopeLLM, 60, ErrBadInput},
+		{user01(), "x", ScopeLLM, 0, ErrBadInput},
+		{Session{Email: "user01@acme.com"}, "x", ScopeLLM, 90, ErrSignInAgain}, // a session from before the upgrade
+		{Session{Email: "User02@ACME.com", SignedIn: t0.Unix()}, "x", ScopeLLM, 90, ErrOffboarded},
 		{Session{Email: "no email", SignedIn: t0.Unix()}, "x", ScopeLLM, 90, ErrBadInput},
 	} {
 		if _, _, err := s.Create(ctx, c.sess, c.name, c.scope, c.days); !errors.Is(err, c.want) {
@@ -128,16 +128,16 @@ func TestCreateRefusals(t *testing.T) {
 		}
 	}
 	s.Settings.MaxDays = 90
-	if _, _, err := s.Create(ctx, alice(), "x", ScopeLLM, 365); !errors.Is(err, ErrBadInput) {
+	if _, _, err := s.Create(ctx, user01(), "x", ScopeLLM, 365); !errors.Is(err, ErrBadInput) {
 		t.Error("365 days above maxDays accepted")
 	}
 	s.Settings.Enabled = false
-	if _, _, err := s.Create(ctx, alice(), "x", ScopeLLM, 30); !errors.Is(err, ErrKeysOff) {
+	if _, _, err := s.Create(ctx, user01(), "x", ScopeLLM, 30); !errors.Is(err, ErrKeysOff) {
 		t.Error("created while switched off")
 	}
 	s.Settings.Enabled = true
 	s.EndTermForTest()
-	if _, _, err := s.Create(ctx, alice(), "x", ScopeLLM, 30); !errors.Is(err, ErrNotLeader) {
+	if _, _, err := s.Create(ctx, user01(), "x", ScopeLLM, 30); !errors.Is(err, ErrNotLeader) {
 		t.Error("created without the lease")
 	}
 	if all, _ := s.ListAll(ctx); len(all) != 0 {
@@ -156,7 +156,7 @@ func TestCreateIsSerialized(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start
-			_, _, err := s.Create(context.Background(), alice(), "k", ScopeLLM, 30)
+			_, _, err := s.Create(context.Background(), user01(), "k", ScopeLLM, 30)
 			switch {
 			case err == nil:
 				ok.Add(1)
@@ -170,7 +170,7 @@ func TestCreateIsSerialized(t *testing.T) {
 	}
 	close(start)
 	wg.Wait()
-	keys, _ := s.List(context.Background(), "alice@acme.com")
+	keys, _ := s.List(context.Background(), "user01@acme.com")
 	if ok.Load() != 20 || tooMany.Load() != 5 || other.Load() != 0 || len(keys) != 20 {
 		t.Fatalf("keys %d ok %d tooMany %d other %d", len(keys), ok.Load(), tooMany.Load(), other.Load())
 	}
@@ -179,19 +179,19 @@ func TestCreateIsSerialized(t *testing.T) {
 func TestHourlyCreationLimit(t *testing.T) {
 	s, clk := newKeySvc(t)
 	for i := 0; i < 10; i++ {
-		if _, _, err := s.Create(context.Background(), alice(), "k", ScopeLLM, 30); err != nil {
+		if _, _, err := s.Create(context.Background(), user01(), "k", ScopeLLM, 30); err != nil {
 			t.Fatal(i, err)
 		}
 	}
-	if _, _, err := s.Create(context.Background(), alice(), "k", ScopeLLM, 30); !errors.Is(err, ErrTooFast) {
+	if _, _, err := s.Create(context.Background(), user01(), "k", ScopeLLM, 30); !errors.Is(err, ErrTooFast) {
 		t.Fatal("11th in an hour accepted")
 	}
 	// Another person has their own allowance.
-	if _, _, err := s.Create(context.Background(), Session{Email: "bob@acme.com", SignedIn: t0.Unix()}, "k", ScopeLLM, 30); err != nil {
-		t.Fatal("bob refused:", err)
+	if _, _, err := s.Create(context.Background(), Session{Email: "user02@acme.com", SignedIn: t0.Unix()}, "k", ScopeLLM, 30); err != nil {
+		t.Fatal("user02 refused:", err)
 	}
 	clk.Set(t0.Add(61 * time.Minute))
-	if _, _, err := s.Create(context.Background(), alice(), "k", ScopeLLM, 30); err != nil {
+	if _, _, err := s.Create(context.Background(), user01(), "k", ScopeLLM, 30); err != nil {
 		t.Fatal("after an hour:", err)
 	}
 }
@@ -201,16 +201,16 @@ func TestLimitCountsOnlyLiveKeys(t *testing.T) {
 	s.PerHour = 100
 	ctx := context.Background()
 	for i := 0; i < 20; i++ {
-		if _, _, err := s.Create(ctx, alice(), "k", ScopeLLM, 30); err != nil {
+		if _, _, err := s.Create(ctx, user01(), "k", ScopeLLM, 30); err != nil {
 			t.Fatal(i, err)
 		}
 	}
-	if _, _, err := s.Create(ctx, alice(), "k", ScopeLLM, 30); !errors.Is(err, ErrTooMany) {
+	if _, _, err := s.Create(ctx, user01(), "k", ScopeLLM, 30); !errors.Is(err, ErrTooMany) {
 		t.Fatal("21st key accepted:", err)
 	}
 	// All 20 stopped (past until) but are not yet cleaned up: they no longer count.
 	clk.Set(t0.AddDate(0, 0, 30).Add(time.Second))
-	late := Session{Email: "alice@acme.com", SignedIn: clk.Now().Unix()}
+	late := Session{Email: "user01@acme.com", SignedIn: clk.Now().Unix()}
 	if _, _, err := s.Create(ctx, late, "k", ScopeLLM, 30); err != nil {
 		t.Fatal("stopped keys counted against the limit:", err)
 	}
@@ -219,20 +219,20 @@ func TestLimitCountsOnlyLiveKeys(t *testing.T) {
 func TestRefreshIsMonotonicAndDeletesExpired(t *testing.T) {
 	s, clk := newKeySvc(t)
 	ctx := context.Background()
-	if _, _, err := s.Create(ctx, alice("eng", "admins"), "live", ScopeLLM, 90); err != nil {
+	if _, _, err := s.Create(ctx, user01("eng", "admins"), "live", ScopeLLM, 90); err != nil {
 		t.Fatal(err)
 	}
 	now := t0.AddDate(0, 0, 25)
 	clk.Set(now)
-	newer := Session{Email: "alice@acme.com", Groups: []string{"eng"}, SignedIn: now.Unix()}
+	newer := Session{Email: "user01@acme.com", Groups: []string{"eng"}, SignedIn: now.Unix()}
 	if err := s.Refresh(ctx, newer); err != nil {
 		t.Fatal(err)
 	}
-	older := Session{Email: "alice@acme.com", Groups: []string{"eng", "admins"}, SignedIn: t0.Unix() + 60}
+	older := Session{Email: "user01@acme.com", Groups: []string{"eng", "admins"}, SignedIn: t0.Unix() + 60}
 	if err := s.Refresh(ctx, older); err != nil {
 		t.Fatal(err)
 	}
-	keys, _ := s.List(ctx, "alice@acme.com")
+	keys, _ := s.List(ctx, "user01@acme.com")
 	if len(keys) != 1 || len(keys[0].Groups) != 1 || !keys[0].Until.Equal(now.AddDate(0, 0, 30)) {
 		t.Fatalf("an older refresh must not win: %+v", keys)
 	}
@@ -241,10 +241,10 @@ func TestRefreshIsMonotonicAndDeletesExpired(t *testing.T) {
 		t.Fatalf("one refresh event expected (the older one changed nothing): %+v", ev)
 	}
 	clk.Set(keys[0].Until.Add(time.Minute)) // inactive past until
-	if err := s.Refresh(ctx, Session{Email: "alice@acme.com", Groups: []string{"eng"}, SignedIn: clk.Now().Unix()}); err != nil {
+	if err := s.Refresh(ctx, Session{Email: "user01@acme.com", Groups: []string{"eng"}, SignedIn: clk.Now().Unix()}); err != nil {
 		t.Fatal(err)
 	}
-	if keys, _ := s.List(ctx, "alice@acme.com"); len(keys) != 0 {
+	if keys, _ := s.List(ctx, "user01@acme.com"); len(keys) != 0 {
 		t.Fatalf("an expired key was revived: %+v", keys)
 	}
 }
@@ -252,13 +252,13 @@ func TestRefreshIsMonotonicAndDeletesExpired(t *testing.T) {
 func TestRefreshFindsOwnerByCanonicalEmail(t *testing.T) {
 	s, _ := newKeySvc(t)
 	ctx := context.Background()
-	if _, _, err := s.Create(ctx, alice("eng"), "k", ScopeLLM, 90); err != nil {
+	if _, _, err := s.Create(ctx, user01("eng"), "k", ScopeLLM, 90); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Refresh(ctx, Session{Email: " ALICE@acme.COM", Groups: []string{"ops"}, SignedIn: t0.Unix() + 10}); err != nil {
+	if err := s.Refresh(ctx, Session{Email: " USER01@acme.COM", Groups: []string{"ops"}, SignedIn: t0.Unix() + 10}); err != nil {
 		t.Fatal(err)
 	}
-	keys, _ := s.List(ctx, " Alice@ACME.com")
+	keys, _ := s.List(ctx, " User01@ACME.com")
 	if len(keys) != 1 || keys[0].Groups[0] != "ops" {
 		t.Fatalf("%+v", keys)
 	}
@@ -267,47 +267,47 @@ func TestRefreshFindsOwnerByCanonicalEmail(t *testing.T) {
 func TestRefreshIgnoresOffboarded(t *testing.T) {
 	s, _ := newKeySvc(t)
 	ctx := context.Background()
-	if _, _, err := s.Create(ctx, alice("eng"), "k", ScopeLLM, 90); err != nil {
+	if _, _, err := s.Create(ctx, user01("eng"), "k", ScopeLLM, 90); err != nil {
 		t.Fatal(err)
 	}
 	// Owner record says offboarded (keys not yet deleted, e.g. a crash mid-offboarding).
-	o, _ := s.owner(ctx, "alice@acme.com")
+	o, _ := s.owner(ctx, "user01@acme.com")
 	o.Offboarded = true
 	if err := s.putOwner(ctx, o); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Refresh(ctx, Session{Email: "alice@acme.com", Groups: []string{"admins"}, SignedIn: t0.Unix() + 10}); err != nil {
+	if err := s.Refresh(ctx, Session{Email: "user01@acme.com", Groups: []string{"admins"}, SignedIn: t0.Unix() + 10}); err != nil {
 		t.Fatal(err)
 	}
-	if keys, _ := s.List(ctx, "alice@acme.com"); len(keys) != 1 || keys[0].Groups[0] != "eng" {
+	if keys, _ := s.List(ctx, "user01@acme.com"); len(keys) != 1 || keys[0].Groups[0] != "eng" {
 		t.Fatalf("refresh changed an offboarded owner's key: %+v", keys)
 	}
 	// Email in the offboarding records, owner record not (yet) marked.
 	s2, _ := newKeySvc(t)
-	if _, _, err := s2.Create(ctx, alice("eng"), "k", ScopeLLM, 90); err != nil {
+	if _, _, err := s2.Create(ctx, user01("eng"), "k", ScopeLLM, 90); err != nil {
 		t.Fatal(err)
 	}
 	if err := s2.Client.Create(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: OffboardedConfigMap, Namespace: "ambit-system"},
-		Data: map[string]string{"emails": `["alice@acme.com"]`}}); err != nil {
+		Data: map[string]string{"emails": `["user01@acme.com"]`}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s2.Refresh(ctx, Session{Email: "alice@acme.com", Groups: []string{"admins"}, SignedIn: t0.Unix() + 10}); err != nil {
+	if err := s2.Refresh(ctx, Session{Email: "user01@acme.com", Groups: []string{"admins"}, SignedIn: t0.Unix() + 10}); err != nil {
 		t.Fatal(err)
 	}
-	if keys, _ := s2.List(ctx, "alice@acme.com"); len(keys) != 1 || keys[0].Groups[0] != "eng" {
+	if keys, _ := s2.List(ctx, "user01@acme.com"); len(keys) != 1 || keys[0].Groups[0] != "eng" {
 		t.Fatalf("refresh changed a blocked person's key: %+v", keys)
 	}
-	if o, _ := s2.owner(ctx, "alice@acme.com"); o.Groups[0] != "eng" {
+	if o, _ := s2.owner(ctx, "user01@acme.com"); o.Groups[0] != "eng" {
 		t.Fatalf("refresh changed a blocked person's owner record: %+v", o)
 	}
 }
 
 func TestRefreshWithoutOwnerRecordIsANoop(t *testing.T) {
 	s, _ := newKeySvc(t)
-	if err := s.Refresh(context.Background(), Session{Email: "carol@acme.com", Groups: []string{"eng"}, SignedIn: t0.Unix()}); err != nil {
+	if err := s.Refresh(context.Background(), Session{Email: "user03@acme.com", Groups: []string{"eng"}, SignedIn: t0.Unix()}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.owner(context.Background(), "carol@acme.com"); !apierrors.IsNotFound(err) {
+	if _, err := s.owner(context.Background(), "user03@acme.com"); !apierrors.IsNotFound(err) {
 		t.Fatal("refresh created an owner record:", err)
 	}
 }
@@ -315,19 +315,19 @@ func TestRefreshWithoutOwnerRecordIsANoop(t *testing.T) {
 func TestRefreshAfterLoweredLimitKeepsTheLowerCeiling(t *testing.T) {
 	s, _ := newKeySvc(t)
 	ctx := context.Background()
-	_, k, err := s.Create(ctx, alice("eng"), "k", ScopeLLM, 365)
+	_, k, err := s.Create(ctx, user01("eng"), "k", ScopeLLM, 365)
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.Settings.MaxDays = 30
-	if err := s.Refresh(ctx, Session{Email: "alice@acme.com", Groups: []string{"eng"}, SignedIn: t0.Unix() + 10}); err != nil {
+	if err := s.Refresh(ctx, Session{Email: "user01@acme.com", Groups: []string{"eng"}, SignedIn: t0.Unix() + 10}); err != nil {
 		t.Fatal(err)
 	}
 	s.Settings.MaxDays = 365 // the operator raises it again
-	if err := s.Refresh(ctx, Session{Email: "alice@acme.com", Groups: []string{"eng"}, SignedIn: t0.Unix() + 20}); err != nil {
+	if err := s.Refresh(ctx, Session{Email: "user01@acme.com", Groups: []string{"eng"}, SignedIn: t0.Unix() + 20}); err != nil {
 		t.Fatal(err)
 	}
-	keys, _ := s.List(ctx, "alice@acme.com")
+	keys, _ := s.List(ctx, "user01@acme.com")
 	if len(keys) != 1 || !keys[0].Ceiling.Equal(k.Created.AddDate(0, 0, 30)) || keys[0].Until.After(keys[0].Ceiling) {
 		t.Fatalf("ceiling not kept lowered: %+v", keys)
 	}
@@ -337,17 +337,17 @@ func TestRepairFromOwnerRecords(t *testing.T) {
 	s, clk := newKeySvc(t)
 	ctx := context.Background()
 	for i := 0; i < 3; i++ {
-		if _, _, err := s.Create(ctx, alice("eng", "admins"), "k", ScopeLLM, 365); err != nil {
+		if _, _, err := s.Create(ctx, user01("eng", "admins"), "k", ScopeLLM, 365); err != nil {
 			t.Fatal(err)
 		}
 	}
 	// Simulate a refresh that crashed after writing the owner record and one key.
-	o, _ := s.owner(ctx, "alice@acme.com")
+	o, _ := s.owner(ctx, "user01@acme.com")
 	o.Groups, o.SignedIn = []string{"eng"}, t0.Add(time.Hour)
 	if err := s.putOwner(ctx, o); err != nil {
 		t.Fatal(err)
 	}
-	keys, _ := s.List(ctx, "alice@acme.com")
+	keys, _ := s.List(ctx, "user01@acme.com")
 	keys[0].Groups = []string{"eng"}
 	if err := s.putKey(ctx, keys[0]); err != nil {
 		t.Fatal(err)
@@ -358,7 +358,7 @@ func TestRepairFromOwnerRecords(t *testing.T) {
 	if err != nil || rep.Updated < 3 {
 		t.Fatalf("%+v %v", rep, err)
 	}
-	keys, _ = s.List(ctx, "alice@acme.com")
+	keys, _ = s.List(ctx, "user01@acme.com")
 	for _, k := range keys {
 		if len(k.Groups) != 1 || k.Ceiling.After(k.Created.AddDate(0, 0, 30)) || k.Until.After(k.Ceiling) {
 			t.Fatalf("not repaired: %+v", k)
@@ -373,7 +373,7 @@ func TestRepairFromOwnerRecords(t *testing.T) {
 func TestRepairNeverExtendsACurrentKey(t *testing.T) {
 	s, _ := newKeySvc(t)
 	ctx := context.Background()
-	_, k, err := s.Create(ctx, alice("eng"), "k", ScopeLLM, 90)
+	_, k, err := s.Create(ctx, user01("eng"), "k", ScopeLLM, 90)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +381,7 @@ func TestRepairNeverExtendsACurrentKey(t *testing.T) {
 	if _, err := s.Repair(ctx); err != nil {
 		t.Fatal(err)
 	}
-	keys, _ := s.List(ctx, "alice@acme.com")
+	keys, _ := s.List(ctx, "user01@acme.com")
 	if len(keys) != 1 || !keys[0].Until.Equal(k.Until) {
 		t.Fatalf("repair extended a key: %+v", keys)
 	}
@@ -397,17 +397,17 @@ func TestRepairCompletesAnInterruptedRefresh(t *testing.T) {
 	}})
 	ctx := context.Background()
 	for i := 0; i < 2; i++ {
-		if _, _, err := s.Create(ctx, alice("eng", "admins"), "k", ScopeLLM, 90); err != nil {
+		if _, _, err := s.Create(ctx, user01("eng", "admins"), "k", ScopeLLM, 90); err != nil {
 			t.Fatal(err)
 		}
 	}
 	now := t0.AddDate(0, 0, 10)
 	clk.Set(now)
 	failKeyUpdates.Store(true)
-	if err := s.Refresh(ctx, Session{Email: "alice@acme.com", Groups: []string{"eng"}, SignedIn: now.Unix()}); err == nil {
+	if err := s.Refresh(ctx, Session{Email: "user01@acme.com", Groups: []string{"eng"}, SignedIn: now.Unix()}); err == nil {
 		t.Fatal("refresh hid a failed key write")
 	}
-	if o, _ := s.owner(ctx, "alice@acme.com"); len(o.Groups) != 1 || !o.SignedIn.Equal(now) {
+	if o, _ := s.owner(ctx, "user01@acme.com"); len(o.Groups) != 1 || !o.SignedIn.Equal(now) {
 		t.Fatalf("owner record not written first: %+v", o)
 	}
 	failKeyUpdates.Store(false)
@@ -415,7 +415,7 @@ func TestRepairCompletesAnInterruptedRefresh(t *testing.T) {
 	if err != nil || rep.Updated != 2 {
 		t.Fatalf("%+v %v", rep, err)
 	}
-	keys, _ := s.List(ctx, "alice@acme.com")
+	keys, _ := s.List(ctx, "user01@acme.com")
 	for _, k := range keys {
 		if len(k.Groups) != 1 || !k.SignedIn.Equal(now) || !k.Until.Equal(now.AddDate(0, 0, 30)) {
 			t.Fatalf("refresh not completed by repair: %+v", k)
@@ -432,13 +432,13 @@ func TestKeyUpdateRetriesOnConflict(t *testing.T) {
 		return c.Update(ctx, obj, opts...)
 	}})
 	ctx := context.Background()
-	if _, _, err := s.Create(ctx, alice("eng"), "k", ScopeLLM, 90); err != nil {
+	if _, _, err := s.Create(ctx, user01("eng"), "k", ScopeLLM, 90); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Refresh(ctx, Session{Email: "alice@acme.com", Groups: []string{"ops"}, SignedIn: t0.Unix() + 10}); err != nil {
+	if err := s.Refresh(ctx, Session{Email: "user01@acme.com", Groups: []string{"ops"}, SignedIn: t0.Unix() + 10}); err != nil {
 		t.Fatal(err)
 	}
-	if keys, _ := s.List(ctx, "alice@acme.com"); len(keys) != 1 || keys[0].Groups[0] != "ops" || conflicts.Load() < 2 {
+	if keys, _ := s.List(ctx, "user01@acme.com"); len(keys) != 1 || keys[0].Groups[0] != "ops" || conflicts.Load() < 2 {
 		t.Fatalf("conflict not retried: %+v (%d updates)", keys, conflicts.Load())
 	}
 }
@@ -446,11 +446,11 @@ func TestKeyUpdateRetriesOnConflict(t *testing.T) {
 func TestStaleResourceVersionIsRefused(t *testing.T) {
 	s, _ := newKeySvc(t)
 	ctx := context.Background()
-	_, k, err := s.Create(ctx, alice("eng"), "k", ScopeLLM, 90)
+	_, k, err := s.Create(ctx, user01("eng"), "k", ScopeLLM, 90)
 	if err != nil {
 		t.Fatal(err)
 	}
-	stale, _ := s.List(ctx, "alice@acme.com")
+	stale, _ := s.List(ctx, "user01@acme.com")
 	fresh := stale[0]
 	fresh.Name = "renamed outside the console"
 	if err := s.putKey(ctx, fresh); err != nil {
@@ -459,11 +459,11 @@ func TestStaleResourceVersionIsRefused(t *testing.T) {
 	if err := s.deleteKey(ctx, stale[0], "revoke", "test"); !apierrors.IsConflict(err) {
 		t.Fatal("delete with a stale resourceVersion was not refused:", err)
 	}
-	if keys, _ := s.List(ctx, "alice@acme.com"); len(keys) != 1 || keys[0].ID != k.ID {
+	if keys, _ := s.List(ctx, "user01@acme.com"); len(keys) != 1 || keys[0].ID != k.ID {
 		t.Fatal("key deleted despite the stale version")
 	}
 	// Revoke re-reads and succeeds.
-	if err := s.Revoke(ctx, alice(), k.ID, false); err != nil {
+	if err := s.Revoke(ctx, user01(), k.ID, false); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -476,19 +476,19 @@ func TestRepairDeletesOrphansOffboardedAndUnreadable(t *testing.T) {
 	if err := s.Client.Create(ctx, bad); err != nil {
 		t.Fatal(err)
 	}
-	_, _, _ = s.Create(ctx, alice(), "k", ScopeLLM, 90)
-	_, _, _ = s.Create(ctx, Session{Email: "bob@acme.com", SignedIn: t0.Unix()}, "k", ScopeLLM, 90)
-	_, _, _ = s.Create(ctx, Session{Email: "carol@acme.com", SignedIn: t0.Unix()}, "k", ScopeLLM, 90)
+	_, _, _ = s.Create(ctx, user01(), "k", ScopeLLM, 90)
+	_, _, _ = s.Create(ctx, Session{Email: "user02@acme.com", SignedIn: t0.Unix()}, "k", ScopeLLM, 90)
+	_, _, _ = s.Create(ctx, Session{Email: "user03@acme.com", SignedIn: t0.Unix()}, "k", ScopeLLM, 90)
 	_ = s.Client.Create(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: OffboardedConfigMap, Namespace: "ambit-system"},
-		Data: map[string]string{"emails": `["bob@acme.com"]`}})
-	o, _ := s.owner(ctx, "alice@acme.com")
+		Data: map[string]string{"emails": `["user02@acme.com"]`}})
+	o, _ := s.owner(ctx, "user01@acme.com")
 	_ = s.Client.Delete(ctx, o.Secret("ambit-system"))
 	rep, err := s.Repair(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	all, _ := s.ListAll(ctx)
-	if len(all) != 1 || all[0].Email != "carol@acme.com" || rep.Deleted != 3 {
+	if len(all) != 1 || all[0].Email != "user03@acme.com" || rep.Deleted != 3 {
 		t.Fatalf("left %+v, report %+v", all, rep)
 	}
 }
@@ -496,16 +496,16 @@ func TestRepairDeletesOrphansOffboardedAndUnreadable(t *testing.T) {
 func TestOffboardKeysDeletesAndMarksOwner(t *testing.T) {
 	s, _ := newKeySvc(t)
 	ctx := context.Background()
-	_, _, _ = s.Create(ctx, alice(), "a", ScopeLLM, 90)
-	_, _, _ = s.Create(ctx, alice(), "b", ScopeMCP, 90)
-	n, err := s.OffboardKeys(ctx, "ALICE@acme.com", "scim PATCH active=false")
+	_, _, _ = s.Create(ctx, user01(), "a", ScopeLLM, 90)
+	_, _, _ = s.Create(ctx, user01(), "b", ScopeMCP, 90)
+	n, err := s.OffboardKeys(ctx, "USER01@acme.com", "scim PATCH active=false")
 	if err != nil || n != 2 {
 		t.Fatal(n, err)
 	}
-	if o, _ := s.owner(ctx, "alice@acme.com"); !o.Offboarded {
+	if o, _ := s.owner(ctx, "user01@acme.com"); !o.Offboarded {
 		t.Fatal("owner not marked")
 	}
-	if _, _, err := s.Create(ctx, alice(), "c", ScopeLLM, 90); !errors.Is(err, ErrOffboarded) {
+	if _, _, err := s.Create(ctx, user01(), "c", ScopeLLM, 90); !errors.Is(err, ErrOffboarded) {
 		t.Fatal("created after offboarding")
 	}
 	ev, _ := s.Events(ctx)
@@ -513,7 +513,7 @@ func TestOffboardKeysDeletesAndMarksOwner(t *testing.T) {
 		t.Fatalf("%+v", ev)
 	}
 	// Idempotent, and works for someone who never had keys (owner record created, marked).
-	if n, err := s.OffboardKeys(ctx, "alice@acme.com", "retry"); err != nil || n != 0 {
+	if n, err := s.OffboardKeys(ctx, "user01@acme.com", "retry"); err != nil || n != 0 {
 		t.Fatal(n, err)
 	}
 	if _, err := s.OffboardKeys(ctx, "dave@acme.com", "scim"); err != nil {
@@ -523,7 +523,7 @@ func TestOffboardKeysDeletesAndMarksOwner(t *testing.T) {
 		t.Fatal("owner without keys not marked")
 	}
 	s.EndTermForTest()
-	if _, err := s.OffboardKeys(ctx, "alice@acme.com", "scim"); !errors.Is(err, ErrNotLeader) {
+	if _, err := s.OffboardKeys(ctx, "user01@acme.com", "scim"); !errors.Is(err, ErrNotLeader) {
 		t.Fatal("offboarded without the lease:", err)
 	}
 }
@@ -531,16 +531,16 @@ func TestOffboardKeysDeletesAndMarksOwner(t *testing.T) {
 func TestReactivationAllowsNewKeys(t *testing.T) {
 	s, _ := newKeySvc(t)
 	ctx := context.Background()
-	if _, err := s.OffboardKeys(ctx, "alice@acme.com", "scim"); err != nil {
+	if _, err := s.OffboardKeys(ctx, "user01@acme.com", "scim"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.Create(ctx, alice(), "c", ScopeLLM, 90); !errors.Is(err, ErrOffboarded) {
+	if _, _, err := s.Create(ctx, user01(), "c", ScopeLLM, 90); !errors.Is(err, ErrOffboarded) {
 		t.Fatal("created while offboarded")
 	}
-	if err := s.Reactivate(ctx, "Alice@Acme.com"); err != nil {
+	if err := s.Reactivate(ctx, "User01@Acme.com"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.Create(ctx, alice(), "c", ScopeLLM, 90); err != nil {
+	if _, _, err := s.Create(ctx, user01(), "c", ScopeLLM, 90); err != nil {
 		t.Fatal("refused after reactivation:", err)
 	}
 	if err := s.Reactivate(ctx, "erin@acme.com"); err != nil { // no owner record: nothing to do
@@ -554,17 +554,17 @@ func TestReactivationAllowsNewKeys(t *testing.T) {
 func TestRevokeOnlyOwnOrAdmin(t *testing.T) {
 	s, _ := newKeySvc(t)
 	ctx := context.Background()
-	_, k, _ := s.Create(ctx, alice(), "a", ScopeLLM, 90)
-	if err := s.Revoke(ctx, Session{Email: "bob@acme.com"}, k.ID, false); !errors.Is(err, ErrNotFound) {
-		t.Fatal("bob revoked alice's key")
+	_, k, _ := s.Create(ctx, user01(), "a", ScopeLLM, 90)
+	if err := s.Revoke(ctx, Session{Email: "user02@acme.com"}, k.ID, false); !errors.Is(err, ErrNotFound) {
+		t.Fatal("user02 revoked user01's key")
 	}
-	if err := s.Revoke(ctx, Session{Email: "bob@acme.com"}, "../../etc", false); !errors.Is(err, ErrNotFound) {
+	if err := s.Revoke(ctx, Session{Email: "user02@acme.com"}, "../../etc", false); !errors.Is(err, ErrNotFound) {
 		t.Fatal("bad id accepted")
 	}
 	if err := s.Revoke(ctx, Session{Email: "root@acme.com", Role: RoleAdmin}, k.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Revoke(ctx, alice(), k.ID, false); !errors.Is(err, ErrNotFound) {
+	if err := s.Revoke(ctx, user01(), k.ID, false); !errors.Is(err, ErrNotFound) {
 		t.Fatal("revoked twice:", err)
 	}
 	ev, _ := s.Events(ctx)
@@ -576,7 +576,7 @@ func TestRevokeOnlyOwnOrAdmin(t *testing.T) {
 func TestEventsOlderThan400DaysAreDeleted(t *testing.T) {
 	s, clk := newKeySvc(t)
 	ctx := context.Background()
-	_, _, _ = s.Create(ctx, alice(), "a", ScopeLLM, 30)
+	_, _, _ = s.Create(ctx, user01(), "a", ScopeLLM, 30)
 	clk.Set(t0.AddDate(0, 0, 401))
 	_, _ = s.Repair(ctx)
 	if ev, _ := keyChanges(s); len(ev) != 1 || ev[0].Action != "cleanup-delete" {
@@ -587,7 +587,7 @@ func TestEventsOlderThan400DaysAreDeleted(t *testing.T) {
 func TestEventsHoldNoSecrets(t *testing.T) {
 	s, _ := newKeySvc(t)
 	ctx := context.Background()
-	plain, k, _ := s.Create(ctx, alice(), "a", ScopeLLM, 30)
+	plain, k, _ := s.Create(ctx, user01(), "a", ScopeLLM, 30)
 	var cms corev1.ConfigMapList
 	if err := s.Client.List(ctx, &cms, client.HasLabels{keyEventLabel}); err != nil || len(cms.Items) == 0 {
 		t.Fatal(err, len(cms.Items))
@@ -602,7 +602,7 @@ func TestEventsHoldNoSecrets(t *testing.T) {
 func TestExpireForTest(t *testing.T) {
 	s, _ := newKeySvc(t)
 	ctx := context.Background()
-	_, k, _ := s.Create(ctx, alice(), "a", ScopeLLM, 30)
+	_, k, _ := s.Create(ctx, user01(), "a", ScopeLLM, 30)
 	soon := t0.Add(72 * time.Hour)
 	if err := s.ExpireForTest(ctx, k.ID, soon); err != nil {
 		t.Fatal(err)
@@ -611,7 +611,7 @@ func TestExpireForTest(t *testing.T) {
 	if err := s.ExpireForTest(ctx, k.ID, later); err != nil {
 		t.Fatal(err)
 	}
-	keys, _ := s.List(ctx, "alice@acme.com")
+	keys, _ := s.List(ctx, "user01@acme.com")
 	if len(keys) != 1 || !keys[0].Until.Equal(later) || !keys[0].Ceiling.Equal(later) {
 		t.Fatalf("%+v", keys)
 	}
@@ -625,7 +625,7 @@ func TestWritableFollowsTheTerm(t *testing.T) {
 	if !s.Writable() {
 		t.Fatal("not writable after StartTerm")
 	}
-	if _, err := s.OffboardKeys(context.Background(), "alice@acme.com", "test"); err != nil { // reactivation must write
+	if _, err := s.OffboardKeys(context.Background(), "user01@acme.com", "test"); err != nil { // reactivation must write
 		t.Fatal(err)
 	}
 	s.EndTermForTest()
@@ -633,9 +633,9 @@ func TestWritableFollowsTheTerm(t *testing.T) {
 		t.Fatal("writable after the term ended")
 	}
 	for name, err := range map[string]error{
-		"revoke":     s.Revoke(context.Background(), alice(), "aaaaaaaaaaaa", false),
-		"refresh":    s.Refresh(context.Background(), alice()),
-		"reactivate": s.Reactivate(context.Background(), "alice@acme.com"),
+		"revoke":     s.Revoke(context.Background(), user01(), "aaaaaaaaaaaa", false),
+		"refresh":    s.Refresh(context.Background(), user01()),
+		"reactivate": s.Reactivate(context.Background(), "user01@acme.com"),
 		"repair":     func() error { _, err := s.Repair(context.Background()); return err }(),
 		"expire":     s.ExpireForTest(context.Background(), "aaaaaaaaaaaa", t0),
 	} {
@@ -691,7 +691,7 @@ func TestEndingTheTermCancelsAnOperation(t *testing.T) {
 	}
 	done := make(chan error)
 	go func() {
-		_, _, err := s.Create(context.Background(), alice(), "a", ScopeLLM, 30)
+		_, _, err := s.Create(context.Background(), user01(), "a", ScopeLLM, 30)
 		done <- err
 	}()
 	<-entered
@@ -732,16 +732,16 @@ func TestKeyReadsAreLabelFiltered(t *testing.T) {
 		},
 	})
 	ctx := context.Background()
-	_, k, _ := s.Create(ctx, alice("eng"), "a", ScopeLLM, 90)
-	_, _ = s.List(ctx, "alice@acme.com")
+	_, k, _ := s.Create(ctx, user01("eng"), "a", ScopeLLM, 90)
+	_, _ = s.List(ctx, "user01@acme.com")
 	_, _ = s.ListAll(ctx)
-	_ = s.Refresh(ctx, Session{Email: "alice@acme.com", Groups: []string{"ops"}, SignedIn: t0.Unix() + 1})
+	_ = s.Refresh(ctx, Session{Email: "user01@acme.com", Groups: []string{"ops"}, SignedIn: t0.Unix() + 1})
 	_ = s.ExpireForTest(ctx, k.ID, t0.Add(time.Hour))
 	_, _ = s.Repair(ctx)
 	_, _ = s.Events(ctx)
-	_ = s.Revoke(ctx, alice(), k.ID, false)
-	_, _ = s.OffboardKeys(ctx, "alice@acme.com", "scim")
-	_ = s.Reactivate(ctx, "alice@acme.com")
+	_ = s.Revoke(ctx, user01(), k.ID, false)
+	_, _ = s.OffboardKeys(ctx, "user01@acme.com", "scim")
+	_ = s.Reactivate(ctx, "user01@acme.com")
 }
 
 // keyChanges returns the recorded events except the start-of-term settings record.
@@ -802,10 +802,10 @@ func TestUnreadableOwnerRecordDeletesItsKeysAndTermStarts(t *testing.T) {
 	fastTermBackoff(t)
 	s, _ := newKeySvc(t)
 	ctx := context.Background()
-	_, ka, _ := s.Create(ctx, alice("eng"), "a", ScopeLLM, 90)
-	_, kb, _ := s.Create(ctx, Session{Email: "bob@acme.com", SignedIn: t0.Unix()}, "b", ScopeLLM, 90)
+	_, ka, _ := s.Create(ctx, user01("eng"), "a", ScopeLLM, 90)
+	_, kb, _ := s.Create(ctx, Session{Email: "user02@acme.com", SignedIn: t0.Unix()}, "b", ScopeLLM, 90)
 	var o corev1.Secret
-	if err := s.Client.Get(ctx, client.ObjectKey{Namespace: "ambit-system", Name: "ambit-key-owner-" + ownerHash("alice@acme.com")}, &o); err != nil {
+	if err := s.Client.Get(ctx, client.ObjectKey{Namespace: "ambit-system", Name: "ambit-key-owner-" + ownerHash("user01@acme.com")}, &o); err != nil {
 		t.Fatal(err)
 	}
 	o.Data = map[string][]byte{"owner.json": []byte("{")}
@@ -839,8 +839,8 @@ func TestStartTermSurvivesAKeyThatCannotBeWritten(t *testing.T) {
 		return c.Update(ctx, obj, opts...)
 	}})
 	ctx := context.Background()
-	_, k1, _ := s.Create(ctx, alice("eng"), "a", ScopeLLM, 365)
-	_, k2, _ := s.Create(ctx, alice("eng"), "b", ScopeLLM, 365)
+	_, k1, _ := s.Create(ctx, user01("eng"), "a", ScopeLLM, 365)
+	_, k2, _ := s.Create(ctx, user01("eng"), "b", ScopeLLM, 365)
 	stuck.Store("ambit-key-" + k1.ID)
 	s.Settings.MaxDays = 30 // both keys need a lower ceiling
 	lead, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -848,7 +848,7 @@ func TestStartTermSurvivesAKeyThatCannotBeWritten(t *testing.T) {
 	if err := s.StartTerm(lead); err != nil || !s.Writable() {
 		t.Fatal("one stuck key blocked the term:", err)
 	}
-	keys, _ := s.List(ctx, "alice@acme.com")
+	keys, _ := s.List(ctx, "user01@acme.com")
 	for _, k := range keys {
 		lowered := !k.Ceiling.After(k.Created.AddDate(0, 0, 30))
 		if (k.ID == k2.ID) != lowered {
@@ -891,12 +891,12 @@ func TestStartTermRecordsSettingsChanges(t *testing.T) {
 func TestListDoesNotWaitForTheLock(t *testing.T) {
 	s, _ := newKeySvc(t)
 	ctx := context.Background()
-	_, _, _ = s.Create(ctx, alice(), "a", ScopeLLM, 90)
+	_, _, _ = s.Create(ctx, user01(), "a", ScopeLLM, 90)
 	s.mu.Lock() // as a long repair would
 	defer s.mu.Unlock()
 	done := make(chan int)
 	go func() {
-		keys, _ := s.List(ctx, "alice@acme.com")
+		keys, _ := s.List(ctx, "user01@acme.com")
 		all, _ := s.ListAll(ctx)
 		done <- len(keys) + len(all)
 	}()
@@ -913,31 +913,31 @@ func TestListDoesNotWaitForTheLock(t *testing.T) {
 func TestOffboardKeysReplacesAnUnreadableOwnerRecord(t *testing.T) {
 	s, _ := newKeySvc(t)
 	ctx := context.Background()
-	_, _, _ = s.Create(ctx, alice("eng"), "a", ScopeLLM, 90)
-	_, _, _ = s.Create(ctx, alice("eng"), "b", ScopeMCP, 90)
+	_, _, _ = s.Create(ctx, user01("eng"), "a", ScopeLLM, 90)
+	_, _, _ = s.Create(ctx, user01("eng"), "b", ScopeMCP, 90)
 	var raw corev1.Secret
-	if err := s.Client.Get(ctx, client.ObjectKey{Namespace: "ambit-system", Name: "ambit-key-owner-" + ownerHash("alice@acme.com")}, &raw); err != nil {
+	if err := s.Client.Get(ctx, client.ObjectKey{Namespace: "ambit-system", Name: "ambit-key-owner-" + ownerHash("user01@acme.com")}, &raw); err != nil {
 		t.Fatal(err)
 	}
 	raw.Data = map[string][]byte{"owner.json": []byte("{")}
 	if err := s.Client.Update(ctx, &raw); err != nil {
 		t.Fatal(err)
 	}
-	n, err := s.OffboardKeys(ctx, "Alice@Acme.com", "scim PATCH active=false")
+	n, err := s.OffboardKeys(ctx, "User01@Acme.com", "scim PATCH active=false")
 	if err != nil || n != 2 {
 		t.Fatal(n, err)
 	}
-	if keys, _ := s.List(ctx, "alice@acme.com"); len(keys) != 0 {
+	if keys, _ := s.List(ctx, "user01@acme.com"); len(keys) != 0 {
 		t.Fatalf("keys left: %+v", keys)
 	}
-	o, err := s.owner(ctx, "alice@acme.com")
-	if err != nil || !o.Offboarded || o.Email != "alice@acme.com" {
+	o, err := s.owner(ctx, "user01@acme.com")
+	if err != nil || !o.Offboarded || o.Email != "user01@acme.com" {
 		t.Fatalf("owner %+v %v", o, err)
 	}
 	if ev, _ := keyChanges(s); ev[0].Action != "offboard-delete" || ev[2].Action != "offboard" {
 		t.Fatalf("%+v", ev)
 	}
-	if _, _, err := s.Create(ctx, alice(), "c", ScopeLLM, 90); !errors.Is(err, ErrOffboarded) {
+	if _, _, err := s.Create(ctx, user01(), "c", ScopeLLM, 90); !errors.Is(err, ErrOffboarded) {
 		t.Fatal("created after offboarding:", err)
 	}
 }
@@ -951,33 +951,33 @@ func TestStaleStartTermDoesNotEndALiveTerm(t *testing.T) {
 	}
 }
 
-// A component that may create Secrets (but not pods) plants an unlabelled owner record before alice's first key.
+// A component that may create Secrets (but not pods) plants an unlabelled owner record before user01's first key.
 func TestForgedOwnerRecordIsIgnored(t *testing.T) {
 	s, _ := newKeySvc(t)
 	ctx := context.Background()
-	forged, _ := json.Marshal(Owner{Email: "alice@acme.com", Groups: []string{"admins"}, SignedIn: t0.AddDate(5, 0, 0)})
-	if err := s.Client.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ambit-key-owner-" + ownerHash("alice@acme.com"),
+	forged, _ := json.Marshal(Owner{Email: "user01@acme.com", Groups: []string{"admins"}, SignedIn: t0.AddDate(5, 0, 0)})
+	if err := s.Client.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ambit-key-owner-" + ownerHash("user01@acme.com"),
 		Namespace: "ambit-system"}, Data: map[string][]byte{"owner.json": forged}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.owner(ctx, "alice@acme.com"); !errors.Is(err, errBadOwner) {
+	if _, err := s.owner(ctx, "user01@acme.com"); !errors.Is(err, errBadOwner) {
 		t.Fatal("unlabelled owner record accepted:", err)
 	}
-	_, k, err := s.Create(ctx, alice("eng"), "k", ScopeLLM, 365)
+	_, k, err := s.Create(ctx, user01("eng"), "k", ScopeLLM, 365)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !slices.Equal(k.Groups, []string{"eng"}) || !k.Until.Equal(t0.AddDate(0, 0, 30)) || !k.SignedIn.Equal(t0) {
 		t.Fatalf("key took the forged record: %+v", k)
 	}
-	o, err := s.owner(ctx, "alice@acme.com")
+	o, err := s.owner(ctx, "user01@acme.com")
 	if err != nil || !slices.Equal(o.Groups, []string{"eng"}) {
 		t.Fatalf("owner record not replaced: %+v %v", o, err)
 	}
 	if _, err := s.Repair(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if keys, _ := s.List(ctx, "alice@acme.com"); len(keys) != 1 || !slices.Equal(keys[0].Groups, []string{"eng"}) || !keys[0].Until.Equal(k.Until) {
+	if keys, _ := s.List(ctx, "user01@acme.com"); len(keys) != 1 || !slices.Equal(keys[0].Groups, []string{"eng"}) || !keys[0].Until.Equal(k.Until) {
 		t.Fatalf("repair copied forged groups: %+v", keys)
 	}
 }
@@ -987,11 +987,11 @@ func TestOwnerRecordForAnotherEmailIsBad(t *testing.T) {
 	ctx := context.Background()
 	o := Owner{Email: "mallory@acme.com", Groups: []string{"admins"}, SignedIn: t0}
 	sec := o.Secret("ambit-system")
-	sec.Name = "ambit-key-owner-" + ownerHash("alice@acme.com")
+	sec.Name = "ambit-key-owner-" + ownerHash("user01@acme.com")
 	if err := s.Client.Create(ctx, sec); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.owner(ctx, "alice@acme.com"); !errors.Is(err, errBadOwner) {
+	if _, err := s.owner(ctx, "user01@acme.com"); !errors.Is(err, errBadOwner) {
 		t.Fatal("owner record of another email accepted:", err)
 	}
 }
@@ -999,23 +999,23 @@ func TestOwnerRecordForAnotherEmailIsBad(t *testing.T) {
 func TestOffboardAndReactivateLabelAPlantedOwnerRecord(t *testing.T) {
 	s, _ := newKeySvc(t)
 	ctx := context.Background()
-	for _, email := range []string{"alice@acme.com", "bob@acme.com"} {
+	for _, email := range []string{"user01@acme.com", "user02@acme.com"} {
 		raw, _ := json.Marshal(Owner{Email: email, Groups: []string{"admins"}, SignedIn: t0})
 		if err := s.Client.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ambit-key-owner-" + ownerHash(email),
 			Namespace: "ambit-system"}, Data: map[string][]byte{"owner.json": raw}}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.OffboardKeys(ctx, "alice@acme.com", "scim"); err != nil {
+	if _, err := s.OffboardKeys(ctx, "user01@acme.com", "scim"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Reactivate(ctx, "bob@acme.com"); err != nil {
+	if err := s.Reactivate(ctx, "user02@acme.com"); err != nil {
 		t.Fatal(err)
 	}
-	if o, err := s.owner(ctx, "alice@acme.com"); err != nil || !o.Offboarded || len(o.Groups) != 0 {
+	if o, err := s.owner(ctx, "user01@acme.com"); err != nil || !o.Offboarded || len(o.Groups) != 0 {
 		t.Fatalf("offboarding did not replace the planted record: %+v %v", o, err)
 	}
-	if o, err := s.owner(ctx, "bob@acme.com"); err != nil || o.Offboarded || len(o.Groups) != 0 {
+	if o, err := s.owner(ctx, "user02@acme.com"); err != nil || o.Offboarded || len(o.Groups) != 0 {
 		t.Fatalf("reactivation did not replace the planted record: %+v %v", o, err)
 	}
 }
@@ -1023,16 +1023,16 @@ func TestOffboardAndReactivateLabelAPlantedOwnerRecord(t *testing.T) {
 func TestCreateWithANewerSignInUpdatesOtherKeys(t *testing.T) {
 	s, clk := newKeySvc(t)
 	ctx := context.Background()
-	_, old, err := s.Create(ctx, alice("eng", "admins"), "old", ScopeLLM, 365)
+	_, old, err := s.Create(ctx, user01("eng", "admins"), "old", ScopeLLM, 365)
 	if err != nil {
 		t.Fatal(err)
 	}
 	now := t0.AddDate(0, 0, 10)
 	clk.Set(now)
-	if _, _, err := s.Create(ctx, Session{Email: "alice@acme.com", Groups: []string{"eng"}, SignedIn: now.Unix()}, "new", ScopeLLM, 365); err != nil {
+	if _, _, err := s.Create(ctx, Session{Email: "user01@acme.com", Groups: []string{"eng"}, SignedIn: now.Unix()}, "new", ScopeLLM, 365); err != nil {
 		t.Fatal(err)
 	}
-	keys, _ := s.List(ctx, "alice@acme.com")
+	keys, _ := s.List(ctx, "user01@acme.com")
 	if len(keys) != 2 || keys[0].ID != old.ID {
 		t.Fatalf("%+v", keys)
 	}
@@ -1047,13 +1047,13 @@ func TestRefreshAtSignInWaitsForTheTerm(t *testing.T) {
 	t.Cleanup(func() { refreshWait, refreshStep = oldWait, oldStep })
 	s, _ := newKeySvc(t)
 	ctx := context.Background()
-	if _, _, err := s.Create(ctx, alice("eng"), "k", ScopeLLM, 90); err != nil {
+	if _, _, err := s.Create(ctx, user01("eng"), "k", ScopeLLM, 90); err != nil {
 		t.Fatal(err)
 	}
 	s.EndTermForTest() // the Lease gap after a restart
 	done := make(chan error)
 	go func() {
-		done <- s.RefreshAtSignIn(ctx, Session{Email: "alice@acme.com", Groups: []string{"ops"}, SignedIn: t0.Unix() + 10})
+		done <- s.RefreshAtSignIn(ctx, Session{Email: "user01@acme.com", Groups: []string{"ops"}, SignedIn: t0.Unix() + 10})
 	}()
 	time.Sleep(30 * time.Millisecond)
 	if err := s.StartTerm(ctx); err != nil {
@@ -1062,13 +1062,13 @@ func TestRefreshAtSignInWaitsForTheTerm(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if keys, _ := s.List(ctx, "alice@acme.com"); len(keys) != 1 || keys[0].Groups[0] != "ops" {
+	if keys, _ := s.List(ctx, "user01@acme.com"); len(keys) != 1 || keys[0].Groups[0] != "ops" {
 		t.Fatalf("refresh dropped during the Lease gap: %+v", keys)
 	}
 	// Never the leader: gives up after refreshWait.
 	refreshWait = 20 * time.Millisecond
 	s.EndTermForTest()
-	if err := s.RefreshAtSignIn(ctx, alice()); !errors.Is(err, ErrNotLeader) {
+	if err := s.RefreshAtSignIn(ctx, user01()); !errors.Is(err, ErrNotLeader) {
 		t.Fatal(err)
 	}
 }
@@ -1077,14 +1077,14 @@ func TestRefreshAtSignInWaitsForTheTerm(t *testing.T) {
 func TestReactivateOfAnActivePersonDoesNotWaitForTheLock(t *testing.T) {
 	s, _ := newKeySvc(t)
 	ctx := context.Background()
-	if _, _, err := s.Create(ctx, alice("eng"), "k", ScopeLLM, 90); err != nil {
+	if _, _, err := s.Create(ctx, user01("eng"), "k", ScopeLLM, 90); err != nil {
 		t.Fatal(err)
 	}
 	s.mu.Lock() // as a long repair would
 	done := make(chan error, 2)
 	go func() {
-		done <- s.Reactivate(ctx, "alice@acme.com") // owner record, not offboarded
-		done <- s.Reactivate(ctx, "erin@acme.com")  // no owner record
+		done <- s.Reactivate(ctx, "user01@acme.com") // owner record, not offboarded
+		done <- s.Reactivate(ctx, "erin@acme.com")   // no owner record
 	}()
 	for i := 0; i < 2; i++ {
 		select {

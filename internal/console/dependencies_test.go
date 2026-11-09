@@ -69,14 +69,14 @@ func TestDependenciesEndpointIsAdminOnly(t *testing.T) {
 		want int
 	}{
 		{nil, http.StatusUnauthorized},
-		{user(auth, "alice@acme.test", RoleViewer), http.StatusForbidden},
-		{user(auth, "sam@acme.test", RoleApprover), http.StatusForbidden},
+		{user(auth, "user01@example.com", RoleViewer), http.StatusForbidden},
+		{user(auth, "user11@example.com", RoleApprover), http.StatusForbidden},
 	} {
 		if r := do(t, h, "GET", "/api/dependencies", tc.who, nil); r.Code != tc.want || strings.Contains(r.Body.String(), "Valkey") {
 			t.Errorf("%v: %d %s", tc.who, r.Code, r.Body)
 		}
 	}
-	r := do(t, h, "GET", "/api/dependencies", user(auth, "priya@acme.test", RoleAdmin), nil)
+	r := do(t, h, "GET", "/api/dependencies", user(auth, "user10@example.com", RoleAdmin), nil)
 	if r.Code != http.StatusOK || !strings.Contains(r.Body.String(), `"name":"Valkey"`) {
 		t.Fatalf("admin: %d %s", r.Code, r.Body)
 	}

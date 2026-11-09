@@ -64,6 +64,9 @@ Each pull request adds a file in changelog/unreleased/ (see its README); the rel
 - A `Server` that runs a `stdio` image cannot have a `connection`.
 - The DocuSign preset's nightly contract check fails because the vendor's server does not ask for authentication
   (issue #222).
+- The console no longer offers the Databricks and PagerDuty presets: their test accounts stopped working, so they
+  could not pass the live check before this release (issue #244). A `Server` you already made from either preset is
+  not changed.
 
 ### All changes
 

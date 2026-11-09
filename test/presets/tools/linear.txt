@@ -45,6 +45,7 @@ list_users
 mark_notification
 merge_diff
 prepare_attachment_upload
+prepare_file_upload
 resolve_diff_thread
 restore_issue_label
 restore_project_label
@@ -66,3 +67,4 @@ share_issue
 submit_diff_review
 unshare_issue
 update_diff
+whoami

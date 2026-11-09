@@ -1,6 +1,8 @@
 analyze_table
+build_custom_element
 create_automation
 create_base
+create_custom_element
 create_field
 create_interface
 create_page
@@ -12,12 +14,15 @@ delete_interface
 delete_page
 delete_records_for_table
 delete_table
+describe_custom_element
 describe_page_element
 describe_page_type
 fetch_automation_input_data
 get_automation
 get_create_automation_instructions
+get_custom_element_documentation
 get_form_schema
+get_page_layout
 get_record_for_page
 get_table_schema
 list_automation_runs
@@ -25,6 +30,7 @@ list_automations
 list_bases
 list_external_accounts
 list_pages_for_base
+list_permission_sets
 list_record_comments
 list_records_for_page
 list_records_for_table
@@ -33,6 +39,7 @@ list_tables_for_base
 list_views_for_table
 list_workspaces
 ping
+publish_form
 publish_interface
 revert_action
 search_bases
@@ -41,6 +48,9 @@ search_records
 submit_form
 test_automation_webhook_trigger
 update_automation
+update_custom_element_config
 update_field
+update_page
 update_records_for_table
 update_table
+update_view

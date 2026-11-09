@@ -25,7 +25,7 @@ PATCH_OFF='{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operati
 past() { date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ; }
 cleanup() {
   kubectl -n "$NS" delete "accessrules.$G" keys-everyone-mock keys-eng-mock keys-users-mock keys-users-tool --ignore-not-found >/dev/null 2>&1 || true
-  kubectl -n "$NS" delete "budgets.$G" keys-mira --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete "budgets.$G" keys-user09 --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" delete secret forge-test forge-scope --ignore-not-found >/dev/null 2>&1 || true
   [[ -n "$DISABLED" ]] && helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --wait --timeout 5m >/dev/null 2>&1 || true
   # R3-3: reactivation clears the block list and the owner flag (the console answers 503 until it holds the key Lease)
@@ -52,7 +52,7 @@ EOF
 PW=$(kubectl -n "$NS" get secret ambit-initial-admin -o jsonpath='{.data.password}' | base64 -d)
 SCIM_TOKEN=$(kubectl -n "$NS" get secret ambit-console-keys -o jsonpath='{.data.scim-token}' | base64 -d)
 # a run that stopped half way may have left keytest offboarded: reactivate it first
-if [[ $(scim GET '/Users?filter=userName%20eq%20%22keytest@acme.test%22') == 200 ]]; then
+if [[ $(scim GET '/Users?filter=userName%20eq%20%22keytest@example.com%22') == 200 ]]; then
   OLD_ID=$(field 'd["Resources"][0]["id"] if d.get("Resources") else ""')
   # ponytail: a failed deactivation (503) can leave the block set with the user still active, and PATCH active=true on an
   # active user changes nothing; deactivating again, then reactivating, completes and clears it.
@@ -91,10 +91,10 @@ models() { command curl -s -o "$W/llm" -w '%{http_code}' "$LLMHOST/v1/models$1" 
 pass "1c GET /v1/models?client_version= answers {\"models\":[]} for Codex, the OpenAI list otherwise; both need a key"
 
 # 2 · refused: no credential, wrong key, broken JWT, wrong-scope key, valid JWT + wrong key
-TOK=$(token alice)
+TOK=$(token user01)
 # First prove a valid JWT works (after a Keycloak restart the gateway holds the old keys until the controller
 # refreshes them, every 5 minutes), so the JWT refusals below cannot pass merely because every JWT is rejected.
-wait_for 400 '[[ $(code -H "Authorization: Bearer $TOK") == 200 ]]' || fail "2 alice's JWT alone must work: $(cat "$W/llm")"
+wait_for 400 '[[ $(code -H "Authorization: Bearer $TOK") == 200 ]]' || fail "2 user01's JWT alone must work: $(cat "$W/llm")"
 [[ $(code) =~ ^40[13]$ ]] || fail "2 no credential: $(cat "$W/llm")"
 [[ $(code -H "Authorization: Bearer ambit_wrongwrongwrongwrongwrongwrongwrongwrongwro") == 403 ]] || fail "2 wrong key: $(cat "$W/llm")"
 [[ $(code -H "Authorization: Bearer eyJhbGciOiJSUzI1NiJ9.e30.x") == 403 ]] || fail "2 broken JWT: $(cat "$W/llm")"
@@ -156,9 +156,9 @@ pass "11 GET /api/settings/keys: $(cat "$W/api")"
 sign_in keycloak keytest keytest-test-pass
 mkkey keytest-laptop llm; AK=$KEY; AKID=$KID
 wait_for 60 '[[ $(code -H "Authorization: Bearer $AK") == 200 ]]' || fail "6 keytest's key is not accepted: $(cat "$W/llm")"
-c=$(scim POST /Users '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"keytest@acme.test","active":true,"emails":[{"value":"keytest@acme.test","primary":true}]}')
+c=$(scim POST /Users '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"keytest@example.com","active":true,"emails":[{"value":"keytest@example.com","primary":true}]}')
 if [[ "$c" == 409 ]]; then  # a rerun: the SCIM user stays after the test
-  [[ $(scim GET '/Users?filter=userName%20eq%20%22keytest@acme.test%22') == 200 ]] || fail "6 scim lookup"
+  [[ $(scim GET '/Users?filter=userName%20eq%20%22keytest@example.com%22') == 200 ]] || fail "6 scim lookup"
   SCIM_ID=$(field 'd["Resources"][0]["id"]')
 else
   [[ "$c" == 201 ]] || fail "6 scim create: $c $(cat "$W/api")"
@@ -183,43 +183,43 @@ pass "7 a JWT without an email is refused (requireEmail default)"
 
 # 8 · MCP: a key sees exactly the tools its owner's JWT sees (same groups)
 kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null && mcp_ready "$NS"
-sign_in keycloak mira mira-test-pass
-mkkey mira-mcp mcp; MK=$KEY
-tools "$(token mira)"; JWT_TOOLS=$TOOLS
+sign_in keycloak user09 user09-test-pass
+mkkey user09-mcp mcp; MK=$KEY
+tools "$(token user09)"; JWT_TOOLS=$TOOLS
 wait_for 60 'try_tools "$MK"; [[ "$TOOLS" == "$JWT_TOOLS" ]]' || fail "8 key tools '$TOOLS' differ from JWT tools '$JWT_TOOLS'"
-[[ -n "$JWT_TOOLS" ]] || fail "8 mira sees no tools"
+[[ -n "$JWT_TOOLS" ]] || fail "8 user09 sees no tools"
 pass "8 MCP: a key gets its owner's tools ($JWT_TOOLS)"
 
-# 10 · mixed credentials: mira's key in x-api-key plus alice's JWT in Authorization is served as mira
-sign_in keycloak mira mira-test-pass
-mkkey mira-llm llm; ML=$KEY; ML_ID=$KID
-wait_for 60 '[[ $(code -H "x-api-key: $ML" -H "Authorization: Bearer $(token alice)") == 200 ]]' || fail "10 mixed credentials: $(cat "$W/llm")"
+# 10 · mixed credentials: user09's key in x-api-key plus user01's JWT in Authorization is served as user09
+sign_in keycloak user09 user09-test-pass
+mkkey user09-llm llm; ML=$KEY; ML_ID=$KID
+wait_for 60 '[[ $(code -H "x-api-key: $ML" -H "Authorization: Bearer $(token user01)") == 200 ]]' || fail "10 mixed credentials: $(cat "$W/llm")"
 sign_in local admin@ambit.local "$PW"
-wait_for 90 '[[ $(keyrecs mira@acme.test "$ML_ID") -ge 1 ]]' || fail "10 no audit record for mira's key: $(head -c 600 "$W/api")"
-[[ $(field 'sum(1 for c in d["calls"] if c.get("keyId")=="'"$ML_ID"'" and c.get("subject"))') == 0 ]] || fail "10 the record carries alice's subject"
-[[ $(field 'sum(1 for c in d["calls"] if c.get("email")=="alice@acme.test" and c.get("keyId")=="'"$ML_ID"'")') == 0 ]] || fail "10 the record names alice"
-pass "10 key + another person's JWT: served as mira; the record has mira's email, the key id and no subject"
+wait_for 90 '[[ $(keyrecs user09@example.com "$ML_ID") -ge 1 ]]' || fail "10 no audit record for user09's key: $(head -c 600 "$W/api")"
+[[ $(field 'sum(1 for c in d["calls"] if c.get("keyId")=="'"$ML_ID"'" and c.get("subject"))') == 0 ]] || fail "10 the record carries user01's subject"
+[[ $(field 'sum(1 for c in d["calls"] if c.get("email")=="user01@example.com" and c.get("keyId")=="'"$ML_ID"'")') == 0 ]] || fail "10 the record names user01"
+pass "10 key + another person's JWT: served as user09; the record has user09's email, the key id and no subject"
 
 # 9 · budgets: one counter per person, whatever the credential
 flush() { kubectl -n "$NS" exec deploy/ambit-valkey -- sh -c "valkey-cli --scan --pattern 'ambit-llm*' | xargs -r valkey-cli del" >/dev/null 2>&1 || true; }
 kubectl -n "$NS" apply -f - >/dev/null <<EOF
 apiVersion: $G/v1alpha1
 kind: Budget
-metadata: { name: keys-mira }
+metadata: { name: keys-user09 }
 spec: { group: ml-research, userRequestsPerDay: 1 }
 EOF
-kubectl -n "$NS" wait "budgets.$G" keys-mira --for=condition=Ready --timeout=60s >/dev/null || fail "9 budget not Ready"
+kubectl -n "$NS" wait "budgets.$G" keys-user09 --for=condition=Ready --timeout=60s >/dev/null || fail "9 budget not Ready"
 wait_rl "$NS" "group_ml-research.user: unit=DAY requests_per_unit=0,"   # the Budget's 1, minus one (budgets.go)
 flush
 day=$(( $(date -u +%s) / 86400 * 86400 ))
 b1=$(code -H "x-api-key: $ML")
 # the answer is counted a moment after it arrives
-for _ in $(seq 1 30); do [[ $(kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "ambit-llm_group_ml-research_user_mira@acme.test_$day" 2>/dev/null | tr -d '\r') == 1 ]] && break; sleep 1; done
-b2=$(code -H "x-api-key: $ML"); b3=$(code -H "Authorization: Bearer $(token mira)")
-[[ "$b1" == 200 && "$b2" == 429 && "$b3" == 429 ]] || fail "9 mira's key then key then JWT: $b1 $b2 $b3 (want 200 429 429): $(cat "$W/llm")"
-kubectl -n "$NS" delete "budgets.$G" keys-mira >/dev/null
+for _ in $(seq 1 30); do [[ $(kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "ambit-llm_group_ml-research_user_user09@example.com_$day" 2>/dev/null | tr -d '\r') == 1 ]] && break; sleep 1; done
+b2=$(code -H "x-api-key: $ML"); b3=$(code -H "Authorization: Bearer $(token user09)")
+[[ "$b1" == 200 && "$b2" == 429 && "$b3" == 429 ]] || fail "9 user09's key then key then JWT: $b1 $b2 $b3 (want 200 429 429): $(cat "$W/llm")"
+kubectl -n "$NS" delete "budgets.$G" keys-user09 >/dev/null
 flush
-pass "9 mira's key got one 200 then 429; her JWT then got 429 too (same counter)"
+pass "9 user09's key got one 200 then 429; her JWT then got 429 too (same counter)"
 
 # 12 · apiKeys.enabled=false: the gateway still decides JWTs (group rule, offboarding); keys are refused
 kubectl -n "$NS" apply -f - >/dev/null <<EOF
@@ -229,7 +229,7 @@ metadata: { name: keys-eng-mock }
 spec: { groups: [eng], models: [mock-echo] }
 EOF
 kubectl -n "$NS" delete "accessrules.$G" keys-everyone-mock >/dev/null
-wait_for 120 '[[ $(code -H "Authorization: Bearer $(token alice)") == 200 && $(code -H "Authorization: Bearer $(token priya)") == 403 ]]' || fail "12 setup: only the eng group rule should allow mock-echo"
+wait_for 120 '[[ $(code -H "Authorization: Bearer $(token user01)") == 200 && $(code -H "Authorization: Bearer $(token user10)") == 403 ]]' || fail "12 setup: only the eng group rule should allow mock-echo"
 sign_in keycloak keytest keytest-test-pass
 mkkey keytest-before llm; KT=$KEY
 wait_for 60 '[[ $(code -H "x-api-key: $KT") == 200 ]]' || fail "12 setup: keytest's key (group eng) is not accepted: $(cat "$W/llm")"
@@ -252,27 +252,27 @@ wait_for 90 '[[ $(code -H "x-api-key: $KEY") == 200 ]]' || fail "12 after restor
 pass "12 apiKeys.enabled=false: group-rule JWT 200, keys refused, offboarded JWT 403; enabled again: keys work"
 
 # 13 · users: a rule naming a person (keytest, in group eng) admits that person by JWT and by key and nobody else
-# (alice is in eng too); offboarding still wins; an MCP tool granted to the person is listed only for that person
+# (user01 is in eng too); offboarding still wins; an MCP tool granted to the person is listed only for that person
 kubectl -n "$NS" apply -f - >/dev/null <<EOF
 apiVersion: $G/v1alpha1
 kind: AccessRule
 metadata: { name: keys-users-mock }
-spec: { users: [keytest@acme.test], models: [mock-echo] }
+spec: { users: [keytest@example.com], models: [mock-echo] }
 ---
 apiVersion: $G/v1alpha1
 kind: AccessRule
 metadata: { name: keys-users-tool }
-spec: { users: [keytest@acme.test], servers: [{ name: everything, tools: [echo] }] }
+spec: { users: [keytest@example.com], servers: [{ name: everything, tools: [echo] }] }
 EOF
 kubectl -n "$NS" delete "accessrules.$G" keys-eng-mock >/dev/null
 sign_in keycloak keytest keytest-test-pass; mkkey keytest-users llm; UK=$KEY
-wait_for 120 '[[ $(code -H "Authorization: Bearer $(token keytest)") == 200 && $(code -H "Authorization: Bearer $(token alice)") == 403 ]]' ||
+wait_for 120 '[[ $(code -H "Authorization: Bearer $(token keytest)") == 200 && $(code -H "Authorization: Bearer $(token user01)") == 403 ]]' ||
   fail "13 only keytest should reach mock-echo: $(cat "$W/llm")"
 wait_for 60 '[[ $(code -H "x-api-key: $UK") == 200 ]]' || fail "13 keytest's key is refused: $(cat "$W/llm")"
-[[ $(code -H "Authorization: Bearer $(token priya)") == 403 ]] || fail "13 priya reached a rule naming only keytest: $(cat "$W/llm")"
-[[ $(kubectl -n "$NS" get "models.$G" mock-echo -o jsonpath='{.status.allowedUsers}') == *keytest@acme.test* ]] || fail "13 Model status lacks allowedUsers"
+[[ $(code -H "Authorization: Bearer $(token user10)") == 403 ]] || fail "13 user10 reached a rule naming only keytest: $(cat "$W/llm")"
+[[ $(kubectl -n "$NS" get "models.$G" mock-echo -o jsonpath='{.status.allowedUsers}') == *keytest@example.com* ]] || fail "13 Model status lacks allowedUsers"
 wait_for 60 'try_tools "$(token keytest)"; [[ $TOOLS == *everything_echo* ]]' || fail "13 keytest does not see everything_echo: $TOOLS"
-tools "$(token alice)"; [[ $TOOLS != *everything_* ]] || fail "13 alice sees a tool granted to keytest: $TOOLS"
+tools "$(token user01)"; [[ $TOOLS != *everything_* ]] || fail "13 user01 sees a tool granted to keytest: $TOOLS"
 DEACTIVATED=1
 wait_for 60 '[[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_OFF") == 200 ]]' || fail "13 deactivate: $(cat "$W/api")"
 wait_for 10 '[[ $(code -H "Authorization: Bearer $(token keytest)") == 403 && $(code -H "x-api-key: $UK") == 403 ]]' ||
@@ -281,5 +281,5 @@ wait_for 60 '[[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_ON") == 200 ]]' || fail "
 DEACTIVATED=""
 wait_for 30 '[[ $(code -H "Authorization: Bearer $(token keytest)") == 200 ]]' || fail "13 reactivation did not lift the block"
 kubectl -n "$NS" delete "accessrules.$G" keys-users-mock keys-users-tool >/dev/null
-pass "13 users: keytest by JWT and key 200, alice and priya 403, everything_echo listed for keytest only; offboarded keytest 403"
+pass "13 users: keytest by JWT and key 200, user01 and user10 403, everything_echo listed for keytest only; offboarded keytest 403"
 done_step keys

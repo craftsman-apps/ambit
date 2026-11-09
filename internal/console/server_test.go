@@ -284,7 +284,7 @@ func TestCallbackWithoutLoginTransaction(t *testing.T) {
 
 func TestSSOUserWithoutGroupsIsViewer(t *testing.T) {
 	f := newFakeIssuer(t)
-	f.connector, f.email, f.groups = "okta", "alice@acme.com", []string{"eng"}
+	f.connector, f.email, f.groups = "okta", "user01@acme.com", []string{"eng"}
 	ts, c := newTestServer(t, f)
 	signIn(t, ts, c, f, false)
 	req, _ := http.NewRequest("GET", ts.URL+"/api/me", nil)

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Step 7 acceptance: evidence (journey A5 "every call Alice made, including denied ones"; A3 usage).
+# Step 7 acceptance: evidence (journey A5 "every call User01 made, including denied ones"; A3 usage).
 # Gateway access logs -> OpenTelemetry Collector -> ClickHouse (one-year TTL) -> console Audit and Usage.
 set -euo pipefail
 NS=${1:-ambit-system}
@@ -19,20 +19,20 @@ kubectl -n "$NS" rollout status statefulset/ambit-clickhouse --timeout=300s >/de
 kubectl -n "$NS" rollout status deploy/ambit-otel-collector --timeout=180s >/dev/null
 kubectl -n "$NS" wait "servers.ambitproject.dev" --all --for=condition=Ready --timeout=300s >/dev/null
 
-# 0 · traffic: alice (eng) one allowed and one refused tool call, one refused model; mira one model call
-A=$(token alice); M=$(token mira)
+# 0 · traffic: user01 (eng) one allowed and one refused tool call, one refused model; user09 one model call
+A=$(token user01); M=$(token user09)
 tools "$A"
 ok=$(call time_get_current_time '{"timezone":"UTC"}'); refused=$(call time_convert_time '{"source_timezone":"UTC","time":"12:00","target_timezone":"UTC"}')
 [[ "$ok" == ok* && "$refused" == error* ]] || fail "0 tool calls: $ok / $refused"
-[[ $(llm_code "$A" "$NEMO") == 403 ]] || fail "0 alice was not refused nemotron"
-mira_llm=$(llm_code "$M" "$NEMO")
-pass "0 alice: 1 allowed call, 1 refused tool, 1 refused model; mira's model call returned $mira_llm"
+[[ $(llm_code "$A" "$NEMO") == 403 ]] || fail "0 user01 was not refused nemotron"
+user09_llm=$(llm_code "$M" "$NEMO")
+pass "0 user01: 1 allowed call, 1 refused tool, 1 refused model; user09's model call returned $user09_llm"
 
-# 1 · A5: the audit search returns alice's calls, refused ones included, and nobody else's
-sign_in keycloak priya priya-test-pass
+# 1 · A5: the audit search returns user01's calls, refused ones included, and nobody else's
+sign_in keycloak user10 user10-test-pass
 day=$(date -u +%Y-%m-%d); next=$(date -u -v+1d +%Y-%m-%d 2>/dev/null || date -u -d tomorrow +%Y-%m-%d)
 for _ in $(seq 1 60); do
-  [[ $(api GET "/api/audit?email=alice@acme.test&from=$day&to=$next") == 200 ]] &&
+  [[ $(api GET "/api/audit?email=user01@example.com&from=$day&to=$next") == 200 ]] &&
     [[ $(field 'len([c for c in d["calls"] if c["route"].endswith("ambit-llm")])') -ge 1 && $(field 'len([c for c in d["calls"] if c["tool"]=="convert_time"])') -ge 1 ]] && break
   sleep 2
 done
@@ -48,15 +48,15 @@ emails=$(field '",".join(sorted({c["email"] for c in d["calls"]}))')
 [[ "$got" == *"tools/call:time:get_current_time:200"* ]] || fail "1 allowed call missing: $got"
 [[ "$got" == *"tools/call:time:convert_time:400"* ]] || fail "1 refused tool call missing: $got"
 [[ "$got" == *"llm::"*":403"* ]] || fail "1 refused model call missing: $got"
-[[ "$emails" == alice@acme.test ]] || fail "1 other users' calls in alice's audit: $emails"
+[[ "$emails" == user01@example.com ]] || fail "1 other users' calls in user01's audit: $emails"
 reason=$(field '[c["error"] for c in d["calls"] if c["tool"]=="convert_time"][0]')
-pass "1 alice's audit: $got; refused tool reason: '$reason'; only alice's calls"
+pass "1 user01's audit: $got; refused tool reason: '$reason'; only user01's calls"
 
 # 2 · the period filter works; only admins may search
-[[ $(api GET "/api/audit?email=alice@acme.test&from=2026-03-01&to=2026-04-01") == 200 && $(field 'len(d["calls"])') == 0 ]] || fail "2 March should be empty"
-sign_in keycloak alice alice-test-pass
-[[ $(api GET "/api/audit?email=alice@acme.test") == 403 ]] || fail "2 a viewer could read the audit log"
-pass "2 period filter respected (March: 0 calls); alice (viewer) gets 403"
+[[ $(api GET "/api/audit?email=user01@example.com&from=2026-03-01&to=2026-04-01") == 200 && $(field 'len(d["calls"])') == 0 ]] || fail "2 March should be empty"
+sign_in keycloak user01 user01-test-pass
+[[ $(api GET "/api/audit?email=user01@example.com") == 403 ]] || fail "2 a viewer could read the audit log"
+pass "2 period filter respected (March: 0 calls); user01 (viewer) gets 403"
 
 # 3 · one-year retention on the table, and only the collector and the console reach ClickHouse
 ttl=$(ch "SELECT engine_full FROM system.tables WHERE database='otel' AND name='otel_logs'")
@@ -65,10 +65,10 @@ out=$(kubectl -n "$NS" run ch-probe --rm -i --restart=Never --quiet --image="$CU
 [[ "${out:0:3}" != 200 ]] || fail "3 a random pod reached ClickHouse"
 pass "3 otel_logs has TTL $(grep -o 'TTL[^S]*' <<<"$ttl" | head -c 60); other pods cannot reach ClickHouse"
 
-# 4 · A3 and requirement 17: LLM requests, tokens and cost per group per day. mira calls the priced test
+# 4 · A3 and requirement 17: LLM requests, tokens and cost per group per day. user09 calls the priced test
 #     model twice (once streamed); each answer carries 12 input and 3 output tokens. The check measures the
 #     increase from these two requests, not totals that earlier requests could already fill.
-sign_in keycloak priya priya-test-pass
+sign_in keycloak user10 user10-test-pass
 mr='[u for u in d["usage"] if u["group"]=="ml-research"]'
 totals() { [[ $(api GET /api/usage) == 200 ]] && field "f\"{sum(u['inputTokens'] for u in $mr)} {sum(u['outputTokens'] for u in $mr)} {sum(u.get('cost') or 0 for u in $mr):.9f}\""; }
 read -r in0 out0 cost0 <<<"$(totals)"

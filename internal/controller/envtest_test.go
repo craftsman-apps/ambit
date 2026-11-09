@@ -104,16 +104,16 @@ func TestCRDRulesRejectUnsafeObjects(t *testing.T) {
 		Spec: v1.AccessRuleSpec{Groups: []string{"eng"}, Servers: []v1.ServerAccess{{Name: "time", Tools: []string{`x" || true || "`}}}}}, "spec.servers[0].tools[0]")
 
 	// users: canonical emails only (quotes would break the generated CEL), and allSignedIn alone.
-	for _, u := range []string{`a"b@c.de`, "A@B.COM", "*@acme.com", "alice"} {
+	for _, u := range []string{`a"b@c.de`, "A@B.COM", "*@acme.com", "user01"} {
 		reject("user "+u, &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "bad-user", Namespace: ns},
 			Spec: v1.AccessRuleSpec{Users: []string{u}, Models: []string{"gemma"}}}, "spec.users[0]")
 	}
 	reject("allSignedIn with users", &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "all-users", Namespace: ns},
-		Spec: v1.AccessRuleSpec{AllSignedIn: true, Users: []string{"alice@acme.com"}, Models: []string{"gemma"}}}, "do not also set groups or users")
+		Spec: v1.AccessRuleSpec{AllSignedIn: true, Users: []string{"user01@acme.com"}, Models: []string{"gemma"}}}, "do not also set groups or users")
 	reject("nobody", &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "nobody", Namespace: ns},
 		Spec: v1.AccessRuleSpec{Models: []string{"gemma"}}}, "set groups, users or allSignedIn")
 	for name, spec := range map[string]v1.AccessRuleSpec{
-		"users-only":  {Users: []string{"alice@acme.com"}, Models: []string{"gemma"}},
+		"users-only":  {Users: []string{"user01@acme.com"}, Models: []string{"gemma"}},
 		"groups-only": {Groups: []string{"eng"}, Models: []string{"gemma"}}, // an existing rule: unchanged (upgrade)
 	} {
 		if err := envClient.Create(ctx, &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns}, Spec: spec}); err != nil {
@@ -149,7 +149,7 @@ func TestCRDRulesRejectUnsafeObjects(t *testing.T) {
 		Spec: v1.ServerRequestSpec{ServerName: "conn-req", RequestedBy: "alice@acme.test", Server: v1.ServerSpec{Image: digestImage, Connection: "google"}}}, wantMsg)
 
 	q := &v1.ServerRequest{ObjectMeta: metav1.ObjectMeta{Name: "time-req", Namespace: ns},
-		Spec: v1.ServerRequestSpec{ServerName: "time", RequestedBy: "alice@acme.test", Server: v1.ServerSpec{Image: digestImage, Transport: "stdio"}}}
+		Spec: v1.ServerRequestSpec{ServerName: "time", RequestedBy: "user01@example.com", Server: v1.ServerSpec{Image: digestImage, Transport: "stdio"}}}
 	if err := envClient.Create(ctx, q); err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestCRDRulesRejectUnsafeObjects(t *testing.T) {
 	if err := envClient.Get(ctx, client.ObjectKeyFromObject(q), q); err != nil {
 		t.Fatal(err)
 	}
-	q.Status = v1.ServerRequestStatus{Decision: "Approved", DecidedBy: "sam@acme.test"}
+	q.Status = v1.ServerRequestStatus{Decision: "Approved", DecidedBy: "user11@example.com"}
 	if err := envClient.Status().Update(ctx, q); err != nil {
 		t.Fatal(err)
 	}

@@ -30,13 +30,13 @@ func TestGitOpsRequestFollowsItsPullRequest(t *testing.T) {
 	repo := &stateRepo{states: map[string]PullRequestState{}}
 	h := NewServer(a, testSPA, LoginOptions{}, &Catalog{Client: c, Namespace: testNS,
 		GitOps: &GitOps{Repo: repo, Repository: "acme/config", Branch: "main", Dir: "ambit"}})
-	alice, sam := user(a, "alice@acme.test", RoleViewer), user(a, "sam@acme.test", RoleApprover)
+	user01, user11 := user(a, "user01@example.com", RoleViewer), user(a, "user11@example.com", RoleApprover)
 	ask := func(name string) RequestView {
-		r := do(t, h, "POST", "/api/server-requests", alice, RequestInput{ServerName: name, Image: echoDigest})
+		r := do(t, h, "POST", "/api/server-requests", user01, RequestInput{ServerName: name, Image: echoDigest})
 		return decodeAs[RequestView](t, r.Body.String())
 	}
 	view := func(name string) RequestView {
-		for _, v := range decodeAs[[]RequestView](t, do(t, h, "GET", "/api/server-requests", sam, nil).Body.String()) {
+		for _, v := range decodeAs[[]RequestView](t, do(t, h, "GET", "/api/server-requests", user11, nil).Body.String()) {
 			if v.Name == name {
 				return v
 			}
@@ -45,7 +45,7 @@ func TestGitOpsRequestFollowsItsPullRequest(t *testing.T) {
 		return RequestView{}
 	}
 	approve := func(r RequestView) *httptest.ResponseRecorder {
-		return do(t, h, "POST", "/api/server-requests/"+r.Name+"/approve", sam, DecisionInput{Comment: "ok"})
+		return do(t, h, "POST", "/api/server-requests/"+r.Name+"/approve", user11, DecisionInput{Comment: "ok"})
 	}
 	branchOf := func(r RequestView) string {
 		var q v1.ServerRequest
@@ -71,7 +71,7 @@ func TestGitOpsRequestFollowsItsPullRequest(t *testing.T) {
 	if r := approve(req); r.Code != http.StatusConflict {
 		t.Fatalf("second approve while open: %d %s", r.Code, r.Body)
 	}
-	if r := do(t, h, "POST", "/api/server-requests/"+req.Name+"/deny", sam, DecisionInput{}); r.Code != http.StatusConflict {
+	if r := do(t, h, "POST", "/api/server-requests/"+req.Name+"/deny", user11, DecisionInput{}); r.Code != http.StatusConflict {
 		t.Fatalf("deny while open: %d %s", r.Code, r.Body)
 	}
 	if len(repo.files) != 1 {
@@ -105,7 +105,7 @@ func TestGitOpsRequestFollowsItsPullRequest(t *testing.T) {
 
 	// Merged: Approved by the approver who opened it, recorded once; a later approve says so.
 	repo.states[branchOf(req)] = PullRequestState{PullRequest: PullRequest{Branch: branchOf(req)}, Merged: true, MergedAt: time.Now()}
-	if v := view(req.Name); v.Decision != "Approved" || v.DecidedBy != "sam@acme.test" || v.State != "" || v.Comment != "ok" {
+	if v := view(req.Name); v.Decision != "Approved" || v.DecidedBy != "user11@example.com" || v.State != "" || v.Comment != "ok" {
 		t.Fatalf("merged: %+v", v)
 	}
 	var q v1.ServerRequest
@@ -122,7 +122,7 @@ func TestGitOpsRequestFollowsItsPullRequest(t *testing.T) {
 		t.Fatalf("approve: %d %s", r.Code, r.Body)
 	}
 	repo.states[branchOf(other)] = PullRequestState{Closed: true}
-	if r := do(t, h, "POST", "/api/server-requests/"+other.Name+"/deny", sam, DecisionInput{}); r.Code != http.StatusOK {
+	if r := do(t, h, "POST", "/api/server-requests/"+other.Name+"/deny", user11, DecisionInput{}); r.Code != http.StatusOK {
 		t.Fatalf("deny after close: %d %s", r.Code, r.Body)
 	}
 }

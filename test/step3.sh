@@ -44,38 +44,38 @@ kubectl -n "$NS" wait "models.$G" --all --for=condition=Ready --timeout=120s >/d
 kubectl -n "$NS" wait "accessrules.$G" --all --for=condition=Ready --timeout=60s >/dev/null || fail "1 access rules not Ready"
 pass "1 controller ready; 2 models accepted by agentgateway; 2 access rules compiled"
 
-A=$(token alice); M=$(token mira)
+A=$(token user01); M=$(token user09)
 # 2 · no token
 [[ $(llm "" "$GEMMA") =~ ^40[13]$ ]] || fail "2 request without a token was not rejected"
 pass "2 no token -> 401 or 403 (the Require rule answers 403: JWT auth is permissive)"
 
 # 3 · U3: denied, with a machine-readable reason, before any provider call
-[[ $(llm "$A" "$NEMO") == 403 ]] || fail "3 alice got $(cat "$W/llm") for the restricted model"
+[[ $(llm "$A" "$NEMO") == 403 ]] || fail "3 user01 got $(cat "$W/llm") for the restricted model"
 grep -q '"code":"model_authorization_denied"' "$W/llm" || fail "3 denial has no reason: $(cat "$W/llm")"
-pass "3 alice (eng) -> nemotron-super: 403 model_authorization_denied"
+pass "3 user01 (eng) -> nemotron-super: 403 model_authorization_denied"
 
 # 4-5 · allowed calls reach OpenRouter (free models)
 if $HAVE_KEY; then
-  c=$(llm "$A" "$GEMMA"); reached_provider "$c" || fail "4 alice -> gemma: $c $(head -c 200 "$W/llm")"
-  pass "4 alice -> gemma: $VIA"
-  c=$(llm "$M" "$NEMO"); reached_provider "$c" || fail "5 mira -> nemotron-super: $c $(head -c 200 "$W/llm")"
-  pass "5 mira (ml-research) -> nemotron-super: $VIA (A2)"
+  c=$(llm "$A" "$GEMMA"); reached_provider "$c" || fail "4 user01 -> gemma: $c $(head -c 200 "$W/llm")"
+  pass "4 user01 -> gemma: $VIA"
+  c=$(llm "$M" "$NEMO"); reached_provider "$c" || fail "5 user09 -> nemotron-super: $c $(head -c 200 "$W/llm")"
+  pass "5 user09 (ml-research) -> nemotron-super: $VIA (A2)"
 else
   echo "SKIP 4-5 no key at $KEYFILE; the checks that do not reach OpenRouter still ran"
 fi
 
 # 6 · A2: removing the group in the IdP removes access at the next token
-uid=$(kc_admin GET "/users?username=mira&exact=true" | uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)[0]["id"])')
+uid=$(kc_admin GET "/users?username=user09&exact=true" | uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)[0]["id"])')
 gid=$(kc_admin GET "/groups?search=ml-research" | uv run --no-project python -c 'import json,sys;print([g["id"] for g in json.load(sys.stdin) if g["name"]=="ml-research"][0])')
 kc_admin DELETE "/users/$uid/groups/$gid" >/dev/null
-[[ $(llm "$(token mira)" "$NEMO") == 403 ]] || fail "6 mira kept access after leaving ml-research"
+[[ $(llm "$(token user09)" "$NEMO") == 403 ]] || fail "6 user09 kept access after leaving ml-research"
 kc_admin PUT "/users/$uid/groups/$gid" >/dev/null
-pass "6 mira removed from ml-research in Keycloak -> 403 at next token (restored afterwards)"
+pass "6 user09 removed from ml-research in Keycloak -> 403 at next token (restored afterwards)"
 
 # 7 · deny by default: a model with no rule is closed to everyone
 kubectl -n "$NS" delete "accessrules.$G" ml-research-nemotron >/dev/null
 wait_expr nemotron-3-super false
-[[ $(llm "$M" "$NEMO") == 403 ]] || fail "7 mira reached a model with no access rule"
+[[ $(llm "$M" "$NEMO") == 403 ]] || fail "7 user09 reached a model with no access rule"
 kubectl -n "$NS" apply -f test/llm/objects.yaml >/dev/null
 wait_expr nemotron-3-super '(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in ["ml-research"])'
 pass "7 no rule -> expression false -> 403; rule restored"

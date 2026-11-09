@@ -43,10 +43,10 @@ func TestAuditStoreFailureNamesClickHouse(t *testing.T) {
 	mux := http.NewServeMux()
 	a.register(mux, func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			h(w, r, Session{Email: "priya@acme.test", Role: RoleAdmin})
+			h(w, r, Session{Email: "user10@example.com", Role: RoleAdmin})
 		}
 	})
-	for _, u := range []string{"/api/audit?email=alice%40acme.test", "/api/usage"} {
+	for _, u := range []string{"/api/audit?email=user01%40example.com", "/api/usage"} {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest("GET", u, nil))
 		if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "ClickHouse") || strings.Contains(rec.Body.String(), "Kubernetes") {

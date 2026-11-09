@@ -43,7 +43,7 @@ func catalogFixture(t *testing.T) (http.Handler, client.Client, *Auth) {
 }
 
 func as(a *Auth, role string) *http.Cookie {
-	s := Session{ID: randomString(), Email: role + "@acme.test", Role: role, Exp: time.Now().Add(time.Hour).Unix()}
+	s := Session{ID: randomString(), Email: role + "@example.com", Role: role, Exp: time.Now().Add(time.Hour).Unix()}
 	a.Sessions.Add(s.ID, s.Email, s.Exp)
 	return &http.Cookie{Name: SessionCookie, Value: a.codec.Encode(s)}
 }
@@ -137,7 +137,7 @@ func TestAdminCreatesUpdatesDeletesRule(t *testing.T) {
 	if err := c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "eng-nemotron"}, &got); err != nil || got.Spec.Groups[0] != "eng" {
 		t.Fatalf("not created: %v %+v", err, got.Spec)
 	}
-	if got.Annotations["ambitproject.dev/created-by"] != "admin@acme.test" {
+	if got.Annotations["ambitproject.dev/created-by"] != "admin@example.com" {
 		t.Fatalf("creator not recorded: %v", got.Annotations)
 	}
 	if r := do(t, h, "POST", "/api/access-rules", admin, RuleInput{Name: "eng-nemotron", AllSignedIn: true, Models: []string{"gemma-4-31b"}}); r.Code != http.StatusConflict {
@@ -236,47 +236,47 @@ func TestRuleWithUsers(t *testing.T) {
 		want string
 	}{
 		{RuleInput{Name: "x", Models: []string{"nemotron-3-super"}}, "choose everyone signed in, or groups or people"},
-		{RuleInput{Name: "x", AllSignedIn: true, Users: []string{"alice@acme.com"}, Models: []string{"nemotron-3-super"}}, "everyone signed in already includes"},
-		{RuleInput{Name: "x", Users: []string{"alice"}, Models: []string{"nemotron-3-super"}}, "not an email address"},
+		{RuleInput{Name: "x", AllSignedIn: true, Users: []string{"user01@acme.com"}, Models: []string{"nemotron-3-super"}}, "everyone signed in already includes"},
+		{RuleInput{Name: "x", Users: []string{"user01"}, Models: []string{"nemotron-3-super"}}, "not an email address"},
 		{RuleInput{Name: "x", Users: []string{`a"b@c.de`}, Models: []string{"nemotron-3-super"}}, "not an email address"},
 		{RuleInput{Name: "x", Users: []string{"*@acme.com"}, Models: []string{"nemotron-3-super"}}, "not an email address"},
-		{RuleInput{Name: "x", Users: []string{"älice@acme.com"}, Models: []string{"nemotron-3-super"}}, "not an email address"},
+		{RuleInput{Name: "x", Users: []string{"äuser01@acme.com"}, Models: []string{"nemotron-3-super"}}, "not an email address"},
 		{RuleInput{Name: "x", Users: make([]string, 51), Models: []string{"nemotron-3-super"}}, "at most 50 people"},
 	} {
 		if r := do(t, h, "POST", "/api/access-rules", admin, tc.in); r.Code != http.StatusBadRequest || !contains(r.Body.String(), tc.want) {
 			t.Errorf("%+v: %d %s", tc.in, r.Code, r.Body)
 		}
 	}
-	r := do(t, h, "POST", "/api/access-rules", admin, RuleInput{Name: "pilot", Groups: []string{"eng"}, Users: []string{" Alice@Acme.COM "}, Models: []string{"nemotron-3-super"}})
+	r := do(t, h, "POST", "/api/access-rules", admin, RuleInput{Name: "pilot", Groups: []string{"eng"}, Users: []string{" User01@Acme.COM "}, Models: []string{"nemotron-3-super"}})
 	if r.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", r.Code, r.Body)
 	}
 	var got v1.AccessRule
-	if err := c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "pilot"}, &got); err != nil || len(got.Spec.Users) != 1 || got.Spec.Users[0] != "alice@acme.com" {
+	if err := c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "pilot"}, &got); err != nil || len(got.Spec.Users) != 1 || got.Spec.Users[0] != "user01@acme.com" {
 		t.Fatalf("stored %v %+v", err, got.Spec)
 	}
 	// The same people in another case and order is the same grant.
-	if r := do(t, h, "POST", "/api/access-rules", admin, RuleInput{Name: "copy", Groups: []string{"eng"}, Users: []string{"ALICE@acme.com"}, Models: []string{"nemotron-3-super"}}); r.Code != http.StatusConflict {
+	if r := do(t, h, "POST", "/api/access-rules", admin, RuleInput{Name: "copy", Groups: []string{"eng"}, Users: []string{"USER01@acme.com"}, Models: []string{"nemotron-3-super"}}); r.Code != http.StatusConflict {
 		t.Fatalf("duplicate by users: %d %s", r.Code, r.Body)
 	}
 	d := do(t, h, "GET", "/api/access-rules/pilot", admin, nil)
 	var detail RuleDetail
 	json.NewDecoder(d.Body).Decode(&detail)
-	if len(detail.Users) != 1 || detail.Users[0] != "alice@acme.com" || len(detail.Effective) != 1 ||
-		!contains(detail.Effective[0].CEL, identity.PrincipalEmail(true)+` in ["alice@acme.com"]`) {
+	if len(detail.Users) != 1 || detail.Users[0] != "user01@acme.com" || len(detail.Effective) != 1 ||
+		!contains(detail.Effective[0].CEL, identity.PrincipalEmail(true)+` in ["user01@acme.com"]`) {
 		t.Fatalf("detail %+v", detail)
 	}
 	// Users only, then updated to everyone signed in (which clears nothing by itself: users must be removed).
-	if r := do(t, h, "PUT", "/api/access-rules/pilot", admin, RuleInput{Users: []string{"bob@acme.com"}, Models: []string{"nemotron-3-super"}}); r.Code != 200 {
+	if r := do(t, h, "PUT", "/api/access-rules/pilot", admin, RuleInput{Users: []string{"user02@acme.com"}, Models: []string{"nemotron-3-super"}}); r.Code != 200 {
 		t.Fatalf("update to users only: %d %s", r.Code, r.Body)
 	}
-	if r := do(t, h, "PUT", "/api/access-rules/pilot", admin, RuleInput{AllSignedIn: true, Users: []string{"bob@acme.com"}, Models: []string{"nemotron-3-super"}}); r.Code != http.StatusBadRequest {
+	if r := do(t, h, "PUT", "/api/access-rules/pilot", admin, RuleInput{AllSignedIn: true, Users: []string{"user02@acme.com"}, Models: []string{"nemotron-3-super"}}); r.Code != http.StatusBadRequest {
 		t.Fatalf("allSignedIn with users: %d %s", r.Code, r.Body)
 	}
 	var list []RuleView
 	json.NewDecoder(do(t, h, "GET", "/api/access-rules", admin, nil).Body).Decode(&list)
 	for _, v := range list {
-		if v.Users == nil || (v.Name == "pilot" && v.Users[0] != "bob@acme.com") {
+		if v.Users == nil || (v.Name == "pilot" && v.Users[0] != "user02@acme.com") {
 			t.Fatalf("list %+v", list)
 		}
 	}

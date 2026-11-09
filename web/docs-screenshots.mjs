@@ -1,5 +1,5 @@
 // Regenerates the console screenshots the documentation uses. No cluster and no sign-in: the Vite dev
-// server serves web/, and Playwright answers every /api call with made-up data (people at acme.test).
+// server serves web/, and Playwright answers every /api call with made-up data (people at example.com).
 //   cd web && npm ci && npx vite --port 5173 &      (then, from web/)
 //   BASE=http://localhost:5173 node docs-screenshots.mjs      (writes into ../docs/assets/console and ../site/static/img)
 // Images: docs/assets/console/server-request-{form,approve}.png (1280x800, docs/guides/request-an-app.md),
@@ -16,20 +16,20 @@ const timeImage = "ghcr.io/stacklok/dockyard/uvx/mcp-server-time@sha256:ab8255cf
 const req = (o) => ({ displayName: "", image: "", url: "", connection: "", transport: "stdio", reason: "", decision: "", decidedBy: "", decidedAt: null, comment: "", pullRequest: "", ...o });
 const requests = [
   req({ name: "req-jira", serverName: "jira", displayName: "Jira", url: "https://mcp.atlassian.example/v1/mcp", connection: "atlassian", transport: "streamable-http",
-    reason: "Engineering triages Jira tickets from Claude Code. Each person uses their own Atlassian account.", requestedBy: "marta@acme.test", requestedAt: t(1, 9) }),
+    reason: "Engineering triages Jira tickets from Claude Code. Each person uses their own Atlassian account.", requestedBy: "user08@example.com", requestedAt: t(1, 9) }),
   req({ name: "req-sentry", serverName: "sentry", displayName: "Sentry", image: "ghcr.io/acme/mcp-sentry@sha256:77c1a0b9d8e7f6a5b4c3d2e1f00a1b2c3d4e5f60718293a4b5c6d7e8f9012345",
-    reason: "On-call needs error context during incidents.", requestedBy: "sam@acme.test", requestedAt: t(1, 11) }),
-  req({ name: "req-time", serverName: "time", displayName: "Time", image: timeImage, requestedBy: "lena@acme.test", requestedAt: t(9, 10),
-    decision: "Approved", decidedBy: "priya@acme.test", decidedAt: t(8, 10), comment: "Fine for engineering." }),
-  req({ name: "req-shell", serverName: "shell-exec", image: "ghcr.io/acme/mcp-shell@sha256:001122334455667788990011223344556677889900112233445566778899aabb", requestedBy: "kim@acme.test", requestedAt: t(12, 10),
-    decision: "Denied", decidedBy: "priya@acme.test", decidedAt: t(11, 10), comment: "Too broad. Ask for a read-only server." }),
+    reason: "On-call needs error context during incidents.", requestedBy: "user11@example.com", requestedAt: t(1, 11) }),
+  req({ name: "req-time", serverName: "time", displayName: "Time", image: timeImage, requestedBy: "user07@example.com", requestedAt: t(9, 10),
+    decision: "Approved", decidedBy: "user10@example.com", decidedAt: t(8, 10), comment: "Fine for engineering." }),
+  req({ name: "req-shell", serverName: "shell-exec", image: "ghcr.io/acme/mcp-shell@sha256:001122334455667788990011223344556677889900112233445566778899aabb", requestedBy: "user05@example.com", requestedAt: t(12, 10),
+    decision: "Denied", decidedBy: "user10@example.com", decidedAt: t(11, 10), comment: "Too broad. Ask for a read-only server." }),
 ];
 const servers = [{ name: "time", displayName: "Time", image: timeImage, url: "", connection: "", transport: "stdio", ready: "True", message: "",
   tools: [{ name: "get_current_time", description: "Get the current time" }, { name: "convert_time", description: "Convert a time between time zones" }],
-  requestedBy: "lena@acme.test", approvedBy: "priya@acme.test", gitManaged: false, rules: ["engineering-time"], changedTools: [] }];
+  requestedBy: "user07@example.com", approvedBy: "user10@example.com", gitManaged: false, rules: ["engineering-time"], changedTools: [] }];
 const connections = [{ name: "atlassian", displayName: "Atlassian", state: "not-connected", revocable: false, connectURL: "/auth/connect/atlassian", servers: [] }];
 const calls = [[7, 8], [5, 119], [5, 119], [3, 194], [0, 229]].map(([s, out], i) => ({
-  time: t(0, 7, 47, [8, 5, 5, 3, 0][i]), email: "alice@acme.test", route: "/v1/chat/completions llm", method: "", server: "", tool: "", model: "nvidia/nemotron-3-super-120b-a12b:free",
+  time: t(0, 7, 47, [8, 5, 5, 3, 0][i]), email: "user01@example.com", route: "/v1/chat/completions llm", method: "", server: "", tool: "", model: "nvidia/nemotron-3-super-120b-a12b:free",
   status: "200", error: "", inputTokens: 22, outputTokens: [137, 119, 119, 194, 229][i], router: "", label: "", labelReason: "" }));
 
 async function open(browser, { me, viewport, scale = 1, dark = false }, path) {
@@ -51,7 +51,7 @@ async function open(browser, { me, viewport, scale = 1, dark = false }, path) {
 const browser = await chromium.launch({ channel: process.env.CI ? undefined : "chrome" });
 
 { // The form, signed in as a viewer.
-  const { ctx, page, unmocked } = await open(browser, { me: user("marta@acme.test", "viewer"), viewport: { width: 1280, height: 800 } }, "/servers");
+  const { ctx, page, unmocked } = await open(browser, { me: user("user08@example.com", "viewer"), viewport: { width: 1280, height: 800 } }, "/servers");
   await page.getByRole("button", { name: "Request a server" }).click();
   await page.fill("#req-name", "jira");
   await page.fill("#req-display", "Jira");
@@ -64,7 +64,7 @@ const browser = await chromium.launch({ channel: process.env.CI ? undefined : "c
   await ctx.close();
 }
 { // Waiting requests, signed in as an approver.
-  const { ctx, page, unmocked } = await open(browser, { me: user("priya@acme.test", "approver"), viewport: { width: 1280, height: 800 } }, "/servers");
+  const { ctx, page, unmocked } = await open(browser, { me: user("user10@example.com", "approver"), viewport: { width: 1280, height: 800 } }, "/servers");
   await page.getByText("Waiting for an approver").waitFor();
   await page.screenshot({ path: root("docs/assets/console/server-request-approve.png") });
   console.log("approve unmocked:", unmocked.join(",") || "none");
@@ -72,8 +72,8 @@ const browser = await chromium.launch({ channel: process.env.CI ? undefined : "c
 }
 // The Audit page for the landing page: the content area (without the left navigation and top bar), 2x.
 for (const dark of [false, true]) {
-  const { ctx, page, unmocked } = await open(browser, { me: user("priya@acme.test", "admin"), viewport: { width: 1443, height: 900 }, scale: 2, dark }, "/audit");
-  await page.fill("#audit-email", "alice@acme.test");
+  const { ctx, page, unmocked } = await open(browser, { me: user("user10@example.com", "admin"), viewport: { width: 1443, height: 900 }, scale: 2, dark }, "/audit");
+  await page.fill("#audit-email", "user01@example.com");
   await page.fill("#audit-from", "2026-09-13");
   await page.fill("#audit-to", "2026-10-13");
   await page.getByRole("button", { name: "Search" }).click();

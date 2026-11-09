@@ -11,7 +11,7 @@ description: Make an MCP server available, allow chosen tools to chosen groups, 
 
 ## Before you start
 
-You need the cluster from the [Quick start](../quick-start.md), the groups and people of [Different models for different teams](models-per-team.md) (Alice in `engineering`, Bob in `sales`), and a personal API key with the scope **MCP** or **LLM and MCP** for each of them. The key is made in the console, as described in [Connect your coding agents](coding-tools.md). Save Alice's key in `ALICE_KEY` and Bob's key in `BOB_KEY`.
+You need the cluster from the [Quick start](../quick-start.md), the groups and people of [Different models for different teams](models-per-team.md) (User01 in `engineering`, User02 in `sales`), and a personal API key with the scope **MCP** or **LLM and MCP** for each of them. The key is made in the console, as described in [Connect your coding agents](coding-tools.md). Save User01's key in `USER01_KEY` and User02's key in `USER02_KEY`.
 
 ## 1. Add the server and allow one tool
 
@@ -52,7 +52,7 @@ kubectl -n ambit-system delete accessrule everyone-time --ignore-not-found
 A client needs the MCP address and a key. With Claude Code:
 
 ```sh
-claude mcp add --transport http ambit http://mcp.localtest.me:8080/mcp --header "Authorization: Bearer $ALICE_KEY"
+claude mcp add --transport http ambit http://mcp.localtest.me:8080/mcp --header "Authorization: Bearer $USER01_KEY"
 ```
 
 The gateway shows each tool with the name of its server in front. This tool is `time_get_current_time`.
@@ -74,26 +74,26 @@ mcp() { # mcp KEY JSON-RPC-REQUEST
 }
 ```
 
-Alice lists her tools. She sees only the allowed tool:
+User01 lists the tools. The list shows only the allowed tool:
 
 ```sh
-mcp "$ALICE_KEY" '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+mcp "$USER01_KEY" '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 ```
 
 The answer has one tool, `time_get_current_time`, and ends with `HTTP 200`.
 
-Alice calls the allowed tool:
+User01 calls the allowed tool:
 
 ```sh
-mcp "$ALICE_KEY" '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"time_get_current_time","arguments":{"timezone":"Europe/London"}}}'
+mcp "$USER01_KEY" '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"time_get_current_time","arguments":{"timezone":"Europe/London"}}}'
 ```
 
 The answer holds the time in London and ends with `HTTP 200`.
 
-Alice calls another tool of the same server. The rule does not list it:
+User01 calls another tool of the same server. The rule does not list it:
 
 ```sh
-mcp "$ALICE_KEY" '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"time_convert_time","arguments":{"source_timezone":"Europe/London","time":"10:00","target_timezone":"Asia/Seoul"}}}'
+mcp "$USER01_KEY" '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"time_convert_time","arguments":{"source_timezone":"Europe/London","time":"10:00","target_timezone":"Asia/Seoul"}}}'
 ```
 
 ```text
@@ -101,17 +101,17 @@ mcp "$ALICE_KEY" '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name"
 HTTP 400
 ```
 
-Bob is in `sales`. No rule gives that group the server, so his list is empty:
+User02 is in `sales`. No rule gives that group the server, so the list is empty:
 
 ```sh
-mcp "$BOB_KEY" '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+mcp "$USER02_KEY" '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 ```
 
 ```text
 data: {"jsonrpc":"2.0","id":2,"result":{"tools":[]}}
 ```
 
-In the console, open **Audit** and search for `alice@acme.test`. Each call shows the server and the tool. The refused call to `convert_time` is there too.
+In the console, open **Audit** and search for `user01@example.com`. Each call shows the server and the tool. The refused call to `convert_time` is there too.
 
 ## Work apps that need a personal sign-in
 

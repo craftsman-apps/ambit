@@ -61,13 +61,13 @@ func TestCheckArguments(t *testing.T) {
 
 // A grant to named people applies to the caller with that exact canonical email, and never to a caller without one.
 func TestCheckArgumentsUsers(t *testing.T) {
-	g := Grant{Rule: "pilot", Users: []string{"alice@acme.com"}, Arguments: []v1.ArgumentRule{{Name: "region", OneOf: []string{"eu"}}}}
+	g := Grant{Rule: "pilot", Users: []string{"user01@acme.com"}, Arguments: []v1.ArgumentRule{{Name: "region", OneOf: []string{"eu"}}}}
 	for _, tc := range []struct {
 		name, email, want string
 	}{
-		{"listed user, allowed value", "alice@acme.com", ""},
-		{"listed user, refused value", "alice@acme.com", "region must be one of eu"},
-		{"another user: not this grant, the gateway decides", "bob@acme.com", ""},
+		{"listed user, allowed value", "user01@acme.com", ""},
+		{"listed user, refused value", "user01@acme.com", "region must be one of eu"},
+		{"another user: not this grant, the gateway decides", "user02@acme.com", ""},
 		{"no email: not this grant", "", ""},
 	} {
 		region := "us"

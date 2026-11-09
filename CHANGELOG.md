@@ -93,6 +93,7 @@ Each pull request adds a file in changelog/unreleased/ (see its README); the rel
 - Codex: the gateway answers Codex's request for the model list (`GET /v1/models?client_version=...`) with `{"models":[]}`, the shape Codex reads. Codex no longer logs `failed to decode models response`. Other clients get the same OpenAI list as before.
 - Savings page: the group chart now shows each group's share of the total instead of dollars that looked larger than the total, and says that people in several groups count in each group. "Counted since" now shows the oldest day the summaries hold, so it never conflicts with the chart.
 - Usage page: reads the daily LLM summary table for the days it holds completely, instead of scanning every audit record. The numbers are the same; the page is much faster with a large audit trail. Days before the summary began still come from the audit records.
+- The console no longer offers the Databricks and PagerDuty presets in its app list. Their test accounts stopped working, so they could not pass the live check before this release. A `Server` you already made from either preset is not changed. They come back when they pass the live check again.
 
 ## 0.2.3 (2026-10-18)
 

@@ -35,20 +35,118 @@ const (
 // entries and removes the others, so an old entry (a session token) does not stay.
 var keyEntries = []string{"Authorization", "accessKey", "secretKey", "sessionToken", "credentials.json"}
 
-type ModelKeyInput struct {
-	APIKey string `json:"apiKey,omitempty"`
+// ModelKeys are the credentials an admin types: an API key, AWS keys (Bedrock) or a Google key file (VertexAI).
+type ModelKeys struct {
+	APIKey  string   `json:"apiKey,omitempty"`
+	AWSKeys *AWSKeys `json:"awsKeys,omitempty"`
+	// GoogleKeyFile is the text of a Google service-account key file.
+	GoogleKeyFile string `json:"googleKeyFile,omitempty"`
 }
 
-// entries are the Secret entries for the provider, and the values redact must remove from any message.
-func (in *ModelKeyInput) entries(provider string) (map[string]string, []string, error) {
-	in.APIKey = strings.TrimSpace(in.APIKey)
-	if cloudOnly(provider) {
-		return nil, []string{in.APIKey}, errors.New("keys for " + provider + " are not changed in the console; change the Secret where it is managed")
+type AWSKeys struct {
+	AccessKey    string `json:"accessKey"`
+	SecretKey    string `json:"secretKey"`
+	SessionToken string `json:"sessionToken,omitempty"`
+}
+
+// ModelKeyInput is the body of PUT /api/models/{name}/key.
+type ModelKeyInput = ModelKeys
+
+const maxGoogleKeyFile = 64 << 10
+
+var (
+	awsAccessKeyRE = regexp.MustCompile(`^[A-Z0-9]{16,128}$`)
+	noSpaceRE      = regexp.MustCompile(`^\S+$`)
+)
+
+func (k *ModelKeys) trim() {
+	k.APIKey = strings.TrimSpace(k.APIKey)
+	k.GoogleKeyFile = strings.TrimSpace(k.GoogleKeyFile)
+	if a := k.AWSKeys; a != nil {
+		a.AccessKey, a.SecretKey, a.SessionToken = strings.TrimSpace(a.AccessKey), strings.TrimSpace(a.SecretKey), strings.TrimSpace(a.SessionToken)
 	}
-	if in.APIKey == "" {
-		return nil, nil, errors.New("the API key is empty")
+}
+
+func (k ModelKeys) empty() bool { return k.APIKey == "" && k.AWSKeys == nil && k.GoogleKeyFile == "" }
+
+// secrets are the values redact removes from any message: every typed value, and for a Google key file also its
+// private key, as text and as it is escaped inside the JSON file.
+func (k ModelKeys) secrets() []string {
+	out := []string{k.APIKey, k.GoogleKeyFile}
+	if a := k.AWSKeys; a != nil {
+		out = append(out, a.AccessKey, a.SecretKey, a.SessionToken)
 	}
-	return map[string]string{"Authorization": in.APIKey}, []string{in.APIKey}, nil
+	var f struct {
+		PrivateKey string `json:"private_key"`
+	}
+	if k.GoogleKeyFile != "" && json.Unmarshal([]byte(k.GoogleKeyFile), &f) == nil && f.PrivateKey != "" {
+		escaped, _ := json.Marshal(f.PrivateKey)
+		out = append(out, f.PrivateKey, strings.Trim(string(escaped), `"`))
+	}
+	return out
+}
+
+// entries checks the keys for the provider and returns the Secret entries (api/v1alpha1/types.go, credentialsRef).
+// Messages never contain a key.
+func (k ModelKeys) entries(provider string) (map[string]string, error) {
+	switch provider {
+	case "Bedrock":
+		a := k.AWSKeys
+		switch {
+		case k.APIKey != "" || k.GoogleKeyFile != "":
+			return nil, errors.New("Bedrock takes an AWS access key and secret key, not an API key or a key file")
+		case a == nil || a.AccessKey == "" || a.SecretKey == "":
+			return nil, errors.New("enter the AWS access key ID and the secret access key")
+		case !awsAccessKeyRE.MatchString(a.AccessKey):
+			return nil, errors.New("the AWS access key ID must be 16 to 128 capital letters and digits, like AKIA...")
+		case len(a.SecretKey) > 256 || !noSpaceRE.MatchString(a.SecretKey):
+			return nil, errors.New("the AWS secret access key must be at most 256 characters, without spaces")
+		case a.SessionToken != "" && (len(a.SessionToken) > 4096 || !noSpaceRE.MatchString(a.SessionToken)):
+			return nil, errors.New("the AWS session token must be at most 4096 characters, without spaces")
+		}
+		e := map[string]string{"accessKey": a.AccessKey, "secretKey": a.SecretKey}
+		if a.SessionToken != "" {
+			e["sessionToken"] = a.SessionToken
+		}
+		return e, nil
+	case "VertexAI":
+		if k.APIKey != "" || k.AWSKeys != nil {
+			return nil, errors.New("Vertex AI takes a Google service-account key file, not an API key or AWS keys")
+		}
+		if k.GoogleKeyFile == "" {
+			return nil, errors.New("upload the Google service-account key file")
+		}
+		if len(k.GoogleKeyFile) > maxGoogleKeyFile {
+			return nil, errors.New("the key file is larger than 64 KiB; a service-account key file is about 2 KiB")
+		}
+		var f map[string]any
+		if json.Unmarshal([]byte(k.GoogleKeyFile), &f) != nil {
+			return nil, errors.New("the key file is not JSON")
+		}
+		if t, _ := f["type"].(string); t != "service_account" {
+			return nil, fmt.Errorf("the key file has type %q; only a service-account key file (type service_account) is accepted", cut(t, 40))
+		}
+		for _, field := range []string{"client_email", "private_key"} {
+			if v, _ := f[field].(string); v == "" {
+				return nil, errors.New("the key file has no " + field)
+			}
+		}
+		return map[string]string{"credentials.json": k.GoogleKeyFile}, nil
+	}
+	switch {
+	case k.AWSKeys != nil || k.GoogleKeyFile != "":
+		return nil, errors.New(provider + " takes an API key, not AWS keys or a key file")
+	case k.APIKey == "":
+		return nil, errors.New("the API key is empty")
+	}
+	return map[string]string{"Authorization": k.APIKey}, nil
+}
+
+func cut(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }
 
 // isConsoleKey reports whether the Secret is the one Add model created for this model.
@@ -95,11 +193,13 @@ func (c *Catalog) changeModelKey(w http.ResponseWriter, r *http.Request, s Sessi
 	if !decodeInto(w, r, &in) {
 		return
 	}
+	in.trim()
+	secrets := in.secrets()
 	m, ok := c.getModel(w, r)
 	if !ok {
 		return
 	}
-	data, secrets, err := in.entries(m.Spec.Provider)
+	data, err := in.entries(m.Spec.Provider)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, redact(err.Error(), secrets...))
 		return

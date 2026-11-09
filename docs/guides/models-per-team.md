@@ -5,7 +5,7 @@ description: Allow the engineering group one model and the sales group another, 
 
 # Different models for different teams
 
-**What you get:** each team uses only the models you give it. Alice in engineering can call the large model. Bob in sales can call the small one. Each is refused on the other.
+**What you get:** each team uses only the models you give it. User01 in engineering can call the large model. User02 in sales can call the small one. Each is refused on the other.
 
 ## Before you start
 
@@ -13,8 +13,8 @@ You need the cluster from the [Quick start](../quick-start.md), with its model `
 
 Access by group needs sign-in through an identity provider that sends a `groups` claim. The quick-start cluster has only the bootstrap admin, who has no groups. Two ways to go on:
 
-- **Your identity provider.** Add its Dex connector as described in [Install on your cluster](../install.md). Create the groups `engineering` and `sales`. Put Alice in the first and Bob in the second.
-- **A test directory.** If you have no identity provider yet, use the small directory below. It is for trying the guides only. It holds Alice and Dan in `engineering` and Bob in `sales`, and it connects to Ambit as an LDAP directory.
+- **Your identity provider.** Add its Dex connector as described in [Install on your cluster](../install.md). Create the groups `engineering` and `sales`. Put User01 in the first and User02 in the second.
+- **A test directory.** If you have no identity provider yet, use the small directory below. It is for trying the guides only. It holds User01 and User04 in `engineering` and User02 in `sales`, and it connects to Ambit as an LDAP directory.
 
 <details>
 <summary>The test directory</summary>
@@ -35,37 +35,37 @@ data:
     objectClass: organizationalUnit
     ou: groups
 
-    dn: cn=alice,ou=people,dc=acme,dc=test
+    dn: cn=user01,ou=people,dc=acme,dc=test
     objectClass: inetOrgPerson
-    cn: alice
-    sn: Alice
-    mail: alice@acme.test
-    userPassword: alice-pass
+    cn: user01
+    sn: User01
+    mail: user01@example.com
+    userPassword: user01-pass
 
-    dn: cn=bob,ou=people,dc=acme,dc=test
+    dn: cn=user02,ou=people,dc=acme,dc=test
     objectClass: inetOrgPerson
-    cn: bob
-    sn: Bob
-    mail: bob@acme.test
-    userPassword: bob-pass
+    cn: user02
+    sn: User02
+    mail: user02@example.com
+    userPassword: user02-pass
 
-    dn: cn=dan,ou=people,dc=acme,dc=test
+    dn: cn=user04,ou=people,dc=acme,dc=test
     objectClass: inetOrgPerson
-    cn: dan
-    sn: Dan
-    mail: dan@acme.test
-    userPassword: dan-pass
+    cn: user04
+    sn: User04
+    mail: user04@example.com
+    userPassword: user04-pass
 
     dn: cn=engineering,ou=groups,dc=acme,dc=test
     objectClass: groupOfNames
     cn: engineering
-    member: cn=alice,ou=people,dc=acme,dc=test
-    member: cn=dan,ou=people,dc=acme,dc=test
+    member: cn=user01,ou=people,dc=acme,dc=test
+    member: cn=user04,ou=people,dc=acme,dc=test
 
     dn: cn=sales,ou=groups,dc=acme,dc=test
     objectClass: groupOfNames
     cn: sales
-    member: cn=bob,ou=people,dc=acme,dc=test
+    member: cn=user02,ou=people,dc=acme,dc=test
 ---
 apiVersion: v1
 kind: Secret
@@ -87,7 +87,7 @@ spec:
           args: ["--copy-service"]
           env:
             - { name: LDAP_ORGANISATION, value: Acme }
-            - { name: LDAP_DOMAIN, value: acme.test }
+            - { name: LDAP_DOMAIN, value: example.com }
             - { name: LDAP_ADMIN_PASSWORD, value: ldap-admin-pass }
             - { name: LDAP_TLS, value: "false" }
           ports: [{ containerPort: 389 }]
@@ -145,11 +145,11 @@ helm upgrade ambit oci://ghcr.io/craftsman-apps/charts/ambit --version 0.1.0 -n 
   --reuse-values -f sso-values.yaml --set limits.enabled=true --wait --timeout 10m
 ```
 
-Open <http://console.localtest.me:8080>. The sign-in page now offers **Acme directory**. Sign in as `alice@acme.test` with the password `alice-pass`. The console home page shows the group `engineering`. The other accounts are `bob@acme.test` with `bob-pass` and `dan@acme.test` with `dan-pass`.
+Open <http://console.localtest.me:8080>. The sign-in page now offers **Acme directory**. Sign in as `user01@example.com` with the password `user01-pass`. The console home page shows the group `engineering`. The other accounts are `user02@example.com` with `user02-pass` and `user04@example.com` with `user04-pass`.
 
 </details>
 
-Both ways need one more step. Each person signs in to the console and creates a personal API key, as described in [Connect your coding agents](coding-tools.md). A key carries the groups its owner had at their last console sign-in. Save Alice's key in the shell variable `ALICE_KEY` and Bob's key in `BOB_KEY`.
+Both ways need one more step. Each person signs in to the console and creates a personal API key, as described in [Connect your coding agents](coding-tools.md). A key carries the groups its owner had at their last console sign-in. Save User01's key in the shell variable `USER01_KEY` and User02's key in `USER02_KEY`.
 
 ## 1. Add a second model
 
@@ -208,13 +208,13 @@ ask() { # ask KEY MODEL
     -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
     -d "{\"model\":\"$2\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hello in five words.\"}]}"
 }
-ask "$ALICE_KEY" nvidia/nemotron-3-super-120b-a12b:free
-ask "$ALICE_KEY" nvidia/nemotron-3.5-lightning:free
-ask "$BOB_KEY" nvidia/nemotron-3.5-lightning:free
-ask "$BOB_KEY" nvidia/nemotron-3-super-120b-a12b:free
+ask "$USER01_KEY" nvidia/nemotron-3-super-120b-a12b:free
+ask "$USER01_KEY" nvidia/nemotron-3.5-lightning:free
+ask "$USER02_KEY" nvidia/nemotron-3.5-lightning:free
+ask "$USER02_KEY" nvidia/nemotron-3-super-120b-a12b:free
 ```
 
-Alice's first call and Bob's first call end with `HTTP 200` and an answer. The other two end with:
+User01's first call and User02's first call end with `HTTP 200` and an answer. The other two end with:
 
 ```text
 {"error":{"message":"Model authorization denied","type":"invalid_request_error","code":"model_authorization_denied"}} HTTP 403

@@ -308,8 +308,8 @@ func (c *Catalog) validateRequest(r *http.Request, in RequestInput) error {
 		return errors.New("use https for a server outside the cluster; plain http is only for in-cluster services (*.svc)")
 	case in.URL != "" && in.Transport == "stdio":
 		return errors.New("a server reached by URL speaks streamable-http or sse")
-	case in.Connection != "" && in.URL == "":
-		return errors.New("a connection is only for servers reached by URL")
+	case in.Connection != "" && in.URL == "" && in.Transport != "streamable-http" && in.Transport != "sse":
+		return errors.New("a connection is for a server reached by URL, or an image that talks streamable-http or sse (a stdio server cannot receive a token)")
 	case !slices.Contains([]string{"", "stdio", "streamable-http", "sse"}, in.Transport):
 		return errors.New("transport must be stdio, streamable-http or sse")
 	case len(in.Reason) > 2000 || len(in.DisplayName) > 200:

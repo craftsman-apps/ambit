@@ -11,15 +11,15 @@ description: Connect your identity provider over SCIM, deactivate a person, and 
 
 You need:
 
-- the cluster from the [Quick start](../quick-start.md) with the people of [Different models for different teams](models-per-team.md). This guide offboards Dan, who is in `engineering`;
-- the model rule `engineering-models` and the tool rule `engineering-time` ([Give an agent tools and apps](mcp-apps.md)), so that Dan has something to lose;
-- no budgets that block Dan. If you did [Set spending limits](spending-limits.md), delete its budgets first and wait a minute:
+- the cluster from the [Quick start](../quick-start.md) with the people of [Different models for different teams](models-per-team.md). This guide offboards User04, who is in `engineering`;
+- the model rule `engineering-models` and the tool rule `engineering-time` ([Give an agent tools and apps](mcp-apps.md)), so that User04 has something to lose;
+- no budgets that block User04. If you did [Set spending limits](spending-limits.md), delete its budgets first and wait a minute:
 
   ```sh
   kubectl -n ambit-system delete budgets.ambitproject.dev engineering sales
   ```
 
-- two personal API keys for Dan, made in the console as in [Connect your coding agents](coding-tools.md): one with the scope **LLM**, in `DAN_KEY`, and one with the scope **MCP**, in `DAN_MCP_KEY`. Keep Dan signed in to the console in a browser. Alice also needs a key, in `ALICE_KEY`.
+- two personal API keys for User04, made in the console as in [Connect your coding agents](coding-tools.md): one with the scope **LLM**, in `USER04_KEY`, and one with the scope **MCP**, in `USER04_MCP_KEY`. Keep User04 signed in to the console in a browser. User01 also needs a key, in `USER01_KEY`.
 
 In real use, your identity provider (Okta, Entra ID) sends the SCIM requests. In this guide you send them yourself with `curl`, so you can see each step.
 
@@ -44,32 +44,32 @@ curl -s -o /dev/null -w 'HTTP %{http_code}\n' $SCIM/Users
 HTTP 401
 ```
 
-## 2. Provision Dan
+## 2. Provision User04
 
-Your identity provider creates a user in Ambit before it can deactivate one. Create Dan the way the provider does:
+Your identity provider creates a user in Ambit before it can deactivate one. Create User04 the way the provider does:
 
 ```sh
 curl -s -X POST $SCIM/Users -H "Authorization: Bearer $SCIM_TOKEN" -H 'Content-Type: application/scim+json' \
-  -d '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"dan@acme.test","active":true,"emails":[{"value":"dan@acme.test","primary":true}]}' | tee dan-scim.json
-ID=$(sed -E 's/.*"id":"([^"]+)".*/\1/' dan-scim.json)
+  -d '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"user04@example.com","active":true,"emails":[{"value":"user04@example.com","primary":true}]}' | tee user04-scim.json
+ID=$(sed -E 's/.*"id":"([^"]+)".*/\1/' user04-scim.json)
 ```
 
-The answer has `"active":true` and an `id`. The address in `userName` and `emails` must be the address Dan signs in with.
+The answer has `"active":true` and an `id`. The address in `userName` and `emails` must be the address User04 signs in with.
 
-## Check that Dan has access
+## Check that User04 has access
 
-Before you offboard Dan, check that his keys and his session work. The function `mcp` is the one from [Give an agent tools and apps](mcp-apps.md).
+Before you offboard User04, check that the keys and the session of that person work. The function `mcp` is the one from [Give an agent tools and apps](mcp-apps.md).
 
 ```sh
-curl -s -o /dev/null -w 'Dan LLM key: HTTP %{http_code}\n' http://llm.localtest.me:8080/v1/chat/completions \
-  -H "Authorization: Bearer $DAN_KEY" -H 'Content-Type: application/json' \
+curl -s -o /dev/null -w 'User04 LLM key: HTTP %{http_code}\n' http://llm.localtest.me:8080/v1/chat/completions \
+  -H "Authorization: Bearer $USER04_KEY" -H 'Content-Type: application/json' \
   -d '{"model":"nvidia/nemotron-3-super-120b-a12b:free","messages":[{"role":"user","content":"hi"}]}'
-mcp "$DAN_MCP_KEY" '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+mcp "$USER04_MCP_KEY" '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 ```
 
-The first command prints `Dan LLM key: HTTP 200`. The second lists the tool `time_get_current_time`. In the console, **Settings** and **Keys** list Dan's keys as **Active**, and Dan's browser is signed in.
+The first command prints `User04 LLM key: HTTP 200`. The second lists the tool `time_get_current_time`. In the console, **Settings** and **Keys** list User04's keys as **Active**, and User04's browser is signed in.
 
-## 3. Deactivate Dan
+## 3. Deactivate User04
 
 ```sh
 curl -s -w '\nHTTP %{http_code}\n' -X PATCH $SCIM/Users/$ID -H "Authorization: Bearer $SCIM_TOKEN" -H 'Content-Type: application/scim+json' \
@@ -83,37 +83,37 @@ The answer has `"active":false` and ends with `HTTP 200`. Deleting the user in t
 Run the same checks as before. The gateway needs a few seconds to learn about the block, so repeat a command if it still shows 200.
 
 ```sh
-curl -s -o /dev/null -w 'Dan LLM key: HTTP %{http_code}\n' http://llm.localtest.me:8080/v1/chat/completions \
-  -H "Authorization: Bearer $DAN_KEY" -H 'Content-Type: application/json' \
+curl -s -o /dev/null -w 'User04 LLM key: HTTP %{http_code}\n' http://llm.localtest.me:8080/v1/chat/completions \
+  -H "Authorization: Bearer $USER04_KEY" -H 'Content-Type: application/json' \
   -d '{"model":"nvidia/nemotron-3-super-120b-a12b:free","messages":[{"role":"user","content":"hi"}]}'
-mcp "$DAN_MCP_KEY" '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+mcp "$USER04_MCP_KEY" '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 ```
 
 ```text
-Dan LLM key: HTTP 403
+User04 LLM key: HTTP 403
 authorization failed
 HTTP 403
 ```
 
-Dan's console session ended. Reload the console in his browser, and it shows the sign-in page. The console API answers `401` for his session cookie. His keys are deleted, not only blocked: as an admin, open **Settings** and **Keys** and see that Dan has none. Alice is not affected:
+User04's console session ended. Reload the console in the browser of that person, and it shows the sign-in page. The console API answers `401` for the session cookie of that person. The keys are deleted, not only blocked: as an admin, open **Settings** and **Keys** and see that User04 has none. User01 is not affected:
 
 ```sh
-curl -s -o /dev/null -w 'Alice LLM key: HTTP %{http_code}\n' http://llm.localtest.me:8080/v1/chat/completions \
-  -H "Authorization: Bearer $ALICE_KEY" -H 'Content-Type: application/json' \
+curl -s -o /dev/null -w 'User01 LLM key: HTTP %{http_code}\n' http://llm.localtest.me:8080/v1/chat/completions \
+  -H "Authorization: Bearer $USER01_KEY" -H 'Content-Type: application/json' \
   -d '{"model":"nvidia/nemotron-3-super-120b-a12b:free","messages":[{"role":"user","content":"hi"}]}'
 ```
 
 ```text
-Alice LLM key: HTTP 200
+User01 LLM key: HTTP 200
 ```
 
 ### The record
 
-Ambit keeps a record of each offboarding. As an admin, open **Settings** and **Offboarding**, or read the same data from the console API. The record for Dan looks like this. Your times and counts are different:
+Ambit keeps a record of each offboarding. As an admin, open **Settings** and **Offboarding**, or read the same data from the console API. The record for User04 looks like this. Your times and counts are different:
 
 ```json
 {
-  "email": "dan@acme.test",
+  "email": "user04@example.com",
   "at": "2026-10-13T08:20:07.193204178Z",
   "trigger": "scim PATCH active=false",
   "grants": [],
@@ -127,7 +127,7 @@ Ambit keeps a record of each offboarding. As an admin, open **Settings** and **O
 - `sessionsEnded`: the console sessions that were ended.
 - `gatewayBlocked`: the gateways now refuse the person's email, even for a token that has not expired.
 - `keysDeleted`: the personal API keys that were deleted.
-- `grants`: one line for each connected app, with `revokedAtProvider` set to `true` when the vendor confirmed the revocation. The list is empty here because Dan connected no app. A revocation that a vendor does not confirm shows its error and marks the record `completeSuccess: false`. Which vendors truly revoke is in [Offboarding](../offboarding.md).
+- `grants`: one line for each connected app, with `revokedAtProvider` set to `true` when the vendor confirmed the revocation. The list is empty here because User04 connected no app. A revocation that a vendor does not confirm shows its error and marks the record `completeSuccess: false`. Which vendors truly revoke is in [Offboarding](../offboarding.md).
 
 ## If the person comes back
 

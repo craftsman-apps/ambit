@@ -31,7 +31,7 @@ func priceFixture(t *testing.T, gitops bool) (http.Handler, client.Client, *Auth
 
 func TestPriceSuggestionAndEdit(t *testing.T) {
 	h, c, a, _ := priceFixture(t, false)
-	admin := user(a, "priya@acme.test", RoleAdmin)
+	admin := user(a, "user10@example.com", RoleAdmin)
 	g := decodeAs[map[string]any](t, do(t, h, "GET", "/api/models/gpt/price", admin, nil).Body.String())
 	s := g["suggestion"].(map[string]any)
 	if g["price"] != nil || s["inputPerMillionTokens"] != "2" || s["outputPerMillionTokens"] != "8" {
@@ -52,14 +52,14 @@ func TestPriceSuggestionAndEdit(t *testing.T) {
 	if r := do(t, h, "PUT", "/api/models/gpt/price", admin, map[string]string{"inputPerMillionTokens": "-1", "outputPerMillionTokens": "1"}); r.Code != http.StatusBadRequest {
 		t.Fatalf("negative price: %d", r.Code)
 	}
-	if r := do(t, h, "PUT", "/api/models/gpt/price", user(a, "alice@acme.test", RoleViewer), map[string]string{"inputPerMillionTokens": "1", "outputPerMillionTokens": "1"}); r.Code != http.StatusForbidden {
+	if r := do(t, h, "PUT", "/api/models/gpt/price", user(a, "user01@example.com", RoleViewer), map[string]string{"inputPerMillionTokens": "1", "outputPerMillionTokens": "1"}); r.Code != http.StatusForbidden {
 		t.Fatalf("viewer: %d", r.Code)
 	}
 }
 
 func TestRemovePriceKeepsOtherFields(t *testing.T) {
 	h, c, a, _ := priceFixture(t, false)
-	admin := user(a, "priya@acme.test", RoleAdmin)
+	admin := user(a, "user10@example.com", RoleAdmin)
 	do(t, h, "PUT", "/api/models/gpt/price", admin, map[string]string{"inputPerMillionTokens": "1", "outputPerMillionTokens": "1"})
 	if r := do(t, h, "PUT", "/api/models/gpt/price", admin, map[string]bool{"remove": true}); r.Code != http.StatusOK {
 		t.Fatalf("%d %s", r.Code, r.Body)
@@ -73,7 +73,7 @@ func TestRemovePriceKeepsOtherFields(t *testing.T) {
 
 func TestPriceEditInGitOpsOpensAPullRequest(t *testing.T) {
 	h, c, a, repo := priceFixture(t, true)
-	r := do(t, h, "PUT", "/api/models/gpt/price", user(a, "priya@acme.test", RoleAdmin), map[string]string{"inputPerMillionTokens": "1", "outputPerMillionTokens": "4"})
+	r := do(t, h, "PUT", "/api/models/gpt/price", user(a, "user10@example.com", RoleAdmin), map[string]string{"inputPerMillionTokens": "1", "outputPerMillionTokens": "4"})
 	if r.Code != http.StatusAccepted || len(repo.files) != 1 || repo.files[0].Path != "ambit/models/gpt.yaml" {
 		t.Fatalf("%d %s %v", r.Code, r.Body, repo.files)
 	}
@@ -87,7 +87,7 @@ func TestPriceEditInGitOpsOpensAPullRequest(t *testing.T) {
 // The pull request rewrites the whole file: it must keep the object's labels (here team: x).
 func TestPriceEditInGitOpsKeepsLabels(t *testing.T) {
 	h, _, a, repo := priceFixture(t, true)
-	r := do(t, h, "PUT", "/api/models/gpt/price", user(a, "priya@acme.test", RoleAdmin), map[string]string{"inputPerMillionTokens": "1", "outputPerMillionTokens": "4"})
+	r := do(t, h, "PUT", "/api/models/gpt/price", user(a, "user10@example.com", RoleAdmin), map[string]string{"inputPerMillionTokens": "1", "outputPerMillionTokens": "4"})
 	if r.Code != http.StatusAccepted || len(repo.files) != 1 {
 		t.Fatalf("%d %s", r.Code, r.Body)
 	}
@@ -114,7 +114,7 @@ func TestPriceSaveRetriesAStatusConflict(t *testing.T) {
 		},
 	})
 	h := NewServer(a, testSPA, LoginOptions{}, &Catalog{Client: wc, Namespace: testNS})
-	if r := do(t, h, "PUT", "/api/models/gpt/price", user(a, "priya@acme.test", RoleAdmin), map[string]string{"inputPerMillionTokens": "1", "outputPerMillionTokens": "4"}); r.Code != http.StatusOK {
+	if r := do(t, h, "PUT", "/api/models/gpt/price", user(a, "user10@example.com", RoleAdmin), map[string]string{"inputPerMillionTokens": "1", "outputPerMillionTokens": "4"}); r.Code != http.StatusOK {
 		t.Fatalf("%d %s", r.Code, r.Body)
 	}
 	var m v1.Model
@@ -131,7 +131,7 @@ func TestPriceEditKeepsMissingCredentialsRef(t *testing.T) {
 		Spec: v1.ModelSpec{Provider: "Bedrock", Model: "anthropic.claude-sonnet-4-5-20250929-v1:0"}}); err != nil {
 		t.Fatal(err)
 	}
-	r := do(t, h, "PUT", "/api/models/claude/price", user(a, "priya@acme.test", RoleAdmin), map[string]string{"inputPerMillionTokens": "3", "outputPerMillionTokens": "15"})
+	r := do(t, h, "PUT", "/api/models/claude/price", user(a, "user10@example.com", RoleAdmin), map[string]string{"inputPerMillionTokens": "3", "outputPerMillionTokens": "15"})
 	if r.Code != http.StatusAccepted || len(repo.files) != 1 {
 		t.Fatalf("%d %s", r.Code, r.Body)
 	}

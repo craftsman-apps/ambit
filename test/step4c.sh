@@ -92,8 +92,8 @@ done
 [[ $(kubectl auth can-i create "servers.$G" -n "$NS" --as="system:serviceaccount:$NS:ambit-console") == no ]] || fail "2 console may create servers"
 pass "2 console service account cannot create, update or delete rules or create servers"
 
-# 3 · A1 through Git: priya edits a rule -> pull request; nothing changes until it is merged
-sign_in keycloak priya priya-test-pass
+# 3 · A1 through Git: user10 edits a rule -> pull request; nothing changes until it is merged
+sign_in keycloak user10 user10-test-pass
 code=$(api PUT /api/access-rules/eng-time '{"groups":["eng"],"allSignedIn":false,"models":[],"servers":[{"name":"time","tools":["convert_time","get_current_time"]}]}')
 [[ "$code" == 202 ]] || fail "3 rule change: $code $(cat "$W/api")"
 PR=$(field "$W/api" 'd["pullRequest"]["url"]')
@@ -103,24 +103,24 @@ steps() { [[ $(api GET "/api/changes/${PR##*/}") == 200 ]] && field "$W/api" '" 
 [[ $(steps) == "done waiting" ]] || fail "3 timeline before merge: $(cat "$W/api")"
 merge "$PR"
 wait_for "3 rule not synced after merge" 120 '[[ $(kubectl -n "$NS" get "accessrules.$G" eng-time -o jsonpath="{.spec.servers[0].tools}") == *convert_time* ]]'
-wait_for "3 alice does not see convert_time: $TOOLS" 60 'try_tools "$(token alice)"; [[ $TOOLS == *time_convert_time* ]]'
+wait_for "3 user01 does not see convert_time: $TOOLS" 60 'try_tools "$(token user01)"; [[ $TOOLS == *time_convert_time* ]]'
 wait_for "3 console timeline did not reach Applied: $(cat "$W/api")" 60 '[[ $(steps) == "done done done done" ]]'
 timeline=$(field "$W/api" '" -> ".join(s["name"] + " " + s.get("detail", "") for s in d["steps"])')
-pass "3 priya's change opened $PR; cluster unchanged until merge; after merge alice sees: $TOOLS; console timeline: $timeline"
+pass "3 user10's change opened $PR; cluster unchanged until merge; after merge user01 sees: $TOOLS; console timeline: $timeline"
 
-# 4 · server approval through Git: sam approves -> pull request with the digest; the server runs after merge
-sign_in keycloak alice alice-test-pass
+# 4 · server approval through Git: user11 approves -> pull request with the digest; the server runs after merge
+sign_in keycloak user01 user01-test-pass
 [[ $(api POST /api/server-requests "{\"serverName\":\"time-b\",\"image\":\"$IMAGE\",\"reason\":\"step 4c\"}") == 201 ]] || fail "4 request: $(cat "$W/api")"
 REQ=$(field "$W/api" 'd["name"]')
-sign_in keycloak sam sam-test-pass
+sign_in keycloak user11 user11-test-pass
 [[ $(api POST "/api/server-requests/$REQ/approve" '{"comment":"digest checked"}') == 202 ]] || fail "4 approve: $(cat "$W/api")"
 SPR=$(field "$W/api" 'd["pullRequest"]["url"]')
 kubectl -n "$NS" get "servers.$G" time-b >/dev/null 2>&1 && fail "4 server exists before merge"
 [[ $(kubectl -n "$NS" get "serverrequests.$G" "$REQ" -o jsonpath='{.status.decision} {.status.pullRequest}') == "Approved $SPR" ]] || fail "4 request status"
 merge "$SPR"
 wait_for "4 time-b not Ready after merge" 300 'kubectl -n "$NS" wait "servers.$G" time-b --for=condition=Ready --timeout=1s >/dev/null 2>&1'
-[[ $(kubectl -n "$NS" get "servers.$G" time-b -o jsonpath='{.metadata.annotations.ambitproject\.dev/approved-by}') == sam@acme.test ]] || fail "4 approval record lost"
-pass "4 sam's approval opened $SPR; time-b ran only after the merge, with approved-by sam"
+[[ $(kubectl -n "$NS" get "servers.$G" time-b -o jsonpath='{.metadata.annotations.ambitproject\.dev/approved-by}') == user11@example.com ]] || fail "4 approval record lost"
+pass "4 user11's approval opened $SPR; time-b ran only after the merge, with approved-by user11"
 
 # 5 · an invalid object fails `ambit validate`, the pull request check (the repository itself passes)
 ( cd "$W/repo" && git pull -q origin main )

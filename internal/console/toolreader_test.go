@@ -26,8 +26,8 @@ func readerFixture(t *testing.T) (*ToolReader, client.Client, *[]string) {
 	_ = c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "jira"}, &conn)
 	conn.Spec.ServerURL = jiraMCP
 	_ = c.Update(t.Context(), &conn)
-	connect(t, conns, testAuthOnly(), "admin@acme.test", "admin")
-	connect(t, conns, testAuthOnly(), "lee@acme.test", "lee")
+	connect(t, conns, testAuthOnly(), "admin@example.com", "admin")
+	connect(t, conns, testAuthOnly(), "user06@example.com", "user06")
 	_ = c.Create(t.Context(), &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "jira-mcp", Namespace: testNS, UID: "uid-jira-mcp"},
 		Spec: v1.ServerSpec{URL: jiraMCP, Connection: "jira", Transport: "streamable-http"}})
 	var mu sync.Mutex
@@ -47,27 +47,27 @@ func TestReaderReadsWithOwnGrantOnly(t *testing.T) {
 	if _, err := tr.Tools(t.Context(), "jira-mcp"); !errors.Is(err, ErrNoReader) {
 		t.Fatalf("no reader yet: %v", err)
 	}
-	if err := tr.SetReader(t.Context(), "admin@acme.test", "jira-mcp"); err != nil {
+	if err := tr.SetReader(t.Context(), "admin@example.com", "jira-mcp"); err != nil {
 		t.Fatal(err)
 	}
 	res, err := tr.Tools(t.Context(), "jira-mcp")
-	if err != nil || res.Reader != "admin@acme.test" || len(res.Tools) != 1 || (*used)[0] != jiraMCP+" at-admin" {
+	if err != nil || res.Reader != "admin@example.com" || len(res.Tools) != 1 || (*used)[0] != jiraMCP+" at-admin" {
 		t.Fatalf("res %+v err %v used %v", res, err, *used)
 	}
-	if err := tr.SetReader(t.Context(), "lee@acme.test", "jira-mcp"); err != nil { // a new reader replaces the old one
+	if err := tr.SetReader(t.Context(), "user06@example.com", "jira-mcp"); err != nil { // a new reader replaces the old one
 		t.Fatal(err)
 	}
-	if who, ok, _ := tr.Reader(t.Context(), "jira-mcp"); !ok || who != "lee@acme.test" {
+	if who, ok, _ := tr.Reader(t.Context(), "jira-mcp"); !ok || who != "user06@example.com" {
 		t.Fatalf("reader %s", who)
 	}
-	if g, _ := tr.Conns.Store.Get(t.Context(), "admin@acme.test", "jira"); len(g.ToolReaderFor) != 0 {
+	if g, _ := tr.Conns.Store.Get(t.Context(), "admin@example.com", "jira"); len(g.ToolReaderFor) != 0 {
 		t.Fatal("previous reader's consent kept")
 	}
 }
 
 func TestReaderNeverSendsTokenToAnotherURL(t *testing.T) {
 	tr, c, used := readerFixture(t)
-	_ = tr.SetReader(t.Context(), "admin@acme.test", "jira-mcp")
+	_ = tr.SetReader(t.Context(), "admin@example.com", "jira-mcp")
 	_, _ = tr.Tools(t.Context(), "jira-mcp") // cached
 	var s v1.Server
 	_ = c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "jira-mcp"}, &s)
@@ -86,18 +86,18 @@ func TestReaderNeverSendsTokenToAnotherURL(t *testing.T) {
 
 func TestDisconnectAndOffboardingEndConsentEvenWhenCached(t *testing.T) {
 	tr, c, _ := readerFixture(t)
-	_ = tr.SetReader(t.Context(), "admin@acme.test", "jira-mcp")
+	_ = tr.SetReader(t.Context(), "admin@example.com", "jira-mcp")
 	_, _ = tr.Tools(t.Context(), "jira-mcp") // fills the cache
-	g, _ := tr.Conns.Store.Get(t.Context(), "admin@acme.test", "jira")
+	g, _ := tr.Conns.Store.Get(t.Context(), "admin@example.com", "jira")
 	_, _ = tr.Conns.Revoke(t.Context(), g) // the reader disconnects
 	if _, err := tr.Tools(t.Context(), "jira-mcp"); !errors.Is(err, ErrNoReader) {
 		t.Fatalf("cached list used after disconnect: %v", err)
 	}
-	connect(t, tr.Conns, testAuthOnly(), "lee@acme.test", "lee")
-	_ = tr.SetReader(t.Context(), "lee@acme.test", "jira-mcp")
+	connect(t, tr.Conns, testAuthOnly(), "user06@example.com", "user06")
+	_ = tr.SetReader(t.Context(), "user06@example.com", "jira-mcp")
 	_, _ = tr.Tools(t.Context(), "jira-mcp")
 	_ = c.Create(t.Context(), &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: OffboardedConfigMap, Namespace: testNS},
-		Data: map[string]string{"emails": `["lee@acme.test"]`}}) // the format controller.OffboardedEmails reads
+		Data: map[string]string{"emails": `["user06@example.com"]`}}) // the format controller.OffboardedEmails reads
 	if _, err := tr.Tools(t.Context(), "jira-mcp"); !errors.Is(err, ErrNoReader) {
 		t.Fatalf("cached list used after offboarding: %v", err)
 	}
@@ -105,8 +105,8 @@ func TestDisconnectAndOffboardingEndConsentEvenWhenCached(t *testing.T) {
 
 func TestReconnectEndsConsent(t *testing.T) {
 	tr, _, _ := readerFixture(t)
-	_ = tr.SetReader(t.Context(), "admin@acme.test", "jira-mcp")
-	connect(t, tr.Conns, testAuthOnly(), "admin@acme.test", "admin") // a new grant carries no consent
+	_ = tr.SetReader(t.Context(), "admin@example.com", "jira-mcp")
+	connect(t, tr.Conns, testAuthOnly(), "admin@example.com", "admin") // a new grant carries no consent
 	if _, ok, _ := tr.Reader(t.Context(), "jira-mcp"); ok {
 		t.Fatal("consent survived a reconnect")
 	}
@@ -114,7 +114,7 @@ func TestReconnectEndsConsent(t *testing.T) {
 
 func TestConsentCannotChangeDuringARead(t *testing.T) {
 	tr, _, _ := readerFixture(t)
-	_ = tr.SetReader(t.Context(), "admin@acme.test", "jira-mcp")
+	_ = tr.SetReader(t.Context(), "admin@example.com", "jira-mcp")
 	started, release := make(chan struct{}), make(chan struct{})
 	tr.List = func(context.Context, *http.Client, string, string, string) ([]v1.Tool, error) {
 		close(started)
@@ -147,12 +147,12 @@ func TestConsentCannotChangeDuringARead(t *testing.T) {
 
 func TestToolsHandlerReturnsNoToken(t *testing.T) {
 	tr, _, _ := readerFixture(t)
-	_ = tr.SetReader(t.Context(), "admin@acme.test", "jira-mcp")
+	_ = tr.SetReader(t.Context(), "admin@example.com", "jira-mcp")
 	rec := httptest.NewRecorder()
 	tr.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/v1/tools/jira-mcp", nil))
 	var body map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &body)
-	if rec.Code != 200 || strings.Contains(rec.Body.String(), "at-admin") || body["reader"] != "admin@acme.test" {
+	if rec.Code != 200 || strings.Contains(rec.Body.String(), "at-admin") || body["reader"] != "admin@example.com" {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 }
@@ -160,9 +160,9 @@ func TestToolsHandlerReturnsNoToken(t *testing.T) {
 // Disconnect during a read: the list read with the old grant is neither returned nor cached.
 func TestRevokeDuringAReadDiscardsTheResult(t *testing.T) {
 	tr, _, _ := readerFixture(t)
-	_ = tr.SetReader(t.Context(), "admin@acme.test", "jira-mcp")
+	_ = tr.SetReader(t.Context(), "admin@example.com", "jira-mcp")
 	tr.List = func(context.Context, *http.Client, string, string, string) ([]v1.Tool, error) {
-		g, _ := tr.Conns.Store.Get(t.Context(), "admin@acme.test", "jira")
+		g, _ := tr.Conns.Store.Get(t.Context(), "admin@example.com", "jira")
 		_, _ = tr.Conns.Revoke(t.Context(), g) // not blocked: the read holds no grant lock while listing
 		return []v1.Tool{{Name: "stale"}}, nil
 	}
@@ -180,7 +180,7 @@ func TestReaderConcurrentConsentChanges(t *testing.T) {
 	tr, _, _ := readerFixture(t)
 	tr.TTL = 0 // every call reads
 	tr.List = func(_ context.Context, _ *http.Client, _, _, bearer string) ([]v1.Tool, error) {
-		return []v1.Tool{{Name: bearer}}, nil // "at-admin", "renewed-lee", ...
+		return []v1.Tool{{Name: bearer}}, nil // "at-admin", "renewed-user06", ...
 	}
 	var wg sync.WaitGroup
 	for i := range 8 {
@@ -190,14 +190,14 @@ func TestReaderConcurrentConsentChanges(t *testing.T) {
 			for range 10 {
 				switch i % 4 {
 				case 0:
-					_ = tr.SetReader(t.Context(), []string{"admin@acme.test", "lee@acme.test"}[i/4], "jira-mcp")
+					_ = tr.SetReader(t.Context(), []string{"admin@example.com", "user06@example.com"}[i/4], "jira-mcp")
 				case 1:
 					_ = tr.ClearReader(t.Context(), "jira-mcp")
 				case 2:
 					tr.Conns.CheckAll(t.Context(), true)
 				default:
 					res, err := tr.Tools(t.Context(), "jira-mcp")
-					if err == nil && !strings.HasSuffix(res.Tools[0].Name, "-"+strings.TrimSuffix(res.Reader, "@acme.test")) {
+					if err == nil && !strings.HasSuffix(res.Tools[0].Name, "-"+strings.TrimSuffix(res.Reader, "@example.com")) {
 						t.Errorf("reader %q got the list read with %q", res.Reader, res.Tools[0].Name)
 					}
 				}
@@ -206,9 +206,9 @@ func TestReaderConcurrentConsentChanges(t *testing.T) {
 	}
 	wg.Wait()
 	// After renewals interleaved with consent changes, the final consent is still in the grant.
-	_ = tr.SetReader(t.Context(), "admin@acme.test", "jira-mcp")
+	_ = tr.SetReader(t.Context(), "admin@example.com", "jira-mcp")
 	tr.Conns.CheckAll(t.Context(), true)
-	if who, ok, err := tr.Reader(t.Context(), "jira-mcp"); !ok || who != "admin@acme.test" || err != nil {
+	if who, ok, err := tr.Reader(t.Context(), "jira-mcp"); !ok || who != "admin@example.com" || err != nil {
 		t.Fatalf("consent lost by renewal: %q %v %v", who, ok, err)
 	}
 }
@@ -217,8 +217,8 @@ func TestReaderConcurrentConsentChanges(t *testing.T) {
 func TestReconnectDuringRenewalKeepsTheNewGrant(t *testing.T) {
 	saas := newFakeSaaS(t)
 	conns, _ := connFixture(t, saas)
-	connect(t, conns, testAuthOnly(), "admin@acme.test", "admin")
-	g, _ := conns.Store.Get(t.Context(), "admin@acme.test", "jira")
+	connect(t, conns, testAuthOnly(), "admin@example.com", "admin")
+	g, _ := conns.Store.Get(t.Context(), "admin@example.com", "jira")
 	g.ToolReaderFor = []string{"uid-jira-mcp"}
 	_ = conns.Store.Put(t.Context(), g)
 	inRenew, release := make(chan struct{}), make(chan struct{})
@@ -229,12 +229,12 @@ func TestReconnectDuringRenewalKeepsTheNewGrant(t *testing.T) {
 	go func() { conns.CheckAll(context.Background(), true); close(renewed) }()
 	<-inRenew // the renewal holds the old grant (with consent) and waits for the provider
 	reconnected := make(chan struct{})
-	go func() { connect(t, conns, testAuthOnly(), "admin@acme.test", "admin2"); close(reconnected) }()
+	go func() { connect(t, conns, testAuthOnly(), "admin@example.com", "admin2"); close(reconnected) }()
 	time.Sleep(100 * time.Millisecond) // without the grant lock, the callback has saved the new grant by now
 	close(release)
 	<-renewed
 	<-reconnected
-	g, _ = conns.Store.Get(t.Context(), "admin@acme.test", "jira")
+	g, _ = conns.Store.Get(t.Context(), "admin@example.com", "jira")
 	if g == nil || g.AccessToken != "at-admin2" || len(g.ToolReaderFor) != 0 {
 		t.Fatalf("stored grant %+v", g)
 	}
@@ -264,7 +264,7 @@ func TestToolReaderAPIErrors(t *testing.T) {
 		t.Fatalf("unknown server: %d %s", rec.Code, rec.Body)
 	}
 	// The admin has not connected the app: a user error, not a server error.
-	g, _ := tr.Conns.Store.Get(t.Context(), "admin@acme.test", "jira")
+	g, _ := tr.Conns.Store.Get(t.Context(), "admin@example.com", "jira")
 	_, _ = tr.Conns.Revoke(t.Context(), g)
 	if rec := do(t, h, "PUT", "/api/servers/jira-mcp/tool-reader", as(a, RoleAdmin), map[string]string{}); rec.Code != http.StatusConflict ||
 		!strings.Contains(rec.Body.String(), "connect jira") {
@@ -286,7 +286,7 @@ func TestToolReaderAPI(t *testing.T) {
 	if rec := do(t, h, "PUT", "/api/servers/jira-mcp/tool-reader", as(a, RoleAdmin), map[string]string{}); rec.Code != http.StatusNoContent {
 		t.Fatalf("admin set: %d %s", rec.Code, rec.Body)
 	}
-	if who, ok, _ := tr.Reader(t.Context(), "jira-mcp"); !ok || who != "admin@acme.test" {
+	if who, ok, _ := tr.Reader(t.Context(), "jira-mcp"); !ok || who != "admin@example.com" {
 		t.Fatalf("reader after PUT: %q", who)
 	}
 	if rec := do(t, h, "DELETE", "/api/servers/jira-mcp/tool-reader", as(a, RoleViewer), nil); rec.Code != http.StatusForbidden {
@@ -317,7 +317,7 @@ func TestServerViewShowsReader(t *testing.T) {
 	if v := view(); v.Reader != "" || v.ToolsReadAt != nil {
 		t.Fatalf("no reader yet: %+v", v)
 	}
-	if err := tr.SetReader(t.Context(), "admin@acme.test", "jira-mcp"); err != nil {
+	if err := tr.SetReader(t.Context(), "admin@example.com", "jira-mcp"); err != nil {
 		t.Fatal(err)
 	}
 	when := metav1.NewTime(time.Date(2026, 10, 6, 9, 0, 0, 0, time.UTC))
@@ -330,7 +330,34 @@ func TestServerViewShowsReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	v := view()
-	if v.Reader != "admin@acme.test" || v.ToolsReadAt == nil || !v.ToolsReadAt.Equal(when.Time) || v.ToolsRead != "True" || v.ToolsReadMessage != "1 tools" {
+	if v.Reader != "admin@example.com" || v.ToolsReadAt == nil || !v.ToolsReadAt.Equal(when.Time) || v.ToolsRead != "True" || v.ToolsReadMessage != "1 tools" {
 		t.Fatalf("reader view: %+v", v)
+	}
+}
+
+// The tool reader reads an image server through its ToolHive proxy, with the reader's own token.
+func TestReaderReadsImageServerThroughItsProxy(t *testing.T) {
+	saas := newFakeSaaS(t)
+	conns, c := connFixture(t, saas)
+	proxy := "http://mcp-gws-proxy." + testNS + ".svc:8080/mcp"
+	var conn v1.Connection
+	_ = c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "jira"}, &conn)
+	conn.Spec.ServerURL = proxy
+	_ = c.Update(t.Context(), &conn)
+	connect(t, conns, testAuthOnly(), "admin@example.com", "admin")
+	_ = c.Create(t.Context(), &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "gws", Namespace: testNS, UID: "uid-gws"},
+		Spec: v1.ServerSpec{Image: "ghcr.io/x/y@sha256:" + strings.Repeat("a0", 32), Connection: "jira", Transport: "streamable-http"}})
+	var endpoints []string
+	tr := &ToolReader{Conns: conns, Namespace: testNS, TTL: time.Minute,
+		List: func(_ context.Context, _ *http.Client, endpoint, _, bearer string) ([]v1.Tool, error) {
+			endpoints = append(endpoints, endpoint+" "+bearer)
+			return []v1.Tool{{Name: "search_gmail_messages"}}, nil
+		}}
+	if err := tr.SetReader(t.Context(), "admin@example.com", "gws"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := tr.Tools(t.Context(), "gws")
+	if err != nil || len(res.Tools) != 1 || len(endpoints) != 1 || endpoints[0] != proxy+" at-admin" {
+		t.Fatalf("res %+v err %v endpoints %v", res, err, endpoints)
 	}
 }

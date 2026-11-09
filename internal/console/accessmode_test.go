@@ -35,7 +35,7 @@ func modeFixture(t *testing.T, accessModeFlag string, data map[string]string) (h
 func TestConfigReportsPublishedAccessMode(t *testing.T) {
 	h, a := modeFixture(t, "audit", map[string]string{"mode": "audit", "modeSince": "2026-10-12T10:00:00Z",
 		"rulesVersion": "3f9a1c2b7d10", "rulesSince": "2026-10-14T16:20:00Z"})
-	cfg := decodeAs[Config](t, do(t, h, "GET", "/api/config", user(a, "x@acme.test", RoleViewer), nil).Body.String())
+	cfg := decodeAs[Config](t, do(t, h, "GET", "/api/config", user(a, "x@example.com", RoleViewer), nil).Body.String())
 	if cfg.AccessMode != "audit" || cfg.ModeSince != "2026-10-12T10:00:00Z" || cfg.RulesVersion != "3f9a1c2b7d10" || cfg.RulesSince != "2026-10-14T16:20:00Z" || cfg.Pending != nil {
 		t.Fatalf("%+v", cfg)
 	}
@@ -46,7 +46,7 @@ func TestConfigReportsPublishedAccessMode(t *testing.T) {
 func TestConfigAccessModeFallsBack(t *testing.T) {
 	for flag, want := range map[string]string{"audit": "audit", "enforce": "enforce", "": "enforce"} {
 		h, a := modeFixture(t, flag, nil)
-		cfg := decodeAs[Config](t, do(t, h, "GET", "/api/config", user(a, "x@acme.test", RoleViewer), nil).Body.String())
+		cfg := decodeAs[Config](t, do(t, h, "GET", "/api/config", user(a, "x@example.com", RoleViewer), nil).Body.String())
 		if cfg.AccessMode != want || cfg.ModeSince != "" {
 			t.Errorf("flag %q: %+v, want mode %q", flag, cfg, want)
 		}
@@ -57,11 +57,11 @@ func TestConfigAccessModeFallsBack(t *testing.T) {
 func TestConfigPendingIsForAdmins(t *testing.T) {
 	h, a := modeFixture(t, "audit", map[string]string{"mode": "enforce", "modeSince": "2026-10-01T00:00:00Z", "rulesVersion": "aaaaaaaaaaaa", "rulesSince": "2026-10-01T00:00:00Z",
 		"pending": `{"mode":"audit","rulesVersion":"bbbbbbbbbbbb","step":"authorization","error":"waiting for agentgateway to apply AgentgatewayModel/m generation 3"}`})
-	cfg := decodeAs[Config](t, do(t, h, "GET", "/api/config", user(a, "priya@acme.test", RoleAdmin), nil).Body.String())
+	cfg := decodeAs[Config](t, do(t, h, "GET", "/api/config", user(a, "user10@example.com", RoleAdmin), nil).Body.String())
 	if cfg.AccessMode != "enforce" || cfg.Pending == nil || cfg.Pending.Mode != "audit" || cfg.Pending.Step != "authorization" || cfg.Pending.Error == "" {
 		t.Fatalf("admin %+v", cfg)
 	}
-	cfg = decodeAs[Config](t, do(t, h, "GET", "/api/config", user(a, "x@acme.test", RoleViewer), nil).Body.String())
+	cfg = decodeAs[Config](t, do(t, h, "GET", "/api/config", user(a, "x@example.com", RoleViewer), nil).Body.String())
 	if cfg.AccessMode != "enforce" || cfg.Pending != nil {
 		t.Fatalf("viewer %+v", cfg)
 	}
@@ -71,7 +71,7 @@ func TestConfigPendingIsForAdmins(t *testing.T) {
 func TestConfigPendingNamesTheRejectedObjects(t *testing.T) {
 	h, a := modeFixture(t, "", map[string]string{"mode": "enforce",
 		"pending": `{"mode":"enforce","rulesVersion":"bbbbbbbbbbbb","step":"authorization","error":"agentgateway rejected Model/mistral-x: bad key. Check the provider secret of Model/mistral-x, or remove the Model.","objects":["Model/mistral-x"]}`})
-	cfg := decodeAs[Config](t, do(t, h, "GET", "/api/config", user(a, "priya@acme.test", RoleAdmin), nil).Body.String())
+	cfg := decodeAs[Config](t, do(t, h, "GET", "/api/config", user(a, "user10@example.com", RoleAdmin), nil).Body.String())
 	if cfg.Pending == nil || len(cfg.Pending.Objects) != 1 || cfg.Pending.Objects[0] != "Model/mistral-x" {
 		t.Fatalf("%+v", cfg.Pending)
 	}
@@ -80,7 +80,7 @@ func TestConfigPendingNamesTheRejectedObjects(t *testing.T) {
 // A broken pending entry never hides the published mode.
 func TestConfigBrokenPendingIsIgnored(t *testing.T) {
 	h, a := modeFixture(t, "", map[string]string{"mode": "audit", "pending": "{not json"})
-	cfg := decodeAs[Config](t, do(t, h, "GET", "/api/config", user(a, "priya@acme.test", RoleAdmin), nil).Body.String())
+	cfg := decodeAs[Config](t, do(t, h, "GET", "/api/config", user(a, "user10@example.com", RoleAdmin), nil).Body.String())
 	if cfg.AccessMode != "audit" || cfg.Pending != nil {
 		t.Fatalf("%+v", cfg)
 	}

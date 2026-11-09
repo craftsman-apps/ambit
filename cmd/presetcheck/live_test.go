@@ -22,7 +22,7 @@ import (
 // fakeVendor: a TLS vendor with /token (refresh rotates rt1 → rt2) and /mcp (go-sdk server, tool "whoami",
 // requires the renewed access token). onCall runs at each MCP request.
 func fakeVendor(t *testing.T, toolError bool, onCall func()) (*httptest.Server, presets.Preset) {
-	return fakeVendorWith(t, "rt1", "at2", "rt2", toolError, "alice", onCall)
+	return fakeVendorWith(t, "rt1", "at2", "rt2", toolError, "user01", onCall)
 }
 
 // fakeVendorWith is fakeVendor with chosen tokens: refresh rotates oldRT → newRT and issues access; the tool

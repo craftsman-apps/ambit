@@ -1,5 +1,5 @@
-# Step 12: a Rules router over the mock models (test/llm/mock.yaml). mira is in ml-research (may use mock-echo,
-# mock-free); alice is in eng (may not); sam (ambit-approvers) may not use the router at all.
+# Step 12: a Rules router over the mock models (test/llm/mock.yaml). user09 is in ml-research (may use mock-echo,
+# mock-free); user01 is in eng (may not); user11 (ambit-approvers) may not use the router at all.
 apiVersion: ambitproject.dev/v1alpha1
 kind: ModelRouter
 metadata: { name: auto }

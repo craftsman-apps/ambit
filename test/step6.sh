@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Step 6 acceptance: offboarding (journey A4). The identity provider deactivates alice over SCIM; by the
+# Step 6 acceptance: offboarding (journey A4). The identity provider deactivates user01 over SCIM; by the
 # time the request returns, every SaaS grant she authorised is revoked at the provider (confirmed by the
 # provider's own session list), her console sessions are over, her still-valid gateway token is refused on
-# the MCP and LLM routes, mira is untouched, and a record proves each step. Reactivation lifts the block.
+# the MCP and LLM routes, user09 is untouched, and a record proves each step. Reactivation lifts the block.
 set -euo pipefail
 NS=${1:-ambit-system}
 cd "$(dirname "$0")/.."
@@ -59,18 +59,18 @@ kubectl -n "$NS" rollout status deploy/whoami --timeout=120s >/dev/null
 SCIM_TOKEN=$(kubectl -n "$NS" get secret ambit-console-keys -o jsonpath='{.data.scim-token}' | base64 -d)
 
 # Start from no provider sessions, so "0 after offboarding" proves Ambit's revocation.
-for u in alice mira; do
+for u in user01 user09; do
   uid=$(kc_admin GET "/users?username=$u&exact=true" | uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)[0]["id"])')
   kc_admin POST "/users/$uid/logout" >/dev/null
 done
 
-# 0 · alice and mira connect the app; alice's gateway token works before offboarding
-sign_in keycloak mira mira-test-pass; connect_saas mira mira-saas-pass
-sign_in keycloak alice alice-test-pass; connect_saas alice alice-saas-pass
-cp "$W/jar" "$W/alice-jar"
-ALICE=$(token alice)
-[[ $(mcp_code "$ALICE") == 200 && $(saas_sessions alice) -ge 1 ]] || fail "0 setup: alice MCP $(mcp_code "$ALICE"), provider sessions $(saas_sessions alice)"
-pass "0 alice and mira connected; alice's gateway token works; the provider holds $(saas_sessions alice) session(s) for alice"
+# 0 · user01 and user09 connect the app; user01's gateway token works before offboarding
+sign_in keycloak user09 user09-test-pass; connect_saas user09 user09-saas-pass
+sign_in keycloak user01 user01-test-pass; connect_saas user01 user01-saas-pass
+cp "$W/jar" "$W/user01-jar"
+USER01=$(token user01)
+[[ $(mcp_code "$USER01") == 200 && $(saas_sessions user01) -ge 1 ]] || fail "0 setup: user01 MCP $(mcp_code "$USER01"), provider sessions $(saas_sessions user01)"
+pass "0 user01 and user09 connected; user01's gateway token works; the provider holds $(saas_sessions user01) session(s) for user01"
 
 # ensure_llm_setup may have restarted the console. The new pod refuses key writes (SCIM answers 503) until it holds
 # the key Lease, about 15 s (docs/api-keys.md). Offboarding in check 2 deletes keys, so wait for the Lease first.
@@ -80,41 +80,41 @@ key_writer_live() {
 }
 wait_for 60 key_writer_live || fail "the console did not take the key Lease within 60 s"
 
-# 1 · the SCIM endpoint needs its token; the identity provider provisions alice
+# 1 · the SCIM endpoint needs its token; the identity provider provisions user01
 [[ $(command curl -s -o /dev/null -w '%{http_code}' "$BASE/scim/v2/Users") == 401 ]] || fail "1 SCIM without token"
-[[ $(scim POST /Users '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"alice@acme.test","active":true,"emails":[{"value":"alice@acme.test","primary":true}]}') == 201 ]] ||
+[[ $(scim POST /Users '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"user01@example.com","active":true,"emails":[{"value":"user01@example.com","primary":true}]}') == 201 ]] ||
   fail "1 provision: $(cat "$W/api")"
 ID=$(field 'd["id"]')
-pass "1 SCIM needs the bearer token; alice provisioned (id $ID)"
+pass "1 SCIM needs the bearer token; user01 provisioned (id $ID)"
 
 # 2 · A4: deactivation (Entra ID style) offboards everything before the request returns
 [[ $(scim PATCH "/Users/$ID" '{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"Replace","path":"active","value":"False"}]}') == 200 ]] ||
   fail "2 deactivate: $(cat "$W/api")"
-[[ $(saas_sessions alice) == 0 ]] || fail "2 the provider still holds $(saas_sessions alice) session(s) for alice"
+[[ $(saas_sessions user01) == 0 ]] || fail "2 the provider still holds $(saas_sessions user01) session(s) for user01"
 [[ $(kubectl -n "$GRANTS" get secret -l ambitproject.dev/connection=saas --no-headers | wc -l | tr -d ' ') == 1 ]] || fail "2 grant count"
-[[ $(saas_sessions mira) -ge 1 ]] || fail "2 mira's grant was revoked too"
-cp "$W/alice-jar" "$W/jar"
-[[ $(me_status) == 401 ]] || fail "2 alice's console session still works"
-pass "2 deactivation: the provider holds 0 sessions for alice (revoked there), mira's grant intact, alice's console session ended"
+[[ $(saas_sessions user09) -ge 1 ]] || fail "2 user09's grant was revoked too"
+cp "$W/user01-jar" "$W/jar"
+[[ $(me_status) == 401 ]] || fail "2 user01's console session still works"
+pass "2 deactivation: the provider holds 0 sessions for user01 (revoked there), user09's grant intact, user01's console session ended"
 
 # 3 · her still-valid gateway token is refused on both routes (not when it expires)
-for _ in $(seq 1 30); do [[ $(mcp_code "$ALICE") == 403 ]] && break; sleep 1; done
-m=$(mcp_code "$ALICE"); l=$(llm_code "$ALICE")
-[[ "$m" == 403 && "$l" == 403 ]] || fail "3 alice's token: MCP $m, LLM $l (want 403 both)"
-[[ $(mcp_code "$(token mira)") == 200 ]] || fail "3 mira blocked too"
-pass "3 alice's unexpired gateway token: MCP 403, LLM 403; mira unaffected"
+for _ in $(seq 1 30); do [[ $(mcp_code "$USER01") == 403 ]] && break; sleep 1; done
+m=$(mcp_code "$USER01"); l=$(llm_code "$USER01")
+[[ "$m" == 403 && "$l" == 403 ]] || fail "3 user01's token: MCP $m, LLM $l (want 403 both)"
+[[ $(mcp_code "$(token user09)") == 200 ]] || fail "3 user09 blocked too"
+pass "3 user01's unexpired gateway token: MCP 403, LLM 403; user09 unaffected"
 
 # 4 · the record proves it, and the log has one line per grant
-sign_in keycloak priya priya-test-pass
+sign_in keycloak user10 user10-test-pass
 [[ $(api GET /api/offboarding) == 200 ]] || fail "4 records: $(cat "$W/api")"
-rec=$(field '[(r["trigger"], r["completeSuccess"], [(g["connection"], g["revokedAtProvider"]) for g in r["grants"]], r["gatewayBlocked"]) for r in d["records"] if r["email"]=="alice@acme.test"][0]')
+rec=$(field '[(r["trigger"], r["completeSuccess"], [(g["connection"], g["revokedAtProvider"]) for g in r["grants"]], r["gatewayBlocked"]) for r in d["records"] if r["email"]=="user01@example.com"][0]')
 [[ "$rec" == "('scim PATCH active=false', True, [('saas', True)], True)" ]] || fail "4 record: $rec"
-kubectl -n "$NS" logs deploy/ambit-console --since=5m | grep -q 'offboarding: grant.*alice@acme.test.*connection=saas revokedAtProvider=true' || fail "4 no log line for the revoked grant"
+kubectl -n "$NS" logs deploy/ambit-console --since=5m | grep -q 'offboarding: grant.*user01@example.com.*connection=saas revokedAtProvider=true' || fail "4 no log line for the revoked grant"
 pass "4 record: $rec; log line per grant present"
 
 # 5 · reactivation lifts the gateway block
 [[ $(scim PATCH "/Users/$ID" '{"Operations":[{"op":"replace","path":"active","value":true}]}') == 200 ]] || fail "5 reactivate"
-for _ in $(seq 1 30); do [[ $(mcp_code "$(token alice)") == 200 ]] && break; sleep 1; done
-[[ $(mcp_code "$(token alice)") == 200 ]] || fail "5 alice still blocked after reactivation"
-pass "5 reactivated: alice's gateway access is back (her app grants stay revoked until she reconnects)"
+for _ in $(seq 1 30); do [[ $(mcp_code "$(token user01)") == 200 ]] && break; sleep 1; done
+[[ $(mcp_code "$(token user01)") == 200 ]] || fail "5 user01 still blocked after reactivation"
+pass "5 reactivated: user01's gateway access is back (her app grants stay revoked until she reconnects)"
 done_step 6

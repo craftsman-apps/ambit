@@ -26,23 +26,23 @@ ensure_llm_setup "$NS"
 kubectl -n "$NS" delete "accessrules.$G" eng-nemotron --ignore-not-found >/dev/null
 
 # 1 · a viewer reads the catalog but cannot change it
-sign_in keycloak alice alice-test-pass || fail "1 alice sign-in"
+sign_in keycloak user01 user01-test-pass || fail "1 user01 sign-in"
 [[ $(api GET /api/models) == 200 ]] && grep -q '"name":"nemotron-3-super"' "$W/api" || fail "1 viewer cannot list models: $(cat "$W/api")"
 [[ $(api POST /api/access-rules '{"name":"eng-nemotron","groups":["eng"],"models":["nemotron-3-super"]}') == 403 ]] || fail "1 viewer could create a rule"
-pass "1 alice (viewer) lists models; creating a rule -> 403"
+pass "1 user01 (viewer) lists models; creating a rule -> 403"
 
 # 2 · an admin grants eng the restricted model; the gateway follows
-sign_in keycloak priya priya-test-pass || fail "2 priya sign-in"
+sign_in keycloak user10 user10-test-pass || fail "2 user10 sign-in"
 c=$(api POST /api/access-rules '{"name":"eng-nemotron","groups":["eng"],"models":["nemotron-3-super"]}')
 [[ "$c" == 201 ]] || fail "2 create: $c $(cat "$W/api")"
 wait_expr nemotron-3-super '(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in ["eng", "ml-research"])'
-[[ $(kubectl -n "$NS" get "accessrules.$G" eng-nemotron -o jsonpath='{.metadata.annotations.ambitproject\.dev/created-by}') == priya@acme.test ]] \
+[[ $(kubectl -n "$NS" get "accessrules.$G" eng-nemotron -o jsonpath='{.metadata.annotations.ambitproject\.dev/created-by}') == user10@example.com ]] \
   || fail "2 creator not recorded"
 if [[ -s "$KEYFILE" ]]; then
-  c=$(llm "$(token alice)" "$NEMO"); reached_provider "$c" || fail "2 alice still denied after the rule: $c $(head -c 200 "$W/llm")"
-  pass "2 priya (admin) creates eng-nemotron in the console -> alice reaches nemotron-super: $VIA"
+  c=$(llm "$(token user01)" "$NEMO"); reached_provider "$c" || fail "2 user01 still denied after the rule: $c $(head -c 200 "$W/llm")"
+  pass "2 user10 (admin) creates eng-nemotron in the console -> user01 reaches nemotron-super: $VIA"
 else
-  pass "2 priya creates eng-nemotron -> gateway policy now includes eng (SKIP the OpenRouter call: no key)"
+  pass "2 user10 creates eng-nemotron -> gateway policy now includes eng (SKIP the OpenRouter call: no key)"
 fi
 
 # 3 · the console shows the merged policy the gateway enforces
@@ -50,11 +50,11 @@ fi
 grep -qF '(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in [\"eng\", \"ml-research\"])' "$W/api" || fail "3 effective policy wrong: $(cat "$W/api")"
 pass "3 rule detail shows the merged policy: eng + ml-research"
 
-# 4 · an edit takes effect: eng replaced by finance, alice denied again (no provider call)
+# 4 · an edit takes effect: eng replaced by finance, user01 denied again (no provider call)
 c=$(api PUT /api/access-rules/eng-nemotron '{"groups":["finance"],"models":["nemotron-3-super"]}'); [[ "$c" == 200 ]] || fail "4 update: $c $(cat "$W/api")"
 wait_expr nemotron-3-super '(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in ["finance", "ml-research"])'
-[[ $(llm "$(token alice)" "$NEMO") == 403 ]] || fail "4 alice kept access after the edit"
-pass "4 edit to finance -> alice 403 again"
+[[ $(llm "$(token user01)" "$NEMO") == 403 ]] || fail "4 user01 kept access after the edit"
+pass "4 edit to finance -> user01 403 again"
 
 # 5 · invalid input and cross-site forms are refused with a reason
 [[ $(api POST /api/access-rules '{"name":"bad","groups":["eng"],"allSignedIn":true,"models":["gemma-4-31b"]}') == 400 ]] \

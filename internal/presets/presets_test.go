@@ -29,13 +29,13 @@ func TestResolveSubstitutesAndBinds(t *testing.T) {
 	if err != nil || len(Validate(ps)) != 0 {
 		t.Fatalf("err %v problems %v", err, Validate(ps))
 	}
-	r, err := ps[0].Resolve(map[string]string{"myDomain": "acme"}, "3MVG", "https://ambit.acme.test/connections/callback")
+	r, err := ps[0].Resolve(map[string]string{"myDomain": "acme"}, "3MVG", "https://ambit.example.com/connections/callback")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r.Connection.AuthorizationURL != "https://acme.my.salesforce.com/services/oauth2/authorize" ||
 		r.Connection.ServerURL != r.Server.URL || r.Connection.Resource != r.Server.URL ||
-		!strings.Contains(r.Setup, "https://ambit.acme.test/connections/callback") {
+		!strings.Contains(r.Setup, "https://ambit.example.com/connections/callback") {
 		t.Fatalf("resolved %+v", r)
 	}
 }

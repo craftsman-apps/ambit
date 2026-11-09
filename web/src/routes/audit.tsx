@@ -79,7 +79,7 @@ export function AuditPage() {
           <p className="text-muted">Every call a person made through the gateway, including the ones it refused. Kept for a year. Dates and times are UTC.</p>
         </div>
         <form className="flex flex-wrap items-end gap-2" onSubmit={search}>
-          <label><span className="mb-1 block text-muted">Email</span><input id="audit-email" className={field} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="alice@acme.com" required /></label>
+          <label><span className="mb-1 block text-muted">Email</span><input id="audit-email" className={field} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="user01@acme.com" required /></label>
           <label><span className="mb-1 block text-muted">From (UTC)</span><input id="audit-from" type="date" className={field} value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} /></label>
           <label><span className="mb-1 block text-muted">To (UTC, inclusive)</span><input id="audit-to" type="date" className={field} value={form.to} onChange={(e) => setForm({ ...form, to: e.target.value })} /></label>
           <Button type="submit" className="w-auto" disabled={res.isFetching}>{res.isFetching ? "Searching…" : "Search"}</Button>

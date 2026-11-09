@@ -82,10 +82,10 @@ sign_in local admin@ambit.local "$PW" || fail "6 sign-in over https"
 ck=$(grep -i '^set-cookie: ambit_session=' "$W/all-headers" | tail -1)
 [[ "$ck" == *Secure* && "$ck" == *HttpOnly* ]] || fail "6 session cookie over https lacks Secure: $ck"
 [[ $(me_status) == 200 ]] || fail "6 /api/me over https"
-tok=$(command curl -s -d grant_type=password -d client_id=ambit-cli-test -d username=alice -d password=alice-test-pass \
+tok=$(command curl -s -d grant_type=password -d client_id=ambit-cli-test -d username=user01 -d password=user01-test-pass \
   http://keycloak.localtest.me:8080/realms/acme/protocol/openid-connect/token | uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)["access_token"])')
 c=$(curl -s --cacert "$W/ca.crt" -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $tok" -H 'Content-Type: application/json' \
   -d '{"model":"nvidia/nemotron-3-super-120b-a12b:free","messages":[{"role":"user","content":"x"}]}' https://llm.localtest.me:8443/v1/chat/completions)
-[[ "$c" == 403 ]] || fail "6 LLM route over https answered $c (want 403 for alice on the restricted model)"
+[[ "$c" == 403 ]] || fail "6 LLM route over https answered $c (want 403 for user01 on the restricted model)"
 pass "6 HTTPS: http->https 301, HSTS, Secure cookie, Dex sign-in over https, LLM route policy on https"
 done_step 3c

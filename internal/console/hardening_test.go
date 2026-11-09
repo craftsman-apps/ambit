@@ -64,13 +64,13 @@ func TestLogoutInvalidatesACopiedCookie(t *testing.T) {
 
 func TestRevokeUserEndsEverySessionOfThatUser(t *testing.T) {
 	f := newFakeIssuer(t)
-	f.connector, f.email, f.groups = "okta", "priya@acme.com", []string{"ambit-admins"}
+	f.connector, f.email, f.groups = "okta", "user10@acme.com", []string{"ambit-admins"}
 	ts, c := newTestServer(t, f)
 	signIn(t, ts, c, f, false)
 	if r := get(t, c, ts.URL+"/api/me"); r.StatusCode != 200 {
 		t.Fatalf("not signed in: %d", r.StatusCode)
 	}
-	if n := testAuth.Sessions.RevokeUser("priya@acme.com"); n != 1 {
+	if n := testAuth.Sessions.RevokeUser("user10@acme.com"); n != 1 {
 		t.Fatalf("revoked %d sessions, want 1", n)
 	}
 	if r := get(t, c, ts.URL+"/api/me"); r.StatusCode != http.StatusUnauthorized {
@@ -95,7 +95,7 @@ func TestUpdateRecordsWhoChangedIt(t *testing.T) {
 	}
 	var got v1.AccessRule
 	c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "everyone-gemma"}, &got)
-	if got.Annotations["ambitproject.dev/updated-by"] != "admin@acme.test" {
+	if got.Annotations["ambitproject.dev/updated-by"] != "admin@example.com" {
 		t.Fatalf("updated-by not recorded: %v", got.Annotations)
 	}
 }

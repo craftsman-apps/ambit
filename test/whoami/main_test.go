@@ -37,7 +37,7 @@ func TestVerify(t *testing.T) {
 	keys := &jose.JSONWebKeySet{Keys: []jose.JSONWebKey{{Key: &key.PublicKey, KeyID: "k1", Algorithm: "RS256", Use: "sig"}}}
 	now := time.Now()
 	good := func() map[string]any {
-		return map[string]any{"iss": testIss, "aud": []string{"account", testAud}, "exp": now.Add(time.Hour).Unix(), "preferred_username": "alice"}
+		return map[string]any{"iss": testIss, "aud": []string{"account", testAud}, "exp": now.Add(time.Hour).Unix(), "preferred_username": "user01"}
 	}
 	mod := func(f func(map[string]any)) map[string]any { c := good(); f(c); return c }
 	pubDER, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
@@ -74,7 +74,7 @@ func TestVerify(t *testing.T) {
 				User string `json:"preferred_username"`
 			}
 			_ = json.Unmarshal(raw, &got)
-			if got.User != "alice" {
+			if got.User != "user01" {
 				t.Errorf("%s: user %q", c.name, got.User)
 			}
 		}

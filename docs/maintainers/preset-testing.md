@@ -94,7 +94,7 @@ Claude does not sign up for or sign in to vendor accounts; the maintainer does s
 7. Set `verified: true` and `verifiedOn: <date>`. Both are left out of the catalog hash, so the live result
    stays valid. Add the vendor's row to the table below. Commit with `test/presets`.
 8. If a vendor refuses access (the Google preview program, Canva) or its server does not work with a
-   company-registered client, stop, write the reason in this file, and tell the product owner. "All 18" then
-   needs a decision.
+   company-registered client, stop, write the reason in this file, and tell the product owner. Whether the gate
+   still requires that preset then needs a decision (as for Databricks and PagerDuty above).
 
 Changing an existing preset needs a higher `version`; CI checks this.

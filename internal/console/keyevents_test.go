@@ -67,10 +67,10 @@ func TestRefreshRecordsAnEventOnlyWhenGroupsChange(t *testing.T) {
 	logs := captureLogs(t)
 	s, _ := newKeySvc(t)
 	ctx := context.Background()
-	if _, _, err := s.Create(ctx, alice("eng"), "k", ScopeLLM, 90); err != nil {
+	if _, _, err := s.Create(ctx, user01("eng"), "k", ScopeLLM, 90); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Refresh(ctx, Session{Email: "alice@acme.com", Groups: []string{"eng"}, SignedIn: t0.Unix() + 10}); err != nil {
+	if err := s.Refresh(ctx, Session{Email: "user01@acme.com", Groups: []string{"eng"}, SignedIn: t0.Unix() + 10}); err != nil {
 		t.Fatal(err)
 	}
 	if ev, _ := keyChanges(s); len(ev) != 1 || ev[0].Action != "create" {
@@ -79,10 +79,10 @@ func TestRefreshRecordsAnEventOnlyWhenGroupsChange(t *testing.T) {
 	if !strings.Contains(logs.String(), "action=refresh") {
 		t.Fatalf("refresh not logged: %s", logs.String())
 	}
-	if keys, _ := s.List(ctx, "alice@acme.com"); len(keys) != 1 || !keys[0].SignedIn.Equal(t0.Add(10*time.Second)) {
+	if keys, _ := s.List(ctx, "user01@acme.com"); len(keys) != 1 || !keys[0].SignedIn.Equal(t0.Add(10*time.Second)) {
 		t.Fatalf("keys not refreshed: %+v", keys)
 	}
-	if err := s.Refresh(ctx, Session{Email: "alice@acme.com", Groups: []string{"ops"}, SignedIn: t0.Unix() + 20}); err != nil {
+	if err := s.Refresh(ctx, Session{Email: "user01@acme.com", Groups: []string{"ops"}, SignedIn: t0.Unix() + 20}); err != nil {
 		t.Fatal(err)
 	}
 	if ev, _ := keyChanges(s); len(ev) != 2 || ev[0].Action != "refresh" || ev[0].Detail != "keys=1" {

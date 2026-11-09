@@ -23,7 +23,7 @@ func TestBudgetWrites(t *testing.T) {
 	}
 	var b v1.Budget
 	if err := c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "eng"}, &b); err != nil || *b.Spec.UserRequestsPerDay != 10 ||
-		b.Spec.GroupRequestsPerDay != nil || b.Annotations[createdByKey] != "admin@acme.test" {
+		b.Spec.GroupRequestsPerDay != nil || b.Annotations[createdByKey] != "admin@example.com" {
 		t.Fatalf("created: %+v %v", b, err)
 	}
 	for name, in := range map[string]BudgetInput{
@@ -68,7 +68,7 @@ func TestGitOpsBudgetCreateRefusesExistingName(t *testing.T) {
 		Spec: v1.BudgetSpec{Group: "eng-a", UserRequestsPerDay: ptr.To[int64](5)}}); err != nil {
 		t.Fatal(err)
 	}
-	r := do(t, h, "POST", "/api/budgets", user(a, "priya@acme.test", RoleAdmin), BudgetInput{Name: "eng-a", Group: "eng.a", UserRequestsPerDay: ptr.To[int64](9)})
+	r := do(t, h, "POST", "/api/budgets", user(a, "user10@example.com", RoleAdmin), BudgetInput{Name: "eng-a", Group: "eng.a", UserRequestsPerDay: ptr.To[int64](9)})
 	if r.Code != http.StatusConflict || len(repo.files) != 0 {
 		t.Fatalf("%d %s, %d files proposed", r.Code, r.Body, len(repo.files))
 	}

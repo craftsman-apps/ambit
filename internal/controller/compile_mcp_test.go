@@ -352,3 +352,49 @@ func TestConnectionPolicyNamesTheRequestIdentity(t *testing.T) {
 		t.Fatalf("x-ambit-user = %s", h)
 	}
 }
+
+func TestImageServerEnvSecretsAndArgs(t *testing.T) {
+	s := server("gws", "streamable-http")
+	s.Spec.Env = []v1.ServerEnv{
+		{Name: "MODE", Value: "read-only"},
+		{Name: "CLIENT_SECRET", SecretKeyRef: &v1.SecretKeyRef{Name: "gws-oauth", Key: "secret"}},
+	}
+	s.Spec.Args = []string{"--tool-tier", "core"}
+	ms := find(t, Compile(nil, []v1.Server{s}, nil, route).Objects, "MCPServer", "gws")
+	env, _, _ := unstructured.NestedSlice(ms.Object, "spec", "env")
+	secrets, _, _ := unstructured.NestedSlice(ms.Object, "spec", "secrets")
+	args, _, _ := unstructured.NestedStringSlice(ms.Object, "spec", "args")
+	if len(env) != 1 || env[0].(map[string]any)["name"] != "MODE" || env[0].(map[string]any)["value"] != "read-only" {
+		t.Fatalf("env %v", env)
+	}
+	// The secret value is never in the MCPServer: ToolHive reads the Secret and sets the variable named targetEnvName.
+	if len(secrets) != 1 || secrets[0].(map[string]any)["name"] != "gws-oauth" || secrets[0].(map[string]any)["key"] != "secret" || secrets[0].(map[string]any)["targetEnvName"] != "CLIENT_SECRET" {
+		t.Fatalf("secrets %v", secrets)
+	}
+	if len(args) != 2 || args[0] != "--tool-tier" {
+		t.Fatalf("args %v", args)
+	}
+	plain := find(t, Compile(nil, []v1.Server{server("time", "stdio")}, nil, route).Objects, "MCPServer", "time")
+	for _, k := range []string{"env", "secrets", "args"} {
+		if _, found, _ := unstructured.NestedFieldNoCopy(plain.Object, "spec", k); found {
+			t.Fatalf("%s set on a server without any", k)
+		}
+	}
+}
+
+func TestEndpointOfImageServerIsItsProxy(t *testing.T) {
+	s := server("gws", "streamable-http")
+	s.Namespace = "ambit-system"
+	if got := Endpoint(s); got != "http://mcp-gws-proxy.ambit-system.svc:8080/mcp" {
+		t.Fatal(got)
+	}
+	s.Spec.Transport = "sse"
+	if got := Endpoint(s); got != "http://mcp-gws-proxy.ambit-system.svc:8080/sse" {
+		t.Fatal(got)
+	}
+	r := server("remote", "streamable-http")
+	r.Spec.Image, r.Spec.URL = "", "https://mcp.example.com/mcp"
+	if Endpoint(r) != "https://mcp.example.com/mcp" {
+		t.Fatal(Endpoint(r))
+	}
+}

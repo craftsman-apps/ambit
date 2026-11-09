@@ -65,7 +65,7 @@ func TestWouldRefuseEndpoint(t *testing.T) {
 		return NewServer(auth, testSPA, LoginOptions{}, &Catalog{Client: b.Build(), Namespace: testNS, Audit: audit}), auth
 	}
 	h, a := build(map[string]string{"mode": "audit", "rulesVersion": "3f9a1c2b7d10"})
-	admin := user(a, "priya@acme.test", RoleAdmin)
+	admin := user(a, "user10@example.com", RoleAdmin)
 	for u, want := range map[string]int{
 		"/api/audit/would-refuse":                               http.StatusBadGateway,
 		"/api/audit/would-refuse?rules=all":                     http.StatusBadGateway,
@@ -78,19 +78,19 @@ func TestWouldRefuseEndpoint(t *testing.T) {
 		}
 	}
 	for _, role := range []string{RoleViewer, RoleApprover} {
-		if rec := do(t, h, "GET", "/api/audit/would-refuse", user(a, "x@acme.test", role), nil); rec.Code != http.StatusForbidden {
+		if rec := do(t, h, "GET", "/api/audit/would-refuse", user(a, "x@example.com", role), nil); rec.Code != http.StatusForbidden {
 			t.Errorf("%s: %d", role, rec.Code)
 		}
 	}
 	h, a = build(nil) // no ambit-access-mode: there is no current version
-	if rec := do(t, h, "GET", "/api/audit/would-refuse?rules=current", user(a, "priya@acme.test", RoleAdmin), nil); rec.Code != http.StatusConflict {
+	if rec := do(t, h, "GET", "/api/audit/would-refuse?rules=current", user(a, "user10@example.com", RoleAdmin), nil); rec.Code != http.StatusConflict {
 		t.Errorf("no published version: %d %s", rec.Code, rec.Body.String())
 	}
 }
 
 // audit builds the attributes of one served audit-mode LLM record.
 func audit(extra map[string]string) map[string]string {
-	m := map[string]string{"ambit.accessMode": "audit", "ambit.rulesVersion": "v1", "http.status": "200", "jwt.email": "u@acme.test",
+	m := map[string]string{"ambit.accessMode": "audit", "ambit.rulesVersion": "v1", "http.status": "200", "jwt.email": "u@example.com",
 		"jwt.groups": `["eng"]`, "gen_ai.request.model": "gpt-4o"}
 	for k, v := range extra {
 		m[k] = v
@@ -167,13 +167,13 @@ func TestAuditOutcomesAgainstClickHouse(t *testing.T) {
 	}
 	for i, r := range rows {
 		attrs := r.attrs
-		attrs["jwt.email"] = fmt.Sprintf("p%d@acme.test", i)
+		attrs["jwt.email"] = fmt.Sprintf("p%d@example.com", i)
 		exec(db, "INSERT INTO otel_logs (Timestamp, LogAttributes) VALUES (?, ?)", base.Add(time.Duration(i)*time.Second), attrs)
 	}
 
 	a := &Audit{DB: db}
 	for i, r := range rows {
-		email := fmt.Sprintf("p%d@acme.test", i)
+		email := fmt.Sprintf("p%d@example.com", i)
 		calls, err := a.Calls(ctx, email, base.Add(-time.Hour), base.Add(time.Hour), 10)
 		if err != nil || len(calls) != 1 {
 			t.Fatalf("%s: %v %+v", r.name, err, calls)
@@ -188,12 +188,12 @@ func TestAuditOutcomesAgainstClickHouse(t *testing.T) {
 	at := func(i int, attrs map[string]string) {
 		exec(db, "INSERT INTO otel_logs (Timestamp, LogAttributes) VALUES (?, ?)", base.Add(time.Duration(i)*time.Second), attrs)
 	}
-	at(0, audit(map[string]string{"jwt.email": "a@acme.test", "jwt.groups": `["ds","eng"]`, "ambit.wouldRefuse": "refuse:model"})) // two groups: counts in both
-	at(1, audit(map[string]string{"jwt.email": "a@acme.test", "jwt.groups": `["ds","eng"]`, "ambit.wouldRefuse": "refuse:model"}))
-	at(2, audit(map[string]string{"jwt.email": "b@acme.test", "jwt.groups": `["ds"]`, "ambit.wouldRefuse": "refuse:model"}))
-	at(3, audit(map[string]string{"jwt.email": "c@acme.test", "jwt.groups": `[]`, "ambit.wouldRefuse": "refuse:model", "ambit.rulesVersion": "v0"})) // old rules
-	at(4, mcp(map[string]string{"jwt.email": "c@acme.test", "jwt.groups": `[]`, "ambit.wouldRefuseTool": "refuse:tool"}))
-	at(5, audit(map[string]string{"jwt.email": "d@acme.test", "ambit.wouldRefuse": "allow"}))
+	at(0, audit(map[string]string{"jwt.email": "a@example.com", "jwt.groups": `["ds","eng"]`, "ambit.wouldRefuse": "refuse:model"})) // two groups: counts in both
+	at(1, audit(map[string]string{"jwt.email": "a@example.com", "jwt.groups": `["ds","eng"]`, "ambit.wouldRefuse": "refuse:model"}))
+	at(2, audit(map[string]string{"jwt.email": "b@example.com", "jwt.groups": `["ds"]`, "ambit.wouldRefuse": "refuse:model"}))
+	at(3, audit(map[string]string{"jwt.email": "c@example.com", "jwt.groups": `[]`, "ambit.wouldRefuse": "refuse:model", "ambit.rulesVersion": "v0"})) // old rules
+	at(4, mcp(map[string]string{"jwt.email": "c@example.com", "jwt.groups": `[]`, "ambit.wouldRefuseTool": "refuse:tool"}))
+	at(5, audit(map[string]string{"jwt.email": "d@example.com", "ambit.wouldRefuse": "allow"}))
 	at(6, audit(nil))                                                                                   // mark missing
 	at(7, audit(map[string]string{"http.status": "403"}))                                               // refused for real
 	at(8, audit(map[string]string{"ambit.accessMode": "enforce", "ambit.wouldRefuse": "refuse:model"})) // not audit mode

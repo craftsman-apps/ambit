@@ -142,13 +142,13 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply(200, []map[string]any{})
 	case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/pulls"):
 		reply(200, []map[string]any{
-			{"number": 9, "html_url": "u9", "title": "Ambit: update access rule eng-time", "head": map[string]string{"ref": "ambit/update-accessrule-eng-time-1"}, "body": "Requested by priya@acme.test in the Ambit console."},
+			{"number": 9, "html_url": "u9", "title": "Ambit: update access rule eng-time", "head": map[string]string{"ref": "ambit/update-accessrule-eng-time-1"}, "body": "Requested by user10@example.com in the Ambit console."},
 			{"number": 8, "html_url": "u8", "title": "Bump chart", "head": map[string]string{"ref": "renovate/chart"}, "body": ""},
 		})
 	case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/pulls/9"):
 		reply(200, map[string]any{"number": 9, "html_url": "u9", "title": "Ambit: update access rule eng-time", "state": "closed", "merged": true,
 			"merge_commit_sha": "abc1234def", "merged_at": "2026-10-01T06:00:00Z", "head": map[string]any{"ref": "ambit/update-accessrule-eng-time-1", "repo": map[string]string{"full_name": "craftsman-apps/ambit-config-test"}},
-			"body": "Requested by priya@acme.test in the Ambit console."})
+			"body": "Requested by user10@example.com in the Ambit console."})
 	case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/pulls/11"): // from a fork, with a console-like branch
 		reply(200, map[string]any{"number": 11, "state": "open", "head": map[string]any{"ref": "ambit/update-accessrule-eng-time-1", "repo": map[string]string{"full_name": "someone/ambit-config-test"}}})
 	case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/pulls/10"):
@@ -219,7 +219,7 @@ func TestPullRequestWritesOneFileOnANewBranch(t *testing.T) {
 	gh, fake := githubFixture(t, map[string]string{"ambit/accessrules/eng-time.yaml": "old"})
 	g := &GitOps{Repo: gh, Branch: "main", Dir: "ambit"}
 	manifest, _ := Manifest("AccessRule", "eng-time", nil, nil, map[string]any{"groups": []string{"eng"}, "models": []string{"gemma"}})
-	pr, err := g.Propose(t.Context(), "update", "AccessRule", "accessrules", "eng-time", "priya@acme.test", manifest)
+	pr, err := g.Propose(t.Context(), "update", "AccessRule", "accessrules", "eng-time", "user10@example.com", manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,11 +230,11 @@ func TestPullRequestWritesOneFileOnANewBranch(t *testing.T) {
 	if !strings.HasPrefix(got, "put:apiVersion: ambitproject.dev/v1alpha1\nkind: AccessRule\nmetadata:\n  name: eng-time\n") || strings.Contains(got, "namespace") {
 		t.Fatalf("committed %q", got)
 	}
-	if !strings.Contains(fake.prs[0]["body"], "Requested by priya@acme.test in the Ambit console.") {
+	if !strings.Contains(fake.prs[0]["body"], "Requested by user10@example.com in the Ambit console.") {
 		t.Fatalf("body %q", fake.prs[0]["body"])
 	}
 	// A second change reuses the installation token.
-	if _, err := g.Propose(t.Context(), "create", "AccessRule", "accessrules", "ml-time", "priya@acme.test", manifest); err != nil {
+	if _, err := g.Propose(t.Context(), "create", "AccessRule", "accessrules", "ml-time", "user10@example.com", manifest); err != nil {
 		t.Fatal(err)
 	}
 	if fake.tokens != 1 {
@@ -245,13 +245,13 @@ func TestPullRequestWritesOneFileOnANewBranch(t *testing.T) {
 func TestDeleteNeedsTheFileInGit(t *testing.T) {
 	gh, fake := githubFixture(t, map[string]string{"ambit/accessrules/eng-time.yaml": "old"})
 	g := &GitOps{Repo: gh, Branch: "main", Dir: "ambit"}
-	if _, err := g.Propose(t.Context(), "delete", "AccessRule", "accessrules", "eng-time", "priya@acme.test", nil); err != nil {
+	if _, err := g.Propose(t.Context(), "delete", "AccessRule", "accessrules", "eng-time", "user10@example.com", nil); err != nil {
 		t.Fatal(err)
 	}
 	if fake.fileCommits["ambit/accessrules/eng-time.yaml"] != "delete" {
 		t.Fatalf("commits %v", fake.fileCommits)
 	}
-	_, err := g.Propose(t.Context(), "delete", "AccessRule", "accessrules", "made-by-kubectl", "priya@acme.test", nil)
+	_, err := g.Propose(t.Context(), "delete", "AccessRule", "accessrules", "made-by-kubectl", "user10@example.com", nil)
 	if err == nil || !strings.Contains(err.Error(), "not in craftsman-apps/ambit-config-test") {
 		t.Fatalf("want a clear error for an object that is not in Git, got %v", err)
 	}
@@ -263,7 +263,7 @@ func TestOpenPullRequestsListsOnlyTheConsolesOwn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(prs) != 1 || prs[0].Number != 9 || prs[0].Author != "priya@acme.test" {
+	if len(prs) != 1 || prs[0].Number != 9 || prs[0].Author != "user10@example.com" {
 		t.Fatalf("%+v", prs)
 	}
 }
@@ -277,7 +277,7 @@ func TestParseAppKeyRejectsGarbage(t *testing.T) {
 func TestPullRequestStateAndContains(t *testing.T) {
 	gh, _ := githubFixture(t, nil)
 	st, err := gh.PullRequestState(t.Context(), 9)
-	if err != nil || !st.Merged || st.Closed || st.MergeCommit != "abc1234def" || st.Branch != "ambit/update-accessrule-eng-time-1" || st.Author != "priya@acme.test" {
+	if err != nil || !st.Merged || st.Closed || st.MergeCommit != "abc1234def" || st.Branch != "ambit/update-accessrule-eng-time-1" || st.Author != "user10@example.com" {
 		t.Fatalf("merged pull request: %+v %v", st, err)
 	}
 	// A closed, unmerged pull request has a test-merge commit; it must not count as merged.

@@ -2,9 +2,9 @@
 # Fallback and several servers (Model.spec.fallback and Model.spec.additionalEndpoints) on kind, with the mock
 # provider (test/llm/mock.yaml): a model name that starts with mock/fail500 or mock/fail429 answers with that status.
 # 1 · the objects are accepted; the Ready message says who may use a Model but not its fallback
-# 2 · a provider that returns 500, or 429, is skipped: mira's very first request is answered by the fallback, and
+# 2 · a provider that returns 500, or 429, is skipped: user09's very first request is answered by the fallback, and
 #     the answer names the fallback's model
-# 3 · access: alice (eng) may use the failing Model but not its fallback; she gets 403, and the fallback receives nothing
+# 3 · access: user01 (eng) may use the failing Model but not its fallback; she gets 403, and the fallback receives nothing
 # 4 · two servers of one Model share the requests
 # 5 · the gateway's access log names the Model that answered
 # 6 · removing the fallback removes the virtual model; the failing Model then answers with its own 500
@@ -39,7 +39,7 @@ until_ok() { local n=$1 what=$2; shift 2; for _ in $(seq 1 "$n"); do "$@" && ret
 
 ensure_llm_setup "$NS"
 kubectl -n "$NS" rollout status deploy/ambit-controller --timeout=120s >/dev/null
-A=$(token alice); M=$(token mira)
+A=$(token user01); M=$(token user09)
 
 # 1 · objects
 price='price: { inputPerMillionTokens: "1.00", outputPerMillionTokens: "4.00" }'
@@ -92,17 +92,17 @@ pass "1 Models with fallback and extra endpoints accepted; Ready says: $msg"
 # 2 · the first request after the provider fails is already answered by the fallback
 for model in mock/fail500 mock/fail429 mock/fail500; do
   c=$(ask "$M" "$model")
-  [[ "$c" == 200 ]] || fail "2 mira -> $model: $c $(head -c 200 "$W/llm")"
+  [[ "$c" == 200 ]] || fail "2 user09 -> $model: $c $(head -c 200 "$W/llm")"
   grep -q '"model":"mock/backup"' "$W/llm" || fail "2 $model was not answered by the fallback: $(head -c 200 "$W/llm")"
 done
-pass "2 mock/fail500 and mock/fail429 (5xx and 429): mira is answered by mock/backup"
+pass "2 mock/fail500 and mock/fail429 (5xx and 429): user09 is answered by mock/backup"
 
-# 3 · alice may use the failing Model but not its fallback: 403, and nothing reaches the fallback
+# 3 · user01 may use the failing Model but not its fallback: 403, and nothing reaches the fallback
 before=$(hits mock-llm mock/backup)
 c=$(ask "$A" mock/fail500)
-[[ "$c" == 403 ]] || fail "3 alice -> mock/fail500: $c $(head -c 200 "$W/llm") (expected 403: she may not use the fallback)"
-[[ $(hits mock-llm mock/backup) == "$before" ]] || fail "3 the fallback received alice's request"
-pass "3 alice (eng, not allowed on the fallback) -> 403; mock/backup saw no request"
+[[ "$c" == 403 ]] || fail "3 user01 -> mock/fail500: $c $(head -c 200 "$W/llm") (expected 403: she may not use the fallback)"
+[[ $(hits mock-llm mock/backup) == "$before" ]] || fail "3 the fallback received user01's request"
+pass "3 user01 (eng, not allowed on the fallback) -> 403; mock/backup saw no request"
 
 # 4 · two servers of one Model share the requests
 b1=$(hits mock-llm mock/shared); b2=$(hits mock-classifier mock/shared)
@@ -125,7 +125,7 @@ plain() { [[ $(ask "$M" mock/fail500) == 500 ]]; }
 until_ok 60 "6 mock/fail500 is not answered with its own 500 after the fallback was removed" plain
 pass "6 fallback removed: virtual model deleted, mock/fail500 answers with its own 500"
 
-# 7 · alice may use the fallback (mock/backup2) but not the primary (mock/fail500-solo); mira may use both
+# 7 · user01 may use the fallback (mock/backup2) but not the primary (mock/fail500-solo); user09 may use both
 kubectl -n "$NS" apply -f - >/dev/null <<YAML
 apiVersion: $G/v1alpha1
 kind: Model
@@ -151,17 +151,17 @@ for m in fb-backup2 fb-solo; do
   kubectl -n "$NS" wait "models.$G" "$m" --for=condition=Ready --timeout=120s >/dev/null \
     || fail "7 $m not Ready: $(kubectl -n "$NS" get "models.$G" "$m" -o jsonpath='{.status.conditions[0].message}')"
 done
-mira_fails_over() { [[ $(ask "$M" mock/fail500-solo) == 200 ]] && grep -q '"model":"mock/backup2"' "$W/llm"; }
-until_ok 60 "7 mira's request for mock/fail500-solo is not answered by mock/backup2" mira_fails_over
+user09_fails_over() { [[ $(ask "$M" mock/fail500-solo) == 200 ]] && grep -q '"model":"mock/backup2"' "$W/llm"; }
+until_ok 60 "7 user09's request for mock/fail500-solo is not answered by mock/backup2" user09_fails_over
 before=$(hits mock-llm mock/backup2)
-for _ in 1 2 3; do  # the primary is marked failing now; alice asks while it is skipped
+for _ in 1 2 3; do  # the primary is marked failing now; user01 asks while it is skipped
   c=$(ask "$A" mock/fail500-solo)
-  [[ "$c" == 403 ]] || fail "7 alice -> mock/fail500-solo while the primary fails: $c $(head -c 200 "$W/llm") (expected 403)"
+  [[ "$c" == 403 ]] || fail "7 user01 -> mock/fail500-solo while the primary fails: $c $(head -c 200 "$W/llm") (expected 403)"
 done
-[[ $(hits mock-llm mock/backup2) == "$before" ]] || fail "7 the fallback received alice's request for the primary's name"
+[[ $(hits mock-llm mock/backup2) == "$before" ]] || fail "7 the fallback received user01's request for the primary's name"
 c=$(ask "$A" mock/backup2)
-[[ "$c" == 200 ]] || fail "7 alice -> mock/backup2 (she may use it): $c $(head -c 200 "$W/llm")"
-pass "7 alice (allowed on mock/backup2 only): 403 for mock/fail500-solo while its primary fails, 200 for mock/backup2 itself"
+[[ "$c" == 200 ]] || fail "7 user01 -> mock/backup2 (she may use it): $c $(head -c 200 "$W/llm")"
+pass "7 user01 (allowed on mock/backup2 only): 403 for mock/fail500-solo while its primary fails, 200 for mock/backup2 itself"
 
 cleanup; trap 'on_exit $?' EXIT
 done_step fallback

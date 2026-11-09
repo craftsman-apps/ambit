@@ -141,6 +141,7 @@ func compressText(ctx context.Context, text string, mode string, presidio bool) 
 	cctx, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
 	done := make(chan res, 1)
+	run := detectText // read here: a goroutine that outlives the deadline must not read the variable a test replaces next
 	go func() {
 		defer func() { <-compressing }()
 		defer func() {
@@ -149,7 +150,7 @@ func compressText(ctx context.Context, text string, mode string, presidio bool) 
 				done <- res{panicked: true}
 			}
 		}()
-		o, t, n := detectText(cctx, text, mode == ModeShorten, presidio)
+		o, t, n := run(cctx, text, mode == ModeShorten, presidio)
 		done <- res{out: o, typ: t, omitted: n}
 	}()
 	var r res

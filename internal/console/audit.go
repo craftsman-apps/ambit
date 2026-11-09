@@ -18,7 +18,7 @@ import (
 	"github.com/craftsman-apps/ambit/internal/auditsql"
 )
 
-// Audit answers from the gateway's access logs in ClickHouse (journey A5: "every call Alice made in
+// Audit answers from the gateway's access logs in ClickHouse (journey A5: "every call User01 made in
 // March, including denied ones"; and token usage per group). Every input reaches ClickHouse as a
 // server-side query parameter, never as SQL text.
 type Audit struct {

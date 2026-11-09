@@ -175,7 +175,7 @@ def rows(path):
 
 def routed(path):
     r = {x["who"]: x for x in rows(path)}
-    m, a = r.get("mira@acme.test", {}), r.get("alice@acme.test", {})
+    m, a = r.get("user09@example.com", {}), r.get("user01@example.com", {})
     # Open point 1: a routed record's llm.requestModel is the model of the line that answered.
     if not (m.get("model") == "mock/echo" and m.get("mark") == "allow" and a.get("model") == "mock/echo" and a.get("mark") == "other-model"):
         sys.exit(f"routed records {r}")
@@ -186,16 +186,16 @@ def audit4(path):
 
     def has(who, pred):
         return any(r["who"] == who and pred(r) for r in rs)
-    ok = (has("alice@acme.test", lambda r: r["model"] == "mock/echo" and r["mark"] == "refuse:model")
-          and has("alice@acme.test", lambda r: r["method"] == "tools/call" and r["toolmark"] == "refuse:tool")
-          and has("mira@acme.test", lambda r: r["model"] == "mock/echo" and r["mark"] == "allow")
-          and has("alice@acme.test", lambda r: r["method"] == "tools/list" and r["toolmark"] == "n/a"))
+    ok = (has("user01@example.com", lambda r: r["model"] == "mock/echo" and r["mark"] == "refuse:model")
+          and has("user01@example.com", lambda r: r["method"] == "tools/call" and r["toolmark"] == "refuse:tool")
+          and has("user09@example.com", lambda r: r["model"] == "mock/echo" and r["mark"] == "allow")
+          and has("user01@example.com", lambda r: r["method"] == "tools/list" and r["toolmark"] == "n/a"))
     sys.exit(0 if ok else 1)
 
 
 def analyze(loop_path, records_path, switch_audit, switch_enforce):
     loop, recs = rows(loop_path), rows(records_path)
-    email = {"alice": "alice@acme.test", "mira": "mira@acme.test"}
+    email = {"user01": "user01@example.com", "user09": "user09@example.com"}
     used, problems = set(), []
     for e in loop:  # one request per person and target per 0.5 s; 100 ms for the clocks
         e["rec"] = None
@@ -206,7 +206,7 @@ def analyze(loop_path, records_path, switch_audit, switch_enforce):
             if i in used or not e["start"] - 0.1 <= float(r["t"]) <= e["end"] + 0.1:
                 continue
             # A model refusal (403 from agentgateway's model router) is recorded without the caller or the model:
-            # it is matched by status and time. Only alice is refused.
+            # it is matched by status and time. Only user01 is refused.
             refused = e["kind"] == "model" and e["status"] == 403 and r["who"] == "" and r["status"] == "403"
             if r["who"] != email[e["who"]] and not refused:
                 continue
@@ -228,24 +228,24 @@ def analyze(loop_path, records_path, switch_audit, switch_enforce):
         if r["mode"] == "audit" and mark not in MARKS:
             missing += 1
             problems.append(f"mark missing: {e}")
-        # alice is refused by the rules: served only in audit mode, and her record says so.
-        if e["who"] == "alice" and not (r["mode"] == "audit" and mark.startswith("refuse:")):
-            problems.append(f"alice served without an audit-mode refuse mark: {e}")
-        # mira is allowed by the rules: in audit mode her record says allow.
-        if e["who"] == "mira" and r["mode"] == "audit" and mark != "allow":
-            problems.append(f"mira served in audit mode with mark {mark!r}, want allow: {e}")
+        # user01 is refused by the rules: served only in audit mode, and her record says so.
+        if e["who"] == "user01" and not (r["mode"] == "audit" and mark.startswith("refuse:")):
+            problems.append(f"user01 served without an audit-mode refuse mark: {e}")
+        # user09 is allowed by the rules: in audit mode her record says allow.
+        if e["who"] == "user09" and r["mode"] == "audit" and mark != "allow":
+            problems.append(f"user09 served in audit mode with mark {mark!r}, want allow: {e}")
     for e in loop:
-        if e["who"] == "mira" and not served(e):
-            problems.append(f"mira not served: {e}")
+        if e["who"] == "user09" and not served(e):
+            problems.append(f"user09 not served: {e}")
         if e["status"] == 0 or e["status"] >= 500:
             problems.append(f"5xx or no connection: {e}")
     for kind in ("model", "tool"):
         changes = []
         for e in loop:
-            if e["who"] == "alice" and e["kind"] == kind and (not changes or changes[-1][0] != served(e)):
+            if e["who"] == "user01" and e["kind"] == kind and (not changes or changes[-1][0] != served(e)):
                 changes.append((served(e), round(e["start"], 1)))
         if [c[0] for c in changes] != [False, True, False]:
-            problems.append(f"alice {kind}: served changes {changes}; want refused, served, refused")
+            problems.append(f"user01 {kind}: served changes {changes}; want refused, served, refused")
     print(f"loop entries {len(loop)}, matched to a record {sum(1 for e in loop if e['rec'])}, mark missing {missing}")
     for mode, p in (("audit", switch_audit), ("enforce", switch_enforce)):
         print(f"switch to {mode}: {open(p).read().strip()}")

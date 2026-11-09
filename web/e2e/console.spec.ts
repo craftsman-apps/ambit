@@ -126,7 +126,7 @@ test("a rule can name people by email, alone or with groups", async ({ page }) =
     await page.getByRole("button", { name: "Create rule" }).click();
     await expect(page).toHaveURL(/rule=ui-test-people/);
     await expect(page.getByText("People: pilot.user@example.com")).toBeVisible();
-    await expect(page.getByText(/in \["pilot\.user@acme\.test"\]/)).toBeVisible();
+    await expect(page.getByText(/in \["pilot\.user@example\.com"\]/)).toBeVisible();
     await expect(page.getByRole("row", { name: /ui-test-people/ })).toContainText("pilot.user@example.com");
   } finally {
     await page.request.delete("/api/access-rules/ui-test-people");

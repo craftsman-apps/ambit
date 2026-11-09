@@ -1,13 +1,13 @@
 # Base images are pinned by digest; Dependabot proposes updates.
 # Builds the console: React app first, then one static Go binary that embeds it.
-FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:6f08a523443ddedf52941874c203475b0ad503e859ad70cb26ab8be9a517dbd5 AS web
+FROM --platform=$BUILDPLATFORM node:26-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94 AS web
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-fund --no-audit
 COPY web/ ./
 RUN npm run build
 
-FROM --platform=$BUILDPLATFORM golang:1.27.2@sha256:820153096fda4de6ac1b7194d12e416b7dd8f4e9a33d17e0345b111b945162d8 AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.3@sha256:e519d3b0a5b285e5aa53ab9eef02bc6bbb9cb04608389b743a136a9ce75f0d1e AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 # Cache mounts keep Go's module and build caches out of image layers: rebuilds reuse one cache
@@ -31,12 +31,12 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 
 # CI: the build job compiles the binaries with Go's cache warm (setup-go) into bin/ and builds this target, so the
 # e2e jobs do not compile again. Same base and layout as the default image below.
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:516757106de35205efb70b91ba03f6f1298424a0678c603255cf2852a7000087 AS prebuilt
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329 AS prebuilt
 COPY bin/ambit-console bin/ambit-controller bin/ambit bin/ambit-guard bin/ambit-router /
 USER 65532:65532
 ENTRYPOINT ["/ambit-console"]
 
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:516757106de35205efb70b91ba03f6f1298424a0678c603255cf2852a7000087
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329
 COPY --from=build /ambit-console /ambit-controller /ambit /ambit-guard /ambit-router /
 USER 65532:65532
 ENTRYPOINT ["/ambit-console"]

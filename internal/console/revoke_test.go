@@ -11,7 +11,7 @@ import (
 
 // Each provider's revocation request, built from the revocation URL an admin entered (docs/offboarding.md).
 func TestRevocationRequestPerProvider(t *testing.T) {
-	g := &Grant{AccessToken: "at-alice", RefreshToken: "rt-alice"}
+	g := &Grant{AccessToken: "at-user01", RefreshToken: "rt-user01"}
 	basic := "Basic " + base64.StdEncoding.EncodeToString([]byte("client-1:secret-1"))
 	for _, tc := range []struct {
 		name, url             string
@@ -21,19 +21,19 @@ func TestRevocationRequestPerProvider(t *testing.T) {
 		header, headerValue   string
 	}{
 		{name: "standard RFC 7009", url: "https://oauth2.googleapis.com/revoke",
-			method: "POST", wantURL: "https://oauth2.googleapis.com/revoke", auth: basic, form: "token=rt-alice&token_type_hint=refresh_token"},
+			method: "POST", wantURL: "https://oauth2.googleapis.com/revoke", auth: basic, form: "token=rt-user01&token_type_hint=refresh_token"},
 		{name: "GitHub, client ID placeholder", url: "https://api.github.com/applications/{client_id}/grant",
-			method: "DELETE", wantURL: "https://api.github.com/applications/client-1/grant", auth: basic, body: map[string]string{"access_token": "at-alice"},
+			method: "DELETE", wantURL: "https://api.github.com/applications/client-1/grant", auth: basic, body: map[string]string{"access_token": "at-user01"},
 			header: "Accept", headerValue: "application/vnd.github+json"},
-		{name: "GitHub Enterprise Server", url: "https://ghe.acme.test/api/v3/applications/old-id/grant",
-			method: "DELETE", wantURL: "https://ghe.acme.test/api/v3/applications/client-1/grant", auth: basic, body: map[string]string{"access_token": "at-alice"}},
+		{name: "GitHub Enterprise Server", url: "https://ghe.example.com/api/v3/applications/old-id/grant",
+			method: "DELETE", wantURL: "https://ghe.example.com/api/v3/applications/client-1/grant", auth: basic, body: map[string]string{"access_token": "at-user01"}},
 		{name: "Slack", url: "https://slack.com/api/auth.revoke",
-			method: "POST", wantURL: "https://slack.com/api/auth.revoke", auth: "Bearer at-alice"},
+			method: "POST", wantURL: "https://slack.com/api/auth.revoke", auth: "Bearer at-user01"},
 		{name: "Notion", url: "https://api.notion.com/v1/oauth/revoke",
-			method: "POST", wantURL: "https://api.notion.com/v1/oauth/revoke", auth: basic, body: map[string]string{"token": "at-alice"},
+			method: "POST", wantURL: "https://api.notion.com/v1/oauth/revoke", auth: basic, body: map[string]string{"token": "at-user01"},
 			header: "Notion-Version", headerValue: "2026-03-11"},
 		{name: "HubSpot", url: "https://api.hubapi.com/oauth/v1/refresh-tokens/{token}",
-			method: "DELETE", wantURL: "https://api.hubapi.com/oauth/v1/refresh-tokens/rt-alice"},
+			method: "DELETE", wantURL: "https://api.hubapi.com/oauth/v1/refresh-tokens/rt-user01"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req, _, err := revocationRequest(t.Context(), tc.url, "client-1", "secret-1", g)
@@ -117,16 +117,16 @@ func TestRevocationMissingToken(t *testing.T) {
 // Only the exact GitHub path shape and the other providers' own hosts pick a special format.
 func TestRevocationStyleIsNotGuessedFromLookalikes(t *testing.T) {
 	for raw, want := range map[string]string{
-		"https://api.github.com/applications/{client_id}/grant":     "github",
-		"https://ghe.acme.test/api/v3/applications/abc/grant":       "github",
-		"https://idp.acme.test/oauth/applications/abc/grant/revoke": "rfc7009",
-		"https://idp.acme.test/applications/abc/grants":             "rfc7009",
-		"https://slack.com/api/auth.revoke":                         "slack",
-		"https://chat.acme.test/api/auth.revoke":                    "rfc7009",
-		"https://api.notion.com/v1/oauth/revoke":                    "notion",
-		"https://api.hubapi.com/oauth/v1/refresh-tokens":            "hubspot",
-		"https://idp.acme.test/oauth/v1/refresh-tokens/revoke":      "rfc7009",
-		"https://oauth2.googleapis.com/revoke":                      "rfc7009",
+		"https://api.github.com/applications/{client_id}/grant":       "github",
+		"https://ghe.example.com/api/v3/applications/abc/grant":       "github",
+		"https://idp.example.com/oauth/applications/abc/grant/revoke": "rfc7009",
+		"https://idp.example.com/applications/abc/grants":             "rfc7009",
+		"https://slack.com/api/auth.revoke":                           "slack",
+		"https://chat.example.com/api/auth.revoke":                    "rfc7009",
+		"https://api.notion.com/v1/oauth/revoke":                      "notion",
+		"https://api.hubapi.com/oauth/v1/refresh-tokens":              "hubspot",
+		"https://idp.example.com/oauth/v1/refresh-tokens/revoke":      "rfc7009",
+		"https://oauth2.googleapis.com/revoke":                        "rfc7009",
 	} {
 		u, _ := url.Parse(raw)
 		if got := revocationStyle(u); got != want {

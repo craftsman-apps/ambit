@@ -119,15 +119,15 @@ test("a rule can name people by email, alone or with groups", async ({ page }) =
     await box.fill("not an email");
     await box.press("Enter");
     await expect(page.getByText(/is not an email address/)).toBeVisible();
-    await box.fill(" Pilot.User@Acme.test ");
+    await box.fill(" Pilot.User@example.com ");
     await box.press("Enter");
-    await expect(page.getByTestId("person-chip-pilot.user@acme.test")).toBeVisible();
+    await expect(page.getByTestId("person-chip-pilot.user@example.com")).toBeVisible();
     await page.getByLabel(/nemotron-3-super/).check();
     await page.getByRole("button", { name: "Create rule" }).click();
     await expect(page).toHaveURL(/rule=ui-test-people/);
-    await expect(page.getByText("People: pilot.user@acme.test")).toBeVisible();
-    await expect(page.getByText(/in \["pilot\.user@acme\.test"\]/)).toBeVisible();
-    await expect(page.getByRole("row", { name: /ui-test-people/ })).toContainText("pilot.user@acme.test");
+    await expect(page.getByText("People: pilot.user@example.com")).toBeVisible();
+    await expect(page.getByText(/in \["pilot\.user@example\.com"\]/)).toBeVisible();
+    await expect(page.getByRole("row", { name: /ui-test-people/ })).toContainText("pilot.user@example.com");
   } finally {
     await page.request.delete("/api/access-rules/ui-test-people");
   }
@@ -236,7 +236,7 @@ test("Offboarding page shows the SCIM endpoint and reveals the token on request"
 test("Audit page searches one person's calls", async ({ page }) => {
   await signInAsBootstrapAdmin(page);
   await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Audit" }).click();
-  await page.getByLabel("Email").fill("alice@acme.test");
+  await page.getByLabel("Email").fill("user01@example.com");
   await page.getByRole("button", { name: "Search" }).click();
   await expect(page.getByText(/\d+ tool and model calls: \d+ refused by policy, \d+ failed/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Export CSV" })).toBeVisible();
@@ -416,8 +416,8 @@ test("admin adds an app from a preset, reads its tools with their own account, a
   await expect(page.getByText("Nobody can use its tools yet")).toBeVisible();
   // Connect with the admin's own SaaS account (Keycloak realm saas), then agree to read tools with it.
   await page.getByRole("link", { name: "Connect your account" }).click();
-  await page.getByLabel("Username or email").fill("alice");
-  await page.getByLabel("Password", { exact: true }).fill("alice-saas-pass");
+  await page.getByLabel("Username or email").fill("user01");
+  await page.getByLabel("Password", { exact: true }).fill("user01-saas-pass");
   await page.getByRole("button", { name: "Sign In" }).click();
   await page.goto(`/settings/apps/add/whoami-test?app=${name}&step=tools`);
   await page.getByRole("button", { name: "Use my account to read tools" }).click();

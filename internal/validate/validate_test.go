@@ -362,8 +362,8 @@ func TestAccessRuleUsers(t *testing.T) {
 		return "apiVersion: ambitproject.dev/v1alpha1\nkind: AccessRule\nmetadata: { name: pilot }\nspec: " + spec
 	}
 	for _, spec := range []string{
-		`{ users: [alice@acme.com], models: [gemma] }`,
-		`{ groups: [eng], users: [alice@acme.com, o.brien+ai@mail.acme.co.uk], models: [gemma] }`,
+		`{ users: [user01@acme.com], models: [gemma] }`,
+		`{ groups: [eng], users: [user01@acme.com, o.brien+ai@mail.acme.co.uk], models: [gemma] }`,
 		`{ groups: [eng], models: [gemma] }`,
 		`{ allSignedIn: true, models: [gemma] }`,
 	} {
@@ -376,10 +376,10 @@ func TestAccessRuleUsers(t *testing.T) {
 		`{ users: [A@B.COM], models: [gemma] }`:                               "should match",
 		`{ users: ['a\b@c.de'], models: [gemma] }`:                            "should match",
 		`{ users: ["*@acme.com"], models: [gemma] }`:                          "should match",
-		`{ users: [alice], models: [gemma] }`:                                 "should match",
+		`{ users: [user01], models: [gemma] }`:                                "should match",
 		`{ models: [gemma] }`:                                                 "set groups, users or allSignedIn",
 		`{ users: [], models: [gemma] }`:                                      "set groups, users or allSignedIn",
-		`{ allSignedIn: true, users: [alice@acme.com], models: [gemma] }`:     "do not also set groups or users",
+		`{ allSignedIn: true, users: [user01@acme.com], models: [gemma] }`:    "do not also set groups or users",
 		`{ allSignedIn: true, groups: [eng], models: [gemma] }`:               "do not also set groups or users",
 		`{ users: [` + strings.Repeat("a@b.co,", 51) + `], models: [gemma] }`: "must have at most 50 items",
 	} {

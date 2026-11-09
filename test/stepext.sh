@@ -93,19 +93,19 @@ left=$(kubectl -n "$NS" get pods -o name | grep -E 'ambit-clickhouse|ambit-valke
 pass "0 Ambit uses the external ClickHouse and Valkey (TLS, private CA, passwords); the chart runs neither"
 
 # 1 · the gateway's access log reaches the external ClickHouse, and the console's audit reads it back
-A=$(token alice)
+A=$(token user01)
 tools "$A"
 [[ $(call time_get_current_time '{"timezone":"UTC"}') == ok* ]] || fail "1 tool call failed"
 for _ in $(seq 1 60); do
-  n=$(ch "SELECT count() FROM audit.otel_logs WHERE LogAttributes['jwt.email'] = 'alice@acme.test' AND LogAttributes['gen_ai.tool.name'] = 'get_current_time'" 2>/dev/null || echo 0)
+  n=$(ch "SELECT count() FROM audit.otel_logs WHERE LogAttributes['jwt.email'] = 'user01@example.com' AND LogAttributes['gen_ai.tool.name'] = 'get_current_time'" 2>/dev/null || echo 0)
   [[ "$n" -ge 1 ]] && break; sleep 2
 done
 [[ "$n" -ge 1 ]] || fail "1 no access log in the external ClickHouse"
-sign_in keycloak priya priya-test-pass
+sign_in keycloak user10 user10-test-pass
 day=$(date -u +%Y-%m-%d); next=$(date -u -v+1d +%Y-%m-%d 2>/dev/null || date -u -d tomorrow +%Y-%m-%d)
-[[ $(api GET "/api/audit?email=alice@acme.test&from=$day&to=$next") == 200 ]] || fail "1 audit search failed: $(cat "$W/api")"
+[[ $(api GET "/api/audit?email=user01@example.com&from=$day&to=$next") == 200 ]] || fail "1 audit search failed: $(cat "$W/api")"
 [[ $(field 'len([c for c in d["calls"] if c["tool"]=="get_current_time"])') -ge 1 ]] || fail "1 the console's audit does not show the call"
-pass "1 alice's tool call is in the external ClickHouse (audit.otel_logs, user ambit_ext) and in the console's audit"
+pass "1 user01's tool call is in the external ClickHouse (audit.otel_logs, user ambit_ext) and in the console's audit"
 
 # 2 · a budget is enforced with counters in the external Valkey, and the console reads them
 kubectl -n "$NS" apply -f - >/dev/null <<YAML
@@ -117,21 +117,21 @@ YAML
 for _ in $(seq 1 60); do [[ $(outcome "$A") == blocked ]] && break; sleep 3; done
 [[ $(outcome "$A") == blocked ]] || fail "2 over budget but not refused"
 keys=$(vk --scan --pattern 'ambit-llm*' | tr '\n' ' ')
-[[ "$keys" == *"alice@acme.test"* ]] || fail "2 no counter for alice in the external Valkey: '$keys'"
+[[ "$keys" == *"user01@example.com"* ]] || fail "2 no counter for user01 in the external Valkey: '$keys'"
 [[ $(api GET /api/budgets) == 200 ]] || fail "2 budgets page failed: $(cat "$W/api")"
-used=$(field '[u["used"] for b in d if b["name"]=="ext-eng" for u in b["users"] if u["email"]=="alice@acme.test"]')
+used=$(field '[u["used"] for b in d if b["name"]=="ext-eng" for u in b["users"] if u["email"]=="user01@example.com"]')
 missing=$(field '[b.get("countsMissing", False) for b in d if b["name"]=="ext-eng"]')
 [[ "$missing" == "[False]" && "$used" != "[]" ]] || fail "2 console could not read the external counters: used=$used missing=$missing"
-pass "2 budget enforced on the external Valkey (TLS, password): alice refused; counter $keys; console shows used $used"
+pass "2 budget enforced on the external Valkey (TLS, password): user01 refused; counter $keys; console shows used $used"
 
 # 3 · back to the bundled databases: the collector writes to the chart's ClickHouse again
 kubectl -n "$NS" delete "budgets.$G" ext-eng --ignore-not-found >/dev/null
 helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --wait --timeout 5m >/dev/null
 kubectl -n "$NS" rollout status statefulset/ambit-clickhouse deploy/ambit-otel-collector deploy/ambit-console --timeout=300s >/dev/null
 since=$(date -u +"%Y-%m-%d %H:%M:%S")
-A=$(token alice); tools "$A"; call time_get_current_time '{"timezone":"UTC"}' >/dev/null
+A=$(token user01); tools "$A"; call time_get_current_time '{"timezone":"UTC"}' >/dev/null
 for _ in $(seq 1 60); do
-  n=$(bundled_ch "SELECT count() FROM otel.otel_logs WHERE Timestamp >= '$since' AND LogAttributes['jwt.email'] = 'alice@acme.test'" 2>/dev/null || echo 0)
+  n=$(bundled_ch "SELECT count() FROM otel.otel_logs WHERE Timestamp >= '$since' AND LogAttributes['jwt.email'] = 'user01@example.com'" 2>/dev/null || echo 0)
   [[ "$n" -ge 1 ]] && break; sleep 2
 done
 [[ "$n" -ge 1 ]] || fail "3 after switching back, no access log reached the bundled ClickHouse"

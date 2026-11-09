@@ -44,11 +44,11 @@ func presetFixture(t *testing.T, gitops bool) *presetEnv {
 	_ = v1.AddToScheme(scheme)
 	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
 	auth := &Auth{codec: Codec{Key: []byte("0123456789abcdef0123456789abcdef")}, ttl: time.Hour, Sessions: NewSessionStore()}
-	conns := &Connections{Client: cl, Namespace: testNS, PublicURL: "https://ambit.acme.test", Codec: Codec{Key: []byte("0123456789abcdef0123456789abcdef")},
+	conns := &Connections{Client: cl, Namespace: testNS, PublicURL: "https://ambit.example.com", Codec: Codec{Key: []byte("0123456789abcdef0123456789abcdef")},
 		Store: &GrantStore{Client: cl, Namespace: "ambit-grants", Key: []byte("fedcba9876543210fedcba9876543210")}}
 	unverified := crmPreset(1)
 	unverified.ID, unverified.Verified = "unverified-app", false
-	cat := &Catalog{Client: cl, Namespace: testNS, Conns: conns, PublicURL: "https://ambit.acme.test", Presets: []presets.Preset{crmPreset(1), unverified}}
+	cat := &Catalog{Client: cl, Namespace: testNS, Conns: conns, PublicURL: "https://ambit.example.com", Presets: []presets.Preset{crmPreset(1), unverified}}
 	env := &presetEnv{cl: cl, cat: cat}
 	if gitops {
 		gh, fake := newFakeGitHub(t)
@@ -70,7 +70,7 @@ func TestPresetListIsReadableWithAPlainGET(t *testing.T) {
 	rec := do(t, e.h, "GET", "/api/presets", e.ck, nil) // no Content-Type: browsers send none on GET
 	var got []PresetView
 	_ = json.Unmarshal(rec.Body.Bytes(), &got)
-	if rec.Code != 200 || len(got) != 1 || got[0].ID != "acme-crm" || got[0].Setup != "Callback https://ambit.acme.test/connections/callback" {
+	if rec.Code != 200 || len(got) != 1 || got[0].ID != "acme-crm" || got[0].Setup != "Callback https://ambit.example.com/connections/callback" {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 	if rec := do(t, e.h, "GET", "/api/apps/unfinished", e.ck, nil); rec.Code != 200 {
@@ -495,15 +495,15 @@ func TestBindKeepsGrantsIssuedBeforeIt(t *testing.T) {
 		AuthorizationURL: "https://a.test/a", TokenURL: "https://a.test/t", ClientID: "c", ClientSecretRef: v1.SecretRef{Name: "ambit-conn-jira"}}})
 	_ = e.cl.Create(t.Context(), &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "jira", Namespace: testNS}, Spec: v1.ServerSpec{URL: "https://mcp.jira.test/mcp", Connection: "jira"}})
 	conns := e.cat.Conns
-	if err := conns.Store.Put(t.Context(), &Grant{Email: "alice@acme.test", Connection: "jira", AccessToken: "at-alice", RefreshToken: "rt-alice",
+	if err := conns.Store.Put(t.Context(), &Grant{Email: "user01@example.com", Connection: "jira", AccessToken: "at-user01", RefreshToken: "rt-user01",
 		Expiry: time.Now().Add(time.Hour), State: grantConnectedState}); err != nil { // pre-bind grant: no ServerURL
 		t.Fatal(err)
 	}
 	if rec := do(t, e.h, "PUT", "/api/apps/jira/bind", e.ck, map[string]string{}); rec.Code != http.StatusOK {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
-	tok, g, err := conns.Token(t.Context(), "alice@acme.test", "jira")
-	if err != nil || tok != "at-alice" || g.ServerURL != "https://mcp.jira.test/mcp" {
+	tok, g, err := conns.Token(t.Context(), "user01@example.com", "jira")
+	if err != nil || tok != "at-user01" || g.ServerURL != "https://mcp.jira.test/mcp" {
 		t.Fatalf("a grant from before the bind must keep working: token %q grant %+v err %v", tok, g, err)
 	}
 }

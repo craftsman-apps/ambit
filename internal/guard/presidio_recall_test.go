@@ -25,7 +25,7 @@ type known struct{ typ, value string }
 var (
 	westFirst = []string{"Olivia", "Liam", "Emma", "Noah", "Ava", "Ethan", "Sophia", "Mason", "Isabella", "Lucas", "Mia", "Henry", "Amelia", "Jack", "Harper", "Owen", "Evelyn", "Caleb", "Grace", "Isaac", "Chloe", "Nathan", "Zoe", "Dylan", "Hannah", "Leo", "Nora", "Adrian", "Claire", "Felix"}
 	westLast  = []string{"Anderson", "Brooks", "Carter", "Dawson", "Ellis", "Foster", "Gibson", "Hughes", "Jenkins", "Keller", "Lawson", "Morgan", "Nguyen", "Owens", "Parker", "Quinn", "Reynolds", "Sullivan", "Turner", "Vaughn", "Walsh", "Young", "Bennett", "Coleman", "Hayes", "Murphy", "Porter", "Ramos", "Stevens", "Thornton"}
-	korFamily = []string{"Kim", "Lee", "Park", "Choi", "Jung", "Kang", "Cho", "Yoon", "Jang", "Lim", "Han", "Oh", "Seo", "Shin", "Kwon", "Hwang", "Ahn", "Song", "Yoo", "Hong"}
+	korFamily = []string{"User05", "User06", "Park", "Choi", "Jung", "Kang", "Cho", "Yoon", "Jang", "Lim", "Han", "Oh", "Seo", "Shin", "Kwon", "Hwang", "Ahn", "Song", "Yoo", "Hong"}
 	korGiven  = []string{"Min-jun", "Seo-yeon", "Ji-ho", "Ha-eun", "Do-yun", "Su-bin", "Jun-seo", "Ye-jin", "Hyun-woo", "Ji-woo", "Seung-min", "Da-eun", "Tae-yang", "So-yeon", "Joon-ho", "Eun-ji", "Dong-hyun", "Na-yeon", "Sang-woo", "Hye-jin"}
 	usStreets = []string{"Maple Street", "Oak Avenue", "Cedar Lane", "Pine Road", "Elm Drive", "Lakeview Boulevard", "Sunset Way", "Highland Court", "Willow Street", "Park Avenue"}
 	usCities  = []string{"Portland, OR 97205", "Austin, TX 78701", "Denver, CO 80202", "Boston, MA 02108", "Seattle, WA 98101", "Chicago, IL 60601", "Atlanta, GA 30303", "Madison, WI 53703"}

@@ -54,15 +54,15 @@ func TestSameGrant(t *testing.T) {
 		t.Error("nil and empty lists should match")
 	}
 	// Users compare as a set too.
-	people := v1.AccessRuleSpec{Users: []string{"alice@acme.com", "bob@acme.com"}, Models: []string{"a"}}
+	people := v1.AccessRuleSpec{Users: []string{"user01@acme.com", "user02@acme.com"}, Models: []string{"a"}}
 	for _, tc := range []struct {
 		name  string
 		users []string
 		want  bool
 	}{
-		{"same users, other order, repeated", []string{"bob@acme.com", "alice@acme.com", "bob@acme.com"}, true},
-		{"one user fewer", []string{"alice@acme.com"}, false},
-		{"another user", []string{"alice@acme.com", "carol@acme.com"}, false},
+		{"same users, other order, repeated", []string{"user02@acme.com", "user01@acme.com", "user02@acme.com"}, true},
+		{"one user fewer", []string{"user01@acme.com"}, false},
+		{"another user", []string{"user01@acme.com", "user03@acme.com"}, false},
 		{"no users", nil, false},
 	} {
 		b := v1.AccessRuleSpec{Users: tc.users, Models: []string{"a"}}
@@ -70,7 +70,7 @@ func TestSameGrant(t *testing.T) {
 			t.Errorf("users %s: got %v, want %v", tc.name, got, tc.want)
 		}
 	}
-	if sameGrant(v1.AccessRuleSpec{Groups: []string{"eng"}, Models: []string{"a"}}, v1.AccessRuleSpec{Groups: []string{"eng"}, Users: []string{"alice@acme.com"}, Models: []string{"a"}}) {
+	if sameGrant(v1.AccessRuleSpec{Groups: []string{"eng"}, Models: []string{"a"}}, v1.AccessRuleSpec{Groups: []string{"eng"}, Users: []string{"user01@acme.com"}, Models: []string{"a"}}) {
 		t.Error("adding a user changes the grant")
 	}
 }

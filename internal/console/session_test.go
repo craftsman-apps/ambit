@@ -7,7 +7,7 @@ import (
 
 func TestCodecRoundTrip(t *testing.T) {
 	c := Codec{Key: []byte("0123456789abcdef0123456789abcdef")}
-	in := Session{Email: "alice@acme.com", Name: "Alice", Groups: []string{"finance"}, Role: RoleViewer, Exp: time.Now().Add(time.Hour).Unix()}
+	in := Session{Email: "user01@acme.com", Name: "User01", Groups: []string{"finance"}, Role: RoleViewer, Exp: time.Now().Add(time.Hour).Unix()}
 	var out Session
 	if err := c.Decode(c.Encode(in), &out); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -19,7 +19,7 @@ func TestCodecRoundTrip(t *testing.T) {
 
 func TestCodecRejectsTamperingAndWrongKey(t *testing.T) {
 	c := Codec{Key: []byte("0123456789abcdef0123456789abcdef")}
-	tok := c.Encode(Session{Email: "alice@acme.com", Role: RoleViewer})
+	tok := c.Encode(Session{Email: "user01@acme.com", Role: RoleViewer})
 	var s Session
 	cases := map[string]string{
 		"empty":         "",
@@ -45,12 +45,12 @@ func TestRoleFor(t *testing.T) {
 		want                   string
 	}{
 		{"bootstrap admin", "local", BootstrapEmail, nil, RoleAdmin},
-		{"other local user is not admin", "local", "bob@acme.com", nil, RoleViewer},
+		{"other local user is not admin", "local", "user02@acme.com", nil, RoleViewer},
 		{"bootstrap email from SSO is not bootstrap", "okta", BootstrapEmail, nil, RoleViewer},
-		{"admin group", "okta", "priya@acme.com", []string{"eng", "ambit-admins"}, RoleAdmin},
-		{"approver group", "okta", "sam@acme.com", []string{"ambit-approvers"}, RoleApprover},
-		{"admin wins over approver", "okta", "sam@acme.com", []string{"ambit-approvers", "ambit-admins"}, RoleAdmin},
-		{"no groups", "okta", "alice@acme.com", nil, RoleViewer},
+		{"admin group", "okta", "user10@acme.com", []string{"eng", "ambit-admins"}, RoleAdmin},
+		{"approver group", "okta", "user11@acme.com", []string{"ambit-approvers"}, RoleApprover},
+		{"admin wins over approver", "okta", "user11@acme.com", []string{"ambit-approvers", "ambit-admins"}, RoleAdmin},
+		{"no groups", "okta", "user01@acme.com", nil, RoleViewer},
 	}
 	for _, c := range cases {
 		if got := roleFor(c.connector, c.email, c.groups); got != c.want {

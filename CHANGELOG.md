@@ -26,8 +26,9 @@ Each pull request adds a file in changelog/unreleased/ (see its README); the rel
   30 days, in estimated tokens and dollars, by day, group, server and router. It needs `evidence.enabled`. See
   [Savings](docs/savings.md).
 - **Servers from an image, with each person's own sign-in.** A `Server` that runs an image over HTTP can now have a
-  `connection`, so each person signs in to the vendor with their own account. Such a Server can also set `env`
-  (values or Secret keys) and `args` for its container.
+  `connection`: each person signs in to the vendor with their own account, and Ambit passes that person's token to
+  the container through ToolHive's proxy. A Server that runs an image can also set `env` (values or Secret keys) and
+  `args` for its container.
 - **Masking handles large tool results.** `ambit-guard` accepts tool results up to 32 MiB (before: 4 MiB) and no
   longer runs out of memory at about 12 MiB.
 - **Two privacy fixes for Presidio users.** (1) Setting Presidio no longer turns off the built-in masks (Korean
@@ -39,8 +40,9 @@ Each pull request adds a file in changelog/unreleased/ (see its README); the rel
 
 ### Upgrade notes
 
-- **Upgrade both charts, `ambit-crds` first.** The CRDs of `Model` and `Server` (and `ServerRequest`) have new
-  optional fields: `fallback` and `additionalEndpoints` on a Model; `resultCompression`, `env` and `args` on a Server.
+- **Upgrade both charts, `ambit-crds` first.** The CRDs of `Model`, `Server` and `ServerRequest` have new optional
+  fields: `fallback` and `additionalEndpoints` on a Model; `resultCompression`, `env` and `args` on a Server and in
+  the server part of a ServerRequest.
   An older controller does not know them. Existing objects need no change.
 - **The `ambit-guard` memory limit is now 512 MiB** (before: 128 MiB), set by the new value
   `protection.memoryLimitMiB`. The memory request stays 32 MiB, so scheduling does not change. A large tool result can
@@ -62,8 +64,8 @@ Each pull request adds a file in changelog/unreleased/ (see its README); the rel
   tool that returns both, compression does not help with Codex. opencode 2.x in its default mode sends neither.
 - `ambit-guard` refuses tool results larger than 32 MiB.
 - A `Server` that runs a `stdio` image cannot have a `connection`.
-- The DocuSign preset's nightly contract check fails because the vendor's server does not ask for authentication
-  (issue #222).
+- The nightly contract check of the DocuSign preset fails, because DocuSign's server does not ask an unauthenticated
+  request to sign in (issue #222). The preset itself passed the live check for this release.
 - The console no longer offers the Databricks and PagerDuty presets: their test accounts stopped working, so they
   could not pass the live check before this release (issue #244). A `Server` you already made from either preset is
   not changed.

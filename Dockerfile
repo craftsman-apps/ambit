@@ -31,12 +31,12 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
 
 # CI: the build job compiles the binaries with Go's cache warm (setup-go) into bin/ and builds this target, so the
 # e2e jobs do not compile again. Same base and layout as the default image below.
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:516757106de35205efb70b91ba03f6f1298424a0678c603255cf2852a7000087 AS prebuilt
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329 AS prebuilt
 COPY bin/ambit-console bin/ambit-controller bin/ambit bin/ambit-guard bin/ambit-router /
 USER 65532:65532
 ENTRYPOINT ["/ambit-console"]
 
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:516757106de35205efb70b91ba03f6f1298424a0678c603255cf2852a7000087
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329
 COPY --from=build /ambit-console /ambit-controller /ambit /ambit-guard /ambit-router /
 USER 65532:65532
 ENTRYPOINT ["/ambit-console"]

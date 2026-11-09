@@ -41,6 +41,10 @@ cleanup_preset() {
 cleanup() {
   kubectl -n "$NS" delete "accessrules.$G" tokenhash-users --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" delete "servers.$G" tokenhash --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete "connections.$G" saas-img --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete secret tokenhash-env --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$GRANTS" delete secret -l ambitproject.dev/connection=saas-img --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$GRANTS" delete secret ambit-conn-saas-img --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" delete -f test/connections/objects.yaml --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$GRANTS" delete secret -l ambitproject.dev/connection=saas --ignore-not-found >/dev/null 2>&1 || true
   cleanup_preset
@@ -92,14 +96,32 @@ m=$(call_whoami "$(token user09)"); a=$(call_whoami "$(token user01)")
 [[ "$m" == "user09 @ $KC/realms/saas" && "$a" == "user01 @ $KC/realms/saas" ]] || fail "3 user09=$m user01=$a"
 pass "3 user09 -> '$m'; user01 -> '$a' (no cross-user token)"
 
-# 3b · An image that talks HTTP also gets each person's own token, through ToolHive's proxy. The image
+# 3b · An image that talks HTTP, set up with env, a Secret and args, bound to its ToolHive proxy by a Connection:
+#      each person's own token reaches the container, and the tools are listed for each person. The image
 #      (test/tokenhash) is loaded on the node by `make image`; a Server names an image by digest, so the
 #      node's digest for it is read and given a name that the digest reference finds.
 node=${KIND_NODE:-${KIND_CLUSTER:-ambit}-control-plane}
 dg=$(docker exec "$node" ctr -n k8s.io images ls "name~=ambit-tokenhash:dev" | awk 'NR==2{print $3}')  # REF TYPE DIGEST ...
 [[ "$dg" =~ ^sha256:[a-f0-9]{64}$ ]] || fail "3b the node has no digest for ambit-tokenhash:dev (run make image): '$dg'"
 docker exec "$node" ctr -n k8s.io images tag --force docker.io/library/ambit-tokenhash:dev "docker.io/library/ambit-tokenhash@$dg" >/dev/null
+envsecret=th-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')  # a made-up test value, only for this run
+want_secret=$(printf %s "$envsecret" | shasum -a 256 | cut -c1-16)
+kubectl -n "$NS" create secret generic tokenhash-env --from-literal=value="$envsecret" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+kubectl -n "$GRANTS" create secret generic ambit-conn-saas-img --from-literal=clientSecret=saas-test-client-secret --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 kubectl -n "$NS" apply -f - >/dev/null <<YAML
+apiVersion: $G/v1alpha1
+kind: Connection
+metadata: { name: saas-img }
+spec:
+  displayName: SaaS for the image server (test)
+  authorizationURL: $KC/realms/saas/protocol/openid-connect/auth
+  tokenURL: $KC/realms/saas/protocol/openid-connect/token
+  revocationURL: $KC/realms/saas/protocol/openid-connect/revoke
+  clientID: ambit-connect
+  clientSecretRef: { name: ambit-conn-saas-img }
+  scopes: [openid]
+  serverURL: http://mcp-tokenhash-proxy.$NS.svc:8080/mcp
+---
 apiVersion: $G/v1alpha1
 kind: Server
 metadata: { name: tokenhash }
@@ -108,7 +130,11 @@ spec:
   image: docker.io/library/ambit-tokenhash@$dg
   transport: streamable-http
   mcpPort: 8080
-  connection: saas
+  connection: saas-img
+  env:
+    - { name: TOKENHASH_LABEL, value: from-env }
+    - { name: TOKENHASH_SECRET, secretKeyRef: { name: tokenhash-env, key: value } }
+  args: ["-suffix=from-args"]
 ---
 apiVersion: $G/v1alpha1
 kind: AccessRule
@@ -118,13 +144,24 @@ spec:
   servers: [{ name: tokenhash }]
 YAML
 kubectl -n "$NS" wait "servers.$G" tokenhash --for=condition=Ready --timeout=240s >/dev/null || fail "3b tokenhash image server not Ready: $(kubectl -n "$NS" get "servers.$G" tokenhash -o jsonpath='{.status.conditions}')"
+sign_in keycloak user01 user01-test-pass
+connect_app saas-img user01 user01-saas-pass
+sign_in keycloak user09 user09-test-pass
+connect_app saas-img user09 user09-saas-pass
+sign_in keycloak user10 user10-test-pass
+connect_app saas-img user01 user01-saas-pass  # the admin lends an account to read the tools, as in check 7
+[[ $(api PUT /api/servers/tokenhash/tool-reader '{}') == 204 ]] || fail "3b tool reader: $(cat "$W/api")"
+wait_for 90 '[[ $(kubectl -n "$NS" get "servers.$G" tokenhash -o jsonpath="{.status.tools[*].name}") == token_hash ]]' ||
+  fail "3b tools of the image server not read through its proxy: $(kubectl -n "$NS" get "servers.$G" tokenhash -o jsonpath='{.status.conditions}')"
 for _ in $(seq 1 30); do ha=$(call_hash "$(token user01)"); [[ "$ha" != "not listed" ]] && break; sleep 3; done
 hm=$(call_hash "$(token user09)"); ha2=$(call_hash "$(token user01)")
-[[ "$ha" == sha256:*" user=user01" && "$hm" == sha256:*" user=user09" ]] || fail "3b the image server received user01='$ha' user09='$hm'"
+cfg=" label=from-env secret=$want_secret suffix=from-args"
+[[ "$ha" == sha256:*" user=user01$cfg" && "$hm" == sha256:*" user=user09$cfg" ]] || fail "3b the image server received user01='$ha' user09='$hm' (want config '$cfg')"
 [[ "${ha%% *}" != "${hm%% *}" && "$ha" == "$ha2" ]] || fail "3b hashes: user01='$ha' user09='$hm' user01 again='$ha2'"
-hp=$(call_hash "$(token user10)")
-[[ "$hp" == "not listed" ]] || fail "3b user10 has no saas grant, but the image server was not withheld from her: '$hp'"
-pass "3b image server over HTTP: user01 -> '$ha'; user09 -> '$hm'; no grant -> withheld (each person's own token reaches the container)"
+# A person with no grant for this app does not get the server (user11 never connected saas-img).
+hp=$(call_hash "$(token user11)")
+[[ "$hp" == "not listed" ]] || fail "3b user11 has no grant, but the image server was not withheld: '$hp'"
+pass "3b image server: env, Secret and args reached the container; tools read through its proxy; user01 -> '${ha%% *}'; user09 -> '${hm%% *}' (different tokens); no grant -> withheld"
 
 # 4 · the broker is reachable only from the gateway; grants are not readable in the Secrets
 probe() {

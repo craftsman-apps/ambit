@@ -66,30 +66,88 @@ run in your cluster and that reads the user's token from the `Authorization` hea
 sign-in. Set `transport: streamable-http` (or `sse`) and `mcpPort`. A `stdio` image with `connection` is refused
 (`connection needs a remote server (url), or an image whose transport is streamable-http or sse`).
 
-```yaml
-apiVersion: ambitproject.dev/v1alpha1
-kind: Server
-metadata: { name: workspace }
-spec:
-  image: ghcr.io/example/workspace-mcp@sha256:<64 hex>
-  transport: streamable-http
-  mcpPort: 8000
-  connection: google
-```
-
 Each call reaches the container through ToolHive's proxy with the calling person's own token in
 `Authorization: Bearer <token>`. The server must accept that token and must not ask the person to sign in again.
 
+Configure the container with `env` and `args` (images only; set by an admin or in GitOps, the console's request
+form does not offer them):
+
+- `env` is a list of variables. Each has a `name` and either an inline `value` or a `secretKeyRef` (`name` and `key`
+  of a Secret in Ambit's namespace). Put a secret value only in a Secret. A Secret key becomes the variable; two
+  variables cannot use the same Secret (use one Secret for each). Names that ToolHive sets (`TOOLHIVE_*`,
+  `MCP_TRANSPORT`, `MCP_PORT`, `FASTMCP_PORT`, `MCP_HOST`) are refused. At most 16 variables.
+- `args` are passed to the container after the image's own command. At most 32.
+
+To list the tools of the server and to bind the Connection to it, set the Connection's `serverURL` to the address of
+the server's ToolHive proxy: `http://mcp-<server name>-proxy.<namespace>.svc:8080/mcp` (`/sse` for `sse`). The token
+broker then gives a token only to that server, and an admin can use "Use my account to read tools" as for a remote
+server. The console reaches the proxy for that, and only for a bound server. A Connection with no `serverURL` also
+works, but then the tools are not listed and a rule grants the whole server or names its tools.
+
+The server is added to the gateway once its proxy answers. It does not need a token for that: any answer below HTTP
+500, including 401, counts.
+
+### Example: Google Workspace MCP (not tested with a real Google account)
+
+This is an example, **not tested with a real Google account**. It runs
+[google_workspace_mcp](https://github.com/taylorwilsdon/google_workspace_mcp) (MIT) in its external OAuth mode:
+the server keeps no sign-in of its own and uses the Google token that Ambit's token broker adds to each call.
+Read-only, with the scopes `openid email` and `gmail.readonly`.
+
+What the settings come from (the project at commit `53c392d`, version 2.4.0):
+
+- Image `ghcr.io/taylorwilsdon/google_workspace_mcp`, tags such as `2.4.0`, `2.4`, `2` and `latest`
+  (`.github/workflows/docker-publish.yml`, `type=semver` tags; `helm-chart/workspace-mcp/values.yaml:5`). Ambit
+  needs a digest: look up the digest of the tag you reviewed (for example with `docker buildx imagetools inspect`)
+  and use `ghcr.io/taylorwilsdon/google_workspace_mcp@sha256:<64 hex>`.
+- It listens on port 8000 and starts with `--transport streamable-http` (`Dockerfile:33`, `Dockerfile:48`).
+- `MCP_ENABLE_OAUTH21=true` and `EXTERNAL_OAUTH21_PROVIDER=true` select the external mode; the second needs the
+  first (`auth/oauth_config.py:96`, `auth/oauth_config.py:108-113`).
+- `GOOGLE_OAUTH_CLIENT_ID` is still required in OAuth 2.1 mode (`main.py:236-248`, `core/server.py:618-622`); the
+  client secret is not required in external mode (`core/server.py:624`).
+- `WORKSPACE_MCP_READ_ONLY=true` requests only read-only scopes and disables tools that write (`main.py:643-647`, `auth/scopes.py:268`).
+
+```yaml
+apiVersion: ambitproject.dev/v1alpha1
+kind: Connection
+metadata: { name: google-gmail }
+spec:
+  displayName: Google (Gmail, read only)
+  authorizationURL: https://accounts.google.com/o/oauth2/v2/auth
+  tokenURL: https://oauth2.googleapis.com/token
+  revocationURL: https://oauth2.googleapis.com/revoke
+  clientID: <your OAuth client ID>.apps.googleusercontent.com
+  clientSecretRef: { name: ambit-conn-google-gmail }   # Ambit's Secret for the client secret
+  scopes: ["openid", "email", "https://www.googleapis.com/auth/gmail.readonly"]
+  authorizeParams: { access_type: offline, prompt: consent }
+  serverURL: http://mcp-gmail-proxy.ambit-system.svc:8080/mcp
+---
+apiVersion: ambitproject.dev/v1alpha1
+kind: Server
+metadata: { name: gmail }
+spec:
+  displayName: Gmail (read only)
+  image: ghcr.io/taylorwilsdon/google_workspace_mcp@sha256:<64 hex>
+  transport: streamable-http
+  mcpPort: 8000
+  connection: google-gmail
+  env:
+    - { name: MCP_ENABLE_OAUTH21, value: "true" }
+    - { name: EXTERNAL_OAUTH21_PROVIDER, value: "true" }
+    - { name: WORKSPACE_MCP_READ_ONLY, value: "true" }
+    - { name: GOOGLE_OAUTH_CLIENT_ID, value: <your OAuth client ID>.apps.googleusercontent.com }
+```
+
+Check on your own account before you rely on it: that the server accepts the token (it may call Google to check
+it), that `gmail.readonly` is enough for the tools you grant, and that the Google OAuth app is set up for your
+users.
+
 Limits:
 
-- The `Connection` must not have a `serverURL`. A bound Connection belongs to one URL, and an image server has no
-  URL, so it is refused with `ConnectionBound`.
-- The tool reader does not work for an image server, so Ambit does not list its tools. Name the tools in the
-  access rule, or grant the whole server.
-- A `Server` has no field for environment variables or arguments. The image must be configured by its own
-  defaults, for example a derived image that sets them.
-- The server is added to the gateway once its proxy answers. It does not need a token for that: any answer below
-  HTTP 500, including 401, counts.
+- A `Connection` that has a `serverURL` refuses any other address (`ConnectionBound`), including the proxy address
+  of another image server.
+- If the proxy address changes (the server is renamed or moved to another namespace), change `serverURL` too;
+  users then connect again.
 
 ## The tool reader
 

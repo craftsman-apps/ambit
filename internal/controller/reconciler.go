@@ -673,9 +673,6 @@ func (r *Reconciler) readTools(ctx context.Context, s v1.Server) ([]v1.Tool, *me
 	if r.toolsRead == nil {
 		r.toolsRead = map[types.UID]time.Time{}
 	}
-	if s.Spec.Image != "" && s.Spec.Connection != "" {
-		return s.Status.Tools, nil // a person's token is needed and no admin's account can be bound to an image: tools stay unlisted
-	}
 	last := func() *metav1.Condition {
 		if s.Spec.Connection == "" {
 			return nil // the condition applies to per-user servers only
@@ -884,11 +881,13 @@ func (r *Reconciler) markRunning(ctx context.Context, servers []v1.Server) (time
 		}
 		delete(r.admitAt, s.UID)
 		delete(r.admitWait, s.UID)
-		s.Status.Tools = answers[k].tools
-		if r.toolsRead == nil {
-			r.toolsRead = map[types.UID]time.Time{}
+		if s.Spec.Connection == "" { // a per-person server was only probed: its tools are read next, through the console
+			s.Status.Tools = answers[k].tools
+			if r.toolsRead == nil {
+				r.toolsRead = map[types.UID]time.Time{}
+			}
+			r.toolsRead[s.UID] = r.now()
 		}
-		r.toolsRead[s.UID] = r.now()
 		setServing(s, "Answered", "answered its first MCP introduction")
 	}
 	return retry, nil

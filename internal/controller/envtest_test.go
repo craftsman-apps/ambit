@@ -145,6 +145,26 @@ func TestCRDRulesRejectUnsafeObjects(t *testing.T) {
 			t.Errorf("%s refused: %v", name, err)
 		}
 	}
+	// env and args: image only; a value or a Secret key; no names that ToolHive sets; one key per Secret.
+	envSpec := func(env ...v1.ServerEnv) v1.ServerSpec {
+		return v1.ServerSpec{Image: digestImage, Transport: "streamable-http", MCPPort: 8000, Env: env}
+	}
+	sec := func(name, secret, key string) v1.ServerEnv {
+		return v1.ServerEnv{Name: name, SecretKeyRef: &v1.SecretKeyRef{Name: secret, Key: key}}
+	}
+	reject("env on a remote server", &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "env-url", Namespace: ns},
+		Spec: v1.ServerSpec{URL: "https://mcp.example.com/mcp", Transport: "streamable-http", Args: []string{"--x"}}}, "env and args set up the container of an image")
+	reject("env with value and secret", &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "env-both", Namespace: ns},
+		Spec: envSpec(v1.ServerEnv{Name: "A", Value: "1", SecretKeyRef: &v1.SecretKeyRef{Name: "s", Key: "k"}})}, "set either value or secretKeyRef")
+	reject("env with neither", &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "env-none", Namespace: ns}, Spec: envSpec(v1.ServerEnv{Name: "A"})}, "set either value or secretKeyRef")
+	reject("env name set by ToolHive", &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "env-th", Namespace: ns}, Spec: envSpec(v1.ServerEnv{Name: "MCP_TRANSPORT", Value: "stdio"})}, "set by ToolHive")
+	reject("env name with a space", &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "env-bad", Namespace: ns}, Spec: envSpec(v1.ServerEnv{Name: "A B", Value: "1"})}, "spec.env[0].name")
+	reject("two variables from one Secret", &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "env-dup", Namespace: ns},
+		Spec: envSpec(sec("A", "same", "a"), sec("B", "same", "b"))}, "one Secret for each")
+	if err := envClient.Create(ctx, &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "env-ok", Namespace: ns},
+		Spec: envSpec(v1.ServerEnv{Name: "WORKSPACE_MCP_READ_ONLY", Value: "true"}, sec("GOOGLE_OAUTH_CLIENT_SECRET", "gws-a", "secret"), sec("OTHER", "gws-b", "k"))}); err != nil {
+		t.Errorf("valid env refused: %v", err)
+	}
 	reject("connection with a stdio server request", &v1.ServerRequest{ObjectMeta: metav1.ObjectMeta{Name: "conn-req", Namespace: ns},
 		Spec: v1.ServerRequestSpec{ServerName: "conn-req", RequestedBy: "alice@acme.test", Server: v1.ServerSpec{Image: digestImage, Connection: "google"}}}, wantMsg)
 
@@ -793,8 +813,7 @@ func TestImageServerWithConnectionJoinsOnProbe(t *testing.T) {
 	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
 		Now: func() time.Time { return time.Now() },
 		ListTools: func(context.Context, v1.Server) ([]v1.Tool, error) {
-			t.Error("tools of a server that needs a person's token must not be read at admission")
-			return nil, errors.New("unexpected")
+			return nil, ErrNoReader // the console has no reader yet
 		},
 		Probe: func(context.Context, v1.Server) error {
 			if !answers {
@@ -842,7 +861,8 @@ func TestImageServerWithConnectionJoinsOnProbe(t *testing.T) {
 	if err := envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "gws"}, &s); err != nil {
 		t.Fatal(err)
 	}
-	if c := meta.FindStatusCondition(s.Status.Conditions, "ToolsRead"); c != nil {
-		t.Fatalf("ToolsRead does not apply to an image server: %+v", c)
+	// After admission its tools are read through the console, like any per-person server.
+	if c := meta.FindStatusCondition(s.Status.Conditions, "ToolsRead"); c == nil || c.Reason != "ReaderUnavailable" {
+		t.Fatalf("ToolsRead: %+v", c)
 	}
 }

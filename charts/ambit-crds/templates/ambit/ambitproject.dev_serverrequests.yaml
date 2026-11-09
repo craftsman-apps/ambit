@@ -73,6 +73,13 @@ spec:
               server:
                 description: Server is what will run, including the image digest.
                 properties:
+                  args:
+                    description: Args are arguments passed to the container of an image, after the image's own command.
+                    items:
+                      type: string
+                    maxItems: 32
+                    type: array
+                    x-kubernetes-list-type: atomic
                   connection:
                     description: 'Connection names a Connection: each call then carries the calling user''s own token for that
 
@@ -81,6 +88,50 @@ spec:
                   displayName:
                     description: DisplayName is shown in the console.
                     type: string
+                  env:
+                    description: 'Env sets environment variables in the container of an image. A value is given inline, or comes from one
+
+                      key of a Secret in Ambit''s namespace (never inline for a secret value). Set by an admin or in GitOps; the
+
+                      console''s request form does not offer it.'
+                    items:
+                      description: 'ServerEnv is one environment variable of an image Server: a value or a Secret key, not both.'
+                      properties:
+                        name:
+                          maxLength: 128
+                          pattern: ^[A-Za-z_][A-Za-z0-9_]*$
+                          type: string
+                        secretKeyRef:
+                          description: SecretKeyRef takes the value from one key of a Secret in Ambit's namespace.
+                          properties:
+                            key:
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                            name:
+                              maxLength: 253
+                              minLength: 1
+                              type: string
+                          required:
+                          - key
+                          - name
+                          type: object
+                        value:
+                          maxLength: 4096
+                          type: string
+                      required:
+                      - name
+                      type: object
+                      x-kubernetes-validations:
+                      - message: set either value or secretKeyRef
+                        rule: has(self.value) != has(self.secretKeyRef)
+                      - message: this name is set by ToolHive
+                        rule: '!self.name.startsWith(''TOOLHIVE_'') && !(self.name in [''MCP_TRANSPORT'',''MCP_PORT'',''FASTMCP_PORT'',''MCP_HOST''])'
+                    maxItems: 16
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
                   image:
                     description: 'Image pinned by digest, e.g. ghcr.io/org/server@sha256:<64 hex>. A tag can later point to
 
@@ -136,6 +187,10 @@ spec:
                 x-kubernetes-validations:
                 - message: set either image (run by ToolHive) or url (a remote server), not both
                   rule: has(self.image) != has(self.url)
+                - message: env and args set up the container of an image; a remote server (url) has none
+                  rule: has(self.image) || (!has(self.env) && !has(self.args))
+                - message: two variables cannot take their value from the same Secret (ToolHive mounts one key of a Secret); use one Secret for each
+                  rule: '!has(self.env) || self.env.all(a, !has(a.secretKeyRef) || self.env.exists_one(b, has(b.secretKeyRef) && b.secretKeyRef.name == a.secretKeyRef.name))'
                 - message: 'connection needs a remote server (url), or an image whose transport is streamable-http or sse: a per-user token cannot reach a stdio server'
                   rule: '!has(self.connection) || has(self.url) || (has(self.transport) && self.transport != ''stdio'')'
               serverName:

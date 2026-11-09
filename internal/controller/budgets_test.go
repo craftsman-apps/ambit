@@ -293,7 +293,7 @@ func TestEmbeddingsCountWhenTheyArrive(t *testing.T) {
 			t.Fatal(err)
 		}
 		v, _, err := prg.Eval(map[string]any{"request": map[string]any{"path": path},
-			"jwt": map[string]any{"sub": "s1", "email": "alice@acme.test", "groups": groups}, "apiKey": map[string]any{}})
+			"jwt": map[string]any{"sub": "s1", "email": "user01@example.com", "groups": groups}, "apiKey": map[string]any{}})
 		return v, err
 	}
 	// descriptorApplies: every entry evaluates and the limit override (if any) evaluates to a limit; agentgateway

@@ -145,7 +145,7 @@ func TestAddModelDirectEnteredKeyCreatesSecretThenModel(t *testing.T) {
 	if strings.Join(order, ",") != "Secret/ambit-llm-gpt-mini,Model/gpt-mini" && strings.Join(order, ",") != "/ambit-llm-gpt-mini,/gpt-mini" {
 		t.Fatalf("order %v", order)
 	}
-	if !strings.Contains(e.logs.String(), `msg="model added"`) || !strings.Contains(e.logs.String(), "credentials=entered") || !strings.Contains(e.logs.String(), "by=admin@acme.test") {
+	if !strings.Contains(e.logs.String(), `msg="model added"`) || !strings.Contains(e.logs.String(), "credentials=entered") || !strings.Contains(e.logs.String(), "by=admin@example.com") {
 		t.Fatalf("log %s", e.logs)
 	}
 	e.noKey(t, rec)
@@ -587,7 +587,7 @@ func TestAddModelSameOperationWithOtherSettingsIsRefused(t *testing.T) {
 		other.Model = "a-different-model"
 		e := modelFixture(t, gitops, interceptor.Funcs{})
 		if gitops { // the merged pull request has reached the cluster
-			_ = e.cl.Create(t.Context(), e.cat.modelFrom(first, "admin@acme.test"))
+			_ = e.cl.Create(t.Context(), e.cat.modelFrom(first, "admin@example.com"))
 		} else if rec := do(t, e.h, "POST", "/api/models", e.ck, first); rec.Code != http.StatusCreated {
 			t.Fatalf("%d %s", rec.Code, rec.Body)
 		}

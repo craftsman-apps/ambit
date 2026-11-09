@@ -41,7 +41,7 @@ print(" ".join(bad))')
 pass "C2 agentgateway accepts every generated policy, backend and model"
 
 # C3 · agentgateway access log → collector → ClickHouse: the attributes the Audit and Usage pages read.
-A=$(token alice); M=$(token mira)
+A=$(token user01); M=$(token user09)
 # Only records written from now on: the version under test, not records from before an upgrade.
 since=$(date -u -v-3S +"%Y-%m-%d %H:%M:%S" 2>/dev/null || date -u -d '3 seconds ago' +"%Y-%m-%d %H:%M:%S")
 tools "$A"; call time_get_current_time '{"timezone":"UTC"}' >/dev/null; call time_convert_time '{"source_timezone":"UTC","time":"12:00","target_timezone":"UTC"}' >/dev/null
@@ -102,7 +102,7 @@ pass "C7 every NetworkPolicy selector matches running pods"
 
 # C8 · MCP tool names stay <server>_<tool>, and a tool a person may not use is answered "Unknown tool".
 tools "$A"
-[[ " $TOOLS " == *" time_get_current_time "* ]] || fail "C8 alice's tools/list lost the <server>_<tool> names: $TOOLS"
+[[ " $TOOLS " == *" time_get_current_time "* ]] || fail "C8 user01's tools/list lost the <server>_<tool> names: $TOOLS"
 r=$(call time_convert_time '{"source_timezone":"UTC","time":"12:00","target_timezone":"UTC"}')
 [[ "$r" == *"Unknown tool"* ]] || fail "C8 a denied tool is no longer answered 'Unknown tool': $r"
 pass "C8 tool names <server>_<tool>; denied tools answered 'Unknown tool'"
@@ -110,7 +110,7 @@ pass "C8 tool names <server>_<tool>; denied tools answered 'Unknown tool'"
 # C9 · a model a person may not use is refused with 403 (per-model rules on AgentgatewayModel).
 c=$(command curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $A" -H 'Content-Type: application/json' \
   -d '{"model":"nvidia/nemotron-3-super-120b-a12b:free","max_tokens":4,"messages":[{"role":"user","content":"hi"}]}' http://llm.localtest.me:8080/v1/chat/completions)
-[[ "$c" == 403 ]] || fail "C9 alice (eng) was not refused the ml-research model: HTTP $c"
+[[ "$c" == 403 ]] || fail "C9 user01 (eng) was not refused the ml-research model: HTTP $c"
 pass "C9 a disallowed model is refused with 403"
 
 # C10 · envoy ratelimit's counter keys in Valkey keep the format the console's Budgets page reads:
@@ -121,7 +121,7 @@ kind: Budget
 metadata: { name: contract-eng }
 spec: { group: eng, userRequestsPerDay: 100000 }
 YAML
-day=$(( $(date -u +%s) / 86400 * 86400 )); key="ambit-llm_group_eng_user_alice@acme.test_$day"
+day=$(( $(date -u +%s) / 86400 * 86400 )); key="ambit-llm_group_eng_user_user01@example.com_$day"
 vget() { kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "$key" 2>/dev/null || true; }
 # The counter must grow with a new request (a counter left from earlier proves nothing).
 before=""; after=""
@@ -145,7 +145,7 @@ cols=$(ch "SELECT arrayStringConcat(groupArray(name), ' ') FROM system.columns W
 pass "C11 ClickHouse applied Ambit's config; otel_logs has Timestamp and LogAttributes"
 
 # C12 · the identity provider's groups reach the console through Dex (roles and "What you can use").
-sign_in keycloak priya priya-test-pass
+sign_in keycloak user10 user10-test-pass
 [[ $(api GET /api/me) == 200 ]] || fail "C12 /api/me failed after SSO sign-in"
 groups=$(uv run --no-project python -c "import json;print(json.load(open('$W/api')).get('groups'))")
 [[ "$groups" == *ambit-admins* ]] || fail "C12 the groups claim did not reach the console: $groups"
@@ -157,20 +157,20 @@ pass "C12 groups claim reaches the console through Dex ($groups)"
 #       other paths are refused, and a client's X-Ambit-User header never reaches a model.
 ensure_llm_setup "$NS"
 since=$(date -u -v-3S +"%Y-%m-%d %H:%M:%S" 2>/dev/null || date -u -d '3 seconds ago' +"%Y-%m-%d %H:%M:%S")
-code=$(command curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(token mira)" -H 'Content-Type: application/json' \
+code=$(command curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(token user09)" -H 'Content-Type: application/json' \
   -d '{"model":"mock/echo","messages":[{"role":"user","content":"contract"}]}' http://llm.localtest.me:8080/v1/chat/completions)
 [[ "$code" == 200 ]] || fail "C14 mock model call answered $code"
 for _ in $(seq 1 30); do
-  rec=$(ch "SELECT concat(LogAttributes['gen_ai.request.model'], ' ', LogAttributes['gen_ai.usage.input_tokens'], ' ', LogAttributes['gen_ai.usage.output_tokens']) FROM otel.otel_logs WHERE Timestamp >= '$since' AND LogAttributes['protocol'] = 'llm' AND LogAttributes['jwt.email'] = 'mira@acme.test' ORDER BY Timestamp DESC LIMIT 1" 2>/dev/null || true)
+  rec=$(ch "SELECT concat(LogAttributes['gen_ai.request.model'], ' ', LogAttributes['gen_ai.usage.input_tokens'], ' ', LogAttributes['gen_ai.usage.output_tokens']) FROM otel.otel_logs WHERE Timestamp >= '$since' AND LogAttributes['protocol'] = 'llm' AND LogAttributes['jwt.email'] = 'user09@example.com' ORDER BY Timestamp DESC LIMIT 1" 2>/dev/null || true)
   [[ -n "$rec" ]] && break; sleep 2
 done
 read -r model tin tout <<<"$rec"
 [[ "$model" == mock/echo && "${tin:-0}" -gt 0 && "${tout:-0}" -gt 0 ]] || fail "C14 agentgateway did not parse the LLM request (model, input, output tokens: '${rec:-no record}')"
-code=$(command curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(token mira)" -H 'Content-Type: application/json' \
+code=$(command curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(token user09)" -H 'Content-Type: application/json' \
   -d '{"model":"mock/echo","messages":[{"role":"user","content":"contract"}]}' http://llm.localtest.me:8080/chat/completions)
 [[ "$code" == 403 ]] || fail "C14 a path the gateway does not parse was answered $code (it would pass through uncounted)"
 # The token broker trusts X-Ambit-User from gateway pods, so the gateway must never pass a client's own to a model.
-answer=$(command curl -s -H "Authorization: Bearer $(token mira)" -H 'X-Ambit-User: victim@acme.test' -H 'Content-Type: application/json' \
+answer=$(command curl -s -H "Authorization: Bearer $(token user09)" -H 'X-Ambit-User: victim@example.com' -H 'Content-Type: application/json' \
   -d '{"model":"mock/echo","messages":[{"role":"user","content":"contract"}]}' http://llm.localtest.me:8080/v1/chat/completions)
 [[ "$answer" == *pong* && "$answer" != *victim* ]] || fail "C14 the model received the client's X-Ambit-User header: ${answer:0:200}"
 pass "C14 LLM requests parsed: model $model, $tin input and $tout output tokens logged; an unparsed path is refused (403); a client's X-Ambit-User does not reach the model"
@@ -185,17 +185,17 @@ metadata: { name: contract-ml }
 spec: { group: ml-research, groupDollarsPerDay: "100", userDollarsPerDay: "100" }
 YAML
 day=$(( $(date -u +%s) / 86400 * 86400 ))
-gk="ambit-llm_spend_group_ml-research_$day"; uk="ambit-llm_spend_group_ml-research_spend_user_mira@acme.test_$day"
+gk="ambit-llm_spend_group_ml-research_$day"; uk="ambit-llm_spend_group_ml-research_spend_user_user09@example.com_$day"
 vget() { kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "$1" 2>/dev/null | tr -d '\r'; }
 wait_rl "$NS" "ambit-llm.spend_group_ml-research.spend_user: unit=DAY requests_per_unit=10000000,"
 g0=$(vget "$gk"); u0=$(vget "$uk")
-command curl -s -o /dev/null -H "Authorization: Bearer $(token mira)" -H 'Content-Type: application/json' \
+command curl -s -o /dev/null -H "Authorization: Bearer $(token user09)" -H 'Content-Type: application/json' \
   -d '{"model":"mock/echo","messages":[{"role":"user","content":"contract"}]}' http://llm.localtest.me:8080/v1/chat/completions
 for _ in $(seq 1 30); do [[ "$(vget "$gk")" == $(( ${g0:-0} + 3 )) && "$(vget "$uk")" == $(( ${u0:-0} + 3 )) ]] && break; sleep 1; done
 g1=$(vget "$gk"); u1=$(vget "$uk")
 [[ "$g1" == $(( ${g0:-0} + 3 )) && "$u1" == $(( ${u0:-0} + 3 )) ]] || fail "C15 spend keys or cost changed: $gk ${g0:-0}->$g1, $uk ${u0:-0}->$u1 (want +3 each)"
 # A stream that turns usage off is rewritten to report it (a conditional transformation) and charged.
-command curl -s -o /dev/null -H "Authorization: Bearer $(token mira)" -H 'Content-Type: application/json' \
+command curl -s -o /dev/null -H "Authorization: Bearer $(token user09)" -H 'Content-Type: application/json' \
   -d '{"model":"mock/echo","stream":true,"stream_options":{"include_usage":false},"messages":[{"role":"user","content":"contract"}]}' http://llm.localtest.me:8080/v1/chat/completions
 for _ in $(seq 1 30); do [[ "$(vget "$gk")" == $(( g1 + 3 )) ]] && break; sleep 1; done
 g2=$(vget "$gk")

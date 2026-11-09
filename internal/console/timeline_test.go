@@ -93,7 +93,7 @@ func TestChangeTimeline(t *testing.T) {
 			auth := &Auth{codec: Codec{Key: []byte("0123456789abcdef0123456789abcdef")}, ttl: time.Hour, Sessions: NewSessionStore()}
 			h := NewServer(auth, testSPA, LoginOptions{}, &Catalog{Client: b.Build(), Namespace: testNS, ArgoApplication: argo,
 				GitOps: &GitOps{Repo: repo, Repository: "acme/config", Branch: "main", Dir: "ambit"}})
-			r := do(t, h, "GET", "/api/changes/12", user(auth, "priya@acme.test", RoleAdmin), nil)
+			r := do(t, h, "GET", "/api/changes/12", user(auth, "user10@example.com", RoleAdmin), nil)
 			if r.Code != http.StatusOK {
 				t.Fatalf("%d %s", r.Code, r.Body)
 			}

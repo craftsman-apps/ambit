@@ -6,9 +6,9 @@
 #   (scale the controller to 0, wait until its pods are gone, delete the policy, helm rollback); without the
 #   delete, helm rollback fails. After the rollback the controller is back to the old chart's replica count.
 #   Upgrade again. Records reach ClickHouse after each move.
-# Steps 1-8 · enforce -> audit -> enforce while a loop calls a model and a tool every 0.5 s as alice (group eng: the
-#   rules refuse her) and mira (group ml-research: allowed). Each step of each switch must already be in every
-#   gateway pod's /config_dump when the controller says it is active. In audit mode alice is served and her records
+# Steps 1-8 · enforce -> audit -> enforce while a loop calls a model and a tool every 0.5 s as user01 (group eng: the
+#   rules refuse her) and user09 (group ml-research: allowed). Each step of each switch must already be in every
+#   gateway pod's /config_dump when the controller says it is active. In audit mode user01 is served and her records
 #   say refuse:model / refuse:tool; every call served in audit mode has a mark; nothing else changes. Then a rules
 #   change the API server refuses stops at its step (RulesNotActive). Python parts: test/stepaudit.py.
 # Step 9 · `ambit check --production --deep` in audit mode: P11 warns (with the days) and the mark-missing line is 0;
@@ -139,7 +139,7 @@ fi
 if want 1; then
 MCP=${MCP:-http://mcp.localtest.me:8080/mcp}
 SSO=(-f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml ${AMBIT_EXTRA_VALUES:+-f "$AMBIT_EXTRA_VALUES"})
-U=alice V=mira   # alice: group eng, the rules refuse her; mira: group ml-research, allowed
+U=user01 V=user09   # user01: group eng, the rules refuse her; user09: group ml-research, allowed
 PY=(uv run --no-project python test/stepaudit.py)
 ch_json() { ch "$1 FORMAT JSONEachRow"; }
 status_of() { command curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
@@ -150,7 +150,7 @@ loop="" forwards=()
 trap 'rc=$?; [[ -n "$loop" ]] && kill "$loop" 2>/dev/null; for p in "${forwards[@]}"; do kill "$p" 2>/dev/null; done
   kubectl -n "$NS" delete accessrule audit-too-long --ignore-not-found >/dev/null 2>&1; on_exit $rc' EXIT
 
-# 1 · enforce mode: alice may not use mock-echo (test/llm/mock.yaml: ml-research only) or the time server; mira may
+# 1 · enforce mode: user01 may not use mock-echo (test/llm/mock.yaml: ml-research only) or the time server; user09 may
 #     use both, the whole server.
 ensure_llm_setup "$NS"
 command helm upgrade ambit charts/ambit -n "$NS" "${SSO[@]}" --set access.mode=enforce --wait --timeout 5m >/dev/null
@@ -239,8 +239,8 @@ wait_for 60 '[[ $(status_of "$(token $U)" mock/echo) == 403 ]]' || fail "5 $U is
 pass "5 enforce again: $U is refused, $V is served"
 sleep 5; kill "$loop"; wait "$loop" 2>/dev/null || true; loop=""
 
-# 6, 7 · the loop against the records: every call served in audit mode has a mark; alice is served only between the
-#        switches and always with refuse:*; mira is always served; no 5xx, no connection error.
+# 6, 7 · the loop against the records: every call served in audit mode has a mark; user01 is served only between the
+#        switches and always with refuse:*; user09 is always served; no 5xx, no connection error.
 IFS='|' read -r first last < <(uv run --no-project python -c 'import json,sys,datetime
 t=[json.loads(l)["start"] for l in open(sys.argv[1])]; f=lambda x: datetime.datetime.fromtimestamp(x, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 print(f(min(t)-1) + "|" + f(max(t)+2))' "$W/loop.jsonl")
@@ -249,7 +249,7 @@ ch_json "SELECT toUnixTimestamp64Nano(Timestamp)/1e9 AS t, LogAttributes['jwt.em
   LogAttributes['gen_ai.request.model'] AS model, LogAttributes['ambit.accessMode'] AS mode, LogAttributes['ambit.wouldRefuse'] AS mark,
   LogAttributes['ambit.wouldRefuseTool'] AS toolmark, LogAttributes['http.response.status_code'] AS status FROM otel.otel_logs
   WHERE Timestamp BETWEEN '$first' AND '$last' AND (
-    (LogAttributes['jwt.email'] IN ('alice@acme.test', 'mira@acme.test')
+    (LogAttributes['jwt.email'] IN ('user01@example.com', 'user09@example.com')
       AND (LogAttributes['gen_ai.request.model'] = 'mock/echo' OR LogAttributes['mcp.method.name'] = 'tools/call')
       -- step 4's routed calls (router auto) are not loop calls; one that falls within 100 ms of a loop call would be matched to it
       AND LogAttributes['ambit.router'] != 'auto')
@@ -279,7 +279,7 @@ pass "8 a refused rules change: RulesNotActive (${msg:0:200}), the old rules ver
 kubectl -n "$NS" delete accessrule audit-too-long >/dev/null
 wait_for 120 '[[ $(ready_reason) == Compiled ]]' || fail "8 the rules did not come back after the refused rule was deleted"
 
-# 9 · ambit check --production --deep (P4's test call needs a Ready Model; mira may use it in both modes). The CLI
+# 9 · ambit check --production --deep (P4's test call needs a Ready Model; user09 may use it in both modes). The CLI
 #     runs the console's query in the ClickHouse pod: pods/exec, with the pod's own credentials.
 go build -o "$W/ambit" ./cmd/ambit || fail "9 go build ./cmd/ambit"
 # P4 --deep calls the first Ready Model by name, and an OpenRouter model answers 429 on the free tier, which says nothing

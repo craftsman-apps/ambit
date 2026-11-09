@@ -24,22 +24,42 @@ type ToolLister func(ctx context.Context, s v1.Server) ([]v1.Tool, error)
 // ListTools asks the Server's ToolHive proxy for its tools. The NetworkPolicy lets only the gateway
 // and this controller reach the proxy.
 func ListTools(ctx context.Context, s v1.Server) ([]v1.Tool, error) {
-	endpoint := fmt.Sprintf("http://mcp-%s-proxy.%s.svc:%d/mcp", s.Name, s.Namespace, proxyPort)
+	endpoint := Endpoint(s)
 	if s.Spec.Connection != "" {
 		// Per-user servers need a user's token; without --console-tools-url their tools stay unlisted
 		// and rules grant "all tools". With it, WithConsoleTools sends them to the console instead.
 		return nil, errToolsNotRead
 	}
-	switch {
-	case s.Spec.URL != "":
-		endpoint = s.Spec.URL
-	case s.Spec.Transport == "sse":
-		endpoint = strings.TrimSuffix(endpoint, "/mcp") + "/sse"
-	}
 	if s.Spec.Transport == "sse" {
 		return listTools(ctx, &mcp.SSEClientTransport{Endpoint: endpoint, HTTPClient: noRedirects})
 	}
 	return listTools(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint, MaxRetries: -1, DisableStandaloneSSE: true, HTTPClient: noRedirects})
+}
+
+// ProbeProxy asks the proxy of an image server that needs a person's token (connection) whether the server
+// answers. It sends no token, so the server may refuse (401): any HTTP answer below 500 counts. ToolHive's
+// proxy answers 502 while the container does not listen yet.
+func ProbeProxy(ctx context.Context, s v1.Server) error {
+	return probeAt(ctx, Endpoint(s))
+}
+
+func probeAt(ctx context.Context, endpoint string) error {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := noRedirects.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 500 {
+		return fmt.Errorf("probe %s: status %d", endpoint, resp.StatusCode)
+	}
+	return nil
 }
 
 // noRedirects keeps tool discovery at the approved URL: a redirect could otherwise send the

@@ -18,7 +18,7 @@ answered() {
   echo "$code $(uv run --no-project python -c "import json;print(json.load(open('$W/r')).get('model',''))" 2>/dev/null)"
 }
 msg() { printf '{"model":"auto","messages":[{"role":"user","content":%s}]}' "$(uv run --no-project python -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$1")"; }
-M=$(token mira); A=$(token alice); S=$(token sam)
+M=$(token user09); A=$(token user01); S=$(token user11)
 long=$(printf 'a%.0s' $(seq 1 1997))😀   # 2001 UTF-8 bytes
 short=$(printf 'a%.0s' $(seq 1 1995))😀  # 1999 UTF-8 bytes
 
@@ -35,9 +35,9 @@ parts=$(uv run --no-project python -c 'import json;print(json.dumps({"model":"au
 pass "1 Rules: keywords (any case), length in bytes, default; multi-part content and no user message reach the default; no extra pods"
 
 # 4 · Access
-[[ "$(answered "$A" "$(msg 'python')")" == "200 mock/unpriced" ]] || fail "4 alice may not use mock-echo → default, not an error: $(cat "$W/r")"
-[[ "$(answered "$S" "$(msg 'python')" | cut -d' ' -f1)" == 400 ]] && grep -q virtual_model_no_matching_target "$W/r" || fail "4 sam may not use the router → 400 virtual_model_no_matching_target: $(cat "$W/r")"
-# a router alice may use whose default she may not (mock-free is ml-research only), and no route matches: 400
+[[ "$(answered "$A" "$(msg 'python')")" == "200 mock/unpriced" ]] || fail "4 user01 may not use mock-echo → default, not an error: $(cat "$W/r")"
+[[ "$(answered "$S" "$(msg 'python')" | cut -d' ' -f1)" == 400 ]] && grep -q virtual_model_no_matching_target "$W/r" || fail "4 user11 may not use the router → 400 virtual_model_no_matching_target: $(cat "$W/r")"
+# a router user01 may use whose default she may not (mock-free is ml-research only), and no route matches: 400
 kubectl -n "$NS" apply -f - >/dev/null <<YAML
 apiVersion: ambitproject.dev/v1alpha1
 kind: ModelRouter
@@ -54,7 +54,7 @@ reason=$(kubectl -n "$NS" get modelrouters.ambitproject.dev auto-ml -o jsonpath=
 sleep 5
 code=$(answered "$A" '{"model":"auto-ml","messages":[{"role":"user","content":"hi"}]}' | cut -d' ' -f1)
 kubectl -n "$NS" delete modelrouters.ambitproject.dev auto-ml >/dev/null; kubectl -n "$NS" delete accessrules.ambitproject.dev router-users-ml >/dev/null
-[[ "$code" == 400 && "$reason" == DefaultNotAllowed ]] && grep -q virtual_model_no_matching_target "$W/r" || fail "4 alice, router allowed, default not: $code, reason $reason, $(cat "$W/r")"
+[[ "$code" == 400 && "$reason" == DefaultNotAllowed ]] && grep -q virtual_model_no_matching_target "$W/r" || fail "4 user01, router allowed, default not: $code, reason $reason, $(cat "$W/r")"
 pass "4 access: a user who may not use a route's model gets the default; a user who may not use the router, or may use it but not its default, gets 400 virtual_model_no_matching_target (the router reports DefaultNotAllowed)"
 
 # 5 · a client cannot send the routing label: the Gateway removes it before anything reads it
@@ -77,7 +77,7 @@ pass "9 audit: auto → mock/echo recorded"
 # ---------- Type LLM: ambit-router asks a classifier (spec rev 5, PR 2 parts 2, 4, 5, 7, 9) ----------
 k_minor=$(kubectl version -o json | uv run --no-project python -c 'import json,sys;print(int(json.load(sys.stdin)["serverVersion"]["minor"].rstrip("+")))')
 (( k_minor >= 30 )) || fail "0 Kubernetes >= 1.30 is needed (native preStop sleep of ambit-router)"
-fresh() { M=$(token mira); A=$(token alice); S=$(token sam); }  # Keycloak tokens last about 5 minutes
+fresh() { M=$(token user09); A=$(token user01); S=$(token user11); }  # Keycloak tokens last about 5 minutes
 # ask MODEL TOKEN TEXT [HEADER...]: prints "STATUS MODEL"; the answer stays in $W/r
 ask() {
   local model=$1 tok=$2 text=$3; shift 3
@@ -191,9 +191,9 @@ pass "2 LLM: coding → mock-echo with label and hash, audited (coding); extra t
 
 # 4 · access
 fresh
-[[ "$(ask smart "$A" "$coding")" == "200 mock/unpriced" ]] || fail "4 alice may not use mock-echo → default: $(cat "$W/r")"
+[[ "$(ask smart "$A" "$coding")" == "200 mock/unpriced" ]] || fail "4 user01 may not use mock-echo → default: $(cat "$W/r")"
 before=$(classified)
-[[ "$(ask smart "$S" "$coding" | cut -d' ' -f1)" == 400 ]] || fail "4 sam may not use smart → 400: $(cat "$W/r")"
+[[ "$(ask smart "$S" "$coding" | cut -d' ' -f1)" == 400 ]] || fail "4 user11 may not use smart → 400: $(cat "$W/r")"
 [[ "$(classified)" == "$before" ]] || fail "4 a user not allowed the router caused a classifier call"
 pass "4 access (LLM): a user not allowed the target gets the default; a user not allowed the router gets 400 and causes no classifier call"
 

@@ -52,7 +52,7 @@ export function PeopleField({ value, onChange }: { value: string[]; onChange: (v
           </span>
         ))}
         <input ref={input} id="rule-users" type="text" inputMode="email" aria-label="Email addresses" aria-invalid={!!error} aria-describedby={error ? errId : undefined}
-          className="min-w-32 flex-1 bg-transparent py-0.5 font-mono text-body outline-none" value={text} placeholder={value.length ? "" : "alice@acme.com"}
+          className="min-w-32 flex-1 bg-transparent py-0.5 font-mono text-body outline-none" value={text} placeholder={value.length ? "" : "user01@acme.com"}
           autoComplete="off" onChange={(e) => { setText(e.target.value); setError(""); }} onKeyDown={onKeyDown} onBlur={() => add(text)} />
       </div>
       {error && <p id={errId} className="text-small text-bad">{error}</p>}

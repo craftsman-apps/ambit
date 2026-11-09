@@ -46,9 +46,9 @@ YAML
 [[ "$bad" == *"set oneOf, notContains or max"* && "$bad" == *"max"* ]] || fail "0 the CRD accepted invalid limits: $bad"
 pass "0 two rules with argument limits are Ready; the CRD refuses a limit without a condition or with a bad maximum"
 
-A=$(token alice)
+A=$(token user01)
 for _ in $(seq 1 30); do tools "$A"; [[ " $TOOLS " == *" everything_echo "* && " $TOOLS " == *" everything_get-sum "* ]] && break; sleep 2; done
-[[ " $TOOLS " == *" everything_echo "* ]] || fail "1 alice does not see everything_echo: $TOOLS"
+[[ " $TOOLS " == *" everything_echo "* ]] || fail "1 user01 does not see everything_echo: $TOOLS"
 ok=$(call everything_echo '{"message":"hello"}')
 [[ "$ok" == ok* ]] || fail "1 an allowed echo was refused: $ok"
 bad=$(call everything_echo '{"message":"my SECRET plan"}')
@@ -61,9 +61,9 @@ big=$(call everything_get-sum '{"a":500,"b":1}')
 [[ "$big" == error* && "$big" == *"a must be a number at most 100"* ]] || fail "2 get-sum over the limit passed: $big"
 pass "2 get-sum a=5 allowed; a=500 refused: ${big#error }"
 
-# mira (ml-research) has every tool of everything through another rule, without limits: rules add up.
-M=$(token mira); tools "$M"
+# user09 (ml-research) has every tool of everything through another rule, without limits: rules add up.
+M=$(token user09); tools "$M"
 any=$(call everything_echo '{"message":"secret"}')
-[[ "$any" == ok* ]] || fail "3 a rule without limits should still allow mira: $any"
-pass "3 limits apply to the rule's own group: mira (another rule, no limits) may echo 'secret'"
+[[ "$any" == ok* ]] || fail "3 a rule without limits should still allow user09: $any"
+pass "3 limits apply to the rule's own group: user09 (another rule, no limits) may echo 'secret'"
 done_step args

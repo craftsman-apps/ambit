@@ -299,7 +299,9 @@ type AccessRuleList struct {
 // ServerSpec is an MCP server in the Ambit catalog: an image that ToolHive runs in a pod, or a remote
 // server at a URL. Clients reach its tools only through the gateway, as "<server name>_<tool>".
 // +kubebuilder:validation:XValidation:rule="has(self.image) != has(self.url)",message="set either image (run by ToolHive) or url (a remote server), not both"
-// +kubebuilder:validation:XValidation:rule="!has(self.connection) || has(self.url)",message="connection needs a remote server (url): a per-user token cannot reach a stdio server"
+// +kubebuilder:validation:XValidation:rule="has(self.image) || (!has(self.env) && !has(self.args))",message="env and args set up the container of an image; a remote server (url) has none"
+// +kubebuilder:validation:XValidation:rule="!has(self.env) || self.env.all(a, !has(a.secretKeyRef) || self.env.exists_one(b, has(b.secretKeyRef) && b.secretKeyRef.name == a.secretKeyRef.name))",message="two variables cannot take their value from the same Secret (ToolHive mounts one key of a Secret); use one Secret for each"
+// +kubebuilder:validation:XValidation:rule="!has(self.connection) || has(self.url) || (has(self.transport) && self.transport != 'stdio')",message="connection needs a remote server (url), or an image whose transport is streamable-http or sse: a per-user token cannot reach a stdio server"
 type ServerSpec struct {
 	// Image pinned by digest, e.g. ghcr.io/org/server@sha256:<64 hex>. A tag can later point to
 	// different code; a digest cannot, so what was reviewed is what runs.
@@ -314,6 +316,19 @@ type ServerSpec struct {
 	// app, and a user without one gets a link to connect it.
 	// +optional
 	Connection string `json:"connection,omitempty"`
+	// Env sets environment variables in the container of an image. A value is given inline, or comes from one
+	// key of a Secret in Ambit's namespace (never inline for a secret value). Set by an admin or in GitOps; the
+	// console's request form does not offer it.
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=map
+	// +listMapKey=name
+	// +optional
+	Env []ServerEnv `json:"env,omitempty"`
+	// Args are arguments passed to the container of an image, after the image's own command.
+	// +kubebuilder:validation:MaxItems=32
+	// +listType=atomic
+	// +optional
+	Args []string `json:"args,omitempty"`
 	// How the server itself talks MCP. stdio servers are wrapped by ToolHive's proxy.
 	// +kubebuilder:validation:Enum=stdio;streamable-http;sse
 	// +kubebuilder:default=stdio
@@ -331,6 +346,31 @@ type ServerSpec struct {
 	// to save model tokens. Off unless set. ambit-guard needs protection.enabled.
 	// +optional
 	ResultCompression *ResultCompression `json:"resultCompression,omitempty"`
+}
+
+// ServerEnv is one environment variable of an image Server: a value or a Secret key, not both.
+// +kubebuilder:validation:XValidation:rule="has(self.value) != has(self.secretKeyRef)",message="set either value or secretKeyRef"
+// +kubebuilder:validation:XValidation:rule="!self.name.startsWith('TOOLHIVE_') && !(self.name in ['MCP_TRANSPORT','MCP_PORT','FASTMCP_PORT','MCP_HOST'])",message="this name is set by ToolHive"
+type ServerEnv struct {
+	// +kubebuilder:validation:Pattern=`^[A-Za-z_][A-Za-z0-9_]*$`
+	// +kubebuilder:validation:MaxLength=128
+	Name string `json:"name"`
+	// +kubebuilder:validation:MaxLength=4096
+	// +optional
+	Value string `json:"value,omitempty"`
+	// SecretKeyRef takes the value from one key of a Secret in Ambit's namespace.
+	// +optional
+	SecretKeyRef *SecretKeyRef `json:"secretKeyRef,omitempty"`
+}
+
+// SecretKeyRef names one key of a Secret.
+type SecretKeyRef struct {
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Key string `json:"key"`
 }
 
 // ResultCompression is the compression of tool results of one server. Start with lossless, check the

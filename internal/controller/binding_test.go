@@ -33,19 +33,24 @@ func TestDestinationHashLength(t *testing.T) {
 	}
 }
 
-// An image server has no URL, so a Connection bound to a URL refuses it; an unbound Connection serves it.
-func TestBindServersImageServerNeedsUnboundConnection(t *testing.T) {
-	img := v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "workspace"}, Spec: v1.ServerSpec{Image: "ghcr.io/x/y@sha256:" + strings.Repeat("a", 64), Transport: "streamable-http", Connection: "google"}}
-	bound := []v1.Connection{{ObjectMeta: metav1.ObjectMeta{Name: "google"}, Spec: v1.ConnectionSpec{ServerURL: "https://mcp.google.test/mcp"}}}
-	if kept, refused := BindServers([]v1.Server{img}, bound); len(kept) != 0 || refused["workspace"] == "" {
-		t.Fatalf("bound Connection: kept %v refused %v", kept, refused)
+// An image server is bound by the address of its ToolHive proxy (Endpoint); any other address is refused.
+func TestBindServersImageServerBoundToItsProxy(t *testing.T) {
+	img := v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "workspace", Namespace: "ambit-system"}, Spec: v1.ServerSpec{Image: "ghcr.io/x/y@sha256:" + strings.Repeat("a", 64), Transport: "streamable-http", Connection: "google"}}
+	conn := func(url string) []v1.Connection {
+		return []v1.Connection{{ObjectMeta: metav1.ObjectMeta{Name: "google"}, Spec: v1.ConnectionSpec{ServerURL: url}}}
 	}
-	unbound := []v1.Connection{{ObjectMeta: metav1.ObjectMeta{Name: "google"}}}
-	kept, refused := BindServers([]v1.Server{img}, unbound)
+	if kept, refused := BindServers([]v1.Server{img}, conn("https://mcp.google.test/mcp")); len(kept) != 0 || refused["workspace"] == "" {
+		t.Fatalf("other address: kept %v refused %v", kept, refused)
+	}
+	proxy := "http://mcp-workspace-proxy.ambit-system.svc:8080/mcp"
+	if kept, refused := BindServers([]v1.Server{img}, conn(proxy)); len(kept) != 1 || len(refused) != 0 {
+		t.Fatalf("its proxy: kept %v refused %v", kept, refused)
+	}
+	kept, refused := BindServers([]v1.Server{img}, conn(""))
 	if len(kept) != 1 || len(refused) != 0 {
-		t.Fatalf("unbound Connection: kept %v refused %v", kept, refused)
+		t.Fatalf("unbound: kept %v refused %v", kept, refused)
 	}
-	if got := BrokerPath(kept[0], false); got != "/v1/connection/google" {
+	if got := BrokerPath(kept[0], true); got != "/v1/connection/google/server/workspace/"+DestinationHash(proxy) {
 		t.Fatalf("broker path %q", got)
 	}
 }

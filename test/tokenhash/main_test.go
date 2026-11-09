@@ -19,3 +19,15 @@ func TestDescribeHashesAndNamesTheUser(t *testing.T) {
 		t.Fatal("the token itself must never be returned")
 	}
 }
+
+func TestConfigReportsHashOfSecretNotValue(t *testing.T) {
+	t.Setenv("TOKENHASH_LABEL", "lbl")
+	t.Setenv("TOKENHASH_SECRET", "hunter2-test-value")
+	got := config("sfx")
+	if !strings.HasPrefix(got, " label=lbl secret=sha256") && !strings.Contains(got, " label=lbl secret=") || !strings.HasSuffix(got, " suffix=sfx") {
+		t.Fatal(got)
+	}
+	if strings.Contains(got, "hunter2") {
+		t.Fatal("the secret value must never be returned")
+	}
+}

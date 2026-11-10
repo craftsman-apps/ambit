@@ -91,6 +91,10 @@ type Call struct {
 	Mark         string `json:"mark"`
 	RulesVersion string `json:"rulesVersion"`
 	Outcome      string `json:"outcome"`
+	// Path is the request path (url.path), for display: /v1/models is a model-list call. ClientAddress is set only
+	// for requests with an invalid key (InvalidKeyCalls).
+	Path          string `json:"path"`
+	ClientAddress string `json:"clientAddress,omitempty"`
 }
 
 // routerOf is the router a call went through: the requested name when it differs from the answering model.
@@ -106,11 +110,14 @@ const status = auditsql.Status
 var callsSQL = withClassify(`{classify}
 SELECT Timestamp,
        {email:String}, LogAttributes['route'], LogAttributes['mcp.method.name'], LogAttributes['mcp.target'],
-       LogAttributes['gen_ai.tool.name'], LogAttributes['gen_ai.request.model'], {status}, LogAttributes['error'],
+       LogAttributes['gen_ai.tool.name'],
+       -- a model the gateway refused itself has no gen_ai.request.model; agentgateway v1.7.0 logs the name asked for
+       if(LogAttributes['gen_ai.request.model'] != '', LogAttributes['gen_ai.request.model'], LogAttributes['agw.ai.original_model']),
+       {status}, LogAttributes['error'],
        toInt64OrZero(LogAttributes['gen_ai.usage.input_tokens']), toInt64OrZero(LogAttributes['gen_ai.usage.output_tokens']),
        LogAttributes['ambit.router'], LogAttributes['ambit.route'], LogAttributes['ambit.routeReason'],
        LogAttributes['ambit.key_id'], LogAttributes['ambit.identity'], LogAttributes['jwt.sub'],
-       LogAttributes['ambit.accessMode'], c_mark, LogAttributes['ambit.rulesVersion'], c_outcome
+       LogAttributes['ambit.accessMode'], c_mark, LogAttributes['ambit.rulesVersion'], c_outcome, LogAttributes['url.path']
 FROM otel_logs
 WHERE (LogAttributes['jwt.email'] = {email:String}
        -- Some refusals (e.g. a model the user may not use) are logged with the token's subject but
@@ -119,6 +126,16 @@ WHERE (LogAttributes['jwt.email'] = {email:String}
   AND Timestamp >= {from:DateTime64(9)} AND Timestamp < {to:DateTime64(9)}
 ORDER BY Timestamp DESC
 LIMIT {limit:UInt32}`)
+
+// invalidKeySQL lists requests made with a key that is wrong, revoked or expired: they have no person. Only these
+// fields are read; the access log never holds a key or the Authorization header.
+var invalidKeySQL = `SELECT Timestamp, LogAttributes['route'], LogAttributes['url.path'], ` + status + `,
+       LogAttributes['error'], LogAttributes['client.address']
+FROM otel_logs
+WHERE LogAttributes['ambit.identity'] = 'invalid key'
+  AND Timestamp >= {from:DateTime64(9)} AND Timestamp < {to:DateTime64(9)}
+ORDER BY Timestamp DESC
+LIMIT {limit:UInt32}`
 
 const subsSQL = `SELECT DISTINCT LogAttributes['jwt.sub'] FROM otel_logs
 WHERE LogAttributes['jwt.email'] = {email:String} AND LogAttributes['jwt.sub'] != '' LIMIT 100`
@@ -154,10 +171,32 @@ func (a *Audit) Calls(ctx context.Context, email string, from, to time.Time, lim
 		var c Call
 		var requested string
 		if err := rows.Scan(&c.Time, &c.Email, &c.Route, &c.Method, &c.Server, &c.Tool, &c.Model, &c.Status, &c.Error, &c.InputTokens, &c.OutputTokens,
-			&requested, &c.Label, &c.LabelReason, &c.KeyID, &c.Identity, &c.Subject, &c.AccessMode, &c.Mark, &c.RulesVersion, &c.Outcome); err != nil {
+			&requested, &c.Label, &c.LabelReason, &c.KeyID, &c.Identity, &c.Subject, &c.AccessMode, &c.Mark, &c.RulesVersion, &c.Outcome, &c.Path); err != nil {
 			return nil, err
 		}
 		c.Router = routerOf(requested, c.Model)
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// InvalidKeyCalls lists the requests in [from, to) made with an invalid key, newest first. Identity is "invalid
+// key"; Email and the other person fields stay empty.
+func (a *Audit) InvalidKeyCalls(ctx context.Context, from, to time.Time, limit int) ([]Call, error) {
+	ctx = clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{
+		"from": from.UTC().Format("2006-01-02 15:04:05.000000000"), "to": to.UTC().Format("2006-01-02 15:04:05.000000000"),
+		"limit": strconv.Itoa(limit)}))
+	rows, err := a.DB.QueryContext(ctx, invalidKeySQL)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Call{}
+	for rows.Next() {
+		c := Call{Identity: "invalid key"}
+		if err := rows.Scan(&c.Time, &c.Route, &c.Path, &c.Status, &c.Error, &c.ClientAddress); err != nil {
+			return nil, err
+		}
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -385,14 +424,23 @@ func period(r *http.Request) (time.Time, time.Time, error) {
 
 func (a *Audit) register(mux *http.ServeMux, admin func(func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc) {
 	mux.HandleFunc("GET /api/audit", admin(func(w http.ResponseWriter, r *http.Request, s Session) {
-		email := r.URL.Query().Get("email")
-		if email == "" {
-			writeErr(w, http.StatusBadRequest, "email is required")
+		email, invalid := r.URL.Query().Get("email"), r.URL.Query().Get("invalidKey")
+		if (email == "") == (invalid == "") || (invalid != "" && invalid != "true") {
+			writeErr(w, http.StatusBadRequest, "give either email or invalidKey=true")
 			return
 		}
 		from, to, err := period(r)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if invalid != "" {
+			calls, err := a.InvalidKeyCalls(r.Context(), from, to, 1000)
+			if err != nil {
+				storeErr(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"invalidKey": true, "from": from, "to": to, "calls": calls, "limited": len(calls) == 1000})
 			return
 		}
 		calls, err := a.Calls(r.Context(), email, from, to, 1000)

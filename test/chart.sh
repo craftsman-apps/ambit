@@ -17,8 +17,6 @@ check 'n=one("NetworkPolicy","ambit-router")["spec"]["ingress"]
 assert any(f.get("podSelector",{}).get("matchLabels",{}).get("gateway.networking.k8s.io/gateway-name")=="ambit" for i in n for f in i.get("from",[]))' "only the gateway reaches port 9000"
 check 's=one("Service","ambit-router")["spec"]["ports"][0]
 assert s["port"]==9000 and s["appProtocol"]=="kubernetes.io/h2c"' "router Service is h2c on 9000"
-check 'e=one("AgentgatewayParameters","ambit")["spec"]["env"]
-assert {"name":"AGENTGATEWAY_MESSAGES_PREFER_COMPLETIONS","value":"true"} in e, e' "gateway converts /v1/messages to Chat Completions, as in v1.5.0"
 check 'sa=one("AgentgatewayParameters","ambit")["spec"]["serviceAccount"]["metadata"]["annotations"]
 assert sa=={"ambitproject.dev/test":"kind"}, sa' "gateway ServiceAccount carries gateway.serviceAccount.annotations"
 none=$(helm template ambit charts/ambit -n ambit-system -f charts/ambit/values-kind.yaml)

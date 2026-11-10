@@ -253,8 +253,8 @@ ch_json "SELECT toUnixTimestamp64Nano(Timestamp)/1e9 AS t, LogAttributes['jwt.em
       AND (LogAttributes['gen_ai.request.model'] = 'mock/echo' OR LogAttributes['mcp.method.name'] = 'tools/call')
       -- step 4's routed calls (router auto) are not loop calls; one that falls within 100 ms of a loop call would be matched to it
       AND LogAttributes['ambit.router'] != 'auto')
-    -- agentgateway answers a model refusal before it takes the request snapshot: no identity, no model in the record
-    OR (LogAttributes['protocol'] = 'llm' AND LogAttributes['jwt.email'] = '' AND LogAttributes['http.response.status_code'] = '403'))
+    -- a model refusal by agentgateway's model router has the caller but no gen_ai.request.model (v1.7.0, issue #87)
+    OR (LogAttributes['protocol'] = 'llm' AND LogAttributes['jwt.email'] = 'user01@example.com' AND LogAttributes['http.response.status_code'] = '403'))
   ORDER BY t" > "$W/records.json"
 "${PY[@]}" analyze "$W/loop.jsonl" "$W/records.json" "$W/switch-audit.json" "$W/switch-enforce.json" > "$W/analyze.out" ||
   fail "6/7 the loop and the records disagree: $(cat "$W/analyze.out")"

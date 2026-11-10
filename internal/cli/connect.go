@@ -304,7 +304,8 @@ func (a *app) disconnectCmd() *cobra.Command {
 		Short: "Remove what ambit connect added to a tool's config",
 		Long: `Removes exactly the entries and blocks that ambit connect added, and keeps everything else in the file. An entry
 you changed after connect stays, with a warning. When no other tool uses the key, the stored key is deleted. That
-does not revoke it: revoke it in the console.`,
+does not revoke it: revoke it in the console, or add --revoke. --revoke sends each key that disconnect deletes to
+the console (DELETE /api/keys/self, authorized by the key itself), which revokes it at once.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: run(func(cmd *cobra.Command, args []string) error {
 			return a.runDisconnect(cmd.Context(), args, f)
@@ -314,6 +315,7 @@ does not revoke it: revoke it in the console.`,
 	fl.BoolVar(&f.all, "all", false, "every tool recorded by ambit connect")
 	fl.StringVar(&f.consoleURL, "console-url", "", "console address for the revoke line (overrides the one saved at connect)")
 	fl.BoolVar(&f.keepKey, "keep-key", false, "do not delete the stored key")
+	fl.BoolVar(&f.revoke, "revoke", false, "revoke each key it deletes, at the console (needs the console address)")
 	fl.BoolVar(&f.dryRun, "dry-run", false, "print what would change; write and delete nothing")
 	addKeyringFlag(c, &f.service)
 	return c

@@ -110,13 +110,29 @@ stay in the scrollback by accident; a tool runs it without a terminal. If no key
 plain-text config files, backups and shell history. It does **not** keep the key from programs that run as your user:
 `ambit key print` gives the key to any such program, because the tools need exactly that.
 
-**Disconnecting does not revoke.** `ambit disconnect` deletes the stored key when no other tool uses it. The key itself
-stays valid at the gateway until you revoke it (next section).
+**Disconnecting does not revoke, unless you add `--revoke`.** `ambit disconnect` deletes the stored key when no other
+tool uses it. The key itself stays valid at the gateway until you revoke it (next section).
 
 ## Revoke a key
 
 In the console, open **Keys** and revoke the key. The gateway then refuses it. Do this when you disconnect for good,
-when a computer is lost, or when you think someone else has the key. The CLI does not revoke keys.
+when a computer is lost, or when you think someone else has the key.
+
+From the CLI, `ambit disconnect <tool> --revoke` (or `--all --revoke`) revokes each key it deletes. It sends the key
+to the console endpoint `DELETE /api/keys/self` as `Authorization: Bearer <key>`:
+
+- The key itself is the only credential. The endpoint has no key ID and does not read the session cookie, so a key
+  can revoke only itself, and a signed-in browser cannot trigger it. Someone who has stolen a key can revoke it,
+  which gains them nothing.
+- `204`: the key is deleted at once; the History has the action `revoke-self` with the owner as actor. `401`: the
+  key is not in the Ambit format, unknown, or revoked already (one answer for all three). `429`: more than 30
+  requests a minute after a burst of 10, counted per console process (`Retry-After: 60`). `503`: this console is not
+  the key writer yet (`Retry-After: 15`).
+- It works also when keys are switched off in the settings: revoking is always safe.
+
+```sh
+curl -X DELETE -H "Authorization: Bearer $AMBIT_API_KEY" https://console.example.com/api/keys/self
+```
 
 ## Scope, end date and limits
 

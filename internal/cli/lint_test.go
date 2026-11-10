@@ -106,7 +106,10 @@ func TestLintGitHubAnnotations(t *testing.T) {
 	t.Setenv("GITHUB_ACTIONS", "true")
 	dir := writeLint(t, map[string]string{"a,b.yaml": lintRisky})
 	_, s := runCLI(t, nil, "lint", dir)
-	if !strings.Contains(s, "::warning file="+filepath.Join(dir, "a%2Cb.yaml")+"::AccessRule everyone-tools: matches all signed-in users") {
+	if !strings.Contains(s, "a%2Cb.yaml::") {
+		t.Fatalf("the comma in the file name is not escaped:\n%s", s)
+	}
+	if !strings.Contains(s, "::warning file="+ghEscape(filepath.Join(dir, "a,b.yaml"), true)+"::AccessRule everyone-tools: matches all signed-in users") {
 		t.Fatalf("no escaped annotation:\n%s", s)
 	}
 }

@@ -14,7 +14,7 @@ const nameRE = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
 const newOperation = () => Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => b.toString(16).padStart(2, "0")).join("");
 
 type Credentials = "entered" | "existing" | "cloud";
-type Unfinished = { secret: string; model: string; operation: string; pullRequest?: PullRequest & { closed: boolean; merged: boolean } };
+type Unfinished = { secret: string; model: string; operation: string; deleted?: boolean; pullRequest?: PullRequest & { closed: boolean; merged: boolean } };
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return <div><label className="block"><span className="mb-1 block text-small text-muted">{label}</span>{children}</label>{hint && <p className="mt-1 text-small text-muted">{hint}</p>}</div>;
@@ -160,7 +160,8 @@ export function AddModel({ onDone }: { onDone: () => void }) {
   );
 }
 
-// Keys the console stored for a model that was never added (the pull request was closed, or a step failed).
+// Keys the console stored for a model that was never added (the pull request was closed, or a step failed), or whose
+// model was deleted while the key stayed (GitOps mode, or a failed removal).
 export function UnfinishedModels() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["unfinished-models"], queryFn: () => getJSON<Unfinished[]>("/api/models/unfinished") });
@@ -171,12 +172,12 @@ export function UnfinishedModels() {
   if (!q.data?.length) return null;
   return (
     <div className="mb-4 max-w-2xl rounded-md border border-line p-3" data-testid="unfinished-models">
-      <p className="font-medium">Unfinished additions</p>
-      <p className="mb-2 text-small text-muted">The console stored these keys, but the model was not added.</p>
+      <p className="font-medium">Keys without a model</p>
+      <p className="mb-2 text-small text-muted">The console stored these keys, but their model was not added or was deleted.</p>
       <ul className="space-y-1">
         {q.data.map((u) => (
           <li key={u.secret} className="flex flex-wrap items-center gap-2 text-small">
-            <span className="font-mono">{u.model}</span><span className="text-muted">key in <span className="font-mono">{u.secret}</span></span>
+            <span className="font-mono">{u.model}</span>{u.deleted && <span className="text-muted">(deleted)</span>}<span className="text-muted">key in <span className="font-mono">{u.secret}</span></span>
             <Button variant="outline" className="w-auto" disabled={remove.isPending} onClick={() => remove.mutate(u.secret)}>Remove key</Button>
           </li>
         ))}

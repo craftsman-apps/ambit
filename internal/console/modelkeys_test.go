@@ -101,7 +101,7 @@ func TestChangeKeyRefuses(t *testing.T) {
 		code int
 		msg  string
 	}{
-		"bed":    {http.StatusBadRequest, "not changed in the console"},
+		"bed":    {http.StatusBadRequest, "Bedrock takes an AWS access key"},
 		"ext":    {http.StatusConflict, "not created by the console"},
 		"borrow": {http.StatusConflict, "not created by the console"},
 		"nosec":  {http.StatusConflict, "does not exist"},
@@ -112,6 +112,10 @@ func TestChangeKeyRefuses(t *testing.T) {
 			t.Errorf("%s: %d %s", path, rec.Code, rec.Body)
 		}
 		e.noKeys(t, rec.Body.String(), newFakeKey)
+	}
+	if rec := do(t, e.h, "PUT", "/api/models/bed/key", e.ck, ModelKeyInput{AWSKeys: &AWSKeys{AccessKey: fakeAWSAccess, SecretKey: fakeAWSSecret}}); rec.Code != http.StatusConflict ||
+		!strings.Contains(rec.Body.String(), "cloud identity") {
+		t.Errorf("cloud identity model: %d %s", rec.Code, rec.Body)
 	}
 	if rec := do(t, e.h, "PUT", "/api/models/own/key", e.ck, ModelKeyInput{APIKey: "  "}); rec.Code != http.StatusBadRequest {
 		t.Errorf("empty key: %d", rec.Code)
@@ -365,4 +369,156 @@ func TestRedactSeveral(t *testing.T) {
 	if msg != "a=[key] b=[key] c=" {
 		t.Fatal(msg)
 	}
+}
+
+const (
+	fakeAWSAccess  = "AKIAFAKE0123456789AB"
+	fakeAWSSecret  = "fake/Secret+Access0123456789"
+	fakeAWSSession = "FakeSessionToken0123456789"
+	fakePrivateKey = "-----BEGIN PRIVATE KEY-----\nFAKEFAKEFAKE0123\n-----END PRIVATE KEY-----\n"
+)
+
+func fakeGoogleKeyFile(typ string) string {
+	b, _ := json.Marshal(map[string]string{"type": typ, "project_id": "acme-ml", "client_email": "gw@acme-ml.iam.gserviceaccount.com", "private_key": fakePrivateKey})
+	return string(b)
+}
+
+func TestModelKeysEntries(t *testing.T) {
+	aws := func(a, s, tok string) ModelKeys {
+		return ModelKeys{AWSKeys: &AWSKeys{AccessKey: a, SecretKey: s, SessionToken: tok}}
+	}
+	cases := []struct {
+		name, provider string
+		in             ModelKeys
+		want           []string // entry names, or nil when refused
+		msg            string
+	}{
+		{"bedrock keys", "Bedrock", aws(fakeAWSAccess, fakeAWSSecret, ""), []string{"accessKey", "secretKey"}, ""},
+		{"bedrock with session", "Bedrock", aws(fakeAWSAccess, fakeAWSSecret, fakeAWSSession), []string{"accessKey", "secretKey", "sessionToken"}, ""},
+		{"bedrock lowercase id", "Bedrock", aws("akiafake0123456789ab", fakeAWSSecret, ""), nil, "capital letters"},
+		{"bedrock short id", "Bedrock", aws("AKIA1", fakeAWSSecret, ""), nil, "16 to 128"},
+		{"bedrock no secret", "Bedrock", aws(fakeAWSAccess, "", ""), nil, "secret access key"},
+		{"bedrock secret with space", "Bedrock", aws(fakeAWSAccess, "a b", ""), nil, "without spaces"},
+		{"bedrock long token", "Bedrock", aws(fakeAWSAccess, fakeAWSSecret, strings.Repeat("x", 4097)), nil, "session token"},
+		{"bedrock api key", "Bedrock", ModelKeys{APIKey: fakeKey}, nil, "not an API key"},
+		{"bedrock nothing", "Bedrock", ModelKeys{}, nil, "access key ID"},
+		{"vertex file", "VertexAI", ModelKeys{GoogleKeyFile: fakeGoogleKeyFile("service_account")}, []string{"credentials.json"}, ""},
+		{"vertex user file", "VertexAI", ModelKeys{GoogleKeyFile: fakeGoogleKeyFile("authorized_user")}, nil, `type "authorized_user"`},
+		{"vertex not json", "VertexAI", ModelKeys{GoogleKeyFile: "{" + fakePrivateKey}, nil, "not JSON"},
+		{"vertex no key", "VertexAI", ModelKeys{GoogleKeyFile: `{"type":"service_account","client_email":"a@b.c"}`}, nil, "no private_key"},
+		{"vertex too large", "VertexAI", ModelKeys{GoogleKeyFile: `{"type":"service_account","x":"` + strings.Repeat("x", 64<<10) + `"}`}, nil, "64 KiB"},
+		{"vertex api key", "VertexAI", ModelKeys{APIKey: fakeKey}, nil, "not an API key"},
+		{"vertex nothing", "VertexAI", ModelKeys{}, nil, "upload"},
+		{"openai key", "OpenAI", ModelKeys{APIKey: fakeKey}, []string{"Authorization"}, ""},
+		{"openai aws", "OpenAI", aws(fakeAWSAccess, fakeAWSSecret, ""), nil, "takes an API key"},
+		{"openai file", "OpenAI", ModelKeys{GoogleKeyFile: fakeGoogleKeyFile("service_account")}, nil, "takes an API key"},
+	}
+	for _, c := range cases {
+		got, err := c.in.entries(c.provider)
+		if c.want == nil {
+			if err == nil || !strings.Contains(err.Error(), c.msg) {
+				t.Errorf("%s: err %v", c.name, err)
+			} else if redact(err.Error(), c.in.secrets()...) != err.Error() {
+				t.Errorf("%s: the message holds a key: %v", c.name, err)
+			}
+			continue
+		}
+		if err != nil || len(got) != len(c.want) {
+			t.Errorf("%s: %v %v", c.name, keysOfS(got), err)
+			continue
+		}
+		for _, k := range c.want {
+			if got[k] == "" {
+				t.Errorf("%s: no entry %s", c.name, k)
+			}
+		}
+	}
+}
+
+func keysOfS(m map[string]string) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func TestRedactGoogleKeyFile(t *testing.T) {
+	k := ModelKeys{GoogleKeyFile: fakeGoogleKeyFile("service_account")}
+	escaped, _ := json.Marshal(fakePrivateKey)
+	for _, msg := range []string{"file " + k.GoogleKeyFile, "key " + fakePrivateKey, "escaped " + string(escaped)} {
+		got := redact(msg, k.secrets()...)
+		if strings.Contains(got, "FAKEFAKEFAKE0123") {
+			t.Errorf("not redacted: %s", got)
+		}
+	}
+}
+
+func TestAddModelWithCloudKeys(t *testing.T) {
+	for _, c := range []struct {
+		provider string
+		keys     ModelKeys
+		entries  []string
+		secrets  []string
+	}{
+		{"Bedrock", ModelKeys{AWSKeys: &AWSKeys{AccessKey: fakeAWSAccess, SecretKey: fakeAWSSecret, SessionToken: fakeAWSSession}}, []string{"accessKey", "secretKey", "sessionToken"}, []string{fakeAWSSecret, fakeAWSSession}},
+		{"VertexAI", ModelKeys{GoogleKeyFile: fakeGoogleKeyFile("service_account")}, []string{"credentials.json"}, []string{fakePrivateKey, "FAKEFAKEFAKE0123"}},
+	} {
+		for _, gitops := range []bool{false, true} {
+			e := modelFixture(t, gitops, interceptor.Funcs{})
+			in := ModelAddInput{Operation: "op1abcde", Name: "cloud", Provider: c.provider, Model: "anthropic.claude-sonnet", Credentials: "entered", ModelKeys: c.keys}
+			if c.provider == "VertexAI" {
+				in.VertexAI = &v1.VertexAISettings{ProjectID: "acme-ml"}
+			}
+			rec := do(t, e.h, "POST", "/api/models", e.ck, in)
+			if rec.Code != http.StatusCreated && rec.Code != http.StatusAccepted {
+				t.Fatalf("%s gitops=%v: %d %s", c.provider, gitops, rec.Code, rec.Body)
+			}
+			sec, ok := e.secret(t, "ambit-llm-cloud")
+			if !ok || len(sec.Data) != len(c.entries) {
+				t.Fatalf("%s: secret entries %v", c.provider, keysOf(sec.Data))
+			}
+			for _, k := range c.entries {
+				if len(sec.Data[k]) == 0 {
+					t.Errorf("%s: no entry %s", c.provider, k)
+				}
+			}
+			for k, v := range sec.Annotations {
+				for _, s := range c.secrets {
+					if strings.Contains(v, s) {
+						t.Errorf("%s: a key is in annotation %s", c.provider, k)
+					}
+				}
+			}
+			if gitops {
+				for _, pr := range e.gh.prs {
+					for _, s := range c.secrets {
+						if strings.Contains(pr["body"], s) {
+							t.Errorf("%s: a key is in the pull request", c.provider)
+						}
+					}
+				}
+			}
+			// A retry of the same operation with the same keys is the same addition.
+			if again := do(t, e.h, "POST", "/api/models", e.ck, in); again.Code >= 300 && again.Code != http.StatusAccepted {
+				t.Errorf("%s retry: %d %s", c.provider, again.Code, again.Body)
+			}
+			e.noKeys(t, rec.Body.String(), c.secrets...)
+		}
+	}
+}
+
+func TestChangeKeyBedrockReplacesEveryEntry(t *testing.T) {
+	m, sec := consoleKeyModel("bed", "Bedrock")
+	sec.Data = map[string][]byte{"accessKey": []byte("AKIAOLD0123456789AB"), "secretKey": []byte("old"), "sessionToken": []byte("old-session")}
+	e := modelFixture(t, false, interceptor.Funcs{}, m, sec)
+	rec := do(t, e.h, "PUT", "/api/models/bed/key", e.ck, ModelKeyInput{AWSKeys: &AWSKeys{AccessKey: fakeAWSAccess, SecretKey: fakeAWSSecret}})
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	got, _ := e.secret(t, "ambit-llm-bed")
+	if string(got.Data["accessKey"]) != fakeAWSAccess || string(got.Data["secretKey"]) != fakeAWSSecret || len(got.Data) != 2 {
+		t.Fatalf("entries %v", keysOf(got.Data))
+	}
+	e.noKeys(t, rec.Body.String(), fakeAWSSecret)
 }

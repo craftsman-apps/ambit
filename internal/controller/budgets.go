@@ -55,9 +55,9 @@ func afterAnswer(entries []any) map[string]any {
 	return map[string]any{"unit": "Tokens", "cost": "1", "entries": out}
 }
 
-// embeddingsDescriptor counts an embeddings request when it arrives: agentgateway v1.6.0 has no step after an
+// embeddingsDescriptor counts an embeddings request when it arrives: agentgateway v1.6.0 had no step after an
 // embeddings answer that could add the count (owner decision 2026-10-13: count them anyway; a refused embeddings
-// request counts too). It shares the counter of the after-answer descriptor (same entries). It is checked as it
+// request counts too). v1.7.0 has that step; moving the count there is issue #261. It shares the counter of the after-answer descriptor (same entries). It is checked as it
 // counts (count + 1 > limit), so its limit is the Budget's own number, set by limitOverride. A limit override applies
 // whatever the entries' values, so it must fail (and the descriptor be skipped) for any other path and non-members.
 func embeddingsDescriptor(entries []any, group string, n int64) map[string]any {
@@ -142,6 +142,7 @@ func usageCondition(groups []string) string {
 		principalGroups + `.exists(g, g in [` + strings.Join(q, ", ") + `])`
 }
 
+// usagePolicy is redundant since agentgateway v1.7.0, which turns usage on for every stream (issue #261).
 // usagePolicy is a backend policy on the LLM route, so agentgateway applies it when it calls the chosen model:
 // after a ModelRouter has picked it. In agentgateway v1.5.0 a route-level (traffic) rewrite was undone there,
 // because the router rebuilt the body from its original copy (found 2026-10-06: routed streams cost nothing;

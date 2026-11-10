@@ -216,8 +216,8 @@ q2=$(ask "$M" mock/echo)
 [[ "$q1" == 200 && "$q2" == 429 && "$(used_user09)" == 1 ]] || fail "9b Budget of 1 request: $q1 $q2, count $(used_user09) (want 200 429, count 1)"
 pass "9b Budget of 1 request a day: the first request passes, the second is refused and not counted"
 
-# 9c · embeddings count against a request limit when they arrive, and are refused at it (a refused one counts too:
-#      agentgateway v1.6.0 has no step after an embeddings answer, docs/budgets.md)
+# 9c · embeddings count against a request limit when they arrive, and are refused at it (a refused one counts too,
+#      docs/budgets.md)
 set_ml '{ group: ml-research, userRequestsPerDay: 2 }' 'group_ml-research.user: unit=DAY requests_per_unit=1,'
 e1=$(ask "$M" mock/echo hi false /embeddings); n1=$(used_user09)
 e2=$(ask "$M" mock/echo hi false /embeddings); n2=$(used_user09)
@@ -266,16 +266,17 @@ pass "14 price changed while a streamed answer ran: charged 3 units, the price w
 
 fresh
 # 15 · a stream that turns usage reporting off is still charged for a dollar-capped group: the gateway turns
-#      it back on (user09, ml-research). User01's group has no dollar cap: her request is left as she sent it.
+#      it back on (user09, ml-research). agentgateway v1.7.0 turns it on for every stream, so user01's stream (no
+#      dollar cap) reports usage too.
 no_usage() { command curl -s -o "$W/$2" -w '%{http_code}' --max-time 60 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
   -d "{\"model\":\"$3\",\"stream\":true,\"stream_options\":{\"include_usage\":false},\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" "$MOCK/chat/completions"; }
 s0=$(spent)
 cm=$(no_usage "$M" nu-m mock/echo); ca=$(no_usage "$A" nu-a mock/unpriced)
 for _ in $(seq 1 30); do [[ "$(spent)" != "$s0" ]] && break; sleep 1; done
 d=$(( $(spent) - ${s0:-0} ))
-[[ "$cm" == 200 && "$ca" == 200 && "$d" == 3 ]] && grep -q '"usage"' "$W/nu-m" && ! grep -q '"usage"' "$W/nu-a" ||
+[[ "$cm" == 200 && "$ca" == 200 && "$d" == 3 ]] && grep -q '"usage"' "$W/nu-m" && grep -q '"usage"' "$W/nu-a" ||
   fail "15 include_usage false: user09 $cm charged $d units (want 200, 3, usage in her stream); user01 $ca, usage in hers: $(grep -c '"usage"' "$W/nu-a")"
-pass "15 include_usage false: user09's stream reported usage and was charged 3 units; user01's (no dollar cap) left unchanged"
+pass "15 include_usage false: user09's stream reported usage and was charged 3 units; user01's reported usage too"
 
 fresh
 kubectl -n "$NS" apply -f test/llm/router.yaml >/dev/null

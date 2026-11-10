@@ -205,10 +205,10 @@ def analyze(loop_path, records_path, switch_audit, switch_enforce):
         for i, r in enumerate(recs):
             if i in used or not e["start"] - 0.1 <= float(r["t"]) <= e["end"] + 0.1:
                 continue
-            # A model refusal (403 from agentgateway's model router) is recorded without the caller or the model:
-            # it is matched by status and time. Only user01 is refused.
-            refused = e["kind"] == "model" and e["status"] == 403 and r["who"] == "" and r["status"] == "403"
-            if r["who"] != email[e["who"]] and not refused:
+            # A model refusal (403 from agentgateway's model router) is recorded with the caller but without the
+            # model (agentgateway v1.7.0, issue #87): it is matched by caller, status and time. Only user01 is refused.
+            refused = e["kind"] == "model" and e["status"] == 403 and r["status"] == "403"
+            if r["who"] != email[e["who"]]:
                 continue
             if refused or (e["kind"] == "tool" and r["method"] == "tools/call") or (e["kind"] == "model" and r["model"] == "mock/echo"):
                 used.add(i)

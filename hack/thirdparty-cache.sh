@@ -20,5 +20,7 @@ v=$(awk '/name: agentgateway$/ { f = 1 } f && $1 == "version:" { print $2; exit 
 images=("cr.agentgateway.dev/controller:$v" "cr.agentgateway.dev/agentgateway:$v")
 for i in "${images[@]}"; do retry docker pull -q "$i"; done
 mkdir -p "$(dirname "$out")"
-docker save "${images[@]}" -o "$out"
+# Only this machine's platform: a save of all platforms lists ones whose layers were never pulled, and
+# `ctr images import --all-platforms` (kind load) then fails with "content digest ... not found" (agentgateway v1.7.0).
+docker save --platform "linux/$(docker version -f '{{.Server.Arch}}')" "${images[@]}" -o "$out"
 echo "cached ${images[*]} and $(ls charts/ambit/charts | tr '\n' ' ')"

@@ -94,18 +94,22 @@ for np in json.load(sys.stdin)["items"]:
             continue
         q = ",".join(f"{k}={v}" for k, v in sel.items())
         pods = subprocess.run(["kubectl", "-n", sys.argv[1], "get", "pods", "-l", q, "--field-selector=status.phase=Running", "-o", "name"], capture_output=True, text=True).stdout.split()
-        if not pods:
+        # A Deployment scaled to 0 on purpose (ambit-router without a ModelRouter) has no pod to match.
+        idle = subprocess.run(["kubectl", "-n", sys.argv[1], "get", "deploy", "-l", q, "-o", "jsonpath={.items[*].spec.replicas}"], capture_output=True, text=True).stdout.split() == ["0"]
+        if not pods and not idle:
             out.append(np["metadata"]["name"] + ":" + q)
 print(" ".join(sorted(set(out))))' "$NS")
 [[ -z "$orphans" ]] || fail "C7 NetworkPolicy selectors match no running pod (labels changed?): $orphans"
 pass "C7 every NetworkPolicy selector matches running pods"
 
-# C8 · MCP tool names stay <server>_<tool>, and a tool a person may not use is answered "Unknown tool".
+# C8 · MCP tool names stay <server>_<tool>, and a tool a person may not use is answered like a tool that does not
+#      exist ("unknown resource" since agentgateway v1.7.0), so the answer does not show that it exists.
 tools "$A"
 [[ " $TOOLS " == *" time_get_current_time "* ]] || fail "C8 user01's tools/list lost the <server>_<tool> names: $TOOLS"
 r=$(call time_convert_time '{"source_timezone":"UTC","time":"12:00","target_timezone":"UTC"}')
-[[ "$r" == *"Unknown tool"* ]] || fail "C8 a denied tool is no longer answered 'Unknown tool': $r"
-pass "C8 tool names <server>_<tool>; denied tools answered 'Unknown tool'"
+none=$(call nosuch_tool '{}')
+[[ "$r" == error* && "$r" == "$none" ]] || fail "C8 a denied tool is answered differently from a missing one: '$r' / '$none'"
+pass "C8 tool names <server>_<tool>; a denied tool is answered like a missing one ('$r')"
 
 # C9 · a model a person may not use is refused with 403 (per-model rules on AgentgatewayModel).
 c=$(command curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $A" -H 'Content-Type: application/json' \
@@ -154,7 +158,7 @@ pass "C12 groups claim reaches the console through Dex ($groups)"
 # C13 · with Argo CD installed: Ambit's health check is still registered for Ambit objects.
 # C14 · agentgateway parses LLM requests on Ambit's route: a call to the mock model is logged with its model and
 #       token counts (the Usage page's cost depends on them; a route that falls back to passthrough loses them),
-#       other paths are refused, and a client's X-Ambit-User header never reaches a model.
+#       other paths are refused (404, charts/ambit/templates/llm.yaml), and a client's X-Ambit-User header never reaches a model.
 ensure_llm_setup "$NS"
 since=$(date -u -v-3S +"%Y-%m-%d %H:%M:%S" 2>/dev/null || date -u -d '3 seconds ago' +"%Y-%m-%d %H:%M:%S")
 code=$(command curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(token user09)" -H 'Content-Type: application/json' \
@@ -168,12 +172,12 @@ read -r model tin tout <<<"$rec"
 [[ "$model" == mock/echo && "${tin:-0}" -gt 0 && "${tout:-0}" -gt 0 ]] || fail "C14 agentgateway did not parse the LLM request (model, input, output tokens: '${rec:-no record}')"
 code=$(command curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $(token user09)" -H 'Content-Type: application/json' \
   -d '{"model":"mock/echo","messages":[{"role":"user","content":"contract"}]}' http://llm.localtest.me:8080/chat/completions)
-[[ "$code" == 403 ]] || fail "C14 a path the gateway does not parse was answered $code (it would pass through uncounted)"
+[[ "$code" == 404 ]] || fail "C14 a path the gateway does not parse was answered $code, not 404 (it would pass through uncounted)"
 # The token broker trusts X-Ambit-User from gateway pods, so the gateway must never pass a client's own to a model.
 answer=$(command curl -s -H "Authorization: Bearer $(token user09)" -H 'X-Ambit-User: victim@example.com' -H 'Content-Type: application/json' \
   -d '{"model":"mock/echo","messages":[{"role":"user","content":"contract"}]}' http://llm.localtest.me:8080/v1/chat/completions)
 [[ "$answer" == *pong* && "$answer" != *victim* ]] || fail "C14 the model received the client's X-Ambit-User header: ${answer:0:200}"
-pass "C14 LLM requests parsed: model $model, $tin input and $tout output tokens logged; an unparsed path is refused (403); a client's X-Ambit-User does not reach the model"
+pass "C14 LLM requests parsed: model $model, $tin input and $tout output tokens logged; an unparsed path is refused (404); a client's X-Ambit-User does not reach the model"
 
 # C15 · dollar budgets: envoy ratelimit keeps spend under ambit-llm_spend_group_<group>_<day>, and the cost
 #       expression (integer arithmetic over price maps) and the include_usage rewrite run in the gateway: one mock answer adds exactly 3 units.

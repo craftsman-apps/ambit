@@ -17,7 +17,9 @@ const Status = "if(LogAttributes['http.response.status_code'] != '', LogAttribut
 //	mark-missing  a call (an LLM request with a model, or an MCP tools/call), served, and its field is absent or
 //	              holds another value: the rule expression failed, or the fields were not active yet. A defect, never
 //	              counted as "would be refused"
-//	n/a           everything else: tools/list, initialize, a mark of n/a, an enforce-mode or older record
+//	no-mark       a served call whose mark is n/a: the rules have no branch for it (no Model with that spec.model).
+//	              Still a call, so the Audit page lists it; not counted as "would be refused" or as a defect
+//	n/a           everything else: tools/list, initialize, an enforce-mode or older record
 //
 // classifySQL is a WITH clause; it defines c_outcome, c_mark, c_target, c_person and c_groups for otel_logs.
 const classifySQL = `WITH {status} AS c_status,
@@ -36,7 +38,8 @@ const classifySQL = `WITH {status} AS c_status,
        c_mark IN ('refuse:model', 'refuse:router', 'refuse:tool'), 'would-refuse',
        c_mark = 'allow', 'allow',
        c_mark = 'other-model', 'other-model',
-       c_mark = 'n/a' OR NOT c_is_call, 'n/a',
+       NOT c_is_call, 'n/a',
+       c_mark = 'n/a', 'no-mark',
        'mark-missing') AS c_outcome,
      if(c_method != '', concat(LogAttributes['mcp.target'], ' · ', LogAttributes['gen_ai.tool.name']), c_model) AS c_target,
      if(LogAttributes['jwt.email'] != '', LogAttributes['jwt.email'], LogAttributes['jwt.sub']) AS c_person,

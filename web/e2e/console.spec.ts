@@ -359,6 +359,8 @@ spec: { provider: OpenAI, model: gpt-4o-mini, credentialsRef: { name: ambit-llm-
 });
 
 test.describe("add model", () => {
+  // The later tests use the model the first one adds: a failure skips them instead of running them on a missing model.
+  test.describe.configure({ mode: "serial" });
   const name = `ui-add-${Date.now().toString(36)}`;
   const kubectl = (args: string[]) => execFileSync("kubectl", ["-n", "ambit-system", ...args]);
   test.afterAll(() => {

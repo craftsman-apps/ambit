@@ -49,9 +49,12 @@ type BudgetView struct {
 	UserLimit  *int64 `json:"userLimit"`
 	GroupUsed  int64  `json:"groupUsed"`
 	// Dollar limits (decimal strings, empty when not set) and today's estimated spend in dollars.
-	GroupDollarLimit string    `json:"groupDollarLimit"`
-	UserDollarLimit  string    `json:"userDollarLimit"`
-	GroupSpent       float64   `json:"groupSpent"`
+	GroupDollarLimit string  `json:"groupDollarLimit"`
+	UserDollarLimit  string  `json:"userDollarLimit"`
+	GroupSpent       float64 `json:"groupSpent"`
+	// Per-minute limits (issue #85). Their use is not shown: a minute's count is gone in a minute.
+	GroupMinuteLimit *int64    `json:"groupMinuteLimit"`
+	UserMinuteLimit  *int64    `json:"userMinuteLimit"`
 	Users            []UserUse `json:"users"` // today's users, most used first
 	Ready            string    `json:"ready"`
 	Message          string    `json:"message"`
@@ -86,7 +89,8 @@ func (b *Budgets) views(ctx context.Context) ([]BudgetView, error) {
 	for _, bu := range l.Items {
 		v := BudgetView{Name: bu.Name, Group: bu.Spec.Group, GroupLimit: bu.Spec.GroupRequestsPerDay, UserLimit: bu.Spec.UserRequestsPerDay,
 			Users: []UserUse{}, Ready: "Unknown", ResetsAt: day.Add(24 * time.Hour), GitManaged: gitManaged(bu.Annotations),
-			GroupDollarLimit: bu.Spec.GroupDollarsPerDay, UserDollarLimit: bu.Spec.UserDollarsPerDay}
+			GroupDollarLimit: bu.Spec.GroupDollarsPerDay, UserDollarLimit: bu.Spec.UserDollarsPerDay,
+			GroupMinuteLimit: bu.Spec.GroupRequestsPerMinute, UserMinuteLimit: bu.Spec.UserRequestsPerMinute}
 		if c := meta.FindStatusCondition(bu.Status.Conditions, "Ready"); c != nil {
 			v.Ready, v.Message = string(c.Status), c.Message
 		}
@@ -282,7 +286,19 @@ type BudgetInput struct {
 	UserRequestsPerDay  *int64 `json:"userRequestsPerDay"`
 	GroupDollarsPerDay  string `json:"groupDollarsPerDay"`
 	UserDollarsPerDay   string `json:"userDollarsPerDay"`
+	// Per clock minute (issue #85); counted when a request arrives.
+	GroupRequestsPerMinute *int64 `json:"groupRequestsPerMinute"`
+	UserRequestsPerMinute  *int64 `json:"userRequestsPerMinute"`
 }
+
+func (in BudgetInput) spec() v1.BudgetSpec {
+	return v1.BudgetSpec{Group: in.Group, GroupRequestsPerDay: in.GroupRequestsPerDay, UserRequestsPerDay: in.UserRequestsPerDay,
+		GroupDollarsPerDay: in.GroupDollarsPerDay, UserDollarsPerDay: in.UserDollarsPerDay,
+		GroupRequestsPerMinute: in.GroupRequestsPerMinute, UserRequestsPerMinute: in.UserRequestsPerMinute}
+}
+
+// perMinuteOK: a per-minute limit is absent or 1 to 1,000,000 (the CRD's bounds).
+func perMinuteOK(n *int64) bool { return n == nil || (*n >= 1 && *n <= 1000000) }
 
 // checkBudget validates the form; self is the budget being edited ("" when creating). A second
 // budget for the same group would be refused by the controller, so it is refused here first.
@@ -290,10 +306,13 @@ func (c *Catalog) checkBudget(r *http.Request, in BudgetInput, self string) (int
 	switch {
 	case !groupRE.MatchString(in.Group):
 		return http.StatusBadRequest, fmt.Errorf("group %q may only contain letters, digits and . _ @ / -", in.Group)
-	case in.GroupRequestsPerDay == nil && in.UserRequestsPerDay == nil && in.GroupDollarsPerDay == "" && in.UserDollarsPerDay == "":
-		return http.StatusBadRequest, errors.New("set at least one limit: requests or dollars, for the whole group or for each person")
+	case in.GroupRequestsPerDay == nil && in.UserRequestsPerDay == nil && in.GroupDollarsPerDay == "" && in.UserDollarsPerDay == "" &&
+		in.GroupRequestsPerMinute == nil && in.UserRequestsPerMinute == nil:
+		return http.StatusBadRequest, errors.New("set at least one limit: requests per day or per minute, or dollars per day, for the whole group or for each person")
 	case (in.GroupRequestsPerDay != nil && *in.GroupRequestsPerDay < 1) || (in.UserRequestsPerDay != nil && *in.UserRequestsPerDay < 1):
 		return http.StatusBadRequest, errors.New("a limit must be at least 1 request per day")
+	case !perMinuteOK(in.GroupRequestsPerMinute) || !perMinuteOK(in.UserRequestsPerMinute):
+		return http.StatusBadRequest, errors.New("a limit per minute must be from 1 to 1,000,000 requests")
 	}
 	for _, d := range []string{in.GroupDollarsPerDay, in.UserDollarsPerDay} {
 		if d == "" {
@@ -333,8 +352,7 @@ func (c *Catalog) createBudget(w http.ResponseWriter, r *http.Request, s Session
 		return
 	}
 	b := &v1.Budget{ObjectMeta: metav1.ObjectMeta{Name: in.Name, Namespace: c.Namespace, Annotations: map[string]string{createdByKey: s.Email}},
-		Spec: v1.BudgetSpec{Group: in.Group, GroupRequestsPerDay: in.GroupRequestsPerDay, UserRequestsPerDay: in.UserRequestsPerDay,
-			GroupDollarsPerDay: in.GroupDollarsPerDay, UserDollarsPerDay: in.UserDollarsPerDay}}
+		Spec: in.spec()}
 	if c.GitOps != nil {
 		// A pull request for an existing file would replace that budget, not add one.
 		var existing v1.Budget
@@ -391,8 +409,7 @@ func (c *Catalog) updateBudget(w http.ResponseWriter, r *http.Request, s Session
 		}
 		return
 	}
-	b.Spec = v1.BudgetSpec{Group: in.Group, GroupRequestsPerDay: in.GroupRequestsPerDay, UserRequestsPerDay: in.UserRequestsPerDay,
-		GroupDollarsPerDay: in.GroupDollarsPerDay, UserDollarsPerDay: in.UserDollarsPerDay}
+	b.Spec = in.spec()
 	if c.GitOps != nil {
 		c.propose(w, r, s, "update", "Budget", "budgets", b.Name, b.Spec, b.Labels, consoleAnnotations(b.Annotations))
 		return

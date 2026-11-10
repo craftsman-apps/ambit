@@ -280,9 +280,11 @@ test("Budgets page adds, changes and removes a group budget", async ({ page }) =
   await page.getByRole("button", { name: "New budget" }).click();
   await page.getByLabel("Group (as your identity provider names it)").fill("ui-test-group");
   await page.getByLabel("Each person, requests per day").fill("25");
+  await page.getByLabel("Each person, requests per minute").fill("7");
   await page.getByRole("button", { name: "Add budget" }).click();
   const card = page.getByTestId("budget-ui-test-group");
   await expect(card.getByText("25 per day")).toBeVisible();
+  await expect(card.getByText("7 requests")).toBeVisible();
   await card.getByRole("button", { name: "Edit" }).click();
   await page.getByLabel("Each person, requests per day").fill("40");
   await page.getByRole("button", { name: "Save" }).click();

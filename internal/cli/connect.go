@@ -240,7 +240,7 @@ func (a *app) runKeySet(ctx context.Context, f connectFlags) error {
 	}
 	kr := st.Keys[url]
 	oldStore := kr.Store
-	kr.Store = store
+	kr.Store, kr.Set = store, true
 	if f.consoleURL != "" {
 		kr.ConsoleURL = strings.TrimRight(f.consoleURL, "/")
 	}

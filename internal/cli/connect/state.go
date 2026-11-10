@@ -22,6 +22,8 @@ type State struct {
 type KeyRecord struct {
 	Store      string `json:"store"` // StoreKeychain or StoreFile
 	ConsoleURL string `json:"consoleURL,omitempty"`
+	// Set means ambit key set stored the key for a helper: only disconnect --all deletes it, not the last tool.
+	Set bool `json:"set,omitempty"`
 }
 
 type ToolRecord struct {
@@ -124,34 +126,33 @@ func (s *State) Save(path string) error {
 	return atomicWrite(path, append(b, '\n'), 0o600)
 }
 
-// LockWait is how long LockState waits for another ambit; a lock older than lockStale is from an ambit that crashed.
+// LockWait is how long LockState waits for another ambit.
 var LockWait = 10 * time.Second
 
-const lockStale = 10 * time.Minute
-
-// LockState takes <path>.lock, so that two connect, disconnect or key set runs do not both load the state file and
-// one of them overwrite the other's record. It waits up to LockWait. The returned function releases the lock.
+// LockState locks <path>.lock, so that two connect, disconnect or key set runs do not both load the state file and
+// one of them overwrite the other's record. It waits up to LockWait. The lock is the operating system's (flock,
+// LockFileEx): it ends with the process, also after Ctrl-C or a crash. The returned function releases it.
 func LockState(path string) (func(), error) {
-	lock := path + ".lock"
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
 		return nil, err
 	}
 	deadline := time.Now().Add(LockWait)
 	for {
-		f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
+		ok, err := tryLock(f)
+		if err != nil {
 			f.Close()
-			return func() { os.Remove(lock) }, nil
-		}
-		if !errors.Is(err, fs.ErrExist) {
 			return nil, err
 		}
-		if fi, serr := os.Stat(lock); serr == nil && time.Since(fi.ModTime()) > lockStale {
-			os.Remove(lock)
-			continue
+		if ok {
+			return func() { f.Close() }, nil // closing the file releases the lock
 		}
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("another ambit connect, disconnect or key set is running (it holds %s); wait for it to finish, or delete that file if no ambit runs", lock)
+			f.Close()
+			return nil, fmt.Errorf("another ambit connect, disconnect or key set is running (it holds %s.lock); wait for it to finish", path)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}

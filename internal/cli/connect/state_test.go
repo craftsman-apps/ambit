@@ -98,15 +98,4 @@ func TestLockStateWaitsForTheOtherRun(t *testing.T) {
 		t.Fatalf("the lock was not taken after release: %v", err)
 	}
 	unlock2()
-	// A lock left by a crashed run is taken over.
-	if err := os.WriteFile(path+".lock", nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	stale := time.Now().Add(-time.Hour)
-	os.Chtimes(path+".lock", stale, stale)
-	if u, err := LockState(path); err != nil {
-		t.Fatalf("stale lock: %v", err)
-	} else {
-		u()
-	}
 }

@@ -116,3 +116,24 @@ func TestDisconnectAllDeletesAKeyFromKeySet(t *testing.T) {
 		t.Fatalf("code %d, keychain %v\n%s%s", code, r.kc, r.stdout.String(), r.stderr.String())
 	}
 }
+
+func TestAKeyFromKeySetStaysUntilDisconnectAll(t *testing.T) {
+	g, g2, r := newGateway(t), newGateway(t), newRig(t)
+	r.env["AMBIT_API_KEY"] = testAmbitKey
+	r.run("key", "set", "--url", g.URL)
+	r.run("connect", "claude-code", "--url", g.URL, "--model", "m", "--yes")
+	if code := r.run("connect", "claude-code", "--url", g2.URL, "--model", "m", "--yes"); code != 0 {
+		t.Fatalf("code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
+	}
+	if _, ok := r.kc[g.URL]; !ok {
+		t.Fatal("a re-connect deleted the key that key set stored")
+	}
+	r.run("connect", "codex", "--url", g.URL, "--model", "m", "--yes")
+	r.run("disconnect", "codex", "--yes")
+	if _, ok := r.kc[g.URL]; !ok {
+		t.Fatal("disconnect of the last tool deleted the key that key set stored")
+	}
+	if code := r.run("disconnect", "--all", "--yes"); code != 0 || len(r.kc) != 0 {
+		t.Fatalf("--all: code %d, keys %v", code, r.kc)
+	}
+}

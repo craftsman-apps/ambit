@@ -462,7 +462,7 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 		return err
 	}
 	if old := oldTool.URL; hadTool && old != url && !st.UsesURL(old, "") {
-		if _, ok := st.Keys[old]; ok { // no tool uses the key of the old address any more
+		if kr, ok := st.Keys[old]; ok && !kr.Set { // no tool uses the key of the old address any more
 			if err := a.deleteKey(d, st, old, "", oldTool.Pending); err != nil {
 				p.Line("%s %s; ambit disconnect --all deletes it later", p.Mark("warn"), err.Error())
 			}
@@ -799,7 +799,7 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 	}
 	sort.Strings(urlList)
 	for _, u := range urlList {
-		if _, hasKey := st.Keys[u]; st.UsesURL(u, "") || f.keepKey || !hasKey {
+		if kr, hasKey := st.Keys[u]; st.UsesURL(u, "") || f.keepKey || !hasKey || (kr.Set && !f.all) {
 			continue
 		}
 		if err := a.deleteKey(d, st, u, f.consoleURL, pendingURLs[u]); err != nil {

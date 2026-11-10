@@ -2,3 +2,4 @@
 - `ambit connect`, `disconnect` and `key set` take a lock file, so two runs at the same time do not lose a record of the state file.
 - `ambit disconnect opencode` without a state file looks for the shell function in the bash, zsh and fish profiles, not only in the profile of the current `$SHELL`.
 - `ambit disconnect` prints each deleted key at once, so a failure to delete a later key does not hide the earlier ones.
+- A key stored with `ambit key set` stays when the last tool that uses its address is disconnected or moved to another address; only `ambit disconnect --all` deletes it.

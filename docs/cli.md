@@ -94,7 +94,7 @@ On Windows, `ambit connect opencode` asks PowerShell for its execution policy. W
 
 The key is checked for the format `ambit_` and 43 letters and digits. If the same command ran before and nothing changed, it prints `✓ <tool> is already connected to <url>` and makes only the test call. If the test call fails, the config stays; the output says what failed and ends with `to undo: ambit disconnect <tool>`. When a connect moves a tool to a new `--url` and no other tool uses the key of the old address, that key is deleted from the keychain, with the line that reminds you to revoke it.
 
-`connect`, `disconnect` and `key set` take the lock file `connect.json.lock` next to the state file, so two runs at the same time do not lose a record. A second run waits up to 10 seconds, then stops with exit 1. A lock file older than 10 minutes is from an `ambit` that stopped, and is taken over.
+`connect`, `disconnect` and `key set` take the lock file `connect.json.lock` next to the state file, so two runs at the same time do not lose a record. A second run waits up to 10 seconds, then stops with exit 1. The lock is the operating system's file lock, so it ends with the process, also after Ctrl-C or a crash; the file itself stays.
 
 ## ambit disconnect
 

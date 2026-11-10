@@ -17,7 +17,7 @@ frontend:
     attributes:
       add:
         - { name: jwt.email, expression: "jwt.email" }
-        - { name: ambit.router, expression: "metadata.agentgateway_user_model" }
+        - { name: ambit.router, expression: "metadata.ambit_requested_model" }
     otlp:
       protocol: GRPC
       backendRef: { name: ambit-otel-collector, port: 4317 }
@@ -49,7 +49,7 @@ func TestAccessLogPolicyAddsModeAndRulesVersion(t *testing.T) {
 		m := a.(map[string]any)
 		got = append(got, [2]string{m["name"].(string), m["expression"].(string)})
 	}
-	want := [][2]string{{"jwt.email", "jwt.email"}, {"ambit.router", "metadata.agentgateway_user_model"},
+	want := [][2]string{{"jwt.email", "jwt.email"}, {"ambit.router", "metadata.ambit_requested_model"},
 		{"ambit.accessMode", `"audit"`}, {"ambit.rulesVersion", `"3f9a1c2b7d10"`}, {"ambit.wouldRefuse", `"n/a"`}}
 	if len(got) != len(want) {
 		t.Fatalf("attributes %v", got)

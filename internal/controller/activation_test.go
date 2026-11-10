@@ -351,3 +351,16 @@ func TestActivationFlagsAreChecked(t *testing.T) {
 		}
 	}
 }
+
+// agentgateway v1.7.0 puts warnings and errors in one NACK when both occur (upstream #3953); a resource with only a
+// warning was applied, so it is not named as rejected. The warning stays in the reason.
+func TestRejectedOfNamesErrorsOnly(t *testing.T) {
+	text := `[{"key":"model/ambit-system/gpt","warn":"unknown field"},{"key":"backend/ambit-system/mistral-x","error":"invalid enum"}]`
+	names, reason := rejectedOf(text, "ambit-system")
+	if len(names) != 1 || names[0] != "mistral-x" {
+		t.Fatalf("names %v, want [mistral-x]", names)
+	}
+	if !strings.Contains(reason, "model/ambit-system/gpt: unknown field") || !strings.Contains(reason, "invalid enum") {
+		t.Fatalf("reason %q", reason)
+	}
+}

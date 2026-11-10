@@ -67,6 +67,13 @@ spec:
     # credential, unlogged and uncounted (the route must match "/" above). /v1/completions is not parsed.
     # A request must also pass the identity gate: a valid key, or else a valid JWT.
     {{- include "ambit.gatewayAuth" (dict "root" $ "jwt" $jwt "scope" "llm" "extra" (list (printf "request.path in [%s]" $paths))) | nindent 4 }}
+    # The model name the client asked for (a ModelRouter such as "auto"), kept for the access log (ambit.router)
+    # and audit-only mode: after routing, llm.requestModel is the model that answered. agentgateway v1.6.0 kept it
+    # in metadata.agentgateway_user_model; v1.7.0 no longer does. The key is missing when the body names no model.
+    transformation:
+      request:
+        metadata:
+          ambit_requested_model: llm.requestModel
 ---
 # The routing label (x-ambit-route) is set only by Ambit (ambit-router, PR 2). A client's own copy is removed at
 # the Gateway, before routing. PreRouting matters: a Gateway-level transformation in the normal phase is replaced

@@ -185,7 +185,8 @@ answer=$(command curl -s -H "Authorization: Bearer $(token user09)" -H 'X-Ambit-
 pass "C14 LLM requests parsed: model $model, $tin input and $tout output tokens logged; an unparsed path is refused (404); a client's X-Ambit-User does not reach the model"
 
 # C15 · dollar budgets: envoy ratelimit keeps spend under ambit-llm_spend_group_<group>_<day>, and the cost
-#       expression (integer arithmetic over price maps) and the include_usage rewrite run in the gateway: one mock answer adds exactly 3 units.
+#       expression (integer arithmetic over price maps) runs in the gateway: one mock answer adds exactly 3 units. agentgateway
+#       (v1.7.0) turns include_usage on for every stream itself; Ambit has no rewrite of its own (issue #261).
 trap 'rc=$?; kubectl -n "$NS" delete "budgets.$G" contract-ml --ignore-not-found >/dev/null 2>&1; on_exit $rc' EXIT
 kubectl -n "$NS" apply -f - >/dev/null <<YAML
 apiVersion: $G/v1alpha1
@@ -209,8 +210,8 @@ command curl -s -o /dev/null -H "Authorization: Bearer $(token user09)" -H 'Cont
 for _ in $(seq 1 30); do [[ "$(vget "$gk")" == $(( g1 + 3 )) ]] && break; sleep 1; done
 g2=$(vget "$gk")
 kubectl -n "$NS" delete "budgets.$G" contract-ml --ignore-not-found >/dev/null
-[[ "$g2" == $(( g1 + 3 )) ]] || fail "C15 a stream with include_usage false was not charged: $gk $g1->$g2 (want +3); the usage rewrite stopped working"
-pass "C15 spend counters: one answer added 3 units to $gk and to the person's key; a stream with include_usage false was rewritten and charged"
+[[ "$g2" == $(( g1 + 3 )) ]] || fail "C15 a stream with include_usage false was not charged: $gk $g1->$g2 (want +3); agentgateway no longer turns usage on in streams"
+pass "C15 spend counters: one answer added 3 units to $gk and to the person's key; a stream with include_usage false reported usage and was charged"
 
 # C16 · agentgateway's control plane renews the certificate it serves to gateway pods 12 hours before expiry
 #       (24-hour lifetime), so more than 11 hours are always left. On 2026-10-02 it was not renewed, and new

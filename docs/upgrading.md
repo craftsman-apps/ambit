@@ -12,6 +12,9 @@ For what each release changes, read the [release notes](https://ambitproject.dev
   <name>`). Gateway errors no longer include internal details. Every streamed chat request ends with a usage chunk,
   also when the client turned it off. `/v1/messages` to OpenAI's own API is sent as a Responses request. See the
   [release notes](https://ambitproject.dev/releases).
+- **Embeddings count against daily request limits after the answer**, like other requests: a refused embeddings
+  request (403 or 429) no longer counts. The controller deletes the policy `ambit-llm-usage`, which the gateway made
+  unnecessary.
 - **Audit rows written before the upgrade keep their caller-less model refusals.** Only refusals after the upgrade
   show the caller.
 

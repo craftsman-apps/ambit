@@ -14,10 +14,9 @@ func TestGeneratorsUseRequestIdentity(t *testing.T) {
 	g := identity.PrincipalGroups
 	p := identity.Principal(true)
 	cases := map[string]string{
-		"CEL":            CEL(Access{Groups: []string{"eng"}}),
-		"member":         member("eng"),
-		"spendUser":      spendUser(),
-		"usageCondition": usageCondition([]string{"eng"}),
+		"CEL":       CEL(Access{Groups: []string{"eng"}}),
+		"member":    member("eng"),
+		"spendUser": spendUser(),
 	}
 	for name, got := range cases {
 		if strings.Contains(strings.ReplaceAll(got, g, ""), "jwt.groups") || strings.Contains(strings.ReplaceAll(got, p, ""), "jwt.email") {

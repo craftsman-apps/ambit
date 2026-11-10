@@ -42,28 +42,9 @@ func member(group string) string {
 // skip both the check and the charge.
 func spendUser() string { return principal() }
 
-// skip is a CEL expression that always fails: agentgateway skips a descriptor when an entry or its limit override fails.
-const skip = `{}["skip"]`
-
-const embeddingsPath = `request.path == "/v1/embeddings"`
-
-// afterAnswer is a request-limit descriptor counted after the answer. It skips embeddings: the embeddings descriptor
-// has already counted them, and a check here would see that count.
+// afterAnswer is a request-limit descriptor: checked after the model's authorization and counted after the answer.
 func afterAnswer(entries []any) map[string]any {
-	first := entries[0].(map[string]any)
-	out := append([]any{map[string]any{"name": first["name"], "expression": embeddingsPath + " ? " + skip + " : " + first["expression"].(string)}}, entries[1:]...)
-	return map[string]any{"unit": "Tokens", "cost": "1", "entries": out}
-}
-
-// embeddingsDescriptor counts an embeddings request when it arrives: agentgateway v1.6.0 had no step after an
-// embeddings answer that could add the count (owner decision 2026-10-13: count them anyway; a refused embeddings
-// request counts too). v1.7.0 has that step; moving the count there is issue #261. It shares the counter of the after-answer descriptor (same entries). It is checked as it
-// counts (count + 1 > limit), so its limit is the Budget's own number, set by limitOverride. A limit override applies
-// whatever the entries' values, so it must fail (and the descriptor be skipped) for any other path and non-members.
-func embeddingsDescriptor(entries []any, group string, n int64) map[string]any {
-	q := strconv.Quote(group)
-	return map[string]any{"unit": "Requests", "entries": entries, "limitOverride": embeddingsPath + " && " +
-		principalGroups + ".exists(g, g == " + q + `) ? {"unit": "day", "requestsPerUnit": ` + strconv.FormatInt(n, 10) + "} : " + skip}
+	return map[string]any{"unit": "Tokens", "cost": "1", "entries": entries}
 }
 
 // minutePaths are the LLM requests a per-minute limit counts: the ones the gateway parses, not /v1/models.
@@ -143,49 +124,9 @@ func costCEL(prices map[string]v1.ModelPrice) string {
 		strings.Join(out, ", ") + "}[llm.requestModel] + 9999999u) / 10000000u"
 }
 
-// UsagePolicyName is the generated policy that turns usage reporting on for dollar-capped groups.
+// UsagePolicyName is the policy 0.3.x generated to turn usage reporting on in streams of dollar-capped groups.
+// agentgateway v1.7.0 does that for every stream, so the reconciler deletes it (issue #261).
 const UsagePolicyName = "ambit-llm-usage"
-
-// usageField is the expression for stream_options: for a streamed chat request from a member of a dollar-capped
-// group it sets include_usage to true (other stream options are kept); otherwise it keeps the field as sent.
-// Without token counts the answer would cost nothing. It reads llmRequest, the body the provider will get.
-// agentgateway removes the field when the expression fails: that is harmless when the client sent no
-// stream_options, and usageCondition never fails, so a client's own stream_options are never lost.
-func usageField(groups []string) string {
-	return usageCondition(groups) + ` ? ` +
-		`(has(llmRequest.stream_options) ? llmRequest.stream_options.merge({"include_usage": true}) : {"include_usage": true}) : ` +
-		`llmRequest.stream_options`
-}
-
-// usageCondition: a streamed chat request from a member of a dollar-capped group. It is false, never an error,
-// for a token without a groups claim or a request without "stream".
-func usageCondition(groups []string) string {
-	q := make([]string, len(groups))
-	for i, g := range groups {
-		q[i] = strconv.Quote(g)
-	}
-	return `request.path == "/v1/chat/completions" && has(llmRequest.stream) && llmRequest.stream == true && ` +
-		principalGroups + `.exists(g, g in [` + strings.Join(q, ", ") + `])`
-}
-
-// usagePolicy is redundant since agentgateway v1.7.0, which turns usage on for every stream (issue #261).
-// usagePolicy is a backend policy on the LLM route, so agentgateway applies it when it calls the chosen model:
-// after a ModelRouter has picked it. In agentgateway v1.5.0 a route-level (traffic) rewrite was undone there,
-// because the router rebuilt the body from its original copy (found 2026-10-06: routed streams cost nothing;
-// fixed in v1.6.0, upstream #3287). It sets no route types: v1.6.0 keeps its defaults (upstream #3391). Nil when
-// no group has a dollar limit.
-func usagePolicy(budgets []v1.Budget, ns, llmRoute string) *unstructured.Unstructured {
-	groups := DollarGroups(budgets)
-	if len(groups) == 0 {
-		return nil
-	}
-	return generated("agentgateway.dev/v1alpha1", "AgentgatewayPolicy", UsagePolicyName, ns, map[string]any{
-		"targetRefs": []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": llmRoute}},
-		"backend": map[string]any{"ai": map[string]any{
-			"transformations": []any{map[string]any{"field": "stream_options", "expression": usageField(groups)}},
-		}},
-	})
-}
 
 // compileBudgets returns the ratelimit service's config (YAML) and the gateway policy, or a nil
 // policy when there are no budgets.
@@ -198,18 +139,18 @@ func compileBudgets(budgets []v1.Budget, prices map[string]v1.ModelPrice, ns str
 		// charged after the answer, so refused requests do not count. A "Requests" descriptor would be checked and
 		// counted with the route policies, before the model's authorization (found 2026-10-13). The check adds
 		// nothing and refuses only above the configured number, so that number is the Budget's minus one.
-		// Embeddings are the exception (embeddingsDescriptor).
+		// Embeddings too, since agentgateway v1.7.0 (issue #261).
 		if b.Spec.GroupRequestsPerDay != nil || b.Spec.UserRequestsPerDay != nil {
 			d := map[string]any{"key": "group", "value": g}
 			if n := b.Spec.GroupRequestsPerDay; n != nil {
 				d["rate_limit"] = map[string]any{"unit": "day", "requests_per_unit": *n - 1}
 				entries := []any{map[string]any{"name": "group", "expression": member(g)}}
-				gwDescriptors = append(gwDescriptors, afterAnswer(entries), embeddingsDescriptor(entries, g, *n))
+				gwDescriptors = append(gwDescriptors, afterAnswer(entries))
 			}
 			if n := b.Spec.UserRequestsPerDay; n != nil {
 				d["descriptors"] = []any{map[string]any{"key": "user", "rate_limit": map[string]any{"unit": "day", "requests_per_unit": *n - 1}}}
 				entries := []any{map[string]any{"name": "group", "expression": member(g)}, map[string]any{"name": "user", "expression": principal()}}
-				gwDescriptors = append(gwDescriptors, afterAnswer(entries), embeddingsDescriptor(entries, g, *n))
+				gwDescriptors = append(gwDescriptors, afterAnswer(entries))
 			}
 			cfgDescriptors = append(cfgDescriptors, d)
 		}

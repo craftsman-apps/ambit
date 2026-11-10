@@ -26,13 +26,12 @@ This section is about daily request limits. A request counts against a daily req
 let it through to the model: the count goes up by
 one after the answer, whatever the model answered (an error from the provider counts too). Requests the gateway
 refuses are not counted: no `AccessRule` allows the model (403), a model without a price for a group with a dollar
-limit (403), or a Budget limit already reached (429). Embeddings are the exception (see the table).
+limit (403), or a Budget limit already reached (429).
 
 | Request | Counted? |
 |---|---|
-| `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, streamed or not | Yes |
-| `/v1/embeddings` | Yes, when it arrives, so a refused embeddings request (403 or 429) counts too |
-| Any other refused request (403 or 429) | No |
+| `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, streamed or not, and `/v1/embeddings` | Yes |
+| A refused request (403 or 429) | No |
 
 ## How spending is counted
 

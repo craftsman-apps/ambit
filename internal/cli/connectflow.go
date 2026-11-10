@@ -55,6 +55,9 @@ func (j *job) change() (connect.FileChange, bool) {
 		}
 		c.After = j.plan.After
 		c.Private = j.secret
+		if j.secret && j.prev != nil && j.prev.Backup != "" {
+			c.KeepBackup = true // the backup holds the header file that connect replaced, maybe with another key
+		}
 		if j.prev != nil && len(j.prev.RemovedSecrets) > 0 {
 			c.KeepBackup = true // the first backup is the only place that holds a secret connect removed
 		}

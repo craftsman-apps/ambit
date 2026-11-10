@@ -119,6 +119,10 @@ func TestConnectClaudeDesktopMCPConflicts(t *testing.T) {
 		if strings.Contains(r.stdout.String()+r.stderr.String(), "ambit_ABCDEFG") {
 			t.Fatal("the old key is in the output")
 		}
+		r.secret = "ambit_zyxwvutsrqponmlkjihgfedcbaZYXWVUTSRQPONMLKJ"
+		if code := r.run("connect", "claude-desktop-mcp", "--url", mcpURL, "--replace-key", "--yes"); code != 0 || r.readFile(header+".ambit.bak") != old {
+			t.Fatalf("a re-connect lost the backup of the replaced header file: code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
+		}
 		r.run("disconnect", "claude-desktop-mcp", "--yes")
 		if r.exists(header) || !strings.Contains(r.stdout.String(), header+".ambit.bak") {
 			t.Fatalf("disconnect:\n%s", r.stdout.String())

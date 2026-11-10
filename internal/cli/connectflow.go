@@ -885,7 +885,10 @@ func (a *app) revokeKey(ctx context.Context, d *connectDeps, st *connect.State, 
 		return fail(err.Error())
 	}
 	req.Header.Set("Authorization", "Bearer "+key)
-	resp, err := d.HTTP(console).Do(req)
+	hc := *d.HTTP(console)
+	// The request carries the key: never follow a redirect, which could send it to another address.
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := hc.Do(req)
 	if err != nil {
 		return fail(err.Error())
 	}

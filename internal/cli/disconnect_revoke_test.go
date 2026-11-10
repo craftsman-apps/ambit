@@ -101,3 +101,13 @@ func TestDisconnectRevokeOnlyKeysThatAreDeleted(t *testing.T) {
 		t.Fatalf("dry run: code %d, bearers %d\n%s", code, len(c.bearers), r.stdout.String())
 	}
 }
+
+func TestDisconnectRevokeDoesNotFollowARedirect(t *testing.T) {
+	g, other, r := newGateway(t), newFakeConsole(t, http.StatusNoContent), newRig(t)
+	redirect := httptest.NewServer(http.RedirectHandler(other.URL+"/api/keys/self", http.StatusTemporaryRedirect))
+	t.Cleanup(redirect.Close)
+	r.run("connect", "claude-code", "--url", g.URL, "--model", "m", "--key-file", r.keyFile(), "--console-url", redirect.URL, "--yes")
+	if code := r.run("disconnect", "claude-code", "--revoke", "--yes"); code != 1 || len(other.bearers) != 0 || len(r.kc) != 1 {
+		t.Fatalf("code %d, the redirect target got %d keys, keys %v\n%s%s", code, len(other.bearers), r.kc, r.stdout.String(), r.stderr.String())
+	}
+}

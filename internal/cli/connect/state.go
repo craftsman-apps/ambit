@@ -45,6 +45,10 @@ type FileRecord struct {
 	// RemovedSecrets are JSON pointers connect removed with --force because they held a secret. The value is
 	// not recorded (the state file never holds a secret); it stays in the backup only.
 	RemovedSecrets []string `json:"removedSecrets,omitempty"`
+	// Secret marks a file that holds the key (the Claude Desktop header file). Its content is never recorded or
+	// printed; SHA256 is the hash of what connect wrote, so disconnect deletes only that.
+	Secret bool   `json:"secret,omitempty"`
+	SHA256 string `json:"sha256,omitempty"`
 }
 
 // Entry is one JSON member Ambit wrote. Wrote and Previous are JSON texts; Previous nil means the member did not

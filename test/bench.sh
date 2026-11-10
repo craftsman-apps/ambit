@@ -123,8 +123,10 @@ load() {
   local line
   line=$(in_pod /tmp/load -url "$u" -rate "$rate" -duration "$DURATION" -warmup "$WARMUP" -token-file "/tmp/$t" -body-file "/tmp/$b" ${h[@]+"${h[@]}"})
   echo "$c $rate $run $line" | tee -a "$OUT/runs.log"
-  [[ "$line" != *" completed=0 "* ]] || fail "$c at $rate req/s, run $run: no request was answered"
-  sed -E 's/[a-z0-9]+=//g; s/ms//g' <<<"$c $rate $run $line" | awk '{print $1,$2,$3,$4,$5,$6,$8,$9}' >> "$OUT/runs.tsv"
+  [[ "$line" =~ ^p50=([0-9.]+)ms\ p95=([0-9.]+)ms\ p99=([0-9.]+)ms\ offered=[0-9]+\ completed=([0-9]+)\ errors=([0-9]+)$ ]] ||
+    fail "$c at $rate req/s, run $run: unexpected output of test/load: $line"
+  [[ ${BASH_REMATCH[4]} != 0 ]] || fail "$c at $rate req/s, run $run: no request was answered"
+  echo "$c $rate $run ${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]} ${BASH_REMATCH[4]} ${BASH_REMATCH[5]}" >> "$OUT/runs.tsv"
 }
 : > "$OUT/runs.tsv"; : > "$OUT/runs.log"
 for run in $(seq 1 "$RUNS"); do
@@ -143,7 +145,10 @@ for run in $(seq 1 "$RUNS"); do
 done
 set_compression off
 
-# --- summary: median of the runs [lowest-highest], and the time added against the direct case at the same rate
+# --- summary: median of the runs [lowest-highest]; the added time is the median of a case minus the median of its
+# direct baseline at the same rate. The noise floor of a cell is the larger spread (highest minus lowest run) of the case
+# and of its baseline:
+# an added time smaller than it is shown as "below noise (< X)", not as a number.
 uv run --no-project python - "$OUT/runs.tsv" "$WARMUP" "$DURATION" <<'PY' | tee "$OUT/summary.md"
 import sys, statistics as st, collections
 rows = [l.split() for l in open(sys.argv[1]) if l.strip()]
@@ -153,20 +158,36 @@ cells = collections.defaultdict(list)
 for c, rate, run, p50, p95, p99, done, err in rows:
     cells[(c, int(rate))].append((float(p50), float(p95), float(p99), int(done), int(err)))
 base = {"llm-jwt": "llm-direct", "llm-key": "llm-direct", "mcp-mask": "mcp-direct", "mcp-compress": "mcp-direct"}
-med = lambda v: st.median(v)
-print("| Case | Rate (req/s) | p50 ms | p95 ms | p99 ms | Added p50 ms | Added p95 ms | Added p99 ms | Throughput (req/s) | Errors |")
-print("|---|---|---|---|---|---|---|---|---|---|")
 order = ["llm-direct", "llm-jwt", "llm-key", "mcp-direct", "mcp-mask", "mcp-compress"]
+rates = lambda c: sorted({r for (k, r) in cells if k == c})
+med = lambda v, i: st.median(x[i] for x in v)
+print("Added time (ms), median of the runs; below noise = smaller than the spread between runs of the case or of its direct baseline")
+print()
+print("| Case | Rate (req/s) | Added p50 | Added p95 | Added p99 |")
+print("|---|---|---|---|---|")
 for c in order:
-    for rate in sorted({r for (k, r) in cells if k == c}):
+    if c not in base:
+        continue
+    for rate in rates(c):
+        v, b = cells[(c, rate)], cells.get((base[c], rate))
+        if not b:
+            continue
+        out = []
+        for i in range(3):
+            added = med(v, i) - med(b, i)
+            noise = max(max(x[i] for x in w) - min(x[i] for x in w) for w in (v, b))
+            out.append(f"{added:.1f}" if added > noise else f"below noise (< {max(noise, -added, 0.1):.1f})")
+        print(f"| {c} | {rate} | {' | '.join(out)} |")
+print()
+print("All measurements (ms): median of the runs [lowest-highest]")
+print()
+print("| Case | Rate (req/s) | p50 | p95 | p99 | Throughput (req/s) | Errors |")
+print("|---|---|---|---|---|---|---|")
+for c in order:
+    for rate in rates(c):
         v = cells[(c, rate)]
-        col = lambda i: f"{med([x[i] for x in v]):.1f} [{min(x[i] for x in v):.1f}-{max(x[i] for x in v):.1f}]"
-        added = ["-", "-", "-"]
-        if c in base and (base[c], rate) in cells:
-            b = cells[(base[c], rate)]
-            added = [f"{med([x[i] for x in v]) - med([y[i] for y in b]):.1f}" for i in range(3)]
-        thr = med([x[3] for x in v]) / measured
-        print(f"| {c} | {rate} | {col(0)} | {col(1)} | {col(2)} | {added[0]} | {added[1]} | {added[2]} | {thr:.1f} | {sum(x[4] for x in v)} |")
-print(f"\n{len(rows)} runs; each run {sys.argv[3]} with the first {sys.argv[2]} not measured. Values: median of the runs [lowest-highest].")
+        col = lambda i: f"{med(v, i):.1f} [{min(x[i] for x in v):.1f}-{max(x[i] for x in v):.1f}]"
+        print(f"| {c} | {rate} | {col(0)} | {col(1)} | {col(2)} | {med(v, 3) / measured:.1f} | {sum(x[4] for x in v)} |")
+print(f"\n{len(rows)} runs; each run {sys.argv[3]} with the first {sys.argv[2]} not measured.")
 PY
 done_step bench

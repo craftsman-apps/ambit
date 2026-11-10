@@ -3,6 +3,7 @@ import Layout from '@theme/Layout';
 import Link from '@docusaurus/Link';
 import ThemedImage from '@theme/ThemedImage';
 import useBaseUrl from '@docusaurus/useBaseUrl';
+import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import UseCases from '../components/UseCases';
 import styles from './index.module.css';
 
@@ -40,6 +41,7 @@ function Themed({name, alt, className}: {name: string; alt: string; className?: 
 }
 
 export default function Home(): ReactNode {
+  const {version} = useDocusaurusContext().siteConfig.customFields as {version: string};
   return (
     <Layout
       title="The AI access layer for enterprises"
@@ -47,7 +49,7 @@ export default function Home(): ReactNode {
       <main className={styles.page}>
         <header className={styles.hero}>
           <div>
-            <p className={styles.eyebrow}>Alpha · v0.1.0 · Apache-2.0</p>
+            <p className={styles.eyebrow}>{`Alpha · v${version} · Apache-2.0`}</p>
             <h1>The AI access layer for enterprises.</h1>
             <p className={styles.lead}>
               A self-hosted gateway that decides who may use which AI models and work apps, sets spending limits,

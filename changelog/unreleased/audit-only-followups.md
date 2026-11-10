@@ -1,0 +1,1 @@
+- Audit page: in audit-only mode, a served model request or tool call that no access rule judges (its mark is `n/a`) is now shown as a call, "Served, no verdict", instead of being sorted with protocol messages.

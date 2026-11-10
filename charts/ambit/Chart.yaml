@@ -8,7 +8,7 @@ sources:
   - https://github.com/craftsman-apps/ambit
 dependencies:
   - name: agentgateway
-    version: v1.6.0
+    version: v1.7.0
     repository: oci://cr.agentgateway.dev/charts
   - name: toolhive-operator
     version: 0.51.4

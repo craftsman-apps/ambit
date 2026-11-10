@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -19,7 +20,7 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// Every agentgateway object the chart renders must pass the agentgateway v1.6.0 CRD schema, as the API server
+// Every agentgateway object the chart renders must pass the vendored agentgateway CRD schema, as the API server
 // checks it on install. The agentgateway standalone config and the CRD differ in places (a transformation's
 // response.set is a map in one and a list of {name, value} in the other); a helm upgrade with limits.enabled
 // failed on that (2026-10-13). The renders cover every chart switch that adds agentgateway objects.
@@ -79,7 +80,11 @@ type crdSchema struct {
 // agentgatewaySchemas reads the vendored agentgateway CRDs (deploy/crds), by "apiVersion/kind".
 func agentgatewaySchemas(t *testing.T) map[string]crdSchema {
 	t.Helper()
-	raw, err := os.ReadFile("../../deploy/crds/agentgateway-crds-v1.6.0.yaml")
+	files, _ := filepath.Glob("../../deploy/crds/agentgateway-crds-*.yaml")
+	if len(files) != 1 {
+		t.Fatalf("want one vendored agentgateway CRD file, found %v", files)
+	}
+	raw, err := os.ReadFile(files[0])
 	if err != nil {
 		t.Fatal(err)
 	}

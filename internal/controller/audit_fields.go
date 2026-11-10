@@ -70,7 +70,8 @@ func AuditFields(res Result, room int) ([]any, error) {
 		}
 	}
 	// Routers first: a routed record's llm.requestModel is the model that answered, so the model branches would
-	// judge it as a direct call. The router name the client asked for is metadata.agentgateway_user_model.
+	// judge it as a direct call. The router name the client asked for is metadata.ambit_requested_model (set by the
+	// chart's ambit-llm-auth policy).
 	var branches, names []string // names: what each branch is for, in AuditTooLarge
 	slices.SortFunc(routers, func(a, b *unstructured.Unstructured) int { return strings.Compare(a.GetName(), b.GetName()) })
 	for _, vm := range routers {
@@ -86,7 +87,7 @@ func AuditFields(res Result, room int) ([]any, error) {
 				answering += fmt.Sprintf("llm.requestModel == %s ? (%s) : ", strconv.Quote(specOf[t]), orFalse(final[t]))
 			}
 		}
-		branches = append(branches, fmt.Sprintf(`has(metadata.agentgateway_user_model) && metadata.agentgateway_user_model == %s ? `+
+		branches = append(branches, fmt.Sprintf(`has(metadata.ambit_requested_model) && metadata.ambit_requested_model == %s ? `+
 			`((%s) ? ((%sfalse) ? "allow" : ((%s) ? "other-model" : "refuse:model")) : "refuse:router") : `,
 			strconv.Quote(wire), CEL(res.Access[vm.GetLabels()[RouterLabel]]), answering, orFalse(final[def])))
 		names = append(names, "router "+strconv.Quote(vm.GetLabels()[RouterLabel]))

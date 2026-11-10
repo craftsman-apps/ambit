@@ -53,7 +53,7 @@ pass "1 guard record in otel_logs: crm, json, lossless, smaller output, groups [
 
 # 2 · the summary tables exist (the console creates them when otel_logs exists) and count the record of step 1
 n_objects() { ch "SELECT count() FROM system.tables WHERE database = 'otel' AND name LIKE 'ambit_%_daily_v1%'"; }
-wait_for 120 '[[ $(n_objects) == 4 ]]' || fail "2 the console did not create the four summary objects in 120 s"
+wait_for 120 '[[ $(n_objects) == 6 ]]' || fail "2 the console did not create the six summary objects (three tables, three views) in 120 s"
 ttl=$(ch "SELECT create_table_query FROM system.tables WHERE database = 'otel' AND name = 'ambit_llm_daily_v1'")
 [[ "$ttl" == *"toIntervalDay(1095)"* ]] || fail "2 the retention is not 1095 days (evidence.summaryRetention 26280h): $ttl"
 raw crm_get_rows '{"n":300}' >/dev/null   # a call after the views exist

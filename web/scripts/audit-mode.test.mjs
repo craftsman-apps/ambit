@@ -38,6 +38,7 @@ test("outcome labels: a real refusal, a verdict, and a missing mark are told apa
   assert.equal(outcomeLabel("would-refuse", "200")?.text, "Would be refused (200)");
   assert.match(outcomeLabel("other-model", "200").text, /unless a later route matched/);
   assert.equal(outcomeLabel("mark-missing", "200")?.text, "Mark missing");
+  assert.equal(outcomeLabel("no-mark", "200")?.text, "Served, no verdict (200)");
   for (const o of ["allow", "n/a", undefined]) assert.equal(outcomeLabel(o, "200"), undefined);
 });
 

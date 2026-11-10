@@ -256,7 +256,7 @@ func (a *app) runKeySet(ctx context.Context, f connectFlags) error {
 func (a *app) connectCmd() *cobra.Command {
 	var f connectFlags
 	c := &cobra.Command{
-		Use:   "connect <claude-code|codex|opencode|cursor> --url <llm address> --model <model id>",
+		Use:   "connect <claude-code|codex|opencode|cursor|claude-desktop-mcp> --url <address> [--model <model id>]",
 		Short: "Point a coding tool at Ambit and store the key in your keychain",
 		Long: `Adds Ambit's entries to the tool's user config file, stores the key in the operating system keychain, and ends
 with one test call in the tool's own request format. The key is never written to a config file: the tool runs
@@ -266,6 +266,10 @@ Only user-level files are changed: ~/.claude/settings.json, ~/.codex/config.toml
 and, for opencode, a function in your shell profile. Each file is copied to <file>.ambit.bak first. Cursor has no
 config file for this: connect prints the steps and writes nothing.
 
+claude-desktop-mcp takes the MCP address as --url and no --model. It adds the entry "ambit" (mcp-remote) to
+claude_desktop_config.json and writes the key to ~/.ambit/mcp-headers.txt (mode 0600), because mcp-remote reads the
+key only from a file or from the config. It makes no test call.
+
 The key comes from the keychain if one is stored for the address, else --key-file, else AMBIT_API_KEY, else a
 hidden prompt. ambit disconnect removes exactly what connect added.`,
 		Args: cobra.ExactArgs(1),
@@ -274,8 +278,8 @@ hidden prompt. ambit disconnect removes exactly what connect added.`,
 		}),
 	}
 	fl := c.Flags()
-	fl.StringVar(&f.url, "url", "", "LLM gateway address, for example https://llm.example.com (required)")
-	fl.StringVar(&f.model, "model", "", "model ID that the tool sends (required except for cursor)")
+	fl.StringVar(&f.url, "url", "", "LLM gateway address, for example https://llm.example.com; the MCP address for claude-desktop-mcp (required)")
+	fl.StringVar(&f.model, "model", "", "model ID that the tool sends (required except for cursor and claude-desktop-mcp)")
 	fl.StringVar(&f.consoleURL, "console-url", "", "console address; disconnect prints the key page of the console from it")
 	fl.StringVar(&f.keyFile, "key-file", "", "read the key from this file (else AMBIT_API_KEY, else a hidden prompt)")
 	fl.BoolVar(&f.replaceKey, "replace-key", false, "ask for a new key even if one is stored for this address")
@@ -291,7 +295,7 @@ hidden prompt. ambit disconnect removes exactly what connect added.`,
 func (a *app) disconnectCmd() *cobra.Command {
 	var f disconnectFlags
 	c := &cobra.Command{
-		Use:   "disconnect <claude-code|codex|opencode|cursor> | --all",
+		Use:   "disconnect <claude-code|codex|opencode|cursor|claude-desktop-mcp> | --all",
 		Short: "Remove what ambit connect added to a tool's config",
 		Long: `Removes exactly the entries and blocks that ambit connect added, and keeps everything else in the file. An entry
 you changed after connect stays, with a warning. When no other tool uses the key, the stored key is deleted. That

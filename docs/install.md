@@ -190,9 +190,13 @@ The gateway then serves HTTPS on `gateway.tls.port` (default 8443), and plain HT
 
 ## Upgrade and uninstall
 
-Read [Upgrading](upgrading.md) before each upgrade. Upgrade the CRD chart first, then Ambit:
+Read [Upgrading](upgrading.md) before each upgrade. Apply the new release's dependency CRDs and upgrade the CRD chart
+first, then Ambit:
 
 ```sh
+R=https://github.com/craftsman-apps/ambit/releases/download/v<new version>
+curl -fsSLO $R/crds.yaml
+kubectl apply --server-side --force-conflicts -f crds.yaml
 helm upgrade ambit-crds oci://ghcr.io/craftsman-apps/charts/ambit-crds --version <new version> -n ambit-system
 helm upgrade ambit oci://ghcr.io/craftsman-apps/charts/ambit --version <new version> -n ambit-system -f values.yaml --wait
 ```

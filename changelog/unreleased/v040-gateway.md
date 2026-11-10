@@ -1,0 +1,6 @@
+- The gateway is agentgateway v1.7.0 (was v1.6.0). Apply the new third-party CRDs before you upgrade the chart (`kubectl apply --server-side -f deploy/crds/`); see [Upgrading](https://ambitproject.dev/upgrading).
+- A model call that the gateway refuses itself (403 for a model the person may not use, 404 for a model that does not exist) now appears on the Audit page under the caller. Before, these rows had no caller (issue #87).
+- A tool call to a tool the person may not use is now answered `unknown resource` (it was `Unknown tool: <name>`), the same answer as for a tool that does not exist. The Audit page still shows it as refused by policy.
+- Every streamed chat request now ends with a usage chunk (token counts), also when the client set `stream_options.include_usage` to false. Before, only people in a group with a dollar limit got it.
+- `/v1/messages` requests to a Model with provider `OpenAI` and no `baseURL` (OpenAI's own API) are now sent to OpenAI as Responses requests, not Chat Completions. Thinking blocks from earlier turns are not sent to OpenAI in either format.
+- Gateway error answers no longer include internal details such as addresses or upstream error text. The status codes are unchanged.

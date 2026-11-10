@@ -6,7 +6,7 @@ import { PullRequestNotice } from "@/components/pull-request";
 import { Shell, Status } from "@/components/shell";
 import { closedWording } from "@/lib/audit-mode";
 import { providerName } from "@/lib/providers";
-import { AddModel, UnfinishedModels } from "@/routes/add-model";
+import { AddModel, emptyKeys, keyBody, KeyFields, UnfinishedModels, type KeyValues } from "@/routes/add-model";
 
 const field = "w-28 rounded-md border border-line bg-surface px-2 py-1 font-mono text-small outline-none focus:border-accent";
 const priceText = (p: ModelPrice) => `$${p.inputPerMillionTokens} / $${p.outputPerMillionTokens} per million`;
@@ -56,17 +56,16 @@ function PriceEditor({ m, onDone }: { m: ModelView; onDone: () => void }) {
 
 // Change the key in the model's console key Secret (admins). The key is sent once and cleared from the page.
 function KeyEditor({ m, onDone }: { m: ModelView; onDone: (changed: boolean) => void }) {
-  const [key, setKey] = useState("");
+  const [keys, setKeys] = useState<KeyValues>(emptyKeys);
   const save = useMutation({
-    mutationFn: (apiKey: string) => sendJSON("PUT", `/api/models/${encodeURIComponent(m.name)}/key`, { apiKey }),
+    mutationFn: (body: object) => sendJSON("PUT", `/api/models/${encodeURIComponent(m.name)}/key`, body),
     onSuccess: () => onDone(true),
   });
   return (
     <form className="mt-2 space-y-2 rounded-md border border-line p-2" aria-label={`Key of ${m.name}`}
-      onSubmit={(e) => { e.preventDefault(); save.mutate(key); setKey(""); }}>
-      <label className="block"><span className="mb-1 block text-small text-muted">New API key</span>
-        <input className={field + " w-64"} type="password" autoComplete="off" spellCheck={false} value={key} onChange={(e) => setKey(e.target.value)} required /></label>
-      <p className="text-small text-muted">The key replaces the one in the Secret <span className="font-mono">{m.keySecret}</span>. The console never shows it.</p>
+      onSubmit={(e) => { e.preventDefault(); save.mutate(keyBody(m.provider, keys)); setKeys(emptyKeys); }}>
+      <KeyFields provider={m.provider} v={keys} set={setKeys} fresh />
+      <p className="text-small text-muted">The new key replaces the one in the Secret <span className="font-mono">{m.keySecret}</span>. The console never shows it.</p>
       <div className="flex gap-2">
         <Button type="submit" className="w-auto" disabled={save.isPending}>Save key</Button>
         <Button type="button" variant="outline" className="w-auto" onClick={() => onDone(false)}>Cancel</Button>

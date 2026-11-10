@@ -1,0 +1,1 @@
+- The homepage shows the latest released version, read from `CHANGELOG.md` at build time, instead of a fixed `v0.1.0`. The README badges show the latest release and the license.

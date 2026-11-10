@@ -140,7 +140,7 @@ export function BudgetsPage() {
         {pr && <PullRequestNotice pr={pr} repository={repository} onDone={() => setPR(null)} />}
         {remove.isError && <p className="text-bad" role="alert">{remove.error.message}</p>}
         {q.isError && <p className="text-bad" role="alert">{q.error.message}</p>}
-        {q.data?.length === 0 && !form && <p className="text-muted">No budgets yet. Groups without a budget have no daily limit.{admin && " Add one with New budget."}</p>}
+        {q.data?.length === 0 && !form && <p className="text-muted">No budgets yet. Groups without a budget have no limit.{admin && " Add one with New budget."}</p>}
         {q.data?.map((b) => (
           <div key={b.name} className="rounded-md border border-line p-4" data-testid={`budget-${b.group}`}>
             <div className="mb-2 flex items-center justify-between gap-3">
@@ -157,7 +157,7 @@ export function BudgetsPage() {
             </div>
             {confirm === b.name && (
               <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-bad p-2" role="alert">
-                <span>Remove the budget for {b.group}? The group will have no daily limit.</span>
+                <span>Remove the budget for {b.group}? The group will have no limit.</span>
                 <Button className="w-auto" disabled={remove.isPending} onClick={() => remove.mutate(b.name)}>Remove budget</Button>
                 <Button variant="outline" className="w-auto" onClick={() => setConfirm(null)}>Keep it</Button>
               </div>

@@ -358,7 +358,7 @@ pass "20a-b per minute 3: $codes(counter 6, refusals counted), Retry-After ${ra}
 new_minute; [[ $(ask_m "$M" mock/echo c) == 200 ]] || fail "20c the next minute was refused: $(cat "$W/m-c")"
 # d) a burst: 6 requests sent at once get exactly 3 answers and 3 refusals (counted when they arrive)
 new_minute; m=$(minute)
-for i in 1 2 3 4 5 6; do ( echo "$(ask_m "$M" mock/echo "d$i")" > "$W/d$i.code" ) & done; wait
+pids=(); for i in 1 2 3 4 5 6; do ( echo "$(ask_m "$M" mock/echo "d$i")" > "$W/d$i.code" ) & pids+=($!); done; wait "${pids[@]}"
 codes=$(cat "$W"/d?.code | sort | uniq -c | tr -s ' ' | tr '\n' ' ')
 [[ $(cat "$W"/d?.code | grep -c '^200$') == 3 && $(cat "$W"/d?.code | grep -c '^429$') == 3 && $(rpm_used ml-research user09@example.com "$m") == 6 ]] ||
   fail "20d burst of 6: $codes counter $(rpm_used ml-research user09@example.com "$m") (want 3 x 200, 3 x 429, 6)"

@@ -113,7 +113,7 @@ assert b['policyName']=='ambit-key-lease' and b['validationActions']==['Deny'] a
 assert b['matchResources']['namespaceSelector']=={'matchLabels':{'kubernetes.io/metadata.name':'ambit-system'}}, b" "admission: only the console changes the key Lease"
 check_qs "r=one('Role','ambit-console')['rules']
 rule=[x for x in r if x['apiGroups']==[''] and set(x['resources'])=={'secrets','configmaps'} and not x.get('resourceNames')]
-assert any(set(x['verbs'])=={'get','list','watch','create','update','delete'} for x in rule), r
+assert any(set(x['verbs'])=={'get','list','watch','create','update','patch','delete'} for x in rule), r
 l=[x for x in r if x['apiGroups']==['coordination.k8s.io']]
 assert len(l)==1 and l[0]['resources']==['leases'] and set(l[0]['verbs'])=={'get','create','update'}, l" "console Role: key objects and Lease (no Lease delete)"
 check_qs "d=one('Deployment','ambit-console')['spec']

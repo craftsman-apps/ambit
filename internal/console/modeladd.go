@@ -62,6 +62,8 @@ type UnfinishedModel struct {
 	Model       string            `json:"model"`
 	Operation   string            `json:"operation"`
 	PullRequest *PullRequestState `json:"pullRequest,omitempty"`
+	// Deleted: the model was deleted by a merged pull request of the console (GitOps mode); its key stayed.
+	Deleted bool `json:"deleted,omitempty"`
 }
 
 // modelProviders are the CRD's provider enum (api/v1alpha1/types.go); a test compares the two.
@@ -70,13 +72,16 @@ var modelProviders = []string{"Anthropic", "Azure", "Baseten", "Bedrock", "Cereb
 
 func cloudOnly(provider string) bool { return provider == "Bedrock" || provider == "VertexAI" }
 
-// redact removes the key (and its base64 form, which a Secret dump shows) from a message.
-func redact(msg, key string) string {
-	if key == "" {
-		return msg
+// redact removes each key (and its base64 form, which a Secret dump shows) from a message.
+func redact(msg string, keys ...string) string {
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		msg = strings.ReplaceAll(msg, key, "[key]")
+		msg = strings.ReplaceAll(msg, base64.StdEncoding.EncodeToString([]byte(key)), "[key]")
 	}
-	msg = strings.ReplaceAll(msg, key, "[key]")
-	return strings.ReplaceAll(msg, base64.StdEncoding.EncodeToString([]byte(key)), "[key]")
+	return msg
 }
 
 func modelBranch(in ModelAddInput) string {
@@ -270,14 +275,15 @@ func (c *Catalog) addModel(w http.ResponseWriter, r *http.Request, s Session) {
 }
 
 // apiErrRedacted is apiErr for a request that carries a key: the message is cleaned before it is shown.
-func apiErrRedacted(w http.ResponseWriter, err error, key string) {
+func apiErrRedacted(w http.ResponseWriter, err error, keys ...string) {
+	key := func(msg string) string { return redact(msg, keys...) }
 	switch {
 	case apierrors.IsInvalid(err) || apierrors.IsBadRequest(err):
-		writeErr(w, http.StatusBadRequest, redact(strings.TrimSpace(err.Error()), key))
+		writeErr(w, http.StatusBadRequest, key(strings.TrimSpace(err.Error())))
 	case apierrors.IsForbidden(err):
-		writeErr(w, http.StatusForbidden, "the console is not allowed to do that in Kubernetes: "+redact(err.Error(), key))
+		writeErr(w, http.StatusForbidden, "the console is not allowed to do that in Kubernetes: "+key(err.Error()))
 	default:
-		slog.Error("add model", "err", redact(err.Error(), key))
+		slog.Error("model key", "err", key(err.Error()))
 		writeErr(w, http.StatusInternalServerError, "the console could not reach Kubernetes; try again")
 	}
 }
@@ -327,7 +333,7 @@ func (c *Catalog) dropSecret(sec *corev1.Secret, in ModelAddInput) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), 10*time.Second)
 	defer cancel()
 	if err := c.Client.Delete(ctx, sec, client.Preconditions{UID: ptrUID(sec.UID)}); err != nil && !apierrors.IsNotFound(err) {
-		slog.Error("add model: the key secret was not removed; it is listed under Unfinished additions", "secret", sec.Name, "operation", in.Operation, "err", redact(err.Error(), in.APIKey))
+		slog.Error("add model: the key secret was not removed; it is listed under Keys without a model", "secret", sec.Name, "operation", in.Operation, "err", redact(err.Error(), in.APIKey))
 	}
 }
 
@@ -420,7 +426,7 @@ func (c *Catalog) proposeModel(w http.ResponseWriter, r *http.Request, s Session
 	}
 	if err != nil {
 		slog.Error("add model: pull request", "model", in.Name, "operation", in.Operation, "err", redact(err.Error(), in.APIKey))
-		writeErr(w, http.StatusBadGateway, "could not open the pull request in "+c.GitOps.Repository+"; retry, or remove the key under Unfinished additions")
+		writeErr(w, http.StatusBadGateway, "could not open the pull request in "+c.GitOps.Repository+"; retry, or remove the key under Keys without a model")
 		return
 	}
 	logModelAdded(in, s, "gitops")
@@ -481,8 +487,8 @@ func (c *Catalog) unfinishedModels(w http.ResponseWriter, r *http.Request, _ Ses
 			serverErr(w, err)
 			return
 		}
-		u := UnfinishedModel{Secret: sec.Name, Model: name, Operation: op}
-		if c.GitOps != nil {
+		u := UnfinishedModel{Secret: sec.Name, Model: name, Operation: op, Deleted: err != nil && sec.Annotations[deleteBranchKey] != ""}
+		if c.GitOps != nil && !u.Deleted {
 			// ponytail: one GitHub lookup per addition not yet in the cluster, on every listing.
 			st, found, err := c.GitOps.Repo.PullRequestByBranch(ctx, sec.Annotations[branchKey])
 			if err != nil {
@@ -532,7 +538,9 @@ func (c *Catalog) removeModelKey(w http.ResponseWriter, r *http.Request, s Sessi
 		writeErr(w, http.StatusConflict, "the model "+m+" uses this Secret")
 		return
 	}
-	if c.GitOps != nil && sec.Annotations[branchKey] != "" {
+	// A Secret whose model a console pull request deleted: the add pull request was merged long ago; no Model uses
+	// it (checked above), so it is removed without looking at that pull request.
+	if c.GitOps != nil && sec.Annotations[branchKey] != "" && sec.Annotations[deleteBranchKey] == "" {
 		st, found, err := c.GitOps.Repo.PullRequestByBranch(ctx, sec.Annotations[branchKey])
 		if err != nil {
 			c.pullRequestStateFailed(w, err)
@@ -569,7 +577,7 @@ func (c *Catalog) removeModelKey(w http.ResponseWriter, r *http.Request, s Sessi
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// modelUsing returns the name of a Model whose credentialsRef names the Secret, or "".
+// modelUsing returns the name of a Model whose credentialsRef, or an additional endpoint's, names the Secret, or "".
 func (c *Catalog) modelUsing(ctx context.Context, secret string) (string, error) {
 	var ms v1.ModelList
 	if err := c.Client.List(ctx, &ms, client.InNamespace(c.Namespace)); err != nil {
@@ -578,6 +586,11 @@ func (c *Catalog) modelUsing(ctx context.Context, secret string) (string, error)
 	for _, m := range ms.Items {
 		if m.Spec.CredentialsRef != nil && m.Spec.CredentialsRef.Name == secret {
 			return m.Name, nil
+		}
+		for _, e := range m.Spec.AdditionalEndpoints {
+			if e.CredentialsRef != nil && e.CredentialsRef.Name == secret {
+				return m.Name, nil
+			}
 		}
 	}
 	return "", nil

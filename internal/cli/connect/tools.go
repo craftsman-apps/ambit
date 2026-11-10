@@ -12,6 +12,8 @@ const (
 	Codex      = "codex"
 	OpenCode   = "opencode"
 	Cursor     = "cursor"
+	// ClaudeDesktopMCP is Claude Desktop's MCP entry (mcp-remote with a header file), not its models.
+	ClaudeDesktopMCP = "claude-desktop-mcp"
 )
 
 // Input is what planning a connect needs. The caller reads the file and the environment; planning changes nothing.

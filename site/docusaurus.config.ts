@@ -1,5 +1,7 @@
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
+import {readFileSync} from 'node:fs';
+import {latestRelease} from './scripts/check-install-version.mjs';
 
 const config: Config = {
   title: 'Ambit',
@@ -8,6 +10,8 @@ const config: Config = {
   baseUrl: '/',
   trailingSlash: false,
   favicon: 'brand/ambit-icon.svg',
+  // The homepage shows the newest released version. CHANGELOG.md gets its "## x.y.z (date)" heading in the release PR.
+  customFields: {version: latestRelease(readFileSync(new URL('../CHANGELOG.md', import.meta.url), 'utf8'))},
   organizationName: 'craftsman-apps',
   projectName: 'ambit',
   onBrokenLinks: 'throw',

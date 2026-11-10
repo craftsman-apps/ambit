@@ -47,11 +47,15 @@ since=$(date -u -v-3S +"%Y-%m-%d %H:%M:%S" 2>/dev/null || date -u -d '3 seconds 
 tools "$A"; call time_get_current_time '{"timezone":"UTC"}' >/dev/null; call time_convert_time '{"source_timezone":"UTC","time":"12:00","target_timezone":"UTC"}' >/dev/null
 command curl -s -o /dev/null -H "Authorization: Bearer $M" -H 'Content-Type: application/json' \
   -d '{"model":"google/gemma-4-31b-it:free","max_tokens":4,"messages":[{"role":"user","content":"hi"}]}' http://llm.localtest.me:8080/v1/chat/completions || true
+# An unknown model: Audit names the model a refused request asked for from agw.ai.original_model (issue #117).
+command curl -s -o /dev/null -H "Authorization: Bearer $A" -H 'Content-Type: application/json' \
+  -d '{"model":"contracts/no-such-model","messages":[{"role":"user","content":"hi"}]}' http://llm.localtest.me:8080/v1/chat/completions || true
 for _ in $(seq 1 30); do
   mcp=$(attrs "Timestamp >= '$since' AND LogAttributes['gen_ai.tool.name'] = 'get_current_time'" 2>/dev/null || true)
   refused=$(attrs "Timestamp >= '$since' AND LogAttributes['gen_ai.tool.name'] = 'convert_time'" 2>/dev/null || true)
   llm=$(attrs "Timestamp >= '$since' AND LogAttributes['protocol'] = 'llm'" 2>/dev/null || true)
-  [[ -n "$mcp" && -n "$refused" && -n "$llm" ]] && break; sleep 2
+  unknown=$(attrs "Timestamp >= '$since' AND LogAttributes['agw.ai.original_model'] = 'contracts/no-such-model'" 2>/dev/null || true)
+  [[ -n "$mcp" && -n "$refused" && -n "$llm" && -n "$unknown" ]] && break; sleep 2
 done
 [[ -n "$mcp" ]] || fail "C3 no access-log record of an MCP tool call reached ClickHouse (attribute gen_ai.tool.name missing?)"
 [[ -n "$llm" ]] || fail "C3 no access-log record of an LLM request reached ClickHouse (attribute protocol=llm missing?)"
@@ -59,6 +63,7 @@ missing=()
 for a in jwt.email jwt.sub jwt.groups route protocol mcp.method.name mcp.target gen_ai.tool.name; do [[ " $mcp " == *" $a "* ]] || missing+=("MCP:$a"); done
 for a in jwt.email jwt.groups route protocol; do [[ " $llm " == *" $a "* ]] || missing+=("LLM:$a"); done
 [[ " $refused " == *" error "* ]] || missing+=("refused MCP:error")
+[[ -n "$unknown" && " $unknown " == *" url.path "* ]] || missing+=("unknown model:agw.ai.original_model|url.path")
 [[ " $mcp " == *" http.status "* || " $mcp " == *" http.response.status_code "* ]] || missing+=("MCP:http.status|http.response.status_code")
 (( ${#missing[@]} == 0 )) || fail "C3 agentgateway access log lacks attributes Ambit reads: ${missing[*]}"
 status_name=$([[ " $mcp " == *" http.response.status_code "* ]] && echo http.response.status_code || echo http.status)

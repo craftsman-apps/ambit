@@ -145,3 +145,58 @@ func TestUsageSplit(t *testing.T) {
 		}
 	}
 }
+
+// Issue #117: a refused model row shows the name asked for (agentgateway v1.7.0 logs it as agw.ai.original_model
+// when gen_ai.request.model is empty), and every row carries its path, so a /v1/models call can be named.
+func TestCallsShowRequestedModelAndPath(t *testing.T) {
+	for _, want := range []string{
+		"if(LogAttributes['gen_ai.request.model'] != '', LogAttributes['gen_ai.request.model'], LogAttributes['agw.ai.original_model'])",
+		"LogAttributes['url.path']",
+	} {
+		if !strings.Contains(callsSQL, want) {
+			t.Errorf("callsSQL lacks %s", want)
+		}
+	}
+}
+
+// Issue #117: requests with an invalid key have no person; their search returns only time, route, path, status,
+// error and client address, never another attribute of the record.
+func TestInvalidKeySQLSelectsOnlySixFields(t *testing.T) {
+	sel := invalidKeySQL[strings.Index(invalidKeySQL, "SELECT"):strings.Index(invalidKeySQL, "FROM")]
+	got := strings.Count(sel, "LogAttributes[")
+	for _, a := range []string{"route", "url.path", "error", "client.address"} {
+		if !strings.Contains(sel, "LogAttributes['"+a+"']") {
+			t.Errorf("invalidKeySQL does not select %s", a)
+		}
+	}
+	// route, url.path, error, client.address, plus auditsql.Status (three reads of the two status names)
+	if got != 7 || !strings.Contains(sel, "Timestamp") {
+		t.Errorf("invalidKeySQL selects %d attributes: %s", got, sel)
+	}
+	if !strings.Contains(invalidKeySQL, "LogAttributes['ambit.identity'] = 'invalid key'") {
+		t.Error(invalidKeySQL)
+	}
+}
+
+// email and invalidKey are two search modes: exactly one is given.
+func TestAuditSearchModes(t *testing.T) {
+	a := OpenAudit(ClickHouse{Addr: "127.0.0.1:1", Password: "x"}) // nothing listens here
+	mux := http.NewServeMux()
+	a.register(mux, func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			h(w, r, Session{Email: "user10@example.com", Role: RoleAdmin})
+		}
+	})
+	for u, code := range map[string]int{
+		"/api/audit": http.StatusBadRequest,
+		"/api/audit?email=user01%40example.com&invalidKey=true": http.StatusBadRequest,
+		"/api/audit?invalidKey=yes":                             http.StatusBadRequest,
+		"/api/audit?invalidKey=true":                            http.StatusBadGateway, // reaches the store
+	} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("GET", u, nil))
+		if rec.Code != code {
+			t.Errorf("%s: %d %s, want %d", u, rec.Code, rec.Body.String(), code)
+		}
+	}
+}

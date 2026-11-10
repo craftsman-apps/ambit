@@ -68,16 +68,19 @@ Prints the password of `admin@ambit.local` of the local cluster. Flag: `--name`.
 
 ```sh
 ambit connect <claude-code|codex|opencode|cursor> --url <llm address> --model <model id> [flags]
+ambit connect claude-desktop-mcp --url <mcp address> [flags]
 ```
 
 Adds Ambit's entries to the user-level config file of a coding tool, stores the key in the keychain of your computer, and ends with one test call in the tool's own request format. It never writes the key to a config file, and it never changes a project file. For what it writes for each tool, see [Connect your coding agents](guides/coding-tools.md#before-you-start). For `cursor` it prints the steps and writes nothing.
+
+`claude-desktop-mcp` connects Claude Desktop to Ambit's MCP tools, as in [Claude Desktop with Ambit's MCP tools](guides/claude-desktop-mcp.md). `--url` is the MCP address (for example `http://mcp.localtest.me:8080/mcp`) and `--model` is not used. It adds the entry `mcpServers.ambit` (the `mcp-remote@0.14.3` bridge started with `npx`, with `--allow-http` for an `http` address whose host is not `localhost`, `127.0.0.1` or `::1`) to `claude_desktop_config.json` (macOS `~/Library/Application Support/Claude/`, Windows `%APPDATA%\Claude\`, Linux `$XDG_CONFIG_HOME/Claude/` or `~/.config/Claude/`). It writes the key to the header file `~/.ambit/mcp-headers.txt` (mode `0600`, readable only by you on Windows too), because `mcp-remote` reads the key only from a file or from the config. This is the one file `ambit connect` writes that holds the key: its content is never printed, and the state file records only its SHA-256 hash. A header file that Ambit did not write is a conflict. It makes no test call: restart Claude Desktop and check Connectors. `ambit disconnect claude-desktop-mcp` removes the entry and deletes the header file while it still holds what connect wrote.
 
 Steps: read and parse the files (a file that does not parse stops the command, nothing is changed), find conflicts, get the key, print the diff of every file, ask `Write these changes? [y/N]`, store the key, write the files (each existing file is first copied to `<file>.ambit.bak`, mode `0600`, only the latest copy is kept), write the state file, make the test call. If a write fails after another file was written, the written files are put back.
 
 | Flag | Meaning |
 |---|---|
 | `--url <address>` | Required. The LLM gateway address, for example `https://llm.example.com`. It is normalised: scheme and host in lower case, no trailing `/` and no trailing `/v1`. Must be `http` or `https`. |
-| `--model <id>` | Required except for `cursor`. The model ID that clients send (the provider's ID). |
+| `--model <id>` | Required except for `cursor` and `claude-desktop-mcp`. The model ID that clients send (the provider's ID). |
 | `--console-url <address>` | The console address. It is saved so that `ambit disconnect` can print the page where you revoke the key. |
 | `--key-file <path>` | Read the key from this file. Without it: `AMBIT_API_KEY`, then a hidden prompt. A key is never a flag value. |
 | `--replace-key` | A key is stored for this address: ask for a new one and replace it. Without the flag the stored key is reused and nothing is asked. |
@@ -209,5 +212,5 @@ Prints the CLI version, the chart version it installs, and, when the cluster ans
 ## Files the CLI writes
 
 - A state file per local cluster: `~/Library/Application Support/ambit/local/<name>.json` (macOS), `~/.config/ambit/local/<name>.json` (Linux), `%AppData%\ambit\local\<name>.json` (Windows). `ambit local down` deletes it.
-- `ambit connect` records what it wrote in `connect.json` in the `ambit` folder of your user config folder (`~/Library/Application Support/ambit` on macOS, `~/.config/ambit` on Linux, `%AppData%\ambit` on Windows), mode `0600`. The file never holds a key. The fallback key file is in `keys/` in the same folder. Each tool's config file that `ambit connect` changed has a copy `<file>.ambit.bak`; `ambit disconnect` does not delete it.
+- `ambit connect` records what it wrote in `connect.json` in the `ambit` folder of your user config folder (`~/Library/Application Support/ambit` on macOS, `~/.config/ambit` on Linux, `%AppData%\ambit` on Windows), mode `0600`. The file never holds a key. `ambit connect claude-desktop-mcp` writes the header file `~/.ambit/mcp-headers.txt`, which holds the key (mode `0600`). The fallback key file is in `keys/` in the same folder. Each tool's config file that `ambit connect` changed has a copy `<file>.ambit.bak`; `ambit disconnect` does not delete it.
 - kind adds the context `kind-<name>` to your kubeconfig; `ambit local down` removes it.

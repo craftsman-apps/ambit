@@ -19,21 +19,26 @@ kubectl -n "$NS" rollout status statefulset/ambit-clickhouse --timeout=300s >/de
 kubectl -n "$NS" rollout status deploy/ambit-otel-collector --timeout=180s >/dev/null
 kubectl -n "$NS" wait "servers.ambitproject.dev" --all --for=condition=Ready --timeout=300s >/dev/null
 
-# 0 · traffic: user01 (eng) one allowed and one refused tool call, one refused model; user09 one model call
+# 0 · traffic: user01 (eng) one allowed and one refused tool call, one refused model, one unknown model;
+#     user09 one model call
+start=$(date -u +%Y-%m-%dT%H:%M:%S)
 A=$(token user01); M=$(token user09)
 tools "$A"
 ok=$(call time_get_current_time '{"timezone":"UTC"}'); refused=$(call time_convert_time '{"source_timezone":"UTC","time":"12:00","target_timezone":"UTC"}')
 [[ "$ok" == ok* && "$refused" == error* ]] || fail "0 tool calls: $ok / $refused"
 [[ $(llm_code "$A" "$NEMO") == 403 ]] || fail "0 user01 was not refused nemotron"
+[[ $(llm_code "$A" step7/no-such-model) == 404 ]] || fail "0 user01's unknown model was not answered 404: $(head -c 200 "$W/llm")"
 user09_llm=$(llm_code "$M" "$NEMO")
-pass "0 user01: 1 allowed call, 1 refused tool, 1 refused model; user09's model call returned $user09_llm"
+pass "0 user01: 1 allowed call, 1 refused tool, 1 refused model, 1 unknown model; user09's model call returned $user09_llm"
 
 # 1 · A5: the audit search returns user01's calls, refused ones included, and nobody else's
 sign_in keycloak user10 user10-test-pass
+# The statuses of user01's model calls answered 403 or 404 since this step started.
+refusals() { field '" ".join(sorted({c["status"] for c in d["calls"] if c["route"].endswith("ambit-llm") and c["time"] >= "'"$start"'" and c["status"] in ("403", "404")}))'; }
 day=$(date -u +%Y-%m-%d); next=$(date -u -v+1d +%Y-%m-%d 2>/dev/null || date -u -d tomorrow +%Y-%m-%d)
 for _ in $(seq 1 60); do
   [[ $(api GET "/api/audit?email=user01@example.com&from=$day&to=$next") == 200 ]] &&
-    [[ $(field 'len([c for c in d["calls"] if c["route"].endswith("ambit-llm")])') -ge 1 && $(field 'len([c for c in d["calls"] if c["tool"]=="convert_time"])') -ge 1 ]] && break
+    [[ $(refusals) == "403 404" && $(field 'len([c for c in d["calls"] if c["tool"]=="convert_time"])') -ge 1 ]] && break
   sleep 2
 done
 got=$(uv run --no-project python - "$W/api" <<'PY'
@@ -47,7 +52,9 @@ PY
 emails=$(field '",".join(sorted({c["email"] for c in d["calls"]}))')
 [[ "$got" == *"tools/call:time:get_current_time:200"* ]] || fail "1 allowed call missing: $got"
 [[ "$got" == *"tools/call:time:convert_time:400"* ]] || fail "1 refused tool call missing: $got"
-[[ "$got" == *"llm::"*":403"* ]] || fail "1 refused model call missing: $got"
+# Issue #87: a model refusal answered by the gateway itself (403 denied, 404 unknown) carries the caller since
+# agentgateway v1.7.0, so user01's search finds both. The model name of these rows is still empty (issue #117).
+[[ "$(refusals)" == "403 404" ]] || fail "1 user01's refused (403) and unknown (404) model calls are not both in their audit: '$(refusals)'"
 [[ "$emails" == user01@example.com ]] || fail "1 other users' calls in user01's audit: $emails"
 reason=$(field '[c["error"] for c in d["calls"] if c["tool"]=="convert_time"][0]')
 pass "1 user01's audit: $got; refused tool reason: '$reason'; only user01's calls"

@@ -23,7 +23,7 @@ Ambit is a self-hosted gateway, built on agentgateway, ToolHive and other open-s
 | Anyone who has the key can use any model. | Access rules based on your identity provider's groups decide which models and MCP servers each team may use. |
 | AI agents connect to work apps on their own, often through one shared service account. | Every MCP call passes one gateway. People connect their own app accounts, tools are checked, and personal data in results is masked. |
 | The cost shows up on next month's bill. | Daily limits per group and per person, in requests or in dollars. |
-| Nobody can say who sent what to which model. | Every call is recorded, refusals included. Model refusals do not yet show who made them (an agentgateway bug; see [Known limitations](#known-limitations)). |
+| Nobody can say who sent what to which model. | Every call is recorded, refusals included. |
 | Someone leaves, and their keys work until someone remembers to rotate them. | The identity provider disables them, and their keys, sessions and app sign-ins stop at once. |
 
 ## Architecture
@@ -41,10 +41,6 @@ Ambit is pre-1.0. The API is `ambitproject.dev/v1alpha1` and can change between 
 |---|---|
 | Install and all features on kind, in CI on every pull request | Azure OpenAI, Amazon Bedrock and Vertex AI with real cloud accounts |
 | Company sign-in through a test Keycloak, external ClickHouse and Valkey, GitOps with Argo CD | A 24-hour soak test (CI runs a 5-minute soak) |
-
-## Known limitations
-
-When the model router refuses a request (status 403 or 404), Ambit records the refusal but not who made it. This is a bug in agentgateway v1.6.0, which answers before it takes the request snapshot that holds the caller's identity. The record keeps the time, the path and the status code, but not the caller or the model. Ambit has no workaround: a check before the router would not cover unknown models (404), and it would change the refusal message. The limitation ends when Ambit moves to an agentgateway version that takes the snapshot before it answers.
 
 ## When not to use Ambit
 

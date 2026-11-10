@@ -75,12 +75,15 @@ reached_provider() {
   fi
   return 1
 }
-# sso_settled NS: after a Helm upgrade that restarts Dex or the console, wait until their old pods are gone. rollout
-# status returns when an old pod is marked for deletion, not when it stops: Dex rolls with a surge pod, so the old Dex,
-# with the old connectors and issuer, can still answer a sign-in step for a moment (#242).
+# sso_settled NS: after a Helm upgrade that restarts Dex or the console, wait until sign-in reaches only the new pods
+# (#242). rollout status returns when an old pod is marked for deletion, not when it stops: Dex rolls with a surge pod,
+# so the old Dex, with the old connectors and issuer, can still answer for a moment, and even after it is gone the
+# Service (the console's code exchange goes to http://ambit-dex:5556) can still send a request to its address.
 sso_settled() {
   wait_for 120 "[[ \$(kubectl -n '$1' get pods -l 'app.kubernetes.io/name in (dex,ambit-console)' -o name | wc -l) -eq 2 ]]" ||
     fail "old Dex or console pods still exist: $(kubectl -n "$1" get pods -l 'app.kubernetes.io/name in (dex,ambit-console)' --no-headers)"
+  wait_for 60 "kubectl -n '$1' exec deploy/ambit-dex -- sh -c 'for i in \$(seq 1 20); do wget -q -O /dev/null -T 1 http://ambit-dex:5556/dex/healthz || exit 1; done'" ||
+    fail "the ambit-dex Service does not answer 20 requests in a row"
 }
 me_status() { curl -s ${CURL_CA:+--cacert "$CURL_CA"} -o "$W/me" -w '%{http_code}' -b "$W/jar" "$BASE/api/me"; }
 

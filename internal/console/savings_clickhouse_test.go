@@ -259,13 +259,17 @@ func TestSinceIsTheViewCreationDay(t *testing.T) {
 	a := clickhouseTestDB(t, "savings_since")
 	ctx := context.Background()
 	now := time.Now().UTC()
-	insertLog(t, a, now.Add(-time.Hour), llm("user1@example.com", `["eng"]`, "gemma", "", 100, 10)) // before the views exist
+	today := now.Truncate(24 * time.Hour)
+	before := now.Add(-time.Hour)
+	if before.Before(today) { // between 00:00 and 01:00 UTC: stay on the same UTC day (#258)
+		before = today
+	}
+	insertLog(t, a, before, llm("user1@example.com", `["eng"]`, "gemma", "", 100, 10)) // before the views exist
 	if err := EnsureSummaries(ctx, a.DB, 365); err != nil {
 		t.Fatal(err)
 	}
 	insertLog(t, a, now, llm("user2@example.com", `["eng"]`, "gemma", "", 200, 20))
 	cov, err := a.summaryCover(ctx, llmTable, llmView, compressTable, compressView)
-	today := now.Truncate(24 * time.Hour)
 	if err != nil || !cov.Since.Equal(today) || !cov.Full.Equal(today.AddDate(0, 0, 1)) {
 		t.Fatalf("cover %+v %v, want since %s and full %s", cov, err, today, today.AddDate(0, 0, 1))
 	}

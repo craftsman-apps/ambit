@@ -304,7 +304,7 @@
   docs: https://developer.salesforce.com/docs/platform/hosted-mcp-servers/guide/sobject-all.html
   live: { tool: getUserInfo }
 - id: docusign
-  version: 1
+  version: 2
   verified: true
   verifiedOn: "2026-10-07"
   displayName: Docusign
@@ -329,7 +329,6 @@
   clientIDLabel: Integration Key
   clientSecretLabel: Secret Key
   docs: https://developers.docusign.com/platform/mcp-server/
-  contract: { unauthenticated: [403] }
   live: { tool: getUserInfo }
 - id: servicenow
   version: 1

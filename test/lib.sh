@@ -75,6 +75,13 @@ reached_provider() {
   fi
   return 1
 }
+# sso_settled NS: after a Helm upgrade that restarts Dex or the console, wait until their old pods are gone. rollout
+# status returns when an old pod is marked for deletion, not when it stops: Dex rolls with a surge pod, so the old Dex,
+# with the old connectors and issuer, can still answer a sign-in step for a moment (#242).
+sso_settled() {
+  wait_for 120 "[[ \$(kubectl -n '$1' get pods -l 'app.kubernetes.io/name in (dex,ambit-console)' -o name | wc -l) -eq 2 ]]" ||
+    fail "old Dex or console pods still exist: $(kubectl -n "$1" get pods -l 'app.kubernetes.io/name in (dex,ambit-console)' --no-headers)"
+}
 me_status() { curl -s ${CURL_CA:+--cacert "$CURL_CA"} -o "$W/me" -w '%{http_code}' -b "$W/jar" "$BASE/api/me"; }
 
 # rlconfig NS: the limits envoy ratelimit has actually loaded, from its debug endpoint (port 6070) through the
@@ -96,6 +103,7 @@ ensure_llm_setup() {
   kubectl -n "$ns" apply -f test/keycloak/keycloak.yaml >/dev/null
   kubectl -n "$ns" rollout status deploy/keycloak --timeout=300s >/dev/null
   helm upgrade ambit charts/ambit -n "$ns" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --wait --timeout 5m >/dev/null
+  sso_settled "$ns"
   HAVE_KEY=false
   if [[ -s "$keyfile" ]]; then
     kubectl -n "$ns" create secret generic ambit-llm-openrouter --from-file=Authorization="$keyfile" --dry-run=client -o yaml | kubectl apply -f - >/dev/null

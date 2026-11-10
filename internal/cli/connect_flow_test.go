@@ -546,7 +546,7 @@ func TestDisconnectRevokeLineWithoutAConsoleURL(t *testing.T) {
 
 func TestDisconnectUsageAndNothingRecorded(t *testing.T) {
 	r := newRig(t)
-	for _, args := range [][]string{{"disconnect"}, {"disconnect", "codex", "--all"}, {"disconnect", "vim"}, {"disconnect", "codex", "--revoke"}, {"connect", "vim", "--url", "https://x.example.com", "--model", "m"},
+	for _, args := range [][]string{{"disconnect"}, {"disconnect", "codex", "--all"}, {"disconnect", "vim"}, {"disconnect", "codex", "--revoke", "--keep-key"}, {"connect", "vim", "--url", "https://x.example.com", "--model", "m"},
 		{"connect", "codex", "--model", "m"}, {"connect", "codex", "--url", "https://x.example.com"}, {"connect", "codex", "--url", "ftp://x", "--model", "m"}, {"connect", "codex", "--url", "https://x.example.com", "--model", "m", "--output", "json"}} {
 		if code := r.run(args...); code != 2 {
 			t.Errorf("%v: code %d, want 2\n%s%s", args, code, r.stdout.String(), r.stderr.String())

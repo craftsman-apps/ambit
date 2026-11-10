@@ -1,0 +1,2 @@
+- The console endpoint `DELETE /api/keys/self` revokes the key that is sent as the bearer token, and only that key. It reads no session cookie, is rate limited (30 a minute per console process), and writes the History action `revoke-self`.
+- `ambit disconnect --revoke` revokes each key it deletes at the console, so a key stops working at once.

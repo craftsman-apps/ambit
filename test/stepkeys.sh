@@ -107,6 +107,16 @@ pass "2 no credential, wrong key, broken JWT, wrong-scope key, JWT + wrong key: 
 wait_for 10 '[[ $(code -H "Authorization: Bearer $K") == 403 ]]' || fail "3 an expired key still works: $(cat "$W/llm")"
 pass "3 an expired key is refused within 10 s"
 
+# 3b · a key revokes itself (DELETE /api/keys/self, the key as bearer, no cookie); another key of the person stays
+mkkey self-a llm; SA=$KEY; SA_ID=$KID; mkkey self-b llm; SB=$KEY
+wait_for 30 '[[ $(code -H "Authorization: Bearer $SA") != 403 ]]' || fail "3b the new key does not work: $(cat "$W/llm")"
+[[ $(command curl -s -o "$W/self" -w '%{http_code}' -X DELETE -b "$W/jar" "$BASE/api/keys/self") == 401 ]] || fail "3b a session without the key was accepted: $(cat "$W/self")"
+[[ $(command curl -s -o "$W/self" -w '%{http_code}' -X DELETE -H "Authorization: Bearer $SA" "$BASE/api/keys/self") == 204 ]] || fail "3b self-revoke: $(cat "$W/self")"
+wait_for 10 '[[ $(code -H "Authorization: Bearer $SA") == 403 ]]' || fail "3b a revoked key still works: $(cat "$W/llm")"
+[[ $(code -H "Authorization: Bearer $SB") != 403 ]] || fail "3b the other key stopped working: $(cat "$W/llm")"
+[[ $(api GET /api/admin/key-events) == 200 && $(field 'sum(1 for e in d["events"] if e["action"]=="revoke-self" and e["keyId"]=="'"$SA_ID"'")') == 1 ]] || fail "3b no History record: $(head -c 600 "$W/api")"
+pass "3b a key revoked itself with DELETE /api/keys/self (204), is refused at once; a session alone gets 401; the other key works"
+
 # 4 · only the Lease-holding console writes key objects; namespace cleanup can still delete them
 kubectl -n "$NS" create secret generic forge-test --from-literal=key=x >/dev/null
 if kubectl -n "$NS" label secret forge-test ambitproject.dev/key=true ambitproject.dev/key-llm=true 2>"$W/err"; then

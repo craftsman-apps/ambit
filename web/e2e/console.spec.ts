@@ -244,6 +244,7 @@ test("Audit page searches one person's calls", async ({ page }) => {
 
 // Issue #117: a model list call, the name of a refused model, and a request with an invalid key are in Audit.
 test("Audit page shows model lists, refused model names and invalid-key requests", async ({ page, request }) => {
+  test.setTimeout(240_000); // two waits of up to 90 s for records to reach ClickHouse
   const llm = "http://llm.localtest.me:8080/v1";
   const tok = await request.post("http://keycloak.localtest.me:8080/realms/acme/protocol/openid-connect/token", {
     form: { grant_type: "password", client_id: "ambit-cli-test", username: "user01", password: "user01-test-pass" } });
@@ -263,7 +264,7 @@ test("Audit page shows model lists, refused model names and invalid-key requests
   }).toPass({ timeout: 90_000 });
   await expect(page.getByRole("cell", { name: "Model list" }).first()).toBeVisible();
 
-  await page.getByLabel("Search", { exact: true }).selectOption("invalid");
+  await page.locator("#audit-mode").selectOption("invalid");
   await expect(page.getByLabel("Email")).toHaveCount(0);
   await expect(async () => {
     await page.getByRole("button", { name: "Search" }).click();

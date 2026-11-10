@@ -109,7 +109,7 @@ func TestBudgetRefusalHasAnErrorBody(t *testing.T) {
 			}
 			b, _ := json.Marshal(body)
 			s := string(b)
-			if !strings.Contains(s, "Budget") || !strings.Contains(s, "request limit") || !strings.Contains(s, "spending limit") {
+			if !strings.Contains(s, "Budget") || !strings.Contains(s, "request or spending limit") || !strings.Contains(s, "per minute or per day") {
 				t.Fatalf("%s %s: message does not say what was reached: %s", c.name, path, s)
 			}
 			anthropic := strings.Contains(s, `"type":"error"`) && strings.Contains(s, `"type":"rate_limit_error"`)

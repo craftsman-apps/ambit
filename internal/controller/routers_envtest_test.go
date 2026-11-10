@@ -114,8 +114,10 @@ func TestModelTakingRouterObjectNameSurvivesCleanup(t *testing.T) {
 	}
 }
 
-// The usage policy exists exactly while some group has a dollar limit.
-func TestUsagePolicyFollowsDollarBudgets(t *testing.T) {
+// Upgrade from 0.3.x: the usage policy that 0.3.x generated for dollar-capped groups is deleted, also while a
+// dollar Budget exists (agentgateway v1.7.0 turns usage on for every stream itself, issue #261). The rate limit
+// policy stays.
+func TestOldUsagePolicyDeletedOnUpgrade(t *testing.T) {
 	needEnv(t)
 	ns := "ambit-usage-policy"
 	namespace(t, ns)
@@ -124,27 +126,29 @@ func TestUsagePolicyFollowsDollarBudgets(t *testing.T) {
 	if err := envClient.Create(ctx, b); err != nil {
 		t.Fatal(err)
 	}
+	old := generated("agentgateway.dev/v1alpha1", "AgentgatewayPolicy", UsagePolicyName, ns, map[string]any{
+		"targetRefs": []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": "ambit-llm"}},
+		"backend": map[string]any{"ai": map[string]any{"transformations": []any{map[string]any{"field": "stream_options",
+			"expression": `{"include_usage": true}`}}}},
+	})
+	if err := envClient.Create(ctx, old); err != nil {
+		t.Fatal(err)
+	}
 	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
 		RateLimit: RateLimit{Service: "ambit-ratelimit", Port: 8081, FailureMode: "FailOpen"}}
-	exists := func() bool {
+	exists := func(name string) bool {
 		p := &unstructured.Unstructured{}
 		p.SetGroupVersionKind(AgentgatewayPolicyGVK)
-		err := envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: UsagePolicyName}, p)
+		err := envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, p)
 		return err == nil && p.GetDeletionTimestamp() == nil
 	}
 	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
 		t.Fatal(err)
 	}
-	if !exists() {
-		t.Fatal("no usage policy with a dollar budget")
+	if exists(UsagePolicyName) {
+		t.Fatal("the 0.3.x usage policy was kept")
 	}
-	if err := envClient.Delete(ctx, b); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
-		t.Fatal(err)
-	}
-	if exists() {
-		t.Fatal("usage policy kept after the last dollar budget was removed")
+	if !exists(BudgetPolicyName) {
+		t.Fatal("no budget policy with a dollar budget")
 	}
 }

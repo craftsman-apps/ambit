@@ -216,15 +216,16 @@ q2=$(ask "$M" mock/echo)
 [[ "$q1" == 200 && "$q2" == 429 && "$(used_user09)" == 1 ]] || fail "9b Budget of 1 request: $q1 $q2, count $(used_user09) (want 200 429, count 1)"
 pass "9b Budget of 1 request a day: the first request passes, the second is refused and not counted"
 
-# 9c · embeddings count against a request limit when they arrive, and are refused at it (a refused one counts too,
-#      docs/budgets.md)
+# 9c · embeddings count against a request limit after the answer, like other requests: a refused one does not count
+#      (docs/budgets.md, issue #261)
 set_ml '{ group: ml-research, userRequestsPerDay: 2 }' 'group_ml-research.user: unit=DAY requests_per_unit=1,'
-e1=$(ask "$M" mock/echo hi false /embeddings); n1=$(used_user09)
-e2=$(ask "$M" mock/echo hi false /embeddings); n2=$(used_user09)
-e3=$(ask "$M" mock/echo hi false /embeddings); n3=$(used_user09)
+wait_used09() { for _ in $(seq 1 30); do [[ "$(used_user09)" == "$1" ]] && break; sleep 1; done; used_user09; }
+e1=$(ask "$M" mock/echo hi false /embeddings); n1=$(wait_used09 1)
+e2=$(ask "$M" mock/echo hi false /embeddings); n2=$(wait_used09 2)
+e3=$(ask "$M" mock/echo hi false /embeddings); sleep 3; n3=$(used_user09)
 c3=$(ask "$M" mock/echo)
-[[ "$e1/$n1 $e2/$n2 $e3/$n3 $c3" == "200/1 200/2 429/3 429" ]] || fail "9c embeddings against 2 requests a day: $e1/$n1 $e2/$n2 $e3/$n3, then chat $c3 (want 200/1 200/2 429/3 429)"
-pass "9c embeddings: two pass (count 1, 2), the third is refused (count 3: refused embeddings count), then chat is refused too"
+[[ "$e1/$n1 $e2/$n2 $e3/$n3 $c3" == "200/1 200/2 429/2 429" ]] || fail "9c embeddings against 2 requests a day: $e1/$n1 $e2/$n2 $e3/$n3, then chat $c3 (want 200/1 200/2 429/2 429)"
+pass "9c embeddings: two pass (count 1, 2), the third is refused and not counted (count 2), then chat is refused too"
 
 # 10 · models: unpriced refused to the capped group, allowed to others; a model priced 0 is allowed and costs 0
 set_ml '{ group: ml-research, groupDollarsPerDay: "1" }' 'spend_group_ml-research: unit=DAY requests_per_unit=100000,'
@@ -265,9 +266,9 @@ set_price 1.00 4.00; wait_policy '"mock/echo": 1000000u'
 pass "14 price changed while a streamed answer ran: charged 3 units, the price when it started"
 
 fresh
-# 15 · a stream that turns usage reporting off is still charged for a dollar-capped group: the gateway turns
-#      it back on (user09, ml-research). agentgateway v1.7.0 turns it on for every stream, so user01's stream (no
-#      dollar cap) reports usage too.
+# 15 · a stream that turns usage reporting off is still charged for a dollar-capped group (user09, ml-research):
+#      agentgateway v1.7.0 turns usage reporting on for every stream, so user01's stream (no dollar cap) reports
+#      usage too. Ambit has no rewrite of its own since issue #261.
 no_usage() { command curl -s -o "$W/$2" -w '%{http_code}' --max-time 60 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
   -d "{\"model\":\"$3\",\"stream\":true,\"stream_options\":{\"include_usage\":false},\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" "$MOCK/chat/completions"; }
 s0=$(spent)
@@ -289,7 +290,7 @@ for _ in $(seq 1 30); do [[ "$(spent)" != "$s0" ]] && break; sleep 1; done
 d=$(( $(spent) - ${s0:-0} ))
 [[ "$c" == 200 && "$d" == 3 ]] && grep -q '"model": *"mock/echo"' "$W/r16" || fail "16 routed answer: status $c, charged $d units (want 3, by mock/echo)"
 pass "16 a routed answer (auto → mock-echo) is charged at mock-echo's price (3 units)"
-# 17 · a routed stream with include_usage false is charged (the usage rewrite runs before the router)
+# 17 · a routed stream with include_usage false is charged (agentgateway turns usage on for the routed model too)
 s0=$(spent)
 c=$(route_ask "$M" r17 '{"model":"auto","stream":true,"stream_options":{"include_usage":false},"messages":[{"role":"user","content":"python"}]}')
 for _ in $(seq 1 30); do [[ "$(spent)" != "$s0" ]] && break; sleep 1; done

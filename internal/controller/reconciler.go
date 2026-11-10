@@ -235,17 +235,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		}
 		res.Objects = append(res.Objects, classifyPolicy(r.Namespace, r.Route.Name, r.Classifier.Deployment, routerCfg))
 	}
-	budgetPolicy, usage := false, false
+	budgetPolicy := false
 	if r.RateLimit.Service != "" {
 		cfg, p := compileBudgets(budgets.Items, prices, r.Namespace, r.RateLimit, r.Route.Name)
 		res.Objects = append(res.Objects, rateLimitConfigMap(r.Namespace, cfg))
 		if p != nil {
 			res.Objects = append(res.Objects, p)
 			budgetPolicy = true
-		}
-		if u := usagePolicy(budgets.Items, r.Namespace, r.Route.Name); u != nil {
-			res.Objects = append(res.Objects, u)
-			usage = true
 		}
 	}
 	retry := false
@@ -307,9 +303,9 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 				}
 			}
 		}
-		// No budgets (or budgets off): stop asking the ratelimit service on every request. No dollar limit: stop
-		// rewriting requests for usage. No Model with failover: stop retrying.
-		for name, wanted := range map[string]bool{BudgetPolicyName: budgetPolicy, UsagePolicyName: usage, ClassifyPolicyName: classify, RetryPolicyName: retry} {
+		// No budgets (or budgets off): stop asking the ratelimit service on every request. No Model with failover: stop
+		// retrying. The usage policy of 0.3.x is never wanted (issue #261).
+		for name, wanted := range map[string]bool{BudgetPolicyName: budgetPolicy, UsagePolicyName: false, ClassifyPolicyName: classify, RetryPolicyName: retry} {
 			if wanted {
 				continue
 			}

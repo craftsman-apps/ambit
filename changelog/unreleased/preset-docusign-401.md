@@ -1,0 +1,1 @@
+- Docusign preset version 2: the Docusign MCP server now answers a request without a token with HTTP 401 and OAuth resource metadata (before: 403). Nothing changes for an app made from version 1; its URLs and scopes are the same.

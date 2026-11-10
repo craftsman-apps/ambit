@@ -12,6 +12,7 @@ import (
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -245,10 +246,10 @@ func TestEnsureSummaries(t *testing.T) {
 	if err := EnsureSummaries(context.Background(), b, 365); err != nil {
 		t.Fatal(err)
 	}
-	if len(a.stmts) != 6 {
+	if len(a.stmts) != 9 { // three tables and views, three TTL statements
 		t.Fatalf("%d statements", len(a.stmts))
 	}
-	for _, q := range a.stmts[:4] {
+	for _, q := range a.stmts[:6] {
 		if !strings.Contains(q, "IF NOT EXISTS") {
 			t.Errorf("not idempotent: %.60s", q)
 		}
@@ -256,8 +257,9 @@ func TestEnsureSummaries(t *testing.T) {
 	if !strings.Contains(a.stmts[0], "TTL day + INTERVAL 1095 DAY") || !strings.Contains(b.stmts[0], "TTL day + INTERVAL 365 DAY") {
 		t.Error("TTL not taken from the retention")
 	}
-	if !strings.Contains(a.stmts[4], "MODIFY TTL day + INTERVAL 1095 DAY") || !strings.Contains(a.stmts[4], "materialize_ttl_after_modify = 0") || !strings.Contains(b.stmts[5], "INTERVAL 365 DAY") {
-		t.Errorf("TTL statements: %q / %q", a.stmts[4], b.stmts[5])
+	if !strings.Contains(a.stmts[6], "MODIFY TTL day + INTERVAL 1095 DAY") || !strings.Contains(a.stmts[6], "materialize_ttl_after_modify = 0") || !strings.Contains(b.stmts[8], "INTERVAL 365 DAY") ||
+		!strings.Contains(a.stmts[8], classifierTable) {
+		t.Errorf("TTL statements: %q / %q", a.stmts[6], b.stmts[8])
 	}
 	for _, q := range a.stmts {
 		if strings.Contains(q, "{days}") {
@@ -320,5 +322,84 @@ func TestSavingsAdminOnly(t *testing.T) {
 	}
 	if rec := do(t, h, "GET", "/api/savings?from=2026-04-01&to=2026-03-01", user(auth, "admin@example.com", RoleAdmin), nil); rec.Code != http.StatusBadRequest {
 		t.Errorf("bad period: %d", rec.Code)
+	}
+}
+
+// #216: routing is net of the classifier. gemma as classifier: 1,000,000 in and 10,000 out = $0.10 + $0.002.
+func TestRoutingNetOfClassifier(t *testing.T) {
+	llm := []SavingsLLMRow{
+		{Day: "2026-10-30", Group: "", Router: "auto", Model: "gemma", In: 1_000_000, Out: 200_000, Requests: 100},
+		{Day: "2026-10-30", Group: "eng", Router: "auto", Model: "gemma", In: 1_000_000, Out: 200_000, Requests: 100},
+		{Day: "2026-10-30", Group: "ml", Router: "auto", Model: "gemma", In: 1_000_000, Out: 200_000, Requests: 100}, // a person in two groups
+	}
+	cls := []SavingsClassifierRow{
+		{Day: "2026-10-30", Group: "", Router: "auto", Calls: 100, In: 1_000_000, Out: 10_000},
+		{Day: "2026-10-30", Group: "eng", Router: "auto", Calls: 100, In: 1_000_000, Out: 10_000},
+		{Day: "2026-10-30", Group: "ml", Router: "auto", Calls: 100, In: 1_000_000, Out: 10_000},
+	}
+	r := router("auto", "small", "sonnet")
+	r.Classifier = "gemma"
+	s := aggregateSavings(llm, nil, testPrices, []RouterInfo{r}, SavingsSettings{}, cls...)
+	near(t, "total", s.Totals.Routing.Dollars, 5.86-0.102) // counted once, not once per group
+	near(t, "router", s.Routers[0].Dollars, 5.86-0.102)
+	near(t, "classifier", s.Routers[0].ClassifierDollars, 0.102)
+	if s.Routers[0].ClassifierRequests != 100 {
+		t.Errorf("classifier requests %d", s.Routers[0].ClassifierRequests)
+	}
+	near(t, "day", s.Days[0].RoutingDollars, 5.86-0.102)
+	for _, g := range s.Groups {
+		near(t, "group "+g.Group, g.Routing.Dollars, 5.86-0.102)
+	}
+}
+
+func TestRoutingClassifierEdgeCases(t *testing.T) {
+	cls := []SavingsClassifierRow{{Day: "2026-10-30", Router: "auto", Calls: 10, In: 1_000_000, Out: 0}}
+	t.Run("unpriced classifier: gross, with a note", func(t *testing.T) {
+		llm := []SavingsLLMRow{{Day: "2026-10-30", Router: "auto", Model: "gemma", In: 1_000_000, Out: 200_000, Requests: 10}}
+		r := router("auto", "small", "sonnet")
+		r.Classifier = "local-llama"
+		s := aggregateSavings(llm, nil, testPrices, []RouterInfo{r}, SavingsSettings{}, cls...)
+		near(t, "total", s.Totals.Routing.Dollars, 5.86)
+		if s.Routers[0].ClassifierDollars != nil || !strings.Contains(strings.Join(s.Notes, "|"), "The classifier local-llama of router auto has no price") {
+			t.Errorf("%+v %v", s.Routers[0], s.Notes)
+		}
+	})
+	t.Run("classifier costs more than routing saves: negative", func(t *testing.T) {
+		llm := []SavingsLLMRow{{Day: "2026-10-30", Router: "auto", Model: "claude-sonnet", In: 1000, Out: 0, Requests: 10}} // saving 0
+		r := router("auto", "small", "sonnet")
+		r.Classifier = "claude-sonnet"
+		s := aggregateSavings(llm, nil, testPrices, []RouterInfo{r}, SavingsSettings{}, cls...)
+		near(t, "total", s.Totals.Routing.Dollars, -3)
+	})
+	t.Run("routed model unpriced: the figure is the classifier cost alone", func(t *testing.T) {
+		llm := []SavingsLLMRow{{Day: "2026-10-30", Router: "auto", Model: "local-llama", In: 1000, Out: 0, Requests: 10}}
+		r := router("auto", "small", "sonnet")
+		r.Classifier = "gemma"
+		s := aggregateSavings(llm, nil, testPrices, []RouterInfo{r}, SavingsSettings{}, cls...)
+		near(t, "total", s.Totals.Routing.Dollars, -0.1)
+	})
+	t.Run("deleted router: not priced", func(t *testing.T) {
+		s := aggregateSavings(nil, nil, testPrices, nil, SavingsSettings{}, cls...)
+		if s.Totals.Routing.Dollars != nil || len(s.Routers) != 1 || !s.Routers[0].Missing || s.Routers[0].ClassifierRequests != 10 {
+			t.Errorf("%+v %+v", s.Totals.Routing, s.Routers)
+		}
+	})
+	t.Run("router without a classifier Model now: note", func(t *testing.T) {
+		s := aggregateSavings(nil, nil, testPrices, []RouterInfo{router("auto", "small")}, SavingsSettings{}, cls...)
+		if !strings.Contains(strings.Join(s.Notes, "|"), "no classifier Model now") {
+			t.Errorf("%v", s.Notes)
+		}
+	})
+}
+
+func TestRouterInfosNameTheClassifier(t *testing.T) {
+	models := []v1.Model{{ObjectMeta: metav1.ObjectMeta{Name: "small"}, Spec: v1.ModelSpec{Model: "gemma"}}}
+	routers := []v1.ModelRouter{
+		{ObjectMeta: metav1.ObjectMeta{Name: "auto"}, Spec: v1.ModelRouterSpec{Default: "small", Classifier: v1.RouterClassifier{Type: "LLM", LLM: &v1.RouterLLM{Model: "small"}}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "rules"}, Spec: v1.ModelRouterSpec{Default: "small"}},
+	}
+	got := RouterInfos(routers, models)
+	if got[0].Classifier != "gemma" || got[1].Classifier != "" {
+		t.Fatalf("%+v", got)
 	}
 }

@@ -21,7 +21,7 @@ This page is not legal advice.
 |---|---|---|
 | **Audit** page in the console (admins only) | Every call through the gateway: time (UTC), email, route, server, tool, model, status, tokens, routing label. Denied calls are included. | Search by email and dates; **Export** to CSV. Needs `evidence.enabled: true`. |
 | **ClickHouse** table `otel_logs` | The same records, as the source data. | Your own SQL queries. Retention is `evidence.retention` (default `8760h`, one year). The key ID of a call made with a personal key is in `LogAttributes['ambit.key_id']`; the Audit page and its CSV do not show it. |
-| **ClickHouse** tables `ambit_llm_daily_v1`, `ambit_compress_daily_v1` | Daily counts behind the Savings page: requests and tokens per day, group, router and model; compressed tool result texts and bytes per day, group, server and type. They hold no email and no content. Group names are the only identifying text. | Your own SQL queries. Retention is `evidence.summaryRetention` (default `26280h`, three years). They count from the day the console created them; there is no backfill. |
+| **ClickHouse** tables `ambit_llm_daily_v1`, `ambit_compress_daily_v1`, `ambit_classifier_daily_v1` | Daily counts behind the Savings page: requests and tokens per day, group, router and model; compressed tool result texts and bytes per day, group, server and type; router classifier calls and tokens per day, group and router. They hold no email and no content. Group names are the only identifying text. | Your own SQL queries. Retention is `evidence.summaryRetention` (default `26280h`, three years). They count from the day the console created them; there is no backfill. |
 | **Usage** page (admins only) | Requests, tokens and estimated cost per group per day, for the last 30 days. | Console. |
 | **Kubernetes objects** (`AccessRule`, `Model`, `Server`, `Budget`, `ModelRouter`, `Connection`) | Who may use what. With GitOps mode, every change is a pull request with its author, reviewer and time. | `kubectl get`, or your configuration repository. |
 | **Settings → Keys** (admins only) | All personal API keys, and the history of key changes: who created or revoked which key, settings changes, sign-ins that changed groups (newest 500). | Console. |
@@ -110,9 +110,21 @@ docker buildx imagetools inspect ghcr.io/craftsman-apps/ambit-console:0.1.0 --fo
 docker buildx imagetools inspect ghcr.io/craftsman-apps/ambit-console:0.1.0 --format '{{ json .Provenance }}'
 ```
 
+From 0.4.0 the image is also **signed** with [cosign](https://docs.sigstore.dev/cosign/) keyless signing: the
+signature is bound to the release workflow's GitHub identity and recorded in Sigstore's public transparency log. To
+verify a tag (cosign 2.0 or newer):
+
+```sh
+cosign verify ghcr.io/craftsman-apps/ambit-console:0.4.0 \
+  --certificate-identity-regexp '^https://github.com/craftsman-apps/ambit/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+The command fails for an image that was not signed by that workflow on a `v*` tag. Releases before 0.4.0 are not signed.
+
 Image labels give the source repository, licence (Apache-2.0), version and commit. The workflow's actions are pinned to commit hashes, and Dependabot proposes updates for Go modules, npm, base images and actions.
 
-**Not yet shipped:** image signatures. They are planned. The Helm charts are published to the registry without an SBOM or signature. Third-party images that the chart installs (agentgateway, ToolHive, Dex, ClickHouse and others) come from their own projects, with their own release practices.
+**Not yet shipped:** the Helm charts are published to the registry without an SBOM or signature. Third-party images that the chart installs (agentgateway, ToolHive, Dex, ClickHouse and others) come from their own projects, with their own release practices.
 
 ## Sources
 

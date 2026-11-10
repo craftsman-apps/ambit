@@ -361,6 +361,8 @@ spec: { provider: OpenAI, model: gpt-4o-mini, credentialsRef: { name: ambit-llm-
 });
 
 test.describe("add model", () => {
+  // The later tests use the model the first one adds: a failure skips them instead of running them on a missing model.
+  test.describe.configure({ mode: "serial" });
   const name = `ui-add-${Date.now().toString(36)}`;
   const kubectl = (args: string[]) => execFileSync("kubectl", ["-n", "ambit-system", ...args]);
   test.afterAll(() => {
@@ -383,6 +385,53 @@ test.describe("add model", () => {
     await expect(page.getByTestId(`model-${name}`)).toBeVisible();
     await expect(page.getByTestId(`model-${name}`)).toContainText("gpt-4o-mini");
     await expect(page.locator("body")).not.toContainText("sk-e2e-not-a-real-key");
+  });
+
+  // The test reads the Secret's metadata only (uid, annotations), never its data.
+  test("an admin changes the key: the same Secret is updated in place and no key is shown", async ({ page }) => {
+    const meta = (path: string) => kubectl(["get", "secret", `ambit-llm-${name}`, "-o", `jsonpath={${path}}`]).toString();
+    const uid = meta(".metadata.uid");
+    await signInAsBootstrapAdmin(page);
+    await page.goto("/models");
+    const row = page.getByTestId(`model-${name}`);
+    await row.getByRole("button", { name: "Change key" }).click();
+    const form = row.getByRole("form", { name: `Key of ${name}` });
+    await expect(form.getByLabel("New API key")).toHaveAttribute("type", "password");
+    await form.getByLabel("New API key").fill("sk-e2e-new-not-a-real-key");
+    await form.getByRole("button", { name: "Save key" }).click();
+    await expect(page.getByTestId("model-notice")).toContainText(`Key of ${name} changed`);
+    expect(meta(".metadata.uid")).toBe(uid);
+    expect(meta(".metadata.annotations.ambitproject\\.dev/key-changed-by")).not.toBe("");
+    await expect(page.locator("body")).not.toContainText("sk-e2e-new-not-a-real-key");
+    await expect(page.locator("body")).not.toContainText("sk-e2e-not-a-real-key");
+  });
+
+  test("delete is refused while an access rule names the model, then removes the Model and its Secret", async ({ page }) => {
+    const rule = `${name}-rule`;
+    execFileSync("kubectl", ["-n", "ambit-system", "apply", "-f", "-"], { input: `apiVersion: ambitproject.dev/v1alpha1
+kind: AccessRule
+metadata: { name: ${rule} }
+spec: { groups: [eng], models: [${name}] }
+` });
+    try {
+      await signInAsBootstrapAdmin(page);
+      await page.goto("/models");
+      const row = page.getByTestId(`model-${name}`);
+      await row.getByRole("button", { name: "Delete" }).click();
+      const confirm = row.getByRole("group", { name: `Delete ${name}` });
+      await expect(confirm).toContainText(`The key Secret ambit-llm-${name} is deleted too.`);
+      await confirm.getByRole("button", { name: "Delete model" }).click();
+      await expect(confirm.getByRole("alert")).toContainText(`the access rules ${rule} name this model`);
+    } finally {
+      kubectl(["delete", "accessrules.ambitproject.dev", rule, "--ignore-not-found"]);
+    }
+    await page.reload();
+    const row = page.getByTestId(`model-${name}`);
+    await row.getByRole("button", { name: "Delete" }).click();
+    await row.getByRole("group", { name: `Delete ${name}` }).getByRole("button", { name: "Delete model" }).click();
+    await expect(page.getByTestId("model-notice")).toContainText(`Model ${name} deleted. Its Secret ambit-llm-${name} was removed.`);
+    await expect(page.getByTestId(`model-${name}`)).toHaveCount(0);
+    expect(kubectl(["get", "secret", "-o", "name"]).toString()).not.toContain(`secret/ambit-llm-${name}\n`);
   });
 });
 

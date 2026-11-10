@@ -326,3 +326,24 @@ test("the pages say what happens to what no rule names, by mode", async ({ page 
     await expect(page.locator("main")).toContainText(inEnforce);
   }
 });
+
+test("Delete model in GitOps mode opens a pull request; the Secret is named", async ({ page }) => {
+  await setup(page, { config: { ...enforce, mode: "gitops", namespace: "ambit-system", repository: "acme/ambit-config" } });
+  const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+  let method = "";
+  await page.route("**/api/changes/4", (r) => json(r, { number: 4, closed: false, merged: false, steps: [] }));
+  await page.route("**/api/models", (r) => json(r, [{ name: "m1", displayName: "", model: "gpt-4o", provider: "OpenAI", allowedGroups: [], allowedUsers: [],
+    allSignedIn: false, ready: "True", message: "", price: null, keySecret: "ambit-llm-m1", consoleKey: true }]));
+  await page.route("**/api/models/m1", (r) => {
+    method = r.request().method();
+    return json(r, { pullRequest: { number: 4, url: "https://github.test/pull/4", title: "Ambit: delete model m1", branch: "ambit/delete-model-m1-1" } }, 202);
+  });
+  await page.goto("/models");
+  const row = page.getByTestId("model-m1");
+  await expect(row.getByRole("button", { name: "Change key" })).toBeVisible();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(row.getByRole("group", { name: "Delete m1" })).toContainText("The key Secret ambit-llm-m1 is deleted too.");
+  await row.getByRole("button", { name: "Delete model" }).click();
+  await expect(page.getByText("Pull request #4 opened")).toBeVisible();
+  expect(method).toBe("DELETE");
+});

@@ -40,6 +40,14 @@ type SavingsCompressRow struct {
 	BytesOut, Omitted        uint64
 }
 
+// SavingsClassifierRow is one row of the classifier daily summary: the classifier calls of a router of type LLM, with
+// their tokens. Group "" is the all-groups row.
+type SavingsClassifierRow struct {
+	Day, Group, Router string
+	Calls              uint64
+	In, Out            int64
+}
+
 // RouterCandidate is a Model a router can pick: the Model object's name and the model name clients send for it
 // (Model is empty when the Model object no longer exists).
 type RouterCandidate struct{ Object, Model string }
@@ -48,6 +56,9 @@ type RouterCandidate struct{ Object, Model string }
 type RouterInfo struct {
 	Name       string
 	Candidates []RouterCandidate
+	// Classifier is the model name clients send for the router's classifier Model ("" for type Rules, or when that
+	// Model no longer exists).
+	Classifier string
 }
 
 // SavingsSettings is the admin's setting for compression dollars when a group has no priced LLM traffic.
@@ -104,6 +115,10 @@ type SavingsRouter struct {
 	Dollars        *float64 `json:"dollars"`
 	UnpricedModels []string `json:"unpricedModels"`
 	Missing        bool     `json:"missing"` // the router no longer exists: its rows are not priced
+	// The classifier calls of a router of type LLM and their cost, which Dollars already has subtracted (nil: no
+	// call counted, or the classifier has no price).
+	ClassifierRequests uint64   `json:"classifierRequests"`
+	ClassifierDollars  *float64 `json:"classifierDollars"`
 }
 
 type SavingsTotals struct {
@@ -204,7 +219,7 @@ func routingSaving(r SavingsLLMRow, info RouterInfo, prices map[string]v1.ModelP
 	return base - routedCost, true
 }
 
-func aggregateSavings(llm []SavingsLLMRow, comp []SavingsCompressRow, prices map[string]v1.ModelPrice, routers []RouterInfo, settings SavingsSettings) Savings {
+func aggregateSavings(llm []SavingsLLMRow, comp []SavingsCompressRow, prices map[string]v1.ModelPrice, routers []RouterInfo, settings SavingsSettings, classifier ...SavingsClassifierRow) Savings {
 	out := Savings{Estimated: true, Settings: SavingsSettingsOut{ReferenceInputPrice: settings.ReferenceInputPrice},
 		Days: []SavingsDay{}, Groups: []SavingsGroup{}, Servers: []SavingsServer{}, Routers: []SavingsRouter{}, Notes: []string{}}
 	avg := inputPrices(llm, prices)
@@ -327,6 +342,51 @@ func aggregateSavings(llm []SavingsLLMRow, comp []SavingsCompressRow, prices map
 				days[r.Day] = d
 			}
 			add(&d.RoutingDollars, s)
+		}
+	}
+	// Routing is net of the classifier (#216): the cost of each classifier call is subtracted from the same group,
+	// router, day and total. The baseline stays the dearest candidate.
+	for _, r := range classifier {
+		g := routing[r.Group]
+		if g == nil {
+			g = &RoutingFigures{}
+			routing[r.Group] = g
+		}
+		info, exists := byName[r.Router]
+		sr := routerOut[r.Router]
+		if r.Group == "" && sr == nil { // every classifier call comes with its LLM row; this only guards against a gap
+			sr = &SavingsRouter{Router: r.Router, BaselineModels: []string{}, UnpricedModels: []string{}, Missing: !exists}
+			routerOut[r.Router] = sr
+			unpriced[r.Router] = map[string]bool{}
+		}
+		if r.Group == "" {
+			sr.ClassifierRequests += r.Calls
+		}
+		if !exists {
+			continue // a deleted router is not priced at all
+		}
+		p, priced := prices[info.Classifier]
+		if !priced {
+			if r.Group == "" {
+				if info.Classifier == "" {
+					out.Notes = append(out.Notes, "Router "+r.Router+" has classifier calls but no classifier Model now: its routing figure is gross, not net.")
+				} else {
+					out.Notes = append(out.Notes, "The classifier "+info.Classifier+" of router "+r.Router+" has no price: its routing figure is gross, not net.")
+				}
+			}
+			continue
+		}
+		c := cost(p, r.In, r.Out)
+		add(&g.Dollars, -c)
+		if r.Group == "" {
+			add(&sr.ClassifierDollars, c)
+			add(&sr.Dollars, -c)
+			d := days[r.Day]
+			if d == nil {
+				d = &SavingsDay{Day: r.Day}
+				days[r.Day] = d
+			}
+			add(&d.RoutingDollars, -c)
 		}
 	}
 	out.Totals.Routing = *routing[""]
@@ -462,6 +522,11 @@ func (a *Audit) savings(w http.ResponseWriter, r *http.Request, _ Session) {
 		storeErr(w, err)
 		return
 	}
+	cls, classifierSince, err := a.ClassifierRows(r.Context(), from, to.Add(-time.Nanosecond))
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
 	var prices map[string]v1.ModelPrice
 	if a.Prices != nil {
 		prices = a.Prices(r.Context())
@@ -470,6 +535,6 @@ func (a *Audit) savings(w http.ResponseWriter, r *http.Request, _ Session) {
 	if a.Routers != nil {
 		routers = a.Routers(r.Context())
 	}
-	res := aggregateSavings(llm, comp, prices, routers, SavingsSettings{ReferenceInputPrice: a.ReferenceInputPrice})
-	writeJSON(w, http.StatusOK, map[string]any{"from": from, "to": to, "since": since, "savings": res})
+	res := aggregateSavings(llm, comp, prices, routers, SavingsSettings{ReferenceInputPrice: a.ReferenceInputPrice}, cls...)
+	writeJSON(w, http.StatusOK, map[string]any{"from": from, "to": to, "since": since, "classifierSince": classifierSince, "savings": res})
 }

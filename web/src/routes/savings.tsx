@@ -6,7 +6,7 @@ import { getJSON } from "@/api";
 import { csvRow } from "@/lib/csv";
 import { bytes, compact, groupRows, resend, share, topGroups, usd, withResend, type Savings } from "@/lib/savings";
 
-type Response = { from: string; to: string; since: string; savings: Savings };
+type Response = { from: string; to: string; since: string; classifierSince: string; savings: Savings };
 
 const th = "px-3 py-2 text-left font-mono text-label font-medium uppercase tracking-[.1em] text-muted";
 const td = "px-3 py-2 tabular-nums";
@@ -32,13 +32,13 @@ export function SavingsPage() {
         {res.isLoading && <p className="text-muted">Loading…</p>}
         {missing && <p className="text-muted" role="status">Savings need the audit trail: set <code className="font-mono">evidence.enabled</code> in the Helm values.</p>}
         {res.isError && !missing && <p className="text-bad" role="alert">{res.error.message}</p>}
-        {s && <Body s={s} later={later} setLater={setLater} />}
+        {s && <Body s={s} later={later} setLater={setLater} classifierSince={res.data?.classifierSince?.slice(0, 10) ?? ""} />}
       </section>
     </Shell>
   );
 }
 
-function Body({ s, later, setLater }: { s: Savings; later: number; setLater: (n: number) => void }) {
+function Body({ s, later, setLater, classifierSince }: { s: Savings; later: number; setLater: (n: number) => void; classifierSince: string }) {
   const c = withResend(s.totals.compression, later);
   const routing = s.totals.routing.dollars;
   const compDollars = c.dollars;
@@ -53,7 +53,7 @@ function Body({ s, later, setLater }: { s: Savings; later: number; setLater: (n:
         <Tile label="Compression" value={noCompression ? "–" : compDollars === null ? "tokens only" : `~${usd(compDollars)}`}
           how={noCompression ? "Nothing compressed." : compDollars === null ? "No price: set a price on a Model or the reference price." : "Estimated. Saved tokens at the average input price of each group."} />
         <Tile label="Routing" value={noRouting ? "–" : routing === null ? "not priced" : `~${usd(routing)}`}
-          how={noRouting ? "No request went through a ModelRouter." : "Estimated. Against the most expensive priced model each router can choose, same tokens. Gross: the classifier's own cost is not subtracted."} />
+          how={noRouting ? "No request went through a ModelRouter." : "Estimated. Against the most expensive priced model each router can choose, same tokens. Net of the classifier's own cost."} />
         <Tile label="Total" value={total === null ? "–" : `~${usd(total)}`} how="Estimated. Compression plus routing." strong />
       </div>
       <div className="flex flex-wrap items-center gap-3">
@@ -72,11 +72,11 @@ function Body({ s, later, setLater }: { s: Savings; later: number; setLater: (n:
       <GroupChart s={s} later={later} total={total} />
       <GroupTable s={s} later={later} total={total} />
       <ServerTable s={s} later={later} />
-      <RouterTable s={s} />
+      <RouterTable s={s} classifierSince={classifierSince} />
       <ul className="space-y-1 text-small text-muted" aria-label="What is not counted">
         <li>Per-group rows can overlap: someone in two groups counts in both. The tiles and the daily chart use one row per request.</li>
         <li>Totals can be incomplete when the guard cannot reach the collector (alert <code className="font-mono">AmbitGuardRecordsDropped</code>).</li>
-        <li>Not counted: prompt cache discounts, the cost of a router's classifier, model fallback, and results a client sends again.</li>
+        <li>Not counted: prompt cache discounts, classifier calls that timed out, model fallback, and results a client sends again.</li>
         <li>Tokens come from bytes with a fixed bytes-per-token value per type, not from the tokenizer of your models.</li>
       </ul>
     </>
@@ -233,22 +233,23 @@ function ServerTable({ s, later }: { s: Savings; later: number }) {
   );
 }
 
-function RouterTable({ s }: { s: Savings }) {
+function RouterTable({ s, classifierSince }: { s: Savings; classifierSince: string }) {
   return (
     <div className="space-y-2">
       <h2 className="text-h2 font-semibold">Routing by router</h2>
       {s.routers.length === 0 ? <p className="text-muted">No request went through a ModelRouter in this period.</p> : (
         <table className="w-full border-collapse text-small" aria-label="Routing by router">
-          <thead><tr className="border-b border-line"><th className={th}>Router</th><th className={th}>Requests</th><th className={th}>Baseline: the most expensive of</th><th className={th}>$ saved (est.)</th><th className={th}>Not priced</th></tr></thead>
+          <thead><tr className="border-b border-line"><th className={th}>Router</th><th className={th}>Requests</th><th className={th}>Baseline: the most expensive of</th><th className={th}>Classifier $ (est.)</th><th className={th}>$ saved, net (est.)</th><th className={th}>Not priced</th></tr></thead>
           <tbody>{s.routers.map((r) => (
             <tr key={r.router} className="border-b border-line-soft"><td className="px-3 py-1 font-mono">{r.router}</td><td className={td}>{r.requests.toLocaleString()}</td>
               <td className="px-3 py-1">{r.missing ? <span className="text-muted">router no longer exists</span> : r.baselineModels.join(", ") || "–"}</td>
+              <td className={td}>{r.classifierDollars === null ? <span className="text-muted">{r.classifierRequests ? "not priced" : "–"}</span> : `~${usd(r.classifierDollars)}`}</td>
               <td className={td}>{r.dollars === null ? <span className="text-muted">not priced</span> : `~${usd(r.dollars)}`}</td>
               <td className="px-3 py-1">{r.unpricedModels.join(", ") || "–"}</td></tr>
           ))}</tbody>
         </table>
       )}
-      <p className="text-small text-muted">Baseline: the most expensive model this router can choose, for anyone. Same tokens assumed. Prices and routers are read when this page opens, so a change re-prices past days.</p>
+      <p className="text-small text-muted">Baseline: the most expensive model this router can choose, for anyone. Same tokens assumed. The saving is net: the cost of the classifier calls of a router of type LLM is subtracted{classifierSince && <> (counted since {classifierSince})</>}, so it can be negative. Prices and routers are read when this page opens, so a change re-prices past days.</p>
     </div>
   );
 }

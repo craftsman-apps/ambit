@@ -82,7 +82,7 @@ spec:
     phase: PreRouting
     transformation:
       request:
-        remove: [x-ambit-route, x-ambit-route-reason, x-ambit-config]
+        remove: [x-ambit-route, x-ambit-route-reason, x-ambit-config, x-ambit-classifier-input-tokens, x-ambit-classifier-output-tokens]
       # An unknown path on the LLM host is refused by the authorization policy above (403, or 401 without a valid
       # token), which reads as a bad key when the base URL is wrong (a doubled /v1). Such a refusal becomes a 404
       # with a body that names the path. The route must match "/" (see above) and agentgateway v1.6.0 applies a

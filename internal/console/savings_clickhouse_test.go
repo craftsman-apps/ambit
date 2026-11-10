@@ -234,6 +234,23 @@ func TestSummariesOnClickHouse(t *testing.T) {
 		t.Errorf("the changed retention was not applied: %v %s", err, ttl)
 	}
 	_ = sql.ErrNoRows
+
+	// #216: a routed record with the classifier's tokens is in the classifier summary, once in the all-groups row and
+	// once per group; a record without them is not.
+	cl := llm("user1@example.com", `["eng","ml-research"]`, "gemma", "auto", 500, 50)
+	cl["ambit.classifier.input_tokens"], cl["ambit.classifier.output_tokens"] = "300", "2"
+	insertLog(t, a, d2, cl)
+	rowsC, csince, err := a.ClassifierRows(ctx, d1, d2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]SavingsClassifierRow{}
+	for _, r := range rowsC {
+		got[r.Group] = r
+	}
+	if len(got) != 3 || got[""] != (SavingsClassifierRow{Day: "2026-10-31", Router: "auto", Calls: 1, In: 300, Out: 2}) || got["eng"].Calls != 1 || got["ml-research"].Calls != 1 || csince == "" {
+		t.Errorf("classifier rows %+v since %q", rowsC, csince)
+	}
 }
 
 // With records of today only, the summary counts from the day the views were created, and that day is partial: the

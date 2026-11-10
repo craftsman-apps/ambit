@@ -53,11 +53,12 @@ without the caller (issue #87); records written before the upgrade to 0.4.0 stay
 - You do not run Kubernetes. Ambit is installed with Helm and has no other install method.
 - You need a stable API today. Wait for a release after `v1alpha1`.
 - You need one proxy for a single team or one provider. A plain proxy is simpler.
+- You need to confine what an agent does on a machine. Ambit does not confine what an agent does on a machine. Use a sandbox such as OpenShell, with Ambit as its only model endpoint: see [Run agents in a sandbox such as OpenShell](guides/sandbox-openshell.md).
 
 ## Next steps
 
 - [Quick start](quick-start.md): install Ambit on a laptop with kind, add a free model and make a first call.
 - [Concepts](concepts.md): the Ambit objects and how a request is checked.
 - [Install on your cluster](install.md): single sign-on, TLS, your own ClickHouse and Valkey, Argo CD and a production checklist.
-- Guides: [connect your coding agents](guides/coding-tools.md), [models per team](guides/models-per-team.md), [MCP servers with per-person sign-in](guides/mcp-apps.md), [asking for an MCP app and approving it](guides/request-an-app.md), [Claude Desktop with Ambit's models](guides/claude-desktop.md), [Claude Desktop with MCP tools](guides/claude-desktop-mcp.md), [spending limits](guides/spending-limits.md), [offboarding](guides/someone-leaves.md), and [turning Ambit on without blocking anyone](guides/audit-only.md).
+- Guides: [connect your coding agents](guides/coding-tools.md), [models per team](guides/models-per-team.md), [MCP servers with per-person sign-in](guides/mcp-apps.md), [asking for an MCP app and approving it](guides/request-an-app.md), [Claude Desktop with Ambit's models](guides/claude-desktop.md), [Claude Desktop with MCP tools](guides/claude-desktop-mcp.md), [spending limits](guides/spending-limits.md), [offboarding](guides/someone-leaves.md), [turning Ambit on without blocking anyone](guides/audit-only.md), and [running agents in a sandbox such as OpenShell](guides/sandbox-openshell.md).
 - Reference: [Models and providers](providers.md), [Personal API keys](api-keys.md), [MCP servers and apps](presets.md), [Budgets](budgets.md), [Model routing](routing.md), [Savings](savings.md), [Offboarding](offboarding.md), [Alerts](alerts.md), [Compliance and audits](compliance.md) and [Upgrading](upgrading.md).

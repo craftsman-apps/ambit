@@ -1,0 +1,1 @@
+- New guide [Run agents in a sandbox such as OpenShell](docs/guides/sandbox-openshell.md): an OpenShell provider profile that makes the Ambit gateway the only model endpoint of an agent in a sandbox, tested with OpenShell v0.1.7 and opencode on 2026-11-10. The "When not to use Ambit" list says that Ambit does not confine what an agent does on a machine.

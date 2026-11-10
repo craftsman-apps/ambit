@@ -55,6 +55,19 @@ func answerLine(status int, body []byte) string {
 	return string(b)
 }
 
+// headers is a repeated -header "Name: value" flag (an MCP session id, an Accept header).
+type headers [][2]string
+
+func (h *headers) String() string { return fmt.Sprint(*h) }
+func (h *headers) Set(v string) error {
+	k, val, ok := strings.Cut(v, ":")
+	if !ok || strings.TrimSpace(k) == "" {
+		return fmt.Errorf("want Name: value, got %q", v)
+	}
+	*h = append(*h, [2]string{strings.TrimSpace(k), strings.TrimSpace(val)})
+	return nil
+}
+
 // dispatch calls send for every tick until the duration has passed or stop is closed; it returns the number sent.
 func dispatch(ticks <-chan time.Time, stop <-chan struct{}, start time.Time, dur time.Duration, send func(time.Time)) int {
 	n := 0
@@ -81,6 +94,8 @@ func main() {
 	bodyFile := flag.String("body-file", "", "file with the JSON request body")
 	bodyFile2 := flag.String("body-file2", "", "optional second body: requests alternate, and each cohort gets its own percentiles")
 	answersFile := flag.String("answers-file", "", "optional: one JSON line per measured request (status, model, content)")
+	var extra headers
+	flag.Var(&extra, "header", "extra request header, Name: value (repeatable)")
 	flag.Parse()
 	var bodies [][]byte
 	for _, f := range []string{*bodyFile, *bodyFile2} {
@@ -133,6 +148,9 @@ func main() {
 			tok, _ := os.ReadFile(*tokenFile)
 			req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(tok)))
 			req.Header.Set("Content-Type", "application/json")
+			for _, h := range extra {
+				req.Header.Set(h[0], h[1])
+			}
 			resp, err := http.DefaultClient.Do(req)
 			ok := err == nil && resp.StatusCode == 200
 			var ms float64

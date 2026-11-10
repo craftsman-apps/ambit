@@ -1,0 +1,1 @@
+- New page [Performance](docs/performance.md): the time the Ambit gateway adds to a model call and to an MCP tool call, measured on one reference machine, and `test/bench.sh` to repeat the measurement.

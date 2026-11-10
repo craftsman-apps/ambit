@@ -171,8 +171,8 @@ evidence:
     # Use an existing ClickHouse (e.g. ClickHouse Cloud) instead of installing one: set host. The collector
     # writes over the native protocol, the console reads over HTTP(S). The user needs CREATE TABLE in the
     # database once (the collector creates otel_logs with the retention above), then INSERT and SELECT. For the
-    # Savings page the console also creates two summary tables and two materialized views in the same database
-    # (names ambit_llm_daily_v1, ambit_compress_daily_v1 and their _mv views): the user needs CREATE TABLE,
+    # Savings page the console also creates three summary tables and three materialized views in the same database
+    # (names ambit_llm_daily_v1, ambit_compress_daily_v1, ambit_classifier_daily_v1 and their _mv views): the user needs CREATE TABLE,
     # CREATE VIEW, ALTER MODIFY TTL, INSERT and SELECT on that database, and SELECT on system.tables.
     external:
       host: ""

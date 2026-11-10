@@ -17,12 +17,13 @@ The **Savings** page (Evidence → Savings, admins only) shows what Ambit saved 
 
 ## Where the numbers are stored
 
-The console keeps two small summary tables in ClickHouse, filled by materialized views when the collector writes a block of records:
+The console keeps three small summary tables in ClickHouse, filled by materialized views when the collector writes a block of records:
 
 | Table | One row for | Holds |
 |---|---|---|
 | `ambit_llm_daily_v1` | UTC day, group, router, model | requests, input tokens, output tokens |
 | `ambit_compress_daily_v1` | UTC day, group, server, type | compressed texts, bytes before, bytes after, cuts |
+| `ambit_classifier_daily_v1` | UTC day, group, router | classifier calls, input tokens, output tokens |
 
 The page reads about 30 days of summary rows instead of every record of the month. The summaries hold counts only: no email, no tool content, no prompt. Group names are the only identifying text in them.
 

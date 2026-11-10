@@ -59,7 +59,8 @@ pass "4 access: a user who may not use a route's model gets the default; a user 
 
 # 5 · a client cannot send the routing label: the Gateway removes it before anything reads it
 [[ "$(answered "$M" "$(msg 'hello')" "" 'x-ambit-route: coding')" == "200 mock/unpriced" ]] && ! grep -q 'x-ambit-route=' "$W/r" || fail "5 x-ambit-route reached the provider: $(cat "$W/r")"
-pass "5 a client-sent x-ambit-route is removed at the Gateway"
+[[ "$(answered "$M" "$(msg 'hello')" "" 'x-ambit-classifier-input-tokens: 999999')" == "200 mock/unpriced" ]] && ! grep -q 'x-ambit-classifier-input-tokens=' "$W/r" || fail "5 x-ambit-classifier-input-tokens reached the provider: $(cat "$W/r")"
+pass "5 a client-sent x-ambit-route and x-ambit-classifier-input-tokens are removed at the Gateway"
 
 # 8 · other paths reach only the default. If the mock cannot answer /v1/messages (the gateway translates it for
 #     OpenAI-compatible providers), read the answering model from the access log instead of the response body.
@@ -175,10 +176,11 @@ wait_until 20 '[[ "$(ask smart "$M" "$coding")" == "200 mock/echo" ]]' >/dev/nul
 grep -q 'x-ambit-route=coding' "$W/r" && grep -q "x-ambit-config=$(hash_now)" "$W/r" || fail "2 the target must see the label and its hash: $(cat "$W/r")"
 row=""
 for _ in $(seq 1 30); do
-  row=$(kubectl -n "$NS" exec statefulset/ambit-clickhouse -- clickhouse-client -q "SELECT LogAttributes['ambit.router'], LogAttributes['ambit.route'], LogAttributes['gen_ai.request.model'] FROM otel.otel_logs WHERE LogAttributes['ambit.router'] = 'smart' AND LogAttributes['ambit.route'] = 'coding' LIMIT 1")
+  row=$(kubectl -n "$NS" exec statefulset/ambit-clickhouse -- clickhouse-client -q "SELECT LogAttributes['ambit.router'], LogAttributes['ambit.route'], LogAttributes['gen_ai.request.model'], LogAttributes['ambit.classifier.input_tokens'], LogAttributes['ambit.classifier.output_tokens'] FROM otel.otel_logs WHERE LogAttributes['ambit.router'] = 'smart' AND LogAttributes['ambit.route'] = 'coding' LIMIT 1")
   [[ -n "$row" ]] && break; sleep 2
 done
-[[ "$row" == $'smart\tcoding\tmock/echo' ]] || fail "2 audit row: '$row'"
+# The classifier's tokens (the mock classifier answers 30 input, 1 output) are in the record, for the Savings page (#216).
+[[ "$row" == $'smart\tcoding\tmock/echo\t30\t1' ]] || fail "2 audit row: '$row'"
 [[ "$(ask smart "$M" CLASSIFY-EXTRA)" == "200 mock/unpriced" ]] || fail "2 an answer with extra text is no label: $(cat "$W/r")"
 kubectl -n "$NS" scale deploy/mock-classifier --replicas=0 >/dev/null
 kubectl -n "$NS" wait pod -l app=mock-classifier --for=delete --timeout=60s >/dev/null 2>&1 || true

@@ -23,7 +23,8 @@ check 'sa=one("AgentgatewayParameters","ambit")["spec"]["serviceAccount"]["metad
 assert sa=={"ambitproject.dev/test":"kind"}, sa' "gateway ServiceAccount carries gateway.serviceAccount.annotations"
 none=$(helm template ambit charts/ambit -n ambit-system -f charts/ambit/values-kind.yaml)
 ! grep -q 'serviceAccount:' <<<"$(sed -n '/kind: AgentgatewayParameters/,/^---/p' <<<"$none")" || { echo "FAIL chart: no serviceAccount overlay without annotations"; exit 1; }
-grep -q 'x-ambit-config' <<<"$out" || { echo "FAIL chart: Gateway must strip x-ambit-config"; exit 1; }
+check 'r=one("AgentgatewayPolicy","ambit-llm-route-headers")["spec"]["traffic"]["transformation"]["request"]["remove"]
+assert set(r)=={"x-ambit-route","x-ambit-route-reason","x-ambit-config","x-ambit-classifier-input-tokens","x-ambit-classifier-output-tokens"}, r' "Gateway strips every header ambit-router sets, so a client cannot forge them"
 grep -q -- '--router-deployment=ambit-router' <<<"$out" || { echo "FAIL chart: controller flag"; exit 1; }
 off=$(helm template ambit charts/ambit -n ambit-system -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --set routing.router.enabled=false)
 ! grep -q 'name: ambit-router$' <<<"$off" || { echo "FAIL chart: routing.router.enabled=false renders no ambit-router"; exit 1; }
@@ -162,7 +163,7 @@ assert {"name":"AMBIT_ACCESS_MODE","value":"audit"} in e, e' "access.mode=audit 
 check_qs 'assert not [x for x in docs if x["kind"]=="AgentgatewayPolicy" and x["metadata"]["name"]=="ambit-access-log"]
 s=yaml.safe_load(one("ConfigMap","ambit-access-log-base")["data"]["spec.yaml"])
 assert s["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"Gateway","name":"ambit"}], s
-assert [x["name"] for x in s["frontend"]["accessLog"]["attributes"]["add"]]==["jwt.email","jwt.groups","jwt.sub","ambit.key_id","ambit.identity","ambit.router","ambit.route","ambit.routeReason"], s
+assert [x["name"] for x in s["frontend"]["accessLog"]["attributes"]["add"]]==["jwt.email","jwt.groups","jwt.sub","ambit.key_id","ambit.identity","ambit.router","ambit.route","ambit.routeReason","ambit.classifier.input_tokens","ambit.classifier.output_tokens"], s
 assert s["frontend"]["accessLog"]["otlp"]=={"protocol":"GRPC","backendRef":{"name":"ambit-otel-collector","port":4317}}, s' "access-log base ConfigMap, no chart AgentgatewayPolicy ambit-access-log"
 noev=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set evidence.enabled=false)
 ! grep -q 'name: ambit-access-log-base' <<<"$noev" || { echo "FAIL chart: no access-log base without evidence"; exit 1; }

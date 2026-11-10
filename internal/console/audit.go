@@ -86,7 +86,7 @@ type Call struct {
 	Subject  string `json:"subject"`
 	// AccessMode is ambit.accessMode, Mark the verdict written when the request was served (empty when absent),
 	// RulesVersion the rules it was judged by, and Outcome the class of auditmode.go: refused, would-refuse,
-	// allow, other-model, mark-missing or n/a.
+	// allow, other-model, mark-missing, no-mark or n/a.
 	AccessMode   string `json:"accessMode"`
 	Mark         string `json:"mark"`
 	RulesVersion string `json:"rulesVersion"`

@@ -18,6 +18,8 @@ import (
 //
 //   - ambit_llm_daily_v1: LLM requests and tokens per UTC day, group, router and model.
 //   - ambit_compress_daily_v1: compressed tool result texts and bytes per UTC day, group, server and type.
+//   - ambit_classifier_daily_v1: classifier calls of routers of type LLM and their tokens per UTC day, group and router
+//     (#216). A table of its own, so the two others are not changed and keep their history.
 //
 // The group "" is the all-groups row: it counts each record once. A person in two groups counts in both group rows,
 // so every total must read only grp = '' (docs/savings.md).
@@ -30,7 +32,13 @@ const (
 	compressTable = "ambit_compress_daily_v1"
 	llmView       = llmTable + "_mv"
 	compressView  = compressTable + "_mv"
+
+	classifierTable = "ambit_classifier_daily_v1"
+	classifierView  = classifierTable + "_mv"
 )
+
+// groupJoin is the group expansion of every summary: the all-groups row ” and one row per group.
+const groupJoin = `ARRAY JOIN arrayConcat([''], if(empty(JSONExtract(LogAttributes['jwt.groups'], 'Array(String)')), ['(no group)'], JSONExtract(LogAttributes['jwt.groups'], 'Array(String)'))) AS grp`
 
 // summaryDDL are the statements that create the summaries; {days} is the retention in whole days. It is a list
 // of plain SQL so the kind test and the query-cost check run the very same text.
@@ -74,6 +82,23 @@ FROM otel_logs
 ARRAY JOIN arrayConcat([''], if(empty(JSONExtract(LogAttributes['jwt.groups'], 'Array(String)')), ['(no group)'], JSONExtract(LogAttributes['jwt.groups'], 'Array(String)'))) AS grp
 WHERE LogAttributes['ambit.kind'] = 'compression' AND LogAttributes['jwt.groups'] != ''
 GROUP BY day, grp, server, type`,
+		`CREATE TABLE IF NOT EXISTS ` + classifierTable + ` (
+  day Date, grp LowCardinality(String), router LowCardinality(String),
+  calls UInt64, input_tokens Int64, output_tokens Int64
+) ENGINE = SummingMergeTree ORDER BY (day, grp, router)
+  TTL day + INTERVAL {days} DAY`,
+		// The router sets the classifier's tokens on the request it labels; the access log copies them (#216).
+		`CREATE MATERIALIZED VIEW IF NOT EXISTS ` + classifierView + ` TO ` + classifierTable + ` AS
+SELECT toDate(Timestamp, 'UTC') AS day,
+       grp,
+       LogAttributes['ambit.router'] AS router,
+       count() AS calls,
+       sum(toInt64OrZero(LogAttributes['ambit.classifier.input_tokens'])) AS input_tokens,
+       sum(toInt64OrZero(LogAttributes['ambit.classifier.output_tokens'])) AS output_tokens
+FROM otel_logs
+` + groupJoin + `
+WHERE LogAttributes['protocol'] = 'llm' AND LogAttributes['jwt.groups'] != '' AND LogAttributes['ambit.classifier.input_tokens'] != ''
+GROUP BY day, grp, router`,
 	}
 	for i := range stmts {
 		stmts[i] = strings.ReplaceAll(stmts[i], "{days}", d)
@@ -87,6 +112,7 @@ func summaryTTL(days int) []string {
 	return []string{
 		fmt.Sprintf("ALTER TABLE %s MODIFY TTL day + INTERVAL %d DAY SETTINGS materialize_ttl_after_modify = 0", llmTable, days),
 		fmt.Sprintf("ALTER TABLE %s MODIFY TTL day + INTERVAL %d DAY SETTINGS materialize_ttl_after_modify = 0", compressTable, days),
+		fmt.Sprintf("ALTER TABLE %s MODIFY TTL day + INTERVAL %d DAY SETTINGS materialize_ttl_after_modify = 0", classifierTable, days),
 	}
 }
 
@@ -169,6 +195,38 @@ GROUP BY day, grp, router, model`
 FROM ` + compressTable + ` WHERE day >= {from:Date} AND day <= {to:Date}
 GROUP BY day, grp, server, type`
 )
+
+const classifierDailySQL = `SELECT toString(day), grp, router, sum(calls), sum(input_tokens), sum(output_tokens)
+FROM ` + classifierTable + ` WHERE day >= {from:Date} AND day <= {to:Date}
+GROUP BY day, grp, router`
+
+// ClassifierRows reads the classifier summary for the UTC days from..to (inclusive), and the day it starts ("" when
+// unknown): routing is net of the classifier from that day.
+func (a *Audit) ClassifierRows(ctx context.Context, from, to time.Time) ([]SavingsClassifierRow, string, error) {
+	ctx = clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{
+		"from": from.UTC().Format("2006-01-02"), "to": to.UTC().Format("2006-01-02")}))
+	rows, err := a.DB.QueryContext(ctx, classifierDailySQL)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	var out []SavingsClassifierRow
+	for rows.Next() {
+		var r SavingsClassifierRow
+		if err := rows.Scan(&r.Day, &r.Group, &r.Router, &r.Calls, &r.In, &r.Out); err != nil {
+			return nil, "", err
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", err
+	}
+	var since string
+	if c, err := a.summaryCover(ctx, classifierTable, classifierView); err == nil {
+		since = c.Since.Format("2006-01-02")
+	}
+	return out, since, nil
+}
 
 // SummaryRows reads both summaries for the UTC days from..to (inclusive). It always sums, because a SummingMergeTree
 // merges later and may hold several rows for one key.
@@ -265,6 +323,9 @@ func RouterInfos(routers []v1.ModelRouter, models []v1.Model) []RouterInfo {
 	var out []RouterInfo
 	for _, r := range routers {
 		info := RouterInfo{Name: r.WireName()}
+		if llm := r.Spec.Classifier.LLM; llm != nil {
+			info.Classifier = wire[llm.Model]
+		}
 		seen := map[string]bool{}
 		for _, obj := range append([]string{r.Spec.Default}, routeModels(r)...) {
 			if seen[obj] {

@@ -82,6 +82,9 @@ data:
             # A classifier's label and its reason (set by ambit-router, PR 2); empty for type Rules.
             - { name: ambit.route, expression: 'request.headers["x-ambit-route"]' }
             - { name: ambit.routeReason, expression: 'request.headers["x-ambit-route-reason"]' }
+            # The classifier call's tokens (ambit-router, when it answered in time): the Savings page subtracts their cost.
+            - { name: ambit.classifier.input_tokens, expression: 'request.headers["x-ambit-classifier-input-tokens"]' }
+            - { name: ambit.classifier.output_tokens, expression: 'request.headers["x-ambit-classifier-output-tokens"]' }
         otlp:
           protocol: GRPC
           backendRef: { name: ambit-otel-collector, port: 4317 }

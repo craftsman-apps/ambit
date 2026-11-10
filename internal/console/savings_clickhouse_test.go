@@ -234,6 +234,23 @@ func TestSummariesOnClickHouse(t *testing.T) {
 		t.Errorf("the changed retention was not applied: %v %s", err, ttl)
 	}
 	_ = sql.ErrNoRows
+
+	// #216: a routed record with the classifier's tokens is in the classifier summary, once in the all-groups row and
+	// once per group; a record without them is not.
+	cl := llm("user1@example.com", `["eng","ml-research"]`, "gemma", "auto", 500, 50)
+	cl["ambit.classifier.input_tokens"], cl["ambit.classifier.output_tokens"] = "300", "2"
+	insertLog(t, a, d2, cl)
+	rowsC, csince, err := a.ClassifierRows(ctx, d1, d2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]SavingsClassifierRow{}
+	for _, r := range rowsC {
+		got[r.Group] = r
+	}
+	if len(got) != 3 || got[""] != (SavingsClassifierRow{Day: "2026-10-31", Router: "auto", Calls: 1, In: 300, Out: 2}) || got["eng"].Calls != 1 || got["ml-research"].Calls != 1 || csince == "" {
+		t.Errorf("classifier rows %+v since %q", rowsC, csince)
+	}
 }
 
 // With records of today only, the summary counts from the day the views were created, and that day is partial: the
@@ -242,13 +259,17 @@ func TestSinceIsTheViewCreationDay(t *testing.T) {
 	a := clickhouseTestDB(t, "savings_since")
 	ctx := context.Background()
 	now := time.Now().UTC()
-	insertLog(t, a, now.Add(-time.Hour), llm("user1@example.com", `["eng"]`, "gemma", "", 100, 10)) // before the views exist
+	today := now.Truncate(24 * time.Hour)
+	before := now.Add(-time.Hour)
+	if before.Before(today) { // between 00:00 and 01:00 UTC: stay on the same UTC day (#258)
+		before = today
+	}
+	insertLog(t, a, before, llm("user1@example.com", `["eng"]`, "gemma", "", 100, 10)) // before the views exist
 	if err := EnsureSummaries(ctx, a.DB, 365); err != nil {
 		t.Fatal(err)
 	}
 	insertLog(t, a, now, llm("user2@example.com", `["eng"]`, "gemma", "", 200, 20))
 	cov, err := a.summaryCover(ctx, llmTable, llmView, compressTable, compressView)
-	today := now.Truncate(24 * time.Hour)
 	if err != nil || !cov.Since.Equal(today) || !cov.Full.Equal(today.AddDate(0, 0, 1)) {
 		t.Fatalf("cover %+v %v, want since %s and full %s", cov, err, today, today.AddDate(0, 0, 1))
 	}

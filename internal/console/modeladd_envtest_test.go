@@ -4,6 +4,7 @@ package console
 // written when it refuses. Run with `make test-go`; plain `go test` skips it.
 
 import (
+	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,7 +14,9 @@ import (
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
@@ -65,5 +68,37 @@ func TestAddModelDryRunAppliesTheCRDRules(t *testing.T) {
 	}
 	if rec := do(t, h, "POST", "/api/models", ck, enteredInput("op3abcde", "good")); rec.Code != http.StatusConflict {
 		t.Fatalf("same name again: %d %s", rec.Code, rec.Body)
+	}
+
+	// Change key: a merge patch on metadata only; the same Secret, the new key, the old one gone.
+	var before corev1.Secret
+	_ = cl.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "ambit-llm-good"}, &before)
+	if rec := do(t, h, "PUT", "/api/models/good/key", ck, ModelKeyInput{APIKey: newFakeKey}); rec.Code != http.StatusNoContent {
+		t.Fatalf("change key: %d %s", rec.Code, rec.Body)
+	}
+	var after corev1.Secret
+	_ = cl.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "ambit-llm-good"}, &after)
+	if after.UID != before.UID || string(after.Data["Authorization"]) != newFakeKey || after.Annotations[keyChangedByKey] == "" {
+		t.Fatalf("after the change: uid %s/%s, annotations %v", before.UID, after.UID, after.Annotations)
+	}
+	// The API server refuses the patch for a changed (resourceVersion) or replaced (uid) Secret.
+	for name, md := range map[string]map[string]any{
+		"stale resourceVersion": {"uid": after.UID, "resourceVersion": before.ResourceVersion},
+		"other uid":             {"uid": "00000000-0000-0000-0000-000000000000", "resourceVersion": after.ResourceVersion},
+	} {
+		patch, _ := json.Marshal(map[string]any{"metadata": md, "data": map[string]any{"Authorization": []byte("x")}})
+		meta := &metav1.PartialObjectMetadata{ObjectMeta: metav1.ObjectMeta{Name: "ambit-llm-good", Namespace: testNS}}
+		meta.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
+		if err := cl.Patch(t.Context(), meta, client.RawPatch(types.MergePatchType, patch)); err == nil {
+			t.Errorf("%s: the patch was applied", name)
+		}
+	}
+
+	// Delete: the Model and its console key Secret are removed.
+	if rec := do(t, h, "DELETE", "/api/models/good", ck, nil); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"secretRemoved":true`) {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body)
+	}
+	if err := cl.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "ambit-llm-good"}, &after); !apierrors.IsNotFound(err) {
+		t.Fatalf("the Secret is still there: %v", err)
 	}
 }

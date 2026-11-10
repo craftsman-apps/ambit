@@ -1,6 +1,6 @@
 // Audit-only mode, as the console shows it. Pure functions, so they run without a browser.
 
-export type Outcome = "refused" | "would-refuse" | "allow" | "other-model" | "mark-missing" | "n/a";
+export type Outcome = "refused" | "would-refuse" | "allow" | "other-model" | "mark-missing" | "no-mark" | "n/a";
 
 // Whole days from an RFC 3339 time to now (UTC); never negative.
 export function daysSince(iso: string, now: Date): number {
@@ -35,6 +35,7 @@ export function outcomeLabel(outcome: Outcome | undefined, status: string): { te
     case "would-refuse": return { text: `Would be refused (${status})`, tone: "warn" };
     case "other-model": return { text: "Would use another model (unless a later route matched)", tone: "warn" };
     case "mark-missing": return { text: "Mark missing", tone: "warn", note: "The rule expression failed, or the audit fields were not active yet." };
+    case "no-mark": return { text: `Served, no verdict (${status})`, tone: "warn", note: "No access rule judges this model or tool, so audit-only mode recorded no verdict." };
     default: return undefined;
   }
 }

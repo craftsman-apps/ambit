@@ -209,6 +209,21 @@ ambit validate <file or directory>...
 
 Checks every Ambit object (`apiVersion: ambitproject.dev/...`) in the YAML files the way the cluster would on apply: defaults, unknown fields, the schema and its CEL rules. Other objects are skipped. Exit 1 if any object would be refused. In GitHub Actions it also prints `::error` annotations. For CI, the binary is also at `/ambit` in the image `ghcr.io/craftsman-apps/ambit-console`.
 
+## ambit lint
+
+```sh
+ambit lint [--strict] <file or directory>...
+```
+
+Reads the YAML files (also a `kind: List`, as `kubectl get accessrules -o yaml` prints it) and prints one warning for each AccessRule setting that the cluster accepts but that gives wide access. It reads files only, no cluster. Other objects are skipped.
+
+| ID | Warning |
+|---|---|
+| `all-signed-in` | `allSignedIn: true` matches every signed-in user. Name groups or users instead. |
+| `all-tools` | A `servers` entry without `tools` allows every tool of the server, including tools the server adds later. List the tools. |
+
+Each line is `! <file>: AccessRule <name>: <warning> [<id>]`, and the last line is `<n> files, <m> AccessRules, <k> warnings`. Exit 0 with or without warnings; with `--strict`, exit 1 when there is a warning. A file that is not valid YAML: exit 2. In GitHub Actions it also prints `::warning` annotations. A warning can be right for a test or a pilot: `ambit lint` does not change or refuse anything.
+
 ## ambit version
 
 Prints the CLI version, the chart version it installs, and, when the cluster answers within 3 seconds, the installed versions of `ambit-crds` and `ambit`. `--output json` prints `{"cli", "charts", "chartRepo", "installed", "cluster"}`.

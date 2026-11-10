@@ -67,3 +67,13 @@ func TestDispatchEndsAfterDuration(t *testing.T) {
 		t.Fatalf("sent %d, want 3", n)
 	}
 }
+
+func TestHeaderFlag(t *testing.T) {
+	var h headers
+	if err := h.Set("Mcp-Session-Id: abc:1"); err != nil || len(h) != 1 || h[0] != [2]string{"Mcp-Session-Id", "abc:1"} {
+		t.Fatalf("%v %v", h, err)
+	}
+	if h.Set("no colon") == nil || h.Set(": empty name") == nil {
+		t.Fatal("a header without a name was accepted")
+	}
+}

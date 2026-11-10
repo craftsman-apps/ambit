@@ -49,24 +49,28 @@ func lintRule(spec v1.AccessRuleSpec) []string {
 // lintFile returns the warnings of the AccessRules in r, as "AccessRule <name>: <warning>", and how many it read.
 func lintFile(r io.Reader) (warnings []string, rules int, err error) {
 	dec := utilyaml.NewYAMLReader(bufio.NewReader(r))
-	var visit func(o lintObject)
-	visit = func(o lintObject) {
+	var visit func(o lintObject) error
+	visit = func(o lintObject) error {
 		if o.Kind == "List" {
-			for _, it := range o.Items {
+			for i, it := range o.Items {
 				var item lintObject
-				if json.Unmarshal(it, &item) == nil {
-					visit(item)
+				if err := json.Unmarshal(it, &item); err != nil {
+					return fmt.Errorf("item %d of a List is not an object: %w", i, err)
+				}
+				if err := visit(item); err != nil {
+					return err
 				}
 			}
-			return
+			return nil
 		}
 		if o.Kind != "AccessRule" || !strings.HasPrefix(o.APIVersion, "ambitproject.dev/") {
-			return
+			return nil
 		}
 		rules++
 		for _, w := range lintRule(o.Spec) {
 			warnings = append(warnings, "AccessRule "+o.Metadata.Name+": "+w)
 		}
+		return nil
 	}
 	for {
 		doc, err := dec.Read()
@@ -83,7 +87,9 @@ func lintFile(r io.Reader) (warnings []string, rules int, err error) {
 		if err := yaml.Unmarshal(doc, &o); err != nil {
 			return nil, 0, fmt.Errorf("not valid YAML: %w", err)
 		}
-		visit(o)
+		if err := visit(o); err != nil {
+			return nil, 0, err
+		}
 	}
 }
 

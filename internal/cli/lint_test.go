@@ -93,6 +93,10 @@ func TestLintStrictAndErrors(t *testing.T) {
 	if code, s := runCLI(t, nil, "lint", bad); code != 2 {
 		t.Fatalf("bad YAML: code %d\n%s", code, s)
 	}
+	badList := writeLint(t, map[string]string{"list.yaml": "apiVersion: v1\nkind: List\nitems:\n- [apiVersion, kind]\n"})
+	if code, s := runCLI(t, nil, "lint", badList); code != 2 || !strings.Contains(s, "item 0 of a List") {
+		t.Fatalf("a List item that is not an object: code %d\n%s", code, s)
+	}
 	if code, _ := runCLI(t, nil, "lint"); code != 2 {
 		t.Fatal("no path accepted")
 	}

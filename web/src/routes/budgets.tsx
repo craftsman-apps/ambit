@@ -7,10 +7,10 @@ import { Shell, Status } from "@/components/shell";
 
 type UserUse = { email: string; used: number; spent: number };
 type BudgetView = { name: string; group: string; groupLimit: number | null; userLimit: number | null; groupUsed: number; users: UserUse[];
-  groupDollarLimit: string; userDollarLimit: string; groupSpent: number;
+  groupDollarLimit: string; userDollarLimit: string; groupSpent: number; groupMinuteLimit?: number | null; userMinuteLimit?: number | null;
   ready: string; message: string; resetsAt: string; countsMissing?: boolean; gitManaged: boolean };
 type BudgetInput = { name?: string; group: string; groupRequestsPerDay: number | null; userRequestsPerDay: number | null;
-  groupDollarsPerDay: string; userDollarsPerDay: string };
+  groupDollarsPerDay: string; userDollarsPerDay: string; groupRequestsPerMinute: number | null; userRequestsPerMinute: number | null };
 
 async function get<T>(url: string): Promise<T> {
   const r = await fetch(url, { credentials: "same-origin" });
@@ -61,12 +61,15 @@ function BudgetForm({ editing, onDone }: { editing?: BudgetView; onDone: () => v
   const [userLimit, setUserLimit] = useState(editing?.userLimit?.toString() ?? "");
   const [groupDollars, setGroupDollars] = useState(editing?.groupDollarLimit ?? "");
   const [userDollars, setUserDollars] = useState(editing?.userDollarLimit ?? "");
+  const [groupMinute, setGroupMinute] = useState(editing?.groupMinuteLimit?.toString() ?? "");
+  const [userMinute, setUserMinute] = useState(editing?.userMinuteLimit?.toString() ?? "");
   const [pr, setPR] = useState<PullRequest | null>(null);
   const num = (v: string) => (v.trim() === "" ? null : Number(v));
   const save = useMutation({
     mutationFn: () => {
       const body: BudgetInput = { group: group.trim(), groupRequestsPerDay: num(groupLimit), userRequestsPerDay: num(userLimit),
-        groupDollarsPerDay: groupDollars.trim(), userDollarsPerDay: userDollars.trim() };
+        groupDollarsPerDay: groupDollars.trim(), userDollarsPerDay: userDollars.trim(),
+        groupRequestsPerMinute: num(groupMinute), userRequestsPerMinute: num(userMinute) };
       return editing ? sendJSON("PUT", `/api/budgets/${encodeURIComponent(editing.name)}`, body)
         : sendJSON("POST", "/api/budgets", { ...body, name: nameFor(group) });
     },
@@ -90,8 +93,15 @@ function BudgetForm({ editing, onDone }: { editing?: BudgetView; onDone: () => v
         <label className="block"><span className="mb-1 block text-muted">Per person dollars per day</span>
           <input id="budget-user-dollars" inputMode="decimal" className={field} value={userDollars} onChange={(e) => setUserDollars(e.target.value)} placeholder="no limit" /></label>
       </div>
-      <p className="text-small text-muted">Set at least one. Days are UTC. Over a limit the gateway answers 429; every replica shares the same count.
-        Dollars are estimated from model prices. Once spending is above a limit, new requests are refused; answers already started still finish and are charged. Embeddings are not counted, and models without a price are refused to the group.</p>
+      <div className="grid grid-cols-2 gap-3">
+        <label className="block"><span className="mb-1 block text-muted">Whole group, requests per minute</span>
+          <input id="budget-group-minute" type="number" min={1} max={1000000} className={field} value={groupMinute} onChange={(e) => setGroupMinute(e.target.value)} placeholder="no limit" /></label>
+        <label className="block"><span className="mb-1 block text-muted">Each person, requests per minute</span>
+          <input id="budget-user-minute" type="number" min={1} max={1000000} className={field} value={userMinute} onChange={(e) => setUserMinute(e.target.value)} placeholder="no limit" /></label>
+      </div>
+      <p className="text-small text-muted">Set at least one. Days and minutes are UTC. Over a limit the gateway answers 429; every replica shares the same count.
+        A daily request counts after its answer; a request per minute counts when it arrives, also when it is then refused.
+        Dollars are estimated from model prices. Once spending is above a limit, new requests are refused; answers already started still finish and are charged. Embeddings count as requests but are not charged, and models without a price are refused to the group.</p>
       {save.isError && <p className="text-bad" role="alert">{save.error.message}</p>}
       <div className="flex gap-2">
         <Button type="submit" className="w-auto" disabled={save.isPending}>{editing ? "Save" : "Add budget"}</Button>
@@ -122,7 +132,7 @@ export function BudgetsPage() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-h1 font-semibold tracking-tight">Budgets</h1>
-            <p className="text-muted">LLM requests per day for each group, and for each person in it. Over the limit the gateway answers 429 until the day resets (UTC).</p>
+            <p className="text-muted">LLM requests per day and per minute, and dollars per day, for each group and for each person in it. Over a limit the gateway answers 429 until that limit resets (UTC).</p>
           </div>
           {admin && !form && <Button className="w-auto shrink-0" onClick={() => setForm("new")}>New budget</Button>}
         </div>
@@ -130,7 +140,7 @@ export function BudgetsPage() {
         {pr && <PullRequestNotice pr={pr} repository={repository} onDone={() => setPR(null)} />}
         {remove.isError && <p className="text-bad" role="alert">{remove.error.message}</p>}
         {q.isError && <p className="text-bad" role="alert">{q.error.message}</p>}
-        {q.data?.length === 0 && !form && <p className="text-muted">No budgets yet. Groups without a budget have no daily limit.{admin && " Add one with New budget."}</p>}
+        {q.data?.length === 0 && !form && <p className="text-muted">No budgets yet. Groups without a budget have no limit.{admin && " Add one with New budget."}</p>}
         {q.data?.map((b) => (
           <div key={b.name} className="rounded-md border border-line p-4" data-testid={`budget-${b.group}`}>
             <div className="mb-2 flex items-center justify-between gap-3">
@@ -147,7 +157,7 @@ export function BudgetsPage() {
             </div>
             {confirm === b.name && (
               <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-bad p-2" role="alert">
-                <span>Remove the budget for {b.group}? The group will have no daily limit.</span>
+                <span>Remove the budget for {b.group}? The group will have no limit.</span>
                 <Button className="w-auto" disabled={remove.isPending} onClick={() => remove.mutate(b.name)}>Remove budget</Button>
                 <Button variant="outline" className="w-auto" onClick={() => setConfirm(null)}>Keep it</Button>
               </div>
@@ -159,6 +169,8 @@ export function BudgetsPage() {
               <dt className="text-muted">Each person</dt><dd>{b.userLimit ? `${b.userLimit} per day` : <span className="text-muted">no per-person limit</span>}</dd>
               {b.groupDollarLimit && <><dt className="text-muted">Group spend</dt><dd><Spend spent={b.groupSpent} limit={b.groupDollarLimit} /></dd></>}
               {b.userDollarLimit && <><dt className="text-muted">Each person spends</dt><dd>up to ${b.userDollarLimit} per day</dd></>}
+              {b.groupMinuteLimit != null && <><dt className="text-muted">Group per minute</dt><dd>{b.groupMinuteLimit} requests</dd></>}
+              {b.userMinuteLimit != null && <><dt className="text-muted">Each person per minute</dt><dd>{b.userMinuteLimit} requests</dd></>}
             </dl>
             {(b.userLimit != null || b.userDollarLimit) && b.users.length > 0 && (
               <ul className="mt-2 space-y-1">

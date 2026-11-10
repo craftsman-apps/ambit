@@ -1,0 +1,2 @@
+- Budgets can limit requests per minute: `userRequestsPerMinute` (each person) and `groupRequestsPerMinute` (the whole group), per clock minute (UTC). A request counts when it arrives, also when it is then refused, so a burst cannot get past the limit. The console's Budgets page sets them (issue #85).
+- The text of a Budget refusal (HTTP 429) no longer says "daily": it covers per-minute and daily limits. `Retry-After` is the reset of the limit that refused: the rest of the minute for a per-minute limit, which is checked first, or the time to midnight UTC for a daily limit.

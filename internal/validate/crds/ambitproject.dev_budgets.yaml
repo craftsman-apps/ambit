@@ -31,10 +31,20 @@ spec:
     - jsonPath: .spec.userDollarsPerDay
       name: User $/day
       type: string
+    - jsonPath: .spec.userRequestsPerMinute
+      name: User/min
+      priority: 1
+      type: integer
+    - jsonPath: .spec.groupRequestsPerMinute
+      name: Group/min
+      priority: 1
+      type: integer
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Budget caps a group's LLM requests per day. Over the limit the gateway answers 429.
+        description: 'Budget caps a group''s LLM requests per day and per minute, and its estimated spend per day. Over a limit the
+
+          gateway answers 429.'
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation of an object.
@@ -59,9 +69,9 @@ spec:
           metadata:
             type: object
           spec:
-            description: 'BudgetSpec limits LLM use per day for one group from the identity provider: requests, estimated dollars
+            description: 'BudgetSpec limits LLM use for one group from the identity provider: requests per day, estimated dollars per day
 
-              (from Model prices), or both. Limits are shared across every gateway replica. A member of several
+              (from Model prices), requests per minute, or any of them. Limits are shared across every gateway replica. A member of several
 
               budgeted groups is counted against each of them.'
             properties:
@@ -80,6 +90,14 @@ spec:
                 format: int64
                 minimum: 1
                 type: integer
+              groupRequestsPerMinute:
+                description: 'GroupRequestsPerMinute is shared by everyone in the group, per clock minute (UTC). Unlike the daily limits, a
+
+                  request counts when it arrives, also when it is then refused, so a burst cannot get past it.'
+                format: int64
+                maximum: 1000000
+                minimum: 1
+                type: integer
               userDollarsPerDay:
                 description: UserDollarsPerDay applies to each member separately.
                 pattern: ^[0-9]{1,5}(\.[0-9]{1,5})?$
@@ -89,12 +107,20 @@ spec:
                 format: int64
                 minimum: 1
                 type: integer
+              userRequestsPerMinute:
+                description: 'UserRequestsPerMinute applies to each member separately, per clock minute (UTC), counted like
+
+                  GroupRequestsPerMinute.'
+                format: int64
+                maximum: 1000000
+                minimum: 1
+                type: integer
             required:
             - group
             type: object
             x-kubernetes-validations:
             - message: set at least one limit
-              rule: has(self.groupRequestsPerDay) || has(self.userRequestsPerDay) || has(self.groupDollarsPerDay) || has(self.userDollarsPerDay)
+              rule: has(self.groupRequestsPerDay) || has(self.userRequestsPerDay) || has(self.groupDollarsPerDay) || has(self.userDollarsPerDay) || has(self.groupRequestsPerMinute) || has(self.userRequestsPerMinute)
             - message: groupDollarsPerDay must be greater than 0
               rule: '!has(self.groupDollarsPerDay) || double(self.groupDollarsPerDay) > 0.0'
             - message: userDollarsPerDay must be greater than 0

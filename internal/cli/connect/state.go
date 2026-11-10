@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // State is the file connect.json: what Ambit wrote, so disconnect removes exactly that. It never holds a secret.
@@ -21,6 +22,8 @@ type State struct {
 type KeyRecord struct {
 	Store      string `json:"store"` // StoreKeychain or StoreFile
 	ConsoleURL string `json:"consoleURL,omitempty"`
+	// Set means ambit key set stored the key for a helper: only disconnect --all deletes it, not the last tool.
+	Set bool `json:"set,omitempty"`
 }
 
 type ToolRecord struct {
@@ -121,4 +124,36 @@ func (s *State) Save(path string) error {
 		return err
 	}
 	return atomicWrite(path, append(b, '\n'), 0o600)
+}
+
+// LockWait is how long LockState waits for another ambit.
+var LockWait = 10 * time.Second
+
+// LockState locks <path>.lock, so that two connect, disconnect or key set runs do not both load the state file and
+// one of them overwrite the other's record. It waits up to LockWait. The lock is the operating system's (flock,
+// LockFileEx): it ends with the process, also after Ctrl-C or a crash. The returned function releases it.
+func LockState(path string) (func(), error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	deadline := time.Now().Add(LockWait)
+	for {
+		ok, err := tryLock(f)
+		if err != nil {
+			f.Close()
+			return nil, err
+		}
+		if ok {
+			return func() { f.Close() }, nil // closing the file releases the lock
+		}
+		if time.Now().After(deadline) {
+			f.Close()
+			return nil, fmt.Errorf("another ambit connect, disconnect or key set is running (it holds %s.lock); wait for it to finish", path)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }

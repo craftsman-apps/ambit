@@ -216,6 +216,11 @@ func (a *app) runKeySet(ctx context.Context, f connectFlags) error {
 	if err != nil {
 		return err
 	}
+	unlock, err := connect.LockState(d.StatePath)
+	if err != nil {
+		return &out.Error{What: "cannot change " + d.StatePath, Why: err.Error(), Code: out.ExitFailed}
+	}
+	defer unlock()
 	st, err := connect.LoadState(d.StatePath)
 	if err != nil {
 		return err
@@ -235,7 +240,7 @@ func (a *app) runKeySet(ctx context.Context, f connectFlags) error {
 	}
 	kr := st.Keys[url]
 	oldStore := kr.Store
-	kr.Store = store
+	kr.Store, kr.Set = store, true
 	if f.consoleURL != "" {
 		kr.ConsoleURL = strings.TrimRight(f.consoleURL, "/")
 	}

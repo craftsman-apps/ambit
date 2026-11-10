@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,7 +22,7 @@ import (
 
 // Classifier answers a category for a text (any text: the caller checks it against the router's categories).
 type Classifier interface {
-	Classify(ctx context.Context, r routerconfig.Router, key, text string) (answer string, tokens int, err error)
+	Classify(ctx context.Context, r routerconfig.Router, key, text string) (answer string, used Usage, err error)
 }
 
 // Handler is the ExtProc server. It never changes the body and never answers with an error: a failure is a reason
@@ -65,8 +66,12 @@ type Attrs struct {
 	Config string // the configuration hash the gateway's policy names
 }
 
-// Result: Route "" means no label; Reason "" means the request is not for a router of type LLM.
-type Result struct{ Route, Reason, ConfigHash string }
+// Result: Route "" means no label; Reason "" means the request is not for a router of type LLM. Usage is the
+// classifier call's, when it answered in time (it goes into the request record for the Savings page).
+type Result struct {
+	Route, Reason, ConfigHash string
+	Usage                     Usage
+}
 
 // attributesKey is where agentgateway puts requestAttributes (ext_proc.rs:31, seen in the proof task).
 const attributesKey = "envoy.filters.http.ext_proc"
@@ -118,6 +123,7 @@ func (h *Handler) decide(ctx context.Context, start time.Time, snap *Snapshot, a
 	cctx, cancel := context.WithDeadline(ctx, start.Add(timeout))
 	type out struct {
 		answer string
+		used   Usage
 		err    error
 	}
 	ch := make(chan out, 1)
@@ -128,11 +134,11 @@ func (h *Handler) decide(ctx context.Context, start time.Time, snap *Snapshot, a
 		if r.LLM != nil {
 			key = snap.keys[r.LLM.CredentialKey]
 		}
-		x, n, err := h.Classifier.Classify(cctx, r, key, cut(text, r.MaxBytes))
+		x, used, err := h.Classifier.Classify(cctx, r, key, cut(text, r.MaxBytes))
 		if r.LLM != nil {
-			h.Metrics.Tokens(r.Name, r.LLM.Model, n)
+			h.Metrics.Tokens(r.Name, r.LLM.Model, used.Total())
 		}
-		ch <- out{x, err}
+		ch <- out{x, used, err}
 	}()
 	var o out
 	select {
@@ -150,10 +156,10 @@ func (h *Handler) decide(ctx context.Context, start time.Time, snap *Snapshot, a
 	name := strings.ToLower(strings.TrimSpace(o.answer))
 	for _, c := range r.Categories {
 		if c.Name == name {
-			return Result{Route: name, Reason: "classified", ConfigHash: snap.Config.Hash}
+			return Result{Route: name, Reason: "classified", ConfigHash: snap.Config.Hash, Usage: o.used}
 		}
 	}
-	return Result{Reason: "unknown-category"}
+	return Result{Reason: "unknown-category", Usage: o.used}
 }
 
 // lastUserText is the last user message when its content is a string (the same text the rule lines see).
@@ -234,6 +240,10 @@ func (h *Handler) Process(s extproc.ExternalProcessor_ProcessServer) error {
 			if res.Reason != "" {
 				add("x-ambit-route-reason", res.Reason)
 				h.Metrics.Reason(routerName(snap, b), res.Reason)
+			}
+			if u := res.Usage; u.Total() > 0 {
+				add("x-ambit-classifier-input-tokens", strconv.Itoa(u.In))
+				add("x-ambit-classifier-output-tokens", strconv.Itoa(u.Out))
 			}
 			if res.Route != "" {
 				add("x-ambit-route", res.Route)

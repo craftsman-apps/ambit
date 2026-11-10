@@ -27,12 +27,18 @@ func Prompt(r routerconfig.Router) string {
 	return b.String()
 }
 
-func (l *LLM) Classify(ctx context.Context, r routerconfig.Router, key, text string) (string, int, error) {
+// Usage is what one classifier call used. A provider that reports only total_tokens has it all in In: the classifier
+// writes at most 8 tokens, so pricing them as input is close enough for the Savings estimate.
+type Usage struct{ In, Out int }
+
+func (u Usage) Total() int { return u.In + u.Out }
+
+func (l *LLM) Classify(ctx context.Context, r routerconfig.Router, key, text string) (string, Usage, error) {
 	reqBody, _ := json.Marshal(map[string]any{"model": r.LLM.Model, "temperature": 0, "max_tokens": 8,
 		"messages": []any{map[string]any{"role": "system", "content": Prompt(r)}, map[string]any{"role": "user", "content": text}}})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.LLM.Endpoint+"/chat/completions", bytes.NewReader(reqBody))
 	if err != nil {
-		return "", 0, err
+		return "", Usage{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if key != "" {
@@ -43,11 +49,11 @@ func (l *LLM) Classify(ctx context.Context, r routerconfig.Router, key, text str
 	}
 	resp, err := l.HTTP.Do(req)
 	if err != nil {
-		return "", 0, err
+		return "", Usage{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", 0, fmt.Errorf("classifier answered HTTP %d", resp.StatusCode) // never the body: it may echo the key
+		return "", Usage{}, fmt.Errorf("classifier answered HTTP %d", resp.StatusCode) // never the body: it may echo the key
 	}
 	var out struct {
 		Choices []struct {
@@ -56,14 +62,20 @@ func (l *LLM) Classify(ctx context.Context, r routerconfig.Router, key, text str
 			} `json:"message"`
 		} `json:"choices"`
 		Usage struct {
-			TotalTokens int `json:"total_tokens"`
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
 		} `json:"usage"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&out); err != nil {
-		return "", 0, errors.New("classifier answer is not JSON")
+		return "", Usage{}, errors.New("classifier answer is not JSON")
+	}
+	u := Usage{In: max(out.Usage.PromptTokens, 0), Out: max(out.Usage.CompletionTokens, 0)}
+	if u.Total() == 0 {
+		u.In = max(out.Usage.TotalTokens, 0)
 	}
 	if len(out.Choices) == 0 {
-		return "", out.Usage.TotalTokens, nil
+		return "", u, nil
 	}
-	return out.Choices[0].Message.Content, out.Usage.TotalTokens, nil
+	return out.Choices[0].Message.Content, u, nil
 }

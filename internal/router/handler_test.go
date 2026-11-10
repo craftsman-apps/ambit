@@ -32,7 +32,8 @@ type fakeLLM struct {
 	lastText atomic.Value
 }
 
-func (f *fakeLLM) Classify(ctx context.Context, _ routerconfig.Router, _, text string) (string, int, error) {
+// The fake used 7 input and 1 output token on every answer.
+func (f *fakeLLM) Classify(ctx context.Context, _ routerconfig.Router, _, text string) (string, Usage, error) {
 	f.calls.Add(1)
 	f.running.Add(1)
 	defer f.running.Add(-1)
@@ -42,13 +43,16 @@ func (f *fakeLLM) Classify(ctx context.Context, _ routerconfig.Router, _, text s
 	}
 	if f.ignore {
 		time.Sleep(f.delay)
-		return f.answer, 8, nil
+		return f.answer, Usage{In: 7, Out: 1}, nil
 	}
 	select {
 	case <-time.After(f.delay):
-		return f.answer, 8, f.err
+		if f.err != nil {
+			return "", Usage{}, f.err
+		}
+		return f.answer, Usage{In: 7, Out: 1}, nil
 	case <-ctx.Done():
-		return "", 0, ctx.Err()
+		return "", Usage{}, ctx.Err()
 	}
 }
 
@@ -334,6 +338,29 @@ func TestStreamSetsLabelAndHash(t *testing.T) {
 	hs := headersOf(r2)
 	if hs["x-ambit-route"] != "coding" || hs["x-ambit-config"] != cfg.Hash || hs["x-ambit-route-reason"] != "classified" {
 		t.Fatalf("%v", hs)
+	}
+	if hs["x-ambit-classifier-input-tokens"] != "7" || hs["x-ambit-classifier-output-tokens"] != "1" {
+		t.Fatalf("classifier tokens: %v", hs)
+	}
+}
+
+// The classifier's tokens go into the request record whenever it answered in time, label or not; never on a timeout
+// or an error, where they are not known.
+func TestStreamClassifierTokens(t *testing.T) {
+	cfg := cfgOf(auto)
+	for name, c := range map[string]struct {
+		llm  *fakeLLM
+		want bool
+	}{
+		"unknown category": {&fakeLLM{answer: "cooking"}, true},
+		"timeout":          {&fakeLLM{answer: "coding", delay: time.Second}, false},
+		"error":            {&fakeLLM{err: errors.New("HTTP 500")}, false},
+	} {
+		_, r2 := exchange(t, handler(c.llm, cfg), cfg.Hash, nil, body("auto", "x"))
+		hs := headersOf(r2)
+		if got := hs["x-ambit-classifier-input-tokens"] == "7" && hs["x-ambit-classifier-output-tokens"] == "1"; got != c.want {
+			t.Errorf("%s: %v", name, hs)
+		}
 	}
 }
 

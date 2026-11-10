@@ -242,6 +242,36 @@ test("Audit page searches one person's calls", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Export CSV" })).toBeVisible();
 });
 
+// Issue #117: a model list call, the name of a refused model, and a request with an invalid key are in Audit.
+test("Audit page shows model lists, refused model names and invalid-key requests", async ({ page, request }) => {
+  const llm = "http://llm.localtest.me:8080/v1";
+  const tok = await request.post("http://keycloak.localtest.me:8080/realms/acme/protocol/openid-connect/token", {
+    form: { grant_type: "password", client_id: "ambit-cli-test", username: "user01", password: "user01-test-pass" } });
+  const auth = { Authorization: `Bearer ${(await tok.json()).access_token}` };
+  expect((await request.get(`${llm}/models`, { headers: auth })).status()).toBe(200);
+  const chat = (model: string, headers: Record<string, string>) =>
+    request.post(`${llm}/chat/completions`, { headers, data: { model, messages: [{ role: "user", content: "hi" }] } });
+  expect((await chat("ui/no-such-model", auth)).status()).toBe(404);
+  expect((await chat("mock/unpriced", { Authorization: "Bearer ambit_uitestuitestuitestuitestuitestuitestuitest1" })).status()).toBe(403);
+
+  await signInAsBootstrapAdmin(page);
+  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Audit" }).click();
+  await page.getByLabel("Email").fill("user01@example.com");
+  await expect(async () => {
+    await page.getByRole("button", { name: "Search" }).click();
+    await expect(page.getByRole("cell", { name: "ui/no-such-model" }).first()).toBeVisible({ timeout: 2000 });
+  }).toPass({ timeout: 90_000 });
+  await expect(page.getByRole("cell", { name: "Model list" }).first()).toBeVisible();
+
+  await page.getByLabel("Search", { exact: true }).selectOption("invalid");
+  await expect(page.getByLabel("Email")).toHaveCount(0);
+  await expect(async () => {
+    await page.getByRole("button", { name: "Search" }).click();
+    await expect(page.getByRole("cell", { name: "/v1/chat/completions" }).first()).toBeVisible({ timeout: 2000 });
+  }).toPass({ timeout: 90_000 });
+  await expect(page.getByRole("columnheader", { name: "Client" })).toBeVisible();
+});
+
 test("Budgets page adds, changes and removes a group budget", async ({ page }) => {
   await signInAsBootstrapAdmin(page);
   await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Budgets" }).click();

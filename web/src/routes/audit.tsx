@@ -8,9 +8,11 @@ import { isStale, outcomeLabel, switchCheck, utcMinute, type Outcome, type Would
 
 type Call = { time: string; email: string; route: string; method: string; server: string; tool: string; model: string; status: string; error: string; inputTokens: number; outputTokens: number; router: string; label: string; labelReason: string;
   // Audit-only mode: the verdict written when the request was served, the rules it was judged by, and its class.
-  accessMode?: string; mark?: string; rulesVersion?: string; outcome?: Outcome };
+  accessMode?: string; mark?: string; rulesVersion?: string; outcome?: Outcome;
+  // The request path (/v1/models is a model list), and for a request with an invalid key the address it came from.
+  path?: string; identity?: string; clientAddress?: string };
 // A routed call shows the router and the model that answered, e.g. "auto → mock/echo (coding)".
-const target = (c: Call) => c.router ? `${c.router} → ${c.model}${c.label || c.labelReason ? ` (${c.label || c.labelReason})` : ""}` : (c.server || c.model);
+const target = (c: Call) => c.clientAddress ? `from ${c.clientAddress}` : c.router ? `${c.router} → ${c.model}${c.label || c.labelReason ? ` (${c.label || c.labelReason})` : ""}` : (c.server || c.model);
 type Usage = { day: string; group: string; requests: number; inputTokens: number; outputTokens: number; cost?: number; unpricedModels?: string[] };
 
 async function get<T>(url: string): Promise<T> {
@@ -33,7 +35,8 @@ const failed = (c: Call) => !refused(c) && (c.error !== "" || Number(c.status) >
 // What an auditor asks about: tool calls, model requests, and refusals before the MCP method is known.
 const isCall = (c: Call) => c.method === "tools/call" || c.method === "";
 const utc = (t: string) => new Date(t).toISOString().replace("T", " ").slice(0, 19);
-const what = (c: Call) => c.method ? `${c.method}${c.tool ? ` · ${c.tool}` : ""}` : c.model || /llm$/.test(c.route) ? "LLM request" : c.route;
+const what = (c: Call) => c.method ? `${c.method}${c.tool ? ` · ${c.tool}` : ""}` : c.path === "/v1/models" ? "Model list"
+  : c.identity === "invalid key" ? c.path || c.route : c.model || /llm$/.test(c.route) ? "LLM request" : c.route;
 // In audit-only mode the server classifies a record (outcome); the page's own reading applies to every other record.
 const outcome = (c: Call) => {
   const o = outcomeLabel(c.outcome, c.status);
@@ -42,7 +45,7 @@ const outcome = (c: Call) => {
 };
 
 function csv(calls: Call[]) {
-  const rows = calls.map((c) => csvRow([utc(c.time), c.email, what(c), target(c), outcome(c), c.status, c.error, c.inputTokens, c.outputTokens, c.mark ?? "", c.rulesVersion ?? ""]));
+  const rows = calls.map((c) => csvRow([utc(c.time), c.email || "no person", what(c), target(c), outcome(c), c.status, c.error, c.inputTokens, c.outputTokens, c.mark ?? "", c.rulesVersion ?? ""]));
   return ["time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version", ...rows].join("\n") + "\n";
 }
 function download(name: string, text: string) {
@@ -53,16 +56,18 @@ function download(name: string, text: string) {
   URL.revokeObjectURL(a.href);
 }
 
-// Audit (journey A5): every gateway call one person made in a period, refused ones included.
+// Audit (journey A5): every gateway call one person made in a period, refused ones included; or every request made
+// with an invalid key (wrong, revoked or expired), which has no person (issue #117).
 export function AuditPage() {
-  const [form, setForm] = useState({ email: "", from: monthAgo(), to: today() });
+  const [form, setForm] = useState({ invalidKey: false, email: "", from: monthAgo(), to: today() });
   const [q, setQ] = useState<typeof form | null>(null);
   const [protocol, setProtocol] = useState(false);
   const [onlyWouldRefuse, setOnlyWouldRefuse] = useState(false);
   const audit = useConfig().data?.accessMode === "audit";
   const res = useQuery({
     queryKey: ["audit", q], enabled: !!q, retry: false,
-    queryFn: () => get<{ calls: Call[]; limited: boolean }>(`/api/audit?${new URLSearchParams({ email: q!.email, from: q!.from, to: nextDay(q!.to) })}`),
+    queryFn: () => get<{ calls: Call[]; limited: boolean }>(`/api/audit?${new URLSearchParams({
+      ...(q!.invalidKey ? { invalidKey: "true" } : { email: q!.email }), from: q!.from, to: nextDay(q!.to) })}`),
   });
   const all = res.data?.calls ?? [];
   const hasVerdicts = all.some((c) => c.outcome === "would-refuse" || c.outcome === "other-model" || c.outcome === "mark-missing");
@@ -80,7 +85,11 @@ export function AuditPage() {
           <p className="text-muted">Every call a person made through the gateway, including the ones it refused. Kept for a year. Dates and times are UTC.</p>
         </div>
         <form className="flex flex-wrap items-end gap-2" onSubmit={search}>
-          <label><span className="mb-1 block text-muted">Email</span><input id="audit-email" className={field} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="user01@acme.com" required /></label>
+          <label><span className="mb-1 block text-muted">Search</span>
+            <select id="audit-mode" className={field} value={form.invalidKey ? "invalid" : "email"} onChange={(e) => setForm({ ...form, invalidKey: e.target.value === "invalid" })}>
+              <option value="email">One person</option><option value="invalid">Requests with an invalid key</option>
+            </select></label>
+          {!form.invalidKey && <label><span className="mb-1 block text-muted">Email</span><input id="audit-email" className={field} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="user01@acme.com" required /></label>}
           <label><span className="mb-1 block text-muted">From (UTC)</span><input id="audit-from" type="date" className={field} value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} /></label>
           <label><span className="mb-1 block text-muted">To (UTC, inclusive)</span><input id="audit-to" type="date" className={field} value={form.to} onChange={(e) => setForm({ ...form, to: e.target.value })} /></label>
           <Button type="submit" className="w-auto" disabled={res.isFetching}>{res.isFetching ? "Searching…" : "Search"}</Button>
@@ -99,11 +108,11 @@ export function AuditPage() {
               <label className="inline-flex items-center gap-1.5"><input id="audit-protocol" type="checkbox" checked={protocol} onChange={(e) => setProtocol(e.target.checked)} />
                 Show protocol messages ({all.length - all.filter(isCall).length})</label>
               <Button variant="outline" className="ml-auto w-auto" disabled={all.length === 0}
-                onClick={() => download(`audit-${q!.email}-${q!.from}-${q!.to}.csv`, csv(all))}>Export CSV</Button>
+                onClick={() => download(`audit-${q!.invalidKey ? "invalid-key" : q!.email}-${q!.from}-${q!.to}.csv`, csv(all))}>Export CSV</Button>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full border-collapse text-body">
-                <thead><tr className="border-b border-line"><th className={th}>Time (UTC)</th><th className={th}>What</th><th className={th}>Server / model</th><th className={th}>Outcome</th><th className={th}>Tokens</th></tr></thead>
+                <thead><tr className="border-b border-line"><th className={th}>Time (UTC)</th><th className={th}>What</th><th className={th}>{q!.invalidKey ? "Client" : "Server / model"}</th><th className={th}>Outcome</th><th className={th}>Tokens</th></tr></thead>
                 <tbody>
                   {shown.map((c, i) => (
                     <tr key={i} className="border-b border-line-soft align-top">
@@ -115,7 +124,7 @@ export function AuditPage() {
                       <td className="px-3 py-2 font-mono text-small tabular-nums">{c.inputTokens || c.outputTokens ? `${c.inputTokens} in / ${c.outputTokens} out` : ""}</td>
                     </tr>
                   ))}
-                  {shown.length === 0 && <tr><td colSpan={5} className="px-3 py-6 text-muted">No calls by {q!.email} in this period.</td></tr>}
+                  {shown.length === 0 && <tr><td colSpan={5} className="px-3 py-6 text-muted">{q!.invalidKey ? "No requests with an invalid key in this period." : `No calls by ${q!.email} in this period.`}</td></tr>}
                 </tbody>
               </table>
             </div>

@@ -28,8 +28,10 @@ ok=$(call time_get_current_time '{"timezone":"UTC"}'); refused=$(call time_conve
 [[ "$ok" == ok* && "$refused" == error* ]] || fail "0 tool calls: $ok / $refused"
 [[ $(llm_code "$A" "$NEMO") == 403 ]] || fail "0 user01 was not refused nemotron"
 [[ $(llm_code "$A" step7/no-such-model) == 404 ]] || fail "0 user01's unknown model was not answered 404: $(head -c 200 "$W/llm")"
+[[ $(command curl -s -o "$W/models" -w '%{http_code}' -H "Authorization: Bearer $A" "${LLM%/chat/completions}/models") == 200 ]] || fail "0 user01's model list: $(head -c 200 "$W/models")"
+[[ $(llm_code ambit_step7step7step7step7step7step7step7step7 mock/unpriced) == 403 ]] || fail "0 an invalid key was not refused: $(head -c 200 "$W/llm")"
 user09_llm=$(llm_code "$M" "$NEMO")
-pass "0 user01: 1 allowed call, 1 refused tool, 1 refused model, 1 unknown model; user09's model call returned $user09_llm"
+pass "0 user01: 1 allowed call, 1 refused tool, 1 refused model, 1 unknown model, 1 model list; 1 invalid key; user09's model call returned $user09_llm"
 
 # 1 · A5: the audit search returns user01's calls, refused ones included, and nobody else's
 sign_in keycloak user10 user10-test-pass
@@ -55,9 +57,25 @@ emails=$(field '",".join(sorted({c["email"] for c in d["calls"]}))')
 # Issue #87: a model refusal answered by the gateway itself (403 denied, 404 unknown) carries the caller since
 # agentgateway v1.7.0, so user01's search finds both. The model name of these rows is still empty (issue #117).
 [[ "$(refusals)" == "403 404" ]] || fail "1 user01's refused (403) and unknown (404) model calls are not both in their audit: '$(refusals)'"
+# Issue #117: the refused rows name the model asked for, and the model list call is there with its path.
+since() { echo '[c for c in d["calls"] if c["time"] >= "'"$start"'"]'; }
+[[ $(field "sorted({c['model'] for c in $(since) if c['status'] in ('403', '404') and c['route'].endswith('ambit-llm')})") == "['$NEMO', 'step7/no-such-model']" ]] ||
+  fail "1 the refused model rows do not name their models: $(field "[(c['status'], c['model']) for c in $(since) if c['status'] in ('403', '404')]")"
+[[ $(field "len([c for c in $(since) if c.get('path') == '/v1/models'])") -ge 1 ]] || fail "1 user01's model list call is not in their audit"
 [[ "$emails" == user01@example.com ]] || fail "1 other users' calls in user01's audit: $emails"
 reason=$(field '[c["error"] for c in d["calls"] if c["tool"]=="convert_time"][0]')
 pass "1 user01's audit: $got; refused tool reason: '$reason'; only user01's calls"
+
+# 1b · issue #117: the request with an invalid key is in the invalid-key search, with no person and only six fields
+for _ in $(seq 1 30); do
+  [[ $(api GET "/api/audit?invalidKey=true&from=$day&to=$next") == 200 ]] && [[ $(field "len($(since))") -ge 1 ]] && break; sleep 2
+done
+row=$(field "[c for c in $(since) if c['path'] == '/v1/chat/completions' and c['status'] == '403'][:1]")
+[[ "$row" != "[]" ]] || fail "1b no invalid-key request: $(head -c 300 "$W/api")"
+extra=$(field "sorted({k for c in $(since) for k, v in c.items() if v not in ('', 0, None) and k not in ('time', 'route', 'path', 'status', 'error', 'clientAddress', 'identity')})")
+[[ "$extra" == "[]" ]] || fail "1b the invalid-key rows carry more fields: $extra"
+[[ $(api GET "/api/audit?invalidKey=true&email=user01@example.com") == 400 ]] || fail "1b email and invalidKey together were accepted"
+pass "1b invalid-key search: the 403 on /v1/chat/completions, no person, only time, route, path, status, error and client address"
 
 # 2 · the period filter works; only admins may search
 [[ $(api GET "/api/audit?email=user01@example.com&from=2026-03-01&to=2026-04-01") == 200 && $(field 'len(d["calls"])') == 0 ]] || fail "2 March should be empty"

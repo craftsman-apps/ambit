@@ -29,7 +29,7 @@ limit (403), or a Budget limit already reached (429). Embeddings are the excepti
 | Request | Counted? |
 |---|---|
 | `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, streamed or not | Yes |
-| `/v1/embeddings` | Yes, when it arrives, so a refused embeddings request (403 or 429) counts too: agentgateway v1.6.0 has no counting step after an embeddings answer |
+| `/v1/embeddings` | Yes, when it arrives, so a refused embeddings request (403 or 429) counts too |
 | Any other refused request (403 or 429) | No |
 
 ## How spending is counted
@@ -45,9 +45,9 @@ charged at the price from when it started.
 |---|---|
 | `/v1/chat/completions`, `/v1/messages`, `/v1/responses`, streamed or not | Yes, when the answer reports token counts |
 | A stream cut off part-way | For the token counts received before it stopped |
-| `/v1/embeddings` | **No** (agentgateway v1.5.0 and v1.6.0 do not run the charge step for embeddings) |
+| `/v1/embeddings` | **No**: an embeddings answer has an input token count but no output token count, and the charge needs both |
 | An answer without token counts | **No** |
-| A streamed request that turns usage reporting off (`stream_options: {"include_usage": false}`) | Yes, for members of a group with a dollar limit: the gateway turns usage reporting back on, so the stream ends with one extra chunk carrying the token counts (standard OpenAI behavior). Other people's requests are left as sent |
+| A streamed request that turns usage reporting off (`stream_options: {"include_usage": false}`) | Yes: the gateway turns usage reporting back on for every streamed request, so the stream ends with one extra chunk carrying the token counts (standard OpenAI behavior) |
 | A refused or failed request | No (no tokens) |
 
 ## When a cap is passed

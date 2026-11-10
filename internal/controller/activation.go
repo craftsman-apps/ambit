@@ -264,11 +264,13 @@ func boundedReason(s string) string {
 	return s
 }
 
-// rejectedOf reads a NACK text. agentgateway v1.6.0 sends a JSON array of {"key", "error" or "warn"}, one entry per
-// rejected resource, the key being "<kind>/<namespace>/<name>", for example "backend/default/bad-gcp" or
+// rejectedOf reads a NACK text. agentgateway sends a JSON array of {"key", "error" or "warn"}, one entry per
+// resource with a problem, the key being "<kind>/<namespace>/<name>", for example "backend/default/bad-gcp" or
 // "model/default/gpt-5-mini" (crates/xds/src/client.rs:76-82 and :715, crates/agentgateway/src/store/binds.rs:2603
 // and :2973). names are the resource names in namespace; reason is "key: text" per entry. A text in another format
-// names nothing and is the reason as it is: the caller then gives the generic message.
+// names nothing and is the reason as it is: the caller then gives the generic message. Only "error" entries name a
+// resource: since agentgateway v1.7.0 a NACK carries warnings only next to an error (upstream #3953), and a resource
+// with a warning was applied.
 func rejectedOf(text, namespace string) (names []string, reason string) {
 	var entries []struct{ Key, Error, Warn string }
 	if json.Unmarshal([]byte(text), &entries) != nil || len(entries) == 0 {
@@ -277,7 +279,7 @@ func rejectedOf(text, namespace string) (names []string, reason string) {
 	var parts []string
 	for _, e := range entries {
 		parts = append(parts, e.Key+": "+cmp.Or(e.Error, e.Warn))
-		if kind, rest, _ := strings.Cut(e.Key, "/"); kind == "backend" || kind == "model" {
+		if kind, rest, _ := strings.Cut(e.Key, "/"); e.Error != "" && (kind == "backend" || kind == "model") {
 			if ns, name, ok := strings.Cut(rest, "/"); ok && ns == namespace && name != "" {
 				names = append(names, name)
 			}

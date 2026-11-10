@@ -80,6 +80,8 @@ reached_provider() {
 # so the old Dex, with the old connectors and issuer, can still answer for a moment, and even after it is gone the
 # Service (the console's code exchange goes to http://ambit-dex:5556) can still send a request to its address.
 sso_settled() {
+  kubectl -n "$1" rollout status deploy/ambit-dex --timeout=180s >/dev/null  # the new pods exist; then the old ones go
+  kubectl -n "$1" rollout status deploy/ambit-console --timeout=180s >/dev/null
   wait_for 120 "[[ \$(kubectl -n '$1' get pods -l 'app.kubernetes.io/name in (dex,ambit-console)' -o name | wc -l) -eq 2 ]]" ||
     fail "old Dex or console pods still exist: $(kubectl -n "$1" get pods -l 'app.kubernetes.io/name in (dex,ambit-console)' --no-headers)"
   wait_for 60 "kubectl -n '$1' exec deploy/ambit-dex -- sh -c 'for i in \$(seq 1 20); do wget -q -O /dev/null -T 1 http://ambit-dex:5556/dex/healthz || exit 1; done'" ||

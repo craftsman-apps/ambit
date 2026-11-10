@@ -103,13 +103,14 @@ ambit disconnect <claude-code|codex|opencode|cursor> [flags]
 ambit disconnect --all [flags]
 ```
 
-Removes exactly what `ambit connect` added, and keeps every other byte of the file when nothing changed in between. For Codex and opencode this needs the state file `connect.json`: without it, the blank line that connect added before a block stays. An entry that you changed after connect stays, with a `!` line. A tool that is not recorded in the state file prints `✓ <tool> is not connected (nothing recorded)`; for Codex and opencode, a marked block that is found is still removed. When no other tool uses the key, the stored key is deleted. That does not revoke it: the last line says to revoke it in the console.
+Removes exactly what `ambit connect` added, and keeps every other byte of the file when nothing changed in between. For Codex and opencode this needs the state file `connect.json`: without it, the blank line that connect added before a block stays. An entry that you changed after connect stays, with a `!` line. A tool that is not recorded in the state file prints `✓ <tool> is not connected (nothing recorded)`; for Codex and opencode, a marked block that is found is still removed. When no other tool uses the key, the stored key is deleted. That does not revoke it: the last line says to revoke it in the console. With `--revoke`, each key that is deleted is first revoked at the console (`DELETE /api/keys/self`, see [Personal API keys](api-keys.md#revoke-a-key)). A key the console does not know (revoked or stopped already) gives a warning and is deleted. Any other failure (network, `429`, `5xx`) keeps the stored key and exits 1; the tools are already disconnected, and `ambit disconnect --all --revoke` finishes the work. A key stored with `ambit key set` is deleted only by `--all`.
 
 | Flag | Meaning |
 |---|---|
 | `--all` | Every tool recorded in the state file. It cannot be used with a tool name (exit 2). |
 | `--console-url <address>` | Overrides the console address saved at connect, for the last line. |
 | `--keep-key` | Do not delete the stored key, even when no tool uses it. |
+| `--revoke` | Revoke each key that is deleted, at the console. Needs the console address (`--console-url`, or the one saved at connect; else exit 2 and nothing changes). Cannot be used with `--keep-key` (exit 2). `--dry-run` prints `would revoke the key for <address> at <console>` and calls nothing. |
 | `--dry-run` | Print the diffs and change nothing. |
 
 ## ambit key print
@@ -133,7 +134,7 @@ Stores a key for the address without connecting a tool, so that `ambit key print
 | Case | Exit |
 |---|---|
 | Done, including "already connected", warnings, and a `--dry-run` that finds no problem | 0 |
-| Unknown tool, missing `--url` or `--model`, `--all` with a tool name, a bad `--url`, a key that is not in the Ambit format, `--output json`, an unknown flag such as `--revoke`; no terminal and no `--yes` | 2 |
+| Unknown tool, missing `--url` or `--model`, `--all` with a tool name, a bad `--url`, a key that is not in the Ambit format, `--output json`, an unknown flag, `--revoke` without a console address or with `--keep-key`; no terminal and no `--yes` | 2 |
 | A config file that does not parse, both `opencode.json` and `opencode.jsonc`, an opencode v2 config | 1 |
 | A conflict without `--force`, also under `--dry-run` | 1 |
 | A keychain error on macOS or Windows, a locked Secret Service | 1 |
@@ -141,6 +142,7 @@ Stores a key for the address without connecting a tool, so that `ambit key print
 | `ambit` runs from a temporary npx copy | 1 |
 | The test call failed | 1 |
 | `ambit key print`: no key stored | 1 |
+| `--revoke`: the console did not revoke the key (network, `429`, `5xx`) | 1 |
 
 ## ambit check
 

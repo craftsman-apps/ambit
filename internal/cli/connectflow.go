@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -31,7 +32,7 @@ type connectFlags struct {
 }
 
 type disconnectFlags struct {
-	all, keepKey, dryRun bool
+	all, keepKey, dryRun, revoke bool
 	consoleURL, service  string
 }
 
@@ -463,7 +464,7 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	}
 	if old := oldTool.URL; hadTool && old != url && !st.UsesURL(old, "") {
 		if kr, ok := st.Keys[old]; ok && !kr.Set { // no tool uses the key of the old address any more
-			if err := a.deleteKey(d, st, old, "", oldTool.Pending); err != nil {
+			if err := a.deleteKey(d, st, old, "", oldTool.Pending, true); err != nil {
 				p.Line("%s %s; ambit disconnect --all deletes it later", p.Mark("warn"), err.Error())
 			}
 		}
@@ -652,6 +653,8 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 		return out.Usage("disconnect", "name a tool, or use --all", "ambit disconnect claude-code, or ambit disconnect --all")
 	case len(args) > 0 && !validTool(args[0]):
 		return out.Usage("unknown tool "+args[0], "choose claude-code, codex, opencode, cursor or claude-desktop-mcp", "ambit disconnect --help")
+	case f.revoke && f.keepKey:
+		return out.Usage("--revoke and --keep-key", "cannot be used together: a revoked key is of no use", "ambit disconnect --help")
 	}
 	d, err := a.connectEnv(f.service)
 	if err != nil {
@@ -674,6 +677,14 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 		sort.Strings(tools)
 	} else {
 		tools = args[:1]
+	}
+	deleting := keysToDelete(st, tools, f)
+	if f.revoke {
+		for _, u := range deleting {
+			if consoleFor(f.consoleURL, st.Keys[u]) == "" {
+				return out.Usage("--revoke", "needs the console address for the key of "+u, "ambit disconnect --revoke --console-url https://console.example.com")
+			}
+		}
 	}
 
 	type toolJobs struct {
@@ -751,6 +762,11 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 		}
 	}
 	if f.dryRun {
+		for _, u := range deleting {
+			if f.revoke {
+				p.Line("would revoke the key for %s at %s", u, consoleFor(f.consoleURL, st.Keys[u]))
+			}
+		}
 		p.Line("%s dry run: no problems found", p.Mark("ok"))
 		return nil
 	}
@@ -769,11 +785,9 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 			p.Line("%s %s %s", p.Mark("ok"), verb, j.path)
 		}
 	}
-	urls := map[string]bool{}
 	pendingURLs := map[string]bool{} // an interrupted connect: the key may be in either store
 	for _, tj := range all {
 		if tr, ok := st.Tools[tj.tool]; ok {
-			urls[tr.URL] = true
 			pendingURLs[tr.URL] = pendingURLs[tr.URL] || tr.Pending
 			delete(st.Tools, tj.tool)
 		}
@@ -781,10 +795,7 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 	if showCursor {
 		st.CursorShown = false
 	}
-	if f.all { // a key that no tool uses any more, left by a failed deletion or an earlier update
-		for u := range st.Keys {
-			urls[u] = true
-		}
+	if f.all {
 		if len(tools) == 0 {
 			p.Line("%s no tool is connected (nothing recorded)", p.Mark("ok"))
 		}
@@ -793,18 +804,99 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 	if err := st.Save(d.StatePath); err != nil {
 		return err
 	}
-	var urlList []string
-	for u := range urls {
-		urlList = append(urlList, u)
-	}
-	sort.Strings(urlList)
-	for _, u := range urlList {
-		if kr, hasKey := st.Keys[u]; st.UsesURL(u, "") || f.keepKey || !hasKey || (kr.Set && !f.all) {
-			continue
+	for _, u := range deleting {
+		if f.revoke {
+			if err := a.revokeKey(ctx, d, st, u, consoleFor(f.consoleURL, st.Keys[u])); err != nil {
+				return err
+			}
 		}
-		if err := a.deleteKey(d, st, u, f.consoleURL, pendingURLs[u]); err != nil {
+		if err := a.deleteKey(d, st, u, f.consoleURL, pendingURLs[u], !f.revoke); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// keysToDelete is the addresses whose stored key disconnect deletes: keys of the disconnected tools (with --all,
+// every stored key) that no remaining tool uses. A key from ambit key set goes only with --all.
+func keysToDelete(st *connect.State, tools []string, f disconnectFlags) []string {
+	if f.keepKey {
+		return nil
+	}
+	urls := map[string]bool{}
+	for _, t := range tools {
+		if tr, ok := st.Tools[t]; ok {
+			urls[tr.URL] = true
+		}
+	}
+	if f.all { // also a key that no tool uses any more, left by a failed deletion or an earlier update
+		for u := range st.Keys {
+			urls[u] = true
+		}
+	}
+	var list []string
+	for u := range urls {
+		kr, ok := st.Keys[u]
+		if !ok || (kr.Set && !f.all) {
+			continue
+		}
+		used := false
+		for name, t := range st.Tools {
+			used = used || (t.URL == u && !slices.Contains(tools, name))
+		}
+		if !used {
+			list = append(list, u)
+		}
+	}
+	sort.Strings(list)
+	return list
+}
+
+func consoleFor(flag string, kr connect.KeyRecord) string {
+	if c := strings.TrimRight(flag, "/"); c != "" {
+		return c
+	}
+	return kr.ConsoleURL
+}
+
+// revokeKey sends the stored key of u to the console's DELETE /api/keys/self, which deletes that key. A key the
+// console does not know (revoked or stopped already) is only a warning; any other failure keeps the stored key.
+func (a *app) revokeKey(ctx context.Context, d *connectDeps, st *connect.State, u, console string) error {
+	p := a.printer()
+	s, ok := d.store(st, u)
+	if !ok {
+		return nil
+	}
+	key, err := s.Get(u)
+	if errors.Is(err, connect.ErrNotFound) {
+		p.Line("%s no key is stored for %s; nothing to revoke", p.Mark("warn"), u)
+		return nil
+	}
+	if err != nil {
+		return &out.Error{What: "read the stored key of " + u, Why: err.Error(), Next: "unlock your keychain, then run the command again", Code: out.ExitFailed}
+	}
+	p.Redactor().Add(key)
+	fail := func(why string) error {
+		return &out.Error{What: "revoke the key for " + u, Why: why + "; the key is still stored",
+			Next: "run ambit disconnect --all --revoke again, or revoke the key in the console: " + console + "/keys", Code: out.ExitFailed}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, console+"/api/keys/self", nil)
+	if err != nil {
+		return fail(err.Error())
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := d.HTTP(console).Do(req)
+	if err != nil {
+		return fail(err.Error())
+	}
+	resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		p.Line("%s key for %s revoked", p.Mark("ok"), u)
+	case http.StatusUnauthorized:
+		p.Line("%s the console does not know the key for %s (revoked or stopped already)", p.Mark("warn"), u)
+	default:
+		return fail("the console answered " + resp.Status)
 	}
 	return nil
 }
@@ -812,7 +904,7 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 // deleteKey deletes the stored key of u (also from the other store when an interrupted connect may have put it
 // there), takes it out of the state file, and prints the line and the revoke reminder at once, so that a later
 // failure does not hide what was already deleted.
-func (a *app) deleteKey(d *connectDeps, st *connect.State, u, consoleURL string, pending bool) error {
+func (a *app) deleteKey(d *connectDeps, st *connect.State, u, consoleURL string, pending, remind bool) error {
 	p := a.printer()
 	kr := st.Keys[u]
 	stores := []connect.Store{}
@@ -832,13 +924,12 @@ func (a *app) deleteKey(d *connectDeps, st *connect.State, u, consoleURL string,
 		return err
 	}
 	p.Line("%s key for %s deleted from %s", p.Mark("ok"), u, storeName(d.GOOS, kr.Store, d.File, u))
-	console := strings.TrimRight(consoleURL, "/")
-	if console == "" {
-		console = kr.ConsoleURL
-	}
-	if console != "" {
+	console := consoleFor(consoleURL, kr)
+	switch {
+	case !remind:
+	case console != "":
 		p.Line("  next: revoke the key in the console: %s/keys (deleting it here does not revoke it)", console)
-	} else {
+	default:
 		p.Line("  next: revoke the key in the console (Settings > Keys); deleting it here does not revoke it")
 	}
 	return nil

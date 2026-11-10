@@ -2,6 +2,9 @@ package console
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -698,6 +701,42 @@ func (s *KeyService) Revoke(ctx context.Context, by Session, id string, admin bo
 		return ErrNotFound
 	}
 	return err
+}
+
+// RevokeSelf deletes the key whose plain text is bearer: the key revokes itself (D13). It needs no session and
+// takes no key ID, so a key can delete only itself. An unknown key, or one the repair already deleted, is
+// ErrNotFound. The History records the action revoke-self with the owner as actor.
+func (s *KeyService) RevokeSelf(ctx context.Context, bearer string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ctx, cancel, err := s.opCtx(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	sum := sha256.Sum256([]byte(bearer))
+	hash := []byte("sha256:" + hex.EncodeToString(sum[:]))
+	same := func(k Key) bool { return subtle.ConstantTimeCompare([]byte(k.Hash), hash) == 1 }
+	secs, err := s.keySecrets(ctx, client.MatchingLabels{keyLabel: "true"})
+	if err != nil {
+		return err
+	}
+	for _, k := range decodeKeys(secs, "") {
+		if !same(k) {
+			continue
+		}
+		_, err := s.changeKey(ctx, k.ID, func(cur *Key) (keyOp, error) {
+			if !same(*cur) {
+				return keyKeep, ErrNotFound
+			}
+			return keyDelete, nil
+		}, "revoke-self", k.Email)
+		if apierrors.IsNotFound(err) {
+			return ErrNotFound
+		}
+		return err
+	}
+	return ErrNotFound
 }
 
 // ResetLimitsForTest forgets the hourly creation counts. Only the acceptance-test hook calls it.

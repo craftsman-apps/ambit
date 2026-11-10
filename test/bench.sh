@@ -125,7 +125,9 @@ load() {
   echo "$c $rate $run $line" | tee -a "$OUT/runs.log"
   [[ "$line" =~ ^p50=([0-9.]+)ms\ p95=([0-9.]+)ms\ p99=([0-9.]+)ms\ offered=[0-9]+\ completed=([0-9]+)\ errors=([0-9]+)$ ]] ||
     fail "$c at $rate req/s, run $run: unexpected output of test/load: $line"
-  [[ ${BASH_REMATCH[4]} != 0 ]] || fail "$c at $rate req/s, run $run: no request was answered"
+  # a run where more than 1 % of the requests failed measures the failure, not the gateway
+  (( BASH_REMATCH[4] > 0 && BASH_REMATCH[5] * 100 <= BASH_REMATCH[4] + BASH_REMATCH[5] )) ||
+    fail "$c at $rate req/s, run $run: more than 1 % of the requests failed: $line"
   echo "$c $rate $run ${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]} ${BASH_REMATCH[4]} ${BASH_REMATCH[5]}" >> "$OUT/runs.tsv"
 }
 : > "$OUT/runs.tsv"; : > "$OUT/runs.log"
@@ -174,8 +176,8 @@ for c in order:
             continue
         out = []
         for i in range(3):
-            added = med(v, i) - med(b, i)
-            noise = max(max(x[i] for x in w) - min(x[i] for x in w) for w in (v, b))
+            added = round(med(v, i) - med(b, i), 1)  # decided at the printed precision
+            noise = round(max(max(x[i] for x in w) - min(x[i] for x in w) for w in (v, b)), 1)
             out.append(f"{added:.1f}" if added > noise else f"below noise (< {max(noise, -added, 0.1):.1f})")
         print(f"| {c} | {rate} | {' | '.join(out)} |")
 print()

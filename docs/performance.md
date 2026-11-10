@@ -62,7 +62,7 @@ How to read the tables:
 - **p99 is the value that 1 request in 100 exceeds.** In one run of 600 requests (10 req/s) it rests on 6 requests, so one pause of the laptop moves it, as in the run of 31.1 ms in `mcp-compress` at 50 req/s and the baseline run of 14.0 ms in `mcp-direct` at 10 req/s.
 - Every measured request got HTTP 200: 0 errors in the 54 runs, and the gateway answered at the rate it was sent (Throughput). The sender checks the HTTP status only; one tool call of each MCP session is checked for a result before the run starts.
 
-Repeatability: in a first full run on the same cluster, the p50 of every cell was within 0.4 ms of the value above (the largest relative difference was 16 %: 2.9 ms against 2.5 ms). In one run of that first run (`mcp-mask` at 50 req/s) all 3,000 requests failed, and the logs did not show why. `test/bench.sh` now checks each MCP session with one call before it measures, and stops when a run gets no answer; the published numbers come from the second full run, in which no request failed.
+Repeatability: in a first full run on the same cluster, the p50 of every cell was within 0.4 ms of the value above (the largest relative difference was 16 %: 2.9 ms against 2.5 ms). In one run of that first run (`mcp-mask` at 50 req/s) all 3,000 requests failed, and the logs did not show why. `test/bench.sh` now checks each MCP session with one call before it measures, and stops when more than 1 % of the requests of a run fail; the published numbers come from the second full run, in which no request failed.
 
 ## What was measured
 

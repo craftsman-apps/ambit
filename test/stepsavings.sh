@@ -59,7 +59,10 @@ ttl=$(ch "SELECT create_table_query FROM system.tables WHERE database = 'otel' A
 raw crm_get_rows '{"n":300}' >/dev/null   # a call after the views exist
 rows_of() { ch "SELECT toUInt64(sum(results)) FROM otel.ambit_compress_daily_v1 WHERE grp = '$1' AND server = 'crm'"; }
 wait_for 60 '[[ $(rows_of eng) -gt 0 ]]' || fail "2 the summary has no row for group eng and server crm"
-[[ $(rows_of '') -ge $(rows_of eng) ]] || fail "2 the all-groups row is smaller than a group row"
+# One query: records of the calls above still arrive while this runs, and the view writes a record's all-groups row
+# and its group row in the same insert. Two separate queries could see an insert in between (#242).
+[[ $(ch "SELECT sumIf(results, grp = '') >= sumIf(results, grp = 'eng') FROM otel.ambit_compress_daily_v1 WHERE server = 'crm'") == 1 ]] ||
+  fail "2 the all-groups row is smaller than a group row"
 sign_in keycloak user01 user01-test-pass || fail "2 user01 sign-in"
 [[ $(api GET /api/savings) == 403 ]] || fail "2 a viewer reached /api/savings"
 sign_in keycloak user10 user10-test-pass || fail "2 user10 sign-in"

@@ -11,6 +11,7 @@ upgrade() {
   helm upgrade ambit charts/ambit -n "$NS" "${VALUES[@]}" "$@" --wait --timeout 5m >/dev/null
   kubectl -n "$NS" rollout status deploy/ambit-console --timeout=180s >/dev/null
   kubectl -n "$NS" rollout status deploy/ambit-dex --timeout=180s >/dev/null
+  sso_settled "$NS"
 }
 kc_admin() { # kc_admin METHOD PATH: call the Keycloak admin API
   local tok; tok=$(curl -s -d grant_type=password -d client_id=admin-cli -d username=admin -d password=admin \

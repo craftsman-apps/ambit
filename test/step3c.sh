@@ -70,6 +70,7 @@ kubectl -n "$NS" create secret generic ambit-test-ca --from-file=ca.crt="$W/ca.c
 helm upgrade ambit charts/ambit -n "$NS" "${LLM_VALUES[@]}" -f test/tls/values-tls.yaml --wait --timeout 5m >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-dex --timeout=180s >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-console --timeout=180s >/dev/null
+sso_settled "$NS"
 restore() { helm upgrade ambit charts/ambit -n "$NS" "${LLM_VALUES[@]}" --wait --timeout 5m >/dev/null; kubectl -n "$NS" rollout status deploy/ambit-console --timeout=180s >/dev/null; }
 trap 'rc=$?; restore; on_exit $rc' EXIT
 HTTPS=https://console.localtest.me:8443

@@ -42,6 +42,11 @@ Ambit is pre-1.0. The API is `ambitproject.dev/v1alpha1` and can change between 
 | Install and all features on kind, in CI on every pull request | Azure OpenAI, Amazon Bedrock and Vertex AI with real cloud accounts |
 | Company sign-in through a test Keycloak, external ClickHouse and Valkey, GitOps with Argo CD | A 24-hour soak test (CI runs a 5-minute soak) |
 
+## Known limitations
+
+None are listed for this release. Until 0.4.0, a model call that the gateway refused itself (403 or 404) was recorded
+without the caller (issue #87); records written before the upgrade to 0.4.0 stay that way.
+
 ## When not to use Ambit
 
 - You need a hosted service. Ambit runs only in your Kubernetes cluster.

@@ -12,7 +12,7 @@ type Call = { time: string; email: string; route: string; method: string; server
   // The request path (/v1/models is a model list), and for a request with an invalid key the address it came from.
   path?: string; identity?: string; clientAddress?: string };
 // A routed call shows the router and the model that answered, e.g. "auto → mock/echo (coding)".
-const target = (c: Call) => c.clientAddress ? `from ${c.clientAddress}` : c.router ? `${c.router} → ${c.model}${c.label || c.labelReason ? ` (${c.label || c.labelReason})` : ""}` : (c.server || c.model);
+const target = (c: Call) => c.identity === "invalid key" ? `from ${c.clientAddress || "an unknown address"}` : c.router ? `${c.router} → ${c.model}${c.label || c.labelReason ? ` (${c.label || c.labelReason})` : ""}` : (c.server || c.model);
 type Usage = { day: string; group: string; requests: number; inputTokens: number; outputTokens: number; cost?: number; unpricedModels?: string[] };
 
 async function get<T>(url: string): Promise<T> {
@@ -71,7 +71,8 @@ export function AuditPage() {
   });
   const all = res.data?.calls ?? [];
   const hasVerdicts = all.some((c) => c.outcome === "would-refuse" || c.outcome === "other-model" || c.outcome === "mark-missing");
-  const shown = (protocol ? all : all.filter(isCall)).filter((c) => !onlyWouldRefuse || c.outcome === "would-refuse");
+  // Audit-only verdicts belong to people's calls; requests with an invalid key have none, so that filter is off there.
+  const shown = (protocol ? all : all.filter(isCall)).filter((c) => !onlyWouldRefuse || q?.invalidKey || c.outcome === "would-refuse");
   const search = (e: React.FormEvent) => {
     e.preventDefault();
     // The same search again must ask again (after an error, or for new calls), not reuse the answer.
@@ -103,7 +104,7 @@ export function AuditPage() {
                 {all.filter(isCall).length} tool and model calls: {all.filter((c) => isCall(c) && refused(c)).length} refused by policy, {all.filter((c) => isCall(c) && failed(c)).length} failed
                 {res.data.limited && " — showing the newest 1,000; narrow the period"}.
               </span>
-              {(audit || hasVerdicts) && <label className="inline-flex items-center gap-1.5"><input id="audit-would-refuse" type="checkbox" checked={onlyWouldRefuse} onChange={(e) => setOnlyWouldRefuse(e.target.checked)} />
+              {(audit || hasVerdicts) && !q?.invalidKey && <label className="inline-flex items-center gap-1.5"><input id="audit-would-refuse" type="checkbox" checked={onlyWouldRefuse} onChange={(e) => setOnlyWouldRefuse(e.target.checked)} />
                 Only calls the rules would refuse</label>}
               <label className="inline-flex items-center gap-1.5"><input id="audit-protocol" type="checkbox" checked={protocol} onChange={(e) => setProtocol(e.target.checked)} />
                 Show protocol messages ({all.length - all.filter(isCall).length})</label>

@@ -68,7 +68,8 @@ pass "1 user01's audit: $got; refused tool reason: '$reason'; only user01's call
 
 # 1b · issue #117: the request with an invalid key is in the invalid-key search, with no person and only six fields
 for _ in $(seq 1 30); do
-  [[ $(api GET "/api/audit?invalidKey=true&from=$day&to=$next") == 200 ]] && [[ $(field "len($(since))") -ge 1 ]] && break; sleep 2
+  [[ $(api GET "/api/audit?invalidKey=true&from=$day&to=$next") == 200 ]] &&
+    [[ $(field "len([c for c in $(since) if c['path'] == '/v1/chat/completions' and c['status'] == '403'])") -ge 1 ]] && break; sleep 2
 done
 row=$(field "[c for c in $(since) if c['path'] == '/v1/chat/completions' and c['status'] == '403'][:1]")
 [[ "$row" != "[]" ]] || fail "1b no invalid-key request: $(head -c 300 "$W/api")"

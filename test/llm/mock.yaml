@@ -54,7 +54,7 @@ data:
                 self.wfile.write(b"data: [DONE]\n\n")
                 return
             usage = None if text == "NO-USAGE" else USAGE
-            content = "pong" + (" x-ambit-user=" + self.headers["x-ambit-user"] if self.headers.get("x-ambit-user") else "") + (" x-ambit-route=" + self.headers["x-ambit-route"] if self.headers.get("x-ambit-route") else "") + (" x-ambit-config=" + self.headers["x-ambit-config"] if self.headers.get("x-ambit-config") else "")
+            content = "pong" + (" x-ambit-user=" + self.headers["x-ambit-user"] if self.headers.get("x-ambit-user") else "") + (" x-ambit-route=" + self.headers["x-ambit-route"] if self.headers.get("x-ambit-route") else "") + (" x-ambit-config=" + self.headers["x-ambit-config"] if self.headers.get("x-ambit-config") else "") + (" x-ambit-classifier-input-tokens=" + self.headers["x-ambit-classifier-input-tokens"] if self.headers.get("x-ambit-classifier-input-tokens") else "")
             if body.get("user") == "load":  # load runs (test/load): a fixed 50 ms before the first token
                 time.sleep(0.05)
             if body.get("stream"):

@@ -12,13 +12,15 @@ export type Savings = {
   days: { day: string; compressionDollars: number | null; routingDollars: number | null; compressionTokens: number }[];
   groups: { group: string; compression: Compression; routing: Routing }[];
   servers: { server: string; type: string; results: number; bytesIn: number; bytesOut: number; tokensSaved: number; omitted: number }[];
-  routers: { router: string; baselineModels: string[]; requests: number; dollars: number | null; unpricedModels: string[]; missing: boolean }[];
+  routers: { router: string; baselineModels: string[]; requests: number; dollars: number | null; unpricedModels: string[]; missing: boolean;
+    classifierRequests: number; classifierDollars: number | null }[];
   notes: string[];
 };
 
-// Small amounts keep two significant digits ($0.000048), not a misleading $0.00 (as on the Usage page).
+// Small amounts keep two significant digits ($0.000048), not a misleading $0.00 (as on the Usage page). Routing can be
+// negative (a classifier that costs more than routing saves).
 export function usd(n: number): string {
-  return n >= 0.01 || n === 0
+  return Math.abs(n) >= 0.01 || n === 0
     ? n.toLocaleString("en-US", { style: "currency", currency: "USD" })
     : n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumSignificantDigits: 2 });
 }

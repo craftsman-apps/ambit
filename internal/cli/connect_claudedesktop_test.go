@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,7 +27,7 @@ func TestConnectClaudeDesktopMCPThenDisconnect(t *testing.T) {
 		t.Fatalf("code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
 	}
 	got := r.readFile(config)
-	for _, want := range []string{`"files": { "command": "files-mcp" }`, `"mcp-remote@0.14.3"`, `"` + mcpURL + `"`, `"--allow-http"`, `"--header-file"`, `"` + header + `"`} {
+	for _, want := range []string{`"files": { "command": "files-mcp" }`, `"mcp-remote@0.14.3"`, `"` + mcpURL + `"`, `"--allow-http"`, `"--header-file"`, jsonString(header)} {
 		if !strings.Contains(got, want) {
 			t.Errorf("config lacks %q:\n%s", want, got)
 		}
@@ -156,3 +157,6 @@ func TestConnectClaudeDesktopMCPDryRun(t *testing.T) {
 		t.Fatalf("dry run wrote something:\n%s", r.stdout.String())
 	}
 }
+
+// jsonString is s as a JSON string, as the config holds it (a Windows path has its backslashes doubled).
+func jsonString(s string) string { b, _ := json.Marshal(s); return string(b) }

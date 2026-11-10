@@ -54,12 +54,68 @@ function PriceEditor({ m, onDone }: { m: ModelView; onDone: () => void }) {
   );
 }
 
+// Change the key in the model's console key Secret (admins). The key is sent once and cleared from the page.
+function KeyEditor({ m, onDone }: { m: ModelView; onDone: (changed: boolean) => void }) {
+  const [key, setKey] = useState("");
+  const save = useMutation({
+    mutationFn: (apiKey: string) => sendJSON("PUT", `/api/models/${encodeURIComponent(m.name)}/key`, { apiKey }),
+    onSuccess: () => onDone(true),
+  });
+  return (
+    <form className="mt-2 space-y-2 rounded-md border border-line p-2" aria-label={`Key of ${m.name}`}
+      onSubmit={(e) => { e.preventDefault(); save.mutate(key); setKey(""); }}>
+      <label className="block"><span className="mb-1 block text-small text-muted">New API key</span>
+        <input className={field + " w-64"} type="password" autoComplete="off" spellCheck={false} value={key} onChange={(e) => setKey(e.target.value)} required /></label>
+      <p className="text-small text-muted">The key replaces the one in the Secret <span className="font-mono">{m.keySecret}</span>. The console never shows it.</p>
+      <div className="flex gap-2">
+        <Button type="submit" className="w-auto" disabled={save.isPending}>Save key</Button>
+        <Button type="button" variant="outline" className="w-auto" onClick={() => onDone(false)}>Cancel</Button>
+      </div>
+      {save.isError && <p className="text-small text-bad" role="alert">{save.error.message}</p>}
+    </form>
+  );
+}
+
+type Deleted = { secret: string; secretRemoved: boolean; secretNote?: string };
+
+// Delete a model (admins). Refused while an access rule, a router or another model's fallback names it.
+function DeleteModel({ m, onDone }: { m: ModelView; onDone: (result: string) => void }) {
+  const qc = useQueryClient();
+  const repository = useConfig().data?.repository;
+  const [pr, setPR] = useState<PullRequest | null>(null);
+  const del = useMutation({
+    mutationFn: () => sendJSON("DELETE", `/api/models/${encodeURIComponent(m.name)}`),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["models"] }); qc.invalidateQueries({ queryKey: ["unfinished-models"] }); qc.invalidateQueries({ queryKey: ["model-secrets"] });
+      if (isProposed(res)) { setPR(res.pullRequest); return; }
+      const d = res as Deleted;
+      onDone(`Model ${m.name} deleted.` + (d.secret ? (d.secretRemoved ? ` Its Secret ${d.secret} was removed.` : ` The Secret ${d.secret} was ${d.secretNote}.`) : ""));
+    },
+  });
+  if (pr) return <PullRequestNotice pr={pr} repository={repository} onDone={() => onDone("")} />;
+  return (
+    <div className="mt-2 space-y-2 rounded-md border border-line p-2" role="group" aria-label={`Delete ${m.name}`}>
+      <p className="text-small">Delete model <span className="font-mono">{m.name}</span>? People lose access to it at once.{" "}
+        {m.consoleKey ? <>The key Secret <span className="font-mono">{m.keySecret}</span> is deleted too.</>
+          : m.keySecret ? <>The Secret <span className="font-mono">{m.keySecret}</span> is kept.</> : null}</p>
+      <div className="flex gap-2">
+        <Button type="button" className="w-auto" disabled={del.isPending} onClick={() => del.mutate()}>Delete model</Button>
+        <Button type="button" variant="outline" className="w-auto" onClick={() => onDone("")}>Cancel</Button>
+      </div>
+      {del.isError && <p className="text-small text-bad" role="alert">{del.error.message}</p>}
+    </div>
+  );
+}
+
 export function ModelsPage() {
   const q = useModels();
   const admin = useMe().data?.role === "admin";
   const audit = useConfig().data?.accessMode === "audit";
   const [editing, setEditing] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [keyFor, setKeyFor] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [notice, setNotice] = useState("");
   return (
     <Shell crumb="Govern / Models">
       <section className="p-5">
@@ -68,6 +124,7 @@ export function ModelsPage() {
         {admin && !adding && <Button className="mb-4 w-auto" onClick={() => setAdding(true)}>Add model</Button>}
         {admin && adding && <AddModel onDone={() => setAdding(false)} />}
         {admin && <UnfinishedModels />}
+        {notice && <p className="mb-3 text-small" role="status" data-testid="model-notice">{notice}</p>}
         {q.isError && <p className="text-bad">{q.error.message}</p>}
         <table className="w-full border-collapse">
           <thead>
@@ -75,6 +132,7 @@ export function ModelsPage() {
               <th className="px-3 py-2.5 font-medium">Model</th><th className="px-3 py-2.5 font-medium">Name clients send</th>
               <th className="px-3 py-2.5 font-medium">Provider</th><th className="px-3 py-2.5 font-medium">Who can use it</th>
               <th className="px-3 py-2.5 font-medium">Price</th><th className="px-3 py-2.5 font-medium">Status</th>
+              {admin && <th className="px-3 py-2.5 font-medium">Key</th>}
             </tr>
           </thead>
           <tbody>
@@ -93,6 +151,17 @@ export function ModelsPage() {
                   {editing === m.name && <PriceEditor m={m} onDone={() => setEditing(null)} />}
                 </td>
                 <td className="px-3 py-2.5"><Status ready={m.ready} /></td>
+                {admin && (
+                  <td className="px-3 py-2.5">
+                    {m.consoleKey ? (keyFor === m.name
+                      ? <KeyEditor m={m} onDone={(changed) => { setKeyFor(null); if (changed) setNotice(`Key of ${m.name} changed. New requests use it within a few seconds.`); }} />
+                      : <Button variant="outline" className="block w-auto" onClick={() => { setNotice(""); setKeyFor(m.name); }}>Change key</Button>)
+                      : <span className="text-small text-muted">{m.keySecret ? <>In <span className="font-mono">{m.keySecret}</span>, managed outside the console</> : "Gateway's cloud identity"}</span>}
+                    {deleting === m.name
+                      ? <DeleteModel m={m} onDone={(msg) => { setDeleting(null); setNotice(msg); }} />
+                      : <Button variant="outline" className="mt-1 block w-auto" onClick={() => { setNotice(""); setDeleting(m.name); }}>Delete</Button>}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

@@ -40,6 +40,9 @@ export type ModelView = {
   name: string; displayName: string; model: string; provider: string;
   allowedGroups: string[]; allowedUsers: string[]; allSignedIn: boolean; ready: string; message: string;
   price: ModelPrice | null;
+  // keySecret: the Secret of credentialsRef ("" with the gateway's cloud identity). consoleKey: the console created it
+  // for this model, so an admin can change the key (always false for other roles).
+  keySecret: string; consoleKey: boolean;
 };
 // A model's price and the suggestion from LiteLLM's list (admins only).
 export type PriceInfo = {

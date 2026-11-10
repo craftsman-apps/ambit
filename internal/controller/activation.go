@@ -102,7 +102,9 @@ func (r *Reconciler) nacksSeen(ctx context.Context) (nackSeen, error) {
 
 func (r *Reconciler) nacks(ctx context.Context) ([]corev1.Event, error) {
 	var events corev1.EventList
-	if err := r.Live.List(ctx, &events, client.InNamespace(r.Namespace)); err != nil {
+	// The API server filters by reason (a field selector), so a namespace full of other Events is not read on
+	// every poll. The kind and name are checked below.
+	if err := r.Live.List(ctx, &events, client.InNamespace(r.Namespace), client.MatchingFields{"reason": nackReason}); err != nil {
 		return nil, err
 	}
 	gw := r.Activation.Gateway

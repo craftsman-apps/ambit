@@ -66,6 +66,32 @@ func embeddingsDescriptor(entries []any, group string, n int64) map[string]any {
 		principalGroups + ".exists(g, g == " + q + `) ? {"unit": "day", "requestsPerUnit": ` + strconv.FormatInt(n, 10) + "} : " + skip}
 }
 
+// minutePaths are the LLM requests a per-minute limit counts: the ones the gateway parses, not /v1/models.
+const minutePaths = `request.path in ["/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/embeddings"]`
+
+// perMinute compiles a Budget's per-minute limits (issue #85): the ratelimit service's descriptor tree (keys rpm_group
+// and rpm_user, so the counters are not the daily ones) and the gateway's descriptors. Unlike the daily request
+// limits they count a request when it arrives (unit Requests, checked and counted with the route policies), refused
+// ones included, so requests sent at once cannot all pass before any is counted. The limit is the Budget's number:
+// the ratelimit service refuses when the count would exceed it. A non-member or another path gets the value "",
+// which no config descriptor matches: neither counted against the group nor refused. No expression may fail: a
+// failing entry drops the whole descriptor, and the limit with it.
+func perMinute(b v1.Budget) (map[string]any, []any) {
+	g := b.Spec.Group
+	d := map[string]any{"key": "rpm_group", "value": g}
+	group := map[string]any{"name": "rpm_group", "expression": minutePaths + " ? (" + member(g) + `) : ""`}
+	var gw []any
+	if n := b.Spec.GroupRequestsPerMinute; n != nil {
+		d["rate_limit"] = map[string]any{"unit": "minute", "requests_per_unit": *n}
+		gw = append(gw, map[string]any{"unit": "Requests", "entries": []any{group}})
+	}
+	if n := b.Spec.UserRequestsPerMinute; n != nil {
+		d["descriptors"] = []any{map[string]any{"key": "rpm_user", "rate_limit": map[string]any{"unit": "minute", "requests_per_unit": *n}}}
+		gw = append(gw, map[string]any{"unit": "Requests", "entries": []any{group, map[string]any{"name": "rpm_user", "expression": principal()}}})
+	}
+	return d, gw
+}
+
 // EffectiveBudgets returns the Budget that governs each group: the first by name. The reconciler reports
 // the others as DuplicateGroup.
 func EffectiveBudgets(budgets []v1.Budget) []v1.Budget {
@@ -186,6 +212,11 @@ func compileBudgets(budgets []v1.Budget, prices map[string]v1.ModelPrice, ns str
 				gwDescriptors = append(gwDescriptors, afterAnswer(entries), embeddingsDescriptor(entries, g, *n))
 			}
 			cfgDescriptors = append(cfgDescriptors, d)
+		}
+		if b.Spec.GroupRequestsPerMinute != nil || b.Spec.UserRequestsPerMinute != nil {
+			cd, gd := perMinute(b)
+			cfgDescriptors = append(cfgDescriptors, cd)
+			gwDescriptors = append(gwDescriptors, gd...)
 		}
 		if b.Spec.GroupDollarsPerDay != "" || b.Spec.UserDollarsPerDay != "" {
 			d := map[string]any{"key": "spend_group", "value": g}

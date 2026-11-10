@@ -102,7 +102,7 @@ test("only admins get the Add model button", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Add model" })).toBeVisible();
 });
 
-test("Add model in GitOps mode: the caveat says the key is not in Git, and Bedrock keys are not entered", async ({ page }) => {
+test("Add model in GitOps mode: the caveat says the key is not in Git; Bedrock and Vertex AI keys are entered", async ({ page }) => {
   // The console may be served over plain http, where crypto.randomUUID does not exist (this crashed the form in CI).
   await page.addInitScript(() => { Object.defineProperty(crypto, "randomUUID", { value: undefined }); });
   await setup(page, { config: { ...enforce, mode: "gitops", namespace: "ambit-system", repository: "acme/ambit-config" } });
@@ -122,8 +122,13 @@ test("Add model in GitOps mode: the caveat says the key is not in Git, and Bedro
   await form.getByLabel("API key").fill("sk-not-a-real-key");
   await expect(form.getByTestId("key-caveat")).toContainText("The key is not put in Git.");
   await form.getByLabel("Provider").selectOption("Bedrock");
-  await expect(form.getByLabel("Enter the key here")).toHaveCount(0); // Bedrock keys are not entered in the console
+  await form.getByLabel("Enter the keys here").check();
+  await expect(form.getByLabel("AWS secret access key")).toHaveAttribute("type", "password");
+  await expect(form.getByLabel("AWS session token (optional)")).toHaveAttribute("type", "password");
   await expect(form.getByLabel("Use the gateway's cloud identity")).toBeVisible();
+  await form.getByLabel("Provider").selectOption("VertexAI");
+  await form.getByLabel("Upload the key file").check();
+  await expect(form.getByLabel("Google service-account key file")).toHaveAttribute("type", "file");
   await form.getByLabel("Provider").selectOption("OpenAI");
   await form.getByLabel("Enter the key here").check();
   await form.getByLabel("API key").fill("sk-not-a-real-key");
@@ -325,4 +330,64 @@ test("the pages say what happens to what no rule names, by mode", async ({ page 
     await page.goto(path);
     await expect(page.locator("main")).toContainText(inEnforce);
   }
+});
+
+test("Delete model in GitOps mode opens a pull request; the Secret is named", async ({ page }) => {
+  await setup(page, { config: { ...enforce, mode: "gitops", namespace: "ambit-system", repository: "acme/ambit-config" } });
+  const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+  let method = "";
+  await page.route("**/api/changes/4", (r) => json(r, { number: 4, closed: false, merged: false, steps: [] }));
+  await page.route("**/api/models", (r) => json(r, [{ name: "m1", displayName: "", model: "gpt-4o", provider: "OpenAI", allowedGroups: [], allowedUsers: [],
+    allSignedIn: false, ready: "True", message: "", price: null, keySecret: "ambit-llm-m1", consoleKey: true }]));
+  await page.route("**/api/models/m1", (r) => {
+    method = r.request().method();
+    return json(r, { pullRequest: { number: 4, url: "https://github.test/pull/4", title: "Ambit: delete model m1", branch: "ambit/delete-model-m1-1" } }, 202);
+  });
+  await page.goto("/models");
+  const row = page.getByTestId("model-m1");
+  await expect(row.getByRole("button", { name: "Change key" })).toBeVisible();
+  await row.getByRole("button", { name: "Delete" }).click();
+  await expect(row.getByRole("group", { name: "Delete m1" })).toContainText("The key Secret ambit-llm-m1 is deleted too.");
+  await row.getByRole("button", { name: "Delete model" }).click();
+  await expect(page.getByText("Pull request #4 opened")).toBeVisible();
+  expect(method).toBe("DELETE");
+});
+
+test("Add model with Bedrock keys and with a Vertex AI key file: the keys are sent once and not shown", async ({ page }) => {
+  await setup(page, { config: { ...enforce, mode: "direct", namespace: "ambit-system" } });
+  const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+  const sent: Record<string, unknown>[] = [];
+  await page.route("**/api/models", (r) => {
+    if (r.request().method() !== "POST") return json(r, []);
+    sent.push(r.request().postDataJSON());
+    return json(r, { name: "x", displayName: "", model: "m", provider: "Bedrock", allowedGroups: [], allowedUsers: [], allSignedIn: false, ready: "Unknown", message: "", price: null, keySecret: "", consoleKey: false }, 201);
+  });
+  await page.goto("/models");
+  await page.getByRole("button", { name: "Add model" }).click();
+  let form = page.getByRole("form", { name: "Add model" });
+  await form.getByLabel("Name", { exact: true }).fill("bed");
+  await form.getByLabel("Provider").selectOption("Bedrock");
+  await form.getByLabel("Model ID").fill("anthropic.claude-sonnet");
+  await form.getByLabel("Enter the keys here").check();
+  await form.getByLabel("AWS access key ID").fill("AKIAFAKE0123456789AB");
+  await form.getByLabel("AWS secret access key").fill("fake-secret-not-real");
+  await form.getByRole("button", { name: "Create model" }).click();
+  await expect.poll(() => sent.length).toBe(1);
+  expect(sent[0]).toMatchObject({ provider: "Bedrock", credentials: "entered", awsKeys: { accessKey: "AKIAFAKE0123456789AB", secretKey: "fake-secret-not-real" } });
+  expect(sent[0].apiKey).toBeUndefined();
+
+  await page.getByRole("button", { name: "Add model" }).click();
+  form = page.getByRole("form", { name: "Add model" });
+  await form.getByLabel("Name", { exact: true }).fill("vx");
+  await form.getByLabel("Provider").selectOption("VertexAI");
+  await form.getByLabel("Model ID").fill("gemini-2.5-pro");
+  await form.getByLabel("Google Cloud project ID").fill("acme-ml");
+  await form.getByLabel("Upload the key file").check();
+  const file = JSON.stringify({ type: "service_account", client_email: "gw@acme-ml.iam.gserviceaccount.com", private_key: "FAKE-PRIVATE-KEY" });
+  await form.getByLabel("Google service-account key file").setInputFiles({ name: "acme-ml.json", mimeType: "application/json", buffer: Buffer.from(file) });
+  await expect(form.getByText("Selected: acme-ml.json")).toBeVisible();
+  await expect(page.locator("body")).not.toContainText("FAKE-PRIVATE-KEY");
+  await form.getByRole("button", { name: "Create model" }).click();
+  await expect.poll(() => sent.length).toBe(2);
+  expect(sent[1]).toMatchObject({ provider: "VertexAI", credentials: "entered", googleKeyFile: file, vertexai: { projectId: "acme-ml" } });
 });

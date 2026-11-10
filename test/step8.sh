@@ -59,7 +59,7 @@ r1=$(outcome "$A"); wait_used 1 "1 first answer"; r2=$(outcome "$A"); wait_used 
 # ratelimit service's numbers, not the Budget's).
 grep -qi '^retry-after: [0-9]' "$W/h" && grep -qi '^content-type: application/json' "$W/h" && ! grep -qi '^x-ratelimit-' "$W/h" ||
   fail "1 refusal headers: $(tr -d '\r' <"$W/h" | tr '\n' ' ')"
-grep -q '"type":"insufficient_quota"' "$W/llm" && grep -q 'request limit or the spending limit' "$W/llm" || fail "1 refusal body: $(cat "$W/llm")"
+grep -q '"type":"insufficient_quota"' "$W/llm" && grep -q 'a request or spending limit per minute or per day' "$W/llm" || fail "1 refusal body: $(cat "$W/llm")"
 m=$(outcome "$M")
 [[ "$m" == passed* ]] || fail "1 user09 was counted against eng: $m"
 pass "1 user01: $r1, $r2, then blocked with 429 (limit 2/day), an error body, Retry-After and no x-ratelimit-*; user09 unaffected ($m)"
@@ -216,8 +216,8 @@ q2=$(ask "$M" mock/echo)
 [[ "$q1" == 200 && "$q2" == 429 && "$(used_user09)" == 1 ]] || fail "9b Budget of 1 request: $q1 $q2, count $(used_user09) (want 200 429, count 1)"
 pass "9b Budget of 1 request a day: the first request passes, the second is refused and not counted"
 
-# 9c · embeddings count against a request limit when they arrive, and are refused at it (a refused one counts too:
-#      agentgateway v1.6.0 has no step after an embeddings answer, docs/budgets.md)
+# 9c · embeddings count against a request limit when they arrive, and are refused at it (a refused one counts too,
+#      docs/budgets.md)
 set_ml '{ group: ml-research, userRequestsPerDay: 2 }' 'group_ml-research.user: unit=DAY requests_per_unit=1,'
 e1=$(ask "$M" mock/echo hi false /embeddings); n1=$(used_user09)
 e2=$(ask "$M" mock/echo hi false /embeddings); n2=$(used_user09)
@@ -266,16 +266,17 @@ pass "14 price changed while a streamed answer ran: charged 3 units, the price w
 
 fresh
 # 15 · a stream that turns usage reporting off is still charged for a dollar-capped group: the gateway turns
-#      it back on (user09, ml-research). User01's group has no dollar cap: her request is left as she sent it.
+#      it back on (user09, ml-research). agentgateway v1.7.0 turns it on for every stream, so user01's stream (no
+#      dollar cap) reports usage too.
 no_usage() { command curl -s -o "$W/$2" -w '%{http_code}' --max-time 60 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
   -d "{\"model\":\"$3\",\"stream\":true,\"stream_options\":{\"include_usage\":false},\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" "$MOCK/chat/completions"; }
 s0=$(spent)
 cm=$(no_usage "$M" nu-m mock/echo); ca=$(no_usage "$A" nu-a mock/unpriced)
 for _ in $(seq 1 30); do [[ "$(spent)" != "$s0" ]] && break; sleep 1; done
 d=$(( $(spent) - ${s0:-0} ))
-[[ "$cm" == 200 && "$ca" == 200 && "$d" == 3 ]] && grep -q '"usage"' "$W/nu-m" && ! grep -q '"usage"' "$W/nu-a" ||
+[[ "$cm" == 200 && "$ca" == 200 && "$d" == 3 ]] && grep -q '"usage"' "$W/nu-m" && grep -q '"usage"' "$W/nu-a" ||
   fail "15 include_usage false: user09 $cm charged $d units (want 200, 3, usage in her stream); user01 $ca, usage in hers: $(grep -c '"usage"' "$W/nu-a")"
-pass "15 include_usage false: user09's stream reported usage and was charged 3 units; user01's (no dollar cap) left unchanged"
+pass "15 include_usage false: user09's stream reported usage and was charged 3 units; user01's reported usage too"
 
 fresh
 kubectl -n "$NS" apply -f test/llm/router.yaml >/dev/null
@@ -318,4 +319,83 @@ next=$(ask "$M" mock/echo)
 [[ "$ok" -ge 1 && "$(spent)" -gt 5 && "$next" == 429 ]] || fail "13 parallel: $ok answered, spend $(spent), next $next"
 pass "13 six parallel requests: $ok finished (spend $(spent) units of 5, the documented overshoot); the next is refused"
 kubectl -n "$NS" delete "budgets.$G" ml >/dev/null
+# 20 · issue #85: per-minute limits count a request when it arrives (refused ones included), per clock minute (UTC).
+#      Each case uses a Budget with only the limits under test; the minute counters in Valkey show which limit acted.
+MOCK_LLM=${LLM%/chat/completions}
+minute() { echo $(( $(date -u +%s) / 60 * 60 )); }
+# new_minute: wait for second 5 of the next minute, so a case neither crosses a minute boundary nor starts at one.
+# Observed once on kind (2026-11-10, not explained): a request sent in the first two seconds of a minute was refused
+# after the previous minute's limit was reached; started at second 5 it passed in every run.
+new_minute() { sleep $(( 65 - $(date -u +%s) % 60 )); }
+rpm_used() { kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "ambit-llm_rpm_group_$1_rpm_user_$2_$3" 2>/dev/null | tr -d '\r'; }
+# ask_m TOKEN MODEL [NAME]: status of one chat request; headers and body in $W/m-NAME.h and $W/m-NAME
+ask_m() { command curl -s -D "$W/m-${3:-x}.h" -o "$W/m-${3:-x}" -w '%{http_code}' --max-time 60 -H "Authorization: Bearer $1" \
+  -H 'Content-Type: application/json' -d "{\"model\":\"$2\",\"messages\":[{\"role\":\"user\",\"content\":\"hi\"}]}" "$MOCK_LLM/chat/completions"; }
+retry_after() { awk 'tolower($1)=="retry-after:"{print $2+0}' "$W/m-$1.h"; }
+budget_ml() { kubectl -n "$NS" apply -f - >/dev/null <<YAML
+apiVersion: $G/v1alpha1
+kind: Budget
+metadata: { name: ml }
+spec: { group: ml-research, $1 }
+YAML
+}
+kubectl -n "$NS" delete "budgets.$G" eng ml --ignore-not-found >/dev/null; flush
+budget_ml "userRequestsPerMinute: 3"
+wait_rl "$NS" "ambit-llm.rpm_group_ml-research.rpm_user: unit=MINUTE requests_per_unit=3,"
+M=$(token user09); A=$(token user01)
+# a) sequential: 3 pass, the next 3 are refused, all 6 counted; Retry-After is the rest of the minute
+new_minute; m=$(minute); codes=""
+for i in 1 2 3 4 5 6; do codes+="$(ask_m "$M" mock/echo "a$i") "; done
+ra=$(retry_after a4); used=$(rpm_used ml-research user09@example.com "$m"); left=$(( m + 60 - $(date -u +%s) + 1 ))
+[[ "$codes" == "200 200 200 429 429 429 " && "$used" == 6 ]] || fail "20a per minute 3: $codes counter $used (want 3 x 200, 3 x 429, 6)"
+grep -q '"code":"budget_exceeded"' "$W/m-a4" && grep -q 'per minute' "$W/m-a4" || fail "20a refusal body: $(cat "$W/m-a4")"
+(( ra >= 1 && ra <= 60 && ra <= left + 3 )) || fail "20a Retry-After $ra, want 1..60 and at most the $left s left in the minute"
+# b) /v1/models and a person outside the group do not count
+command curl -s -o /dev/null -H "Authorization: Bearer $M" "$MOCK_LLM/models"; ask_m "$A" mock/unpriced b >/dev/null
+[[ $(rpm_used ml-research user09@example.com "$m") == 6 ]] || fail "20b /v1/models or another group changed user09's minute counter"
+pass "20a-b per minute 3: $codes(counter 6, refusals counted), Retry-After ${ra} s; /v1/models and user01 not counted"
+# c) the next minute starts empty
+new_minute; [[ $(ask_m "$M" mock/echo c) == 200 ]] || fail "20c the next minute was refused: $(cat "$W/m-c")"
+# d) a burst: 6 requests sent at once get exactly 3 answers and 3 refusals (counted when they arrive)
+new_minute; m=$(minute)
+pids=(); for i in 1 2 3 4 5 6; do ( echo "$(ask_m "$M" mock/echo "d$i")" > "$W/d$i.code" ) & pids+=($!); done; wait "${pids[@]}"
+codes=$(cat "$W"/d?.code | sort | uniq -c | tr -s ' ' | tr '\n' ' ')
+[[ $(cat "$W"/d?.code | grep -c '^200$') == 3 && $(cat "$W"/d?.code | grep -c '^429$') == 3 && $(rpm_used ml-research user09@example.com "$m") == 6 ]] ||
+  fail "20d burst of 6: $codes counter $(rpm_used ml-research user09@example.com "$m") (want 3 x 200, 3 x 429, 6)"
+pass "20c-d the next minute starts empty; a burst of 6 sent at once: $codes"
+# e) a group limit is shared: eng gets 4 a minute, user01 and keytest together
+kubectl -n "$NS" apply -f - >/dev/null <<YAML
+apiVersion: $G/v1alpha1
+kind: Budget
+metadata: { name: eng }
+spec: { group: eng, groupRequestsPerMinute: 4 }
+YAML
+wait_rl "$NS" "ambit-llm.rpm_group_eng: unit=MINUTE requests_per_unit=4,"
+A=$(token user01); K=$(command curl -s -d grant_type=password -d client_id=ambit-cli-test -d username=keytest -d password=keytest-test-pass \
+  "${KEYCLOAK:-http://keycloak.localtest.me:8080}/realms/acme/protocol/openid-connect/token" | uv run --no-project python -c 'import json,sys;print(json.load(sys.stdin)["access_token"])')
+new_minute; codes=""
+for t in "$A" "$K" "$A" "$K" "$A" "$K"; do codes+="$(ask_m "$t" mock/unpriced e) "; done
+[[ "$codes" == "200 200 200 200 429 429 " ]] || fail "20e group per minute 4, two people: $codes"
+kubectl -n "$NS" delete "budgets.$G" eng --ignore-not-found >/dev/null
+pass "20e the group's 4 a minute are shared by two people: $codes"
+# f) a daily and a minute limit both used up: the minute limit is checked first (when the request arrives), so its
+#    refusal says the rest of the minute; in the next minute the daily limit refuses with the time to midnight UTC
+budget_ml "userRequestsPerDay: 1, userRequestsPerMinute: 1"
+wait_rl "$NS" "ambit-llm.rpm_group_ml-research.rpm_user: unit=MINUTE requests_per_unit=1,"
+wait_rl "$NS" "ambit-llm.group_ml-research.user: unit=DAY requests_per_unit=0,"
+new_minute; M=$(token user09); f1=$(ask_m "$M" mock/echo f1); sleep 3; f2=$(ask_m "$M" mock/echo f2); ra=$(retry_after f2)
+new_minute; f3=$(ask_m "$M" mock/echo f3); rb=$(retry_after f3)
+[[ "$f1/$f2/$f3" == "200/429/429" ]] && (( ra <= 60 && rb > 60 )) ||
+  fail "20f day and minute both used up: $f1/$f2/$f3, Retry-After $ra then $rb (want 200/429/429, at most 60, then over 60)"
+pass "20f day and minute limits both used up: Retry-After $ra s (the minute), then $rb s in the next minute (the day)"
+# g) the counters are in Valkey without persistence: a restart forgets this minute's count (docs/budgets.md)
+flush; budget_ml "userRequestsPerMinute: 1"
+wait_rl "$NS" "ambit-llm.rpm_group_ml-research.rpm_user: unit=MINUTE requests_per_unit=1,"
+new_minute; g1=$(ask_m "$M" mock/echo g1); g2=$(ask_m "$M" mock/echo g2)
+kubectl -n "$NS" rollout restart deploy/ambit-valkey >/dev/null; kubectl -n "$NS" rollout status deploy/ambit-valkey --timeout=120s >/dev/null
+g3=""; for _ in $(seq 1 20); do g3=$(ask_m "$M" mock/echo g3); [[ "$g3" == 200 ]] && break; sleep 2; done
+[[ "$g1/$g2/$g3" == "200/429/200" ]] || fail "20g Valkey restart: $g1/$g2/$g3 (want 200/429/200)"
+kubectl -n "$NS" delete "budgets.$G" ml --ignore-not-found >/dev/null
+pass "20g a Valkey restart forgets the minute's count: $g1, $g2, then $g3 after the restart"
+
 done_step 8

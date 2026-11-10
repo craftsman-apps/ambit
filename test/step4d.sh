@@ -44,6 +44,7 @@ uv run --no-project --with pyyaml python test/keycloak/merge_values.py test/keyc
 helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f "$W/values-4d.yaml" --wait --timeout 5m >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-dex --timeout=180s >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-console --timeout=180s >/dev/null
+sso_settled "$NS"
 for _ in $(seq 1 30); do [[ $(command curl -s "$BASE/api/login-options") == *keycloak2* ]] && break; sleep 2; done
 [[ $(command curl -s "$BASE/api/login-options") == *'"id":"keycloak2"'* ]] || fail "4 login page does not offer keycloak2"
 sign_in keycloak2 user01 user01-test-pass || fail "4 sign-in through keycloak2 did not reach a form"

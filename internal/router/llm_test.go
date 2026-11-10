@@ -29,8 +29,8 @@ func TestLLMRequestAndAnswer(t *testing.T) {
 	r := auto
 	r.LLM = &routerconfig.LLM{Endpoint: srv.URL + "/v1", Model: "qwen"}
 	ans, n, err := (&LLM{HTTP: srv.Client()}).Classify(t.Context(), r, "sk-test", "fix my python")
-	if err != nil || ans != "coding" || n != 42 || auth != "Bearer sk-test" {
-		t.Fatalf("%q %d %v auth=%q", ans, n, err, auth)
+	if err != nil || ans != "coding" || n != (Usage{In: 42}) || auth != "Bearer sk-test" { // only a total: counted as input
+		t.Fatalf("%q %v %v auth=%q", ans, n, err, auth)
 	}
 	msgs := got["messages"].([]any)
 	if got["model"] != "qwen" || got["temperature"] != 0.0 || got["max_tokens"] != 8.0 ||
@@ -116,5 +116,18 @@ func TestClassifierFailureIsLogged(t *testing.T) {
 	out := buf.String()
 	if strings.Count(out, "classifier call failed") != 1 || !strings.Contains(out, "HTTP 401") || !strings.Contains(out, "router=auto") || strings.Contains(out, "sk") {
 		t.Fatalf("want one warning naming the router and the error, without the key:\n%s", out)
+	}
+}
+
+func TestClassifyReportsInputAndOutputTokens(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"coding"}}],"usage":{"prompt_tokens":120,"completion_tokens":2,"total_tokens":122}}`))
+	}))
+	defer srv.Close()
+	r := auto
+	r.LLM = &routerconfig.LLM{Endpoint: srv.URL, Model: "qwen"}
+	_, u, err := (&LLM{HTTP: srv.Client()}).Classify(t.Context(), r, "", "x")
+	if err != nil || u != (Usage{In: 120, Out: 2}) || u.Total() != 122 {
+		t.Fatalf("%+v %v", u, err)
 	}
 }

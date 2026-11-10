@@ -30,3 +30,8 @@ test('--version <new version> and other numbers are ignored', () => {
   const text = good + 'helm upgrade --version <new version>\nKubernetes 1.30 image v0.1.0 sha256:0123\n';
   assert.deepEqual(installVersionProblems(CL, pages({'docs/install.md': text})), []);
 });
+test('latestRelease: the newest dated heading, prereleases skipped, error without one', () => {
+  assert.equal(latestRelease('## Unreleased\n\n## 0.3.0 (2026-11-09)\n\n## 0.2.3 (2026-10-18)\n'), '0.3.0');
+  assert.equal(latestRelease('## 0.4.0-rc.1 (2026-11-20)\n\n## 0.3.0 (2026-11-09)\n'), '0.3.0');
+  assert.throws(() => latestRelease('# Changelog\n\n## Unreleased\n\n- x\n'), /no "## <version> \(YYYY-MM-DD\)" heading/);
+});

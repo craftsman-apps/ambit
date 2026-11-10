@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -19,7 +21,7 @@ import (
 	"github.com/craftsman-apps/ambit/internal/cli/out"
 )
 
-var connectTools = []string{connect.ClaudeCode, connect.Codex, connect.OpenCode, connect.Cursor}
+var connectTools = []string{connect.ClaudeCode, connect.Codex, connect.OpenCode, connect.Cursor, connect.ClaudeDesktopMCP}
 
 // ambitKeyFormat is what NewSecretKey produces.
 var ambitKeyFormat = regexp.MustCompile(`^ambit_[0-9A-Za-z]{43}$`)
@@ -30,7 +32,7 @@ type connectFlags struct {
 }
 
 type disconnectFlags struct {
-	all, keepKey, dryRun bool
+	all, keepKey, dryRun, revoke bool
 	consoleURL, service  string
 }
 
@@ -43,6 +45,7 @@ type job struct {
 	plan   *connect.Plan         // connect
 	undo   *connect.Disconnected // disconnect
 	rec    connect.FileRecord    // disconnect: what connect recorded
+	secret bool                  // the file holds the key: never print its content
 }
 
 func (j *job) change() (connect.FileChange, bool) {
@@ -53,6 +56,10 @@ func (j *job) change() (connect.FileChange, bool) {
 			return c, false
 		}
 		c.After = j.plan.After
+		c.Private = j.secret
+		if j.secret && j.prev != nil && j.prev.Backup != "" {
+			c.KeepBackup = true // the backup holds the header file that connect replaced, maybe with another key
+		}
 		if j.prev != nil && len(j.prev.RemovedSecrets) > 0 {
 			c.KeepBackup = true // the first backup is the only place that holds a secret connect removed
 		}
@@ -154,6 +161,8 @@ func (a *app) toolFiles(d *connectDeps, tool string, f connectFlags) (jobs []*jo
 		jobs = append(jobs, &job{path: connect.ClaudeSettingsPath(d.Getenv, d.Home)})
 	case connect.Codex:
 		jobs = append(jobs, &job{path: connect.CodexConfigPath(d.Getenv, d.Home)})
+	case connect.ClaudeDesktopMCP:
+		jobs = append(jobs, &job{path: connect.ClaudeDesktopConfigPath(d.GOOS, d.Getenv, d.Home)}, &job{path: connect.MCPHeaderPath(d.Home), secret: true})
 	case connect.OpenCode:
 		path, err := connect.OpenCodePath(d.Getenv, d.Home, func(p string) bool { _, err := os.Stat(p); return err == nil })
 		if err != nil {
@@ -183,7 +192,7 @@ func (a *app) toolFiles(d *connectDeps, tool string, f connectFlags) (jobs []*jo
 func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error {
 	p := a.printer()
 	if !validTool(tool) {
-		return out.Usage("unknown tool "+tool, "choose claude-code, codex, opencode or cursor", "ambit connect --help")
+		return out.Usage("unknown tool "+tool, "choose claude-code, codex, opencode, cursor or claude-desktop-mcp", "ambit connect --help")
 	}
 	if f.url == "" {
 		return out.Usage("--url", "is required", "ambit connect "+tool+" --url https://llm.example.com --model <model id>")
@@ -192,7 +201,7 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	if err != nil {
 		return out.Usage("--url "+f.url, err.Error(), "ambit connect "+tool+" --url https://llm.example.com --model <model id>")
 	}
-	if tool != connect.Cursor && f.model == "" {
+	if tool != connect.Cursor && tool != connect.ClaudeDesktopMCP && f.model == "" {
 		return out.Usage("--model", "is required", "ambit connect "+tool+" --url "+url+" --model <model id>")
 	}
 	if f.keyStore != "" && f.keyStore != connect.StoreKeychain && f.keyStore != connect.StoreFile {
@@ -202,6 +211,11 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	if err != nil {
 		return err
 	}
+	unlock, err := connect.LockState(d.StatePath)
+	if err != nil {
+		return &out.Error{What: "cannot change " + d.StatePath, Why: err.Error(), Code: out.ExitFailed}
+	}
+	defer unlock()
 	st, err := connect.LoadState(d.StatePath)
 	if err != nil {
 		return err
@@ -228,6 +242,10 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 		in := connect.Input{Path: j.path, File: j.before, Exists: j.exists, URL: url, Model: f.model, AmbitPath: ambitPath, GOOS: d.GOOS,
 			Force: f.force, Getenv: d.Getenv, Prev: j.prev}
 		switch {
+		case j.secret:
+			j.plan = planSecretFile(j)
+		case tool == connect.ClaudeDesktopMCP:
+			j.plan, err = connect.PlanClaudeDesktopMCP(in, jobs[1].path)
 		case tool == connect.ClaudeCode:
 			j.plan, err = connect.PlanClaudeCode(in)
 		case tool == connect.Codex:
@@ -241,6 +259,9 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 		if err != nil {
 			return planErr(err)
 		}
+		if j.secret && j.exists && !j.plan.Already {
+			j.plan.Conflicts = append(j.plan.Conflicts, connect.Conflict{What: "the file exists and ambit did not write it", Why: "it may hold another key; --force replaces it (the old file is kept in " + j.path + ".ambit.bak)"})
+		}
 		for _, c := range j.plan.Conflicts {
 			conflicts = append(conflicts, j.path+": "+c.String())
 		}
@@ -250,8 +271,14 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 			}
 		}
 	}
+	if tool == connect.ClaudeDesktopMCP && f.model != "" {
+		notes = append(notes, "--model is not used by claude-desktop-mcp")
+	}
 	if len(conflicts) > 0 && !f.force {
 		args := "ambit connect " + tool + " --url " + url + " --model " + f.model + " --force"
+		if tool == connect.ClaudeDesktopMCP {
+			args = "ambit connect " + tool + " --url " + url + " --force"
+		}
 		err := a.failLines(conflicts, args)
 		p.Line("  --force replaces these entries. The old value is kept so that ambit disconnect puts it back; a secret is kept in the backup file only.")
 		return err
@@ -267,6 +294,15 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	if !f.dryRun {
 		if key, reused, err = a.resolveKey(ctx, d, st, url, f); err != nil {
 			return err
+		}
+		for _, j := range jobs {
+			if j.secret { // the header file holds the key, so it is planned only now
+				j.plan.After = connect.MCPHeader(key)
+				j.plan.Record.SHA256 = connect.FileSum(j.plan.After)
+				if string(j.before) != string(j.plan.After) {
+					j.plan.Already, already = false, false
+				}
+			}
 		}
 	} else {
 		_, reused = st.Keys[url]
@@ -290,6 +326,10 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	}
 	if !already {
 		for _, j := range jobs {
+			if j.secret && !j.plan.Already {
+				p.Line("%s: holds the key, readable only by you (mode 0600)", j.path)
+				continue
+			}
 			if _, changes := j.change(); !changes {
 				p.Line("%s: no change", j.path)
 				continue
@@ -422,9 +462,16 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	if err := d.save(st); err != nil {
 		return err
 	}
+	if old := oldTool.URL; hadTool && old != url && !st.UsesURL(old, "") {
+		if kr, ok := st.Keys[old]; ok && !kr.Set { // no tool uses the key of the old address any more
+			if err := a.deleteKey(d, st, old, "", oldTool.Pending, true); err != nil {
+				p.Line("%s %s; ambit disconnect --all deletes it later", p.Mark("warn"), err.Error())
+			}
+		}
+	}
 
 	// 8: the test call.
-	if !f.noTest {
+	if !f.noTest && tool != connect.ClaudeDesktopMCP {
 		if err := a.testCall(ctx, d, tool, url, f.model, key); err != nil {
 			return err
 		}
@@ -561,6 +608,8 @@ func (a *app) nextSteps(tool, url string, shell connect.Shell) {
 		p.Line("Restart Claude Code, then run /status: \"Anthropic base URL\" must show %s.", url)
 	case connect.Codex:
 		p.Line("Start codex and send one prompt.")
+	case connect.ClaudeDesktopMCP:
+		p.Line("Quit Claude Desktop completely and start it again, then check Connectors for \"ambit\". Node.js (npx) must be installed.")
 	case connect.OpenCode:
 		if shell != connect.NoShell {
 			p.Line("Open a new terminal before you start opencode. The function works only when opencode is started from that shell; an editor that starts opencode by itself does not see it.")
@@ -603,12 +652,19 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 	case !f.all && len(args) == 0:
 		return out.Usage("disconnect", "name a tool, or use --all", "ambit disconnect claude-code, or ambit disconnect --all")
 	case len(args) > 0 && !validTool(args[0]):
-		return out.Usage("unknown tool "+args[0], "choose claude-code, codex, opencode or cursor", "ambit disconnect --help")
+		return out.Usage("unknown tool "+args[0], "choose claude-code, codex, opencode, cursor or claude-desktop-mcp", "ambit disconnect --help")
+	case f.revoke && f.keepKey:
+		return out.Usage("--revoke and --keep-key", "cannot be used together: a revoked key is of no use", "ambit disconnect --help")
 	}
 	d, err := a.connectEnv(f.service)
 	if err != nil {
 		return err
 	}
+	unlock, err := connect.LockState(d.StatePath)
+	if err != nil {
+		return &out.Error{What: "cannot change " + d.StatePath, Why: err.Error(), Code: out.ExitFailed}
+	}
+	defer unlock()
 	st, err := connect.LoadState(d.StatePath)
 	if err != nil {
 		return err
@@ -621,6 +677,14 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 		sort.Strings(tools)
 	} else {
 		tools = args[:1]
+	}
+	deleting := keysToDelete(st, tools, f)
+	if f.revoke {
+		for _, u := range deleting {
+			if consoleFor(f.consoleURL, st.Keys[u]) == "" {
+				return out.Usage("--revoke", "needs the console address for the key of "+u, "ambit disconnect --revoke --console-url https://console.example.com")
+			}
+		}
 	}
 
 	type toolJobs struct {
@@ -641,9 +705,13 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 				if j.before, j.exists, err = readConfig(j.path); err != nil {
 					return err
 				}
-				if len(rec.Blocks) > 0 || len(rec.Wrote) > 0 {
+				j.secret = rec.Secret
+				switch {
+				case rec.Secret:
+					j.undo = connect.UnplanSecretFile(rec, j.before, j.exists)
+				case len(rec.Blocks) > 0 || len(rec.Wrote) > 0:
 					j.undo, err = connect.UnplanBlocks(&rec, j.before, j.exists)
-				} else {
+				default:
 					j.undo, err = connect.UnplanJSON(rec, j.before, j.exists)
 				}
 				if err != nil {
@@ -668,8 +736,12 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 		for _, j := range tj.jobs {
 			if c, ok := j.change(); ok {
 				changes, changed = append(changes, c), append(changed, j)
-				p.Line("%s", j.path)
-				p.Line("%s", diffText(j.path, j.before, true, j.undo.After, j.undo.Delete))
+				if j.secret {
+					p.Line("%s: holds the key; ambit deletes it", j.path)
+				} else {
+					p.Line("%s", j.path)
+					p.Line("%s", diffText(j.path, j.before, true, j.undo.After, j.undo.Delete))
+				}
 			}
 			for _, n := range j.undo.Notes {
 				p.Line("%s %s", p.Mark("warn"), n)
@@ -690,6 +762,11 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 		}
 	}
 	if f.dryRun {
+		for _, u := range deleting {
+			if f.revoke {
+				p.Line("would revoke the key for %s at %s", u, consoleFor(f.consoleURL, st.Keys[u]))
+			}
+		}
 		p.Line("%s dry run: no problems found", p.Mark("ok"))
 		return nil
 	}
@@ -708,11 +785,9 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 			p.Line("%s %s %s", p.Mark("ok"), verb, j.path)
 		}
 	}
-	urls := map[string]bool{}
 	pendingURLs := map[string]bool{} // an interrupted connect: the key may be in either store
 	for _, tj := range all {
 		if tr, ok := st.Tools[tj.tool]; ok {
-			urls[tr.URL] = true
 			pendingURLs[tr.URL] = pendingURLs[tr.URL] || tr.Pending
 			delete(st.Tools, tj.tool)
 		}
@@ -720,10 +795,7 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 	if showCursor {
 		st.CursorShown = false
 	}
-	if f.all { // a key that no tool uses any more, left by a failed deletion or an earlier update
-		for u := range st.Keys {
-			urls[u] = true
-		}
+	if f.all {
 		if len(tools) == 0 {
 			p.Line("%s no tool is connected (nothing recorded)", p.Mark("ok"))
 		}
@@ -732,46 +804,136 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 	if err := st.Save(d.StatePath); err != nil {
 		return err
 	}
-	var keyLines []string
-	var urlList []string
-	for u := range urls {
-		urlList = append(urlList, u)
-	}
-	sort.Strings(urlList)
-	for _, u := range urlList {
-		kr, hasKey := st.Keys[u]
-		if st.UsesURL(u, "") || f.keepKey || !hasKey {
-			continue
-		}
-		stores := []connect.Store{}
-		if s, ok := d.store(st, u); ok {
-			stores = append(stores, s)
-		}
-		if pendingURLs[u] {
-			stores = append(stores, d.Keychain, d.File)
-		}
-		for _, s := range stores {
-			if err := s.Delete(u); err != nil {
-				return &out.Error{What: "delete the stored key of " + u, Why: err.Error(), Next: "unlock your keychain, then run the command again", Code: out.ExitFailed}
+	for _, u := range deleting {
+		if f.revoke {
+			if err := a.revokeKey(ctx, d, st, u, consoleFor(f.consoleURL, st.Keys[u])); err != nil {
+				return err
 			}
 		}
-		delete(st.Keys, u)
-		if err := st.Save(d.StatePath); err != nil {
+		if err := a.deleteKey(d, st, u, f.consoleURL, pendingURLs[u], !f.revoke); err != nil {
 			return err
 		}
-		keyLines = append(keyLines, fmt.Sprintf("%s key for %s deleted from %s", p.Mark("ok"), u, storeName(d.GOOS, kr.Store, d.File, u)))
-		console := strings.TrimRight(f.consoleURL, "/")
-		if console == "" {
-			console = kr.ConsoleURL
-		}
-		if console != "" {
-			keyLines = append(keyLines, "  next: revoke the key in the console: "+console+"/keys (deleting it here does not revoke it)")
-		} else {
-			keyLines = append(keyLines, "  next: revoke the key in the console (Settings > Keys); deleting it here does not revoke it")
+	}
+	return nil
+}
+
+// keysToDelete is the addresses whose stored key disconnect deletes: keys of the disconnected tools (with --all,
+// every stored key) that no remaining tool uses. A key from ambit key set goes only with --all.
+func keysToDelete(st *connect.State, tools []string, f disconnectFlags) []string {
+	if f.keepKey {
+		return nil
+	}
+	urls := map[string]bool{}
+	for _, t := range tools {
+		if tr, ok := st.Tools[t]; ok {
+			urls[tr.URL] = true
 		}
 	}
-	for _, l := range keyLines {
-		p.Line("%s", l)
+	if f.all { // also a key that no tool uses any more, left by a failed deletion or an earlier update
+		for u := range st.Keys {
+			urls[u] = true
+		}
+	}
+	var list []string
+	for u := range urls {
+		kr, ok := st.Keys[u]
+		if !ok || (kr.Set && !f.all) {
+			continue
+		}
+		used := false
+		for name, t := range st.Tools {
+			used = used || (t.URL == u && !slices.Contains(tools, name))
+		}
+		if !used {
+			list = append(list, u)
+		}
+	}
+	sort.Strings(list)
+	return list
+}
+
+func consoleFor(flag string, kr connect.KeyRecord) string {
+	if c := strings.TrimRight(flag, "/"); c != "" {
+		return c
+	}
+	return kr.ConsoleURL
+}
+
+// revokeKey sends the stored key of u to the console's DELETE /api/keys/self, which deletes that key. A key the
+// console does not know (revoked or stopped already) is only a warning; any other failure keeps the stored key.
+func (a *app) revokeKey(ctx context.Context, d *connectDeps, st *connect.State, u, console string) error {
+	p := a.printer()
+	s, ok := d.store(st, u)
+	if !ok {
+		return nil
+	}
+	key, err := s.Get(u)
+	if errors.Is(err, connect.ErrNotFound) {
+		p.Line("%s no key is stored for %s; nothing to revoke", p.Mark("warn"), u)
+		return nil
+	}
+	if err != nil {
+		return &out.Error{What: "read the stored key of " + u, Why: err.Error(), Next: "unlock your keychain, then run the command again", Code: out.ExitFailed}
+	}
+	p.Redactor().Add(key)
+	fail := func(why string) error {
+		return &out.Error{What: "revoke the key for " + u, Why: why + "; the key is still stored",
+			Next: "run ambit disconnect --all --revoke again, or revoke the key in the console: " + console + "/keys", Code: out.ExitFailed}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, console+"/api/keys/self", nil)
+	if err != nil {
+		return fail(err.Error())
+	}
+	req.Header.Set("Authorization", "Bearer "+key)
+	hc := *d.HTTP(console)
+	// The request carries the key: never follow a redirect, which could send it to another address.
+	hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := hc.Do(req)
+	if err != nil {
+		return fail(err.Error())
+	}
+	resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusNoContent:
+		p.Line("%s key for %s revoked", p.Mark("ok"), u)
+	case http.StatusUnauthorized:
+		p.Line("%s the console does not know the key for %s (revoked or stopped already)", p.Mark("warn"), u)
+	default:
+		return fail("the console answered " + resp.Status)
+	}
+	return nil
+}
+
+// deleteKey deletes the stored key of u (also from the other store when an interrupted connect may have put it
+// there), takes it out of the state file, and prints the line and the revoke reminder at once, so that a later
+// failure does not hide what was already deleted.
+func (a *app) deleteKey(d *connectDeps, st *connect.State, u, consoleURL string, pending, remind bool) error {
+	p := a.printer()
+	kr := st.Keys[u]
+	stores := []connect.Store{}
+	if s, ok := d.store(st, u); ok {
+		stores = append(stores, s)
+	}
+	if pending {
+		stores = append(stores, d.Keychain, d.File)
+	}
+	for _, s := range stores {
+		if err := s.Delete(u); err != nil {
+			return &out.Error{What: "delete the stored key of " + u, Why: err.Error(), Next: "unlock your keychain, then run ambit disconnect --all", Code: out.ExitFailed}
+		}
+	}
+	delete(st.Keys, u)
+	if err := d.save(st); err != nil {
+		return err
+	}
+	p.Line("%s key for %s deleted from %s", p.Mark("ok"), u, storeName(d.GOOS, kr.Store, d.File, u))
+	console := consoleFor(consoleURL, kr)
+	switch {
+	case !remind:
+	case console != "":
+		p.Line("  next: revoke the key in the console: %s/keys (deleting it here does not revoke it)", console)
+	default:
+		p.Line("  next: revoke the key in the console (Settings > Keys); deleting it here does not revoke it")
 	}
 	return nil
 }
@@ -783,11 +945,19 @@ func (a *app) unrecordedBlocks(d *connectDeps, tool string) ([]*job, error) {
 	switch tool {
 	case connect.Codex:
 		paths = append(paths, connect.CodexConfigPath(d.Getenv, d.Home))
-	case connect.OpenCode:
-		if sh := connect.DetectShell(d.GOOS, d.Getenv("SHELL")); sh != connect.NoShell {
-			if sp, err := connect.ShellFile(sh, d.GOOS, d.Getenv, d.Home, d.Profile); err == nil {
+	case connect.OpenCode: // every shell's profile, not only $SHELL's: the person may have changed shells since
+		for _, sh := range []connect.Shell{connect.Bash, connect.Zsh, connect.Fish, connect.PowerShell} {
+			if sh == connect.PowerShell && d.GOOS != "windows" {
+				continue
+			}
+			if sp, err := connect.ShellFile(sh, d.GOOS, d.Getenv, d.Home, d.Profile); err == nil && !slices.Contains(paths, sp) {
 				paths = append(paths, sp)
 			}
+		}
+		if d.GOOS != "windows" { // the bash file of the other system, for a home directory shared or copied
+			paths = append(paths, filepath.Join(d.Home, ".bashrc"), filepath.Join(d.Home, ".bash_profile"))
+			slices.Sort(paths)
+			paths = slices.Compact(paths)
 		}
 	}
 	var jobs []*job
@@ -806,4 +976,18 @@ func (a *app) unrecordedBlocks(d *connectDeps, tool string) ([]*job, error) {
 		jobs = append(jobs, &job{path: path, before: b, exists: true, undo: u})
 	}
 	return jobs, nil
+}
+
+// planSecretFile plans the header file before the key is known: it is Ambit's when it still holds what an earlier
+// connect wrote. After and the hash are filled in once the key is read.
+func planSecretFile(j *job) *connect.Plan {
+	p := &connect.Plan{Record: connect.FileRecord{Path: j.path, Secret: true, Created: !j.exists}}
+	if j.prev != nil {
+		p.Record.Created, p.Record.Dirs, p.Record.Backup = j.prev.Created, j.prev.Dirs, j.prev.Backup
+		p.Already = j.exists && connect.FileSum(j.before) == j.prev.SHA256
+	}
+	if p.Already {
+		p.After, p.Record.SHA256 = j.before, j.prev.SHA256
+	}
+	return p
 }

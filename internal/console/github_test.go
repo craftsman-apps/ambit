@@ -141,10 +141,16 @@ func (f *fakeGitHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		reply(200, []map[string]any{})
 	case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/pulls"):
-		reply(200, []map[string]any{
+		open := []map[string]any{
 			{"number": 9, "html_url": "u9", "title": "Ambit: update access rule eng-time", "head": map[string]string{"ref": "ambit/update-accessrule-eng-time-1"}, "body": "Requested by user10@example.com in the Ambit console."},
 			{"number": 8, "html_url": "u8", "title": "Bump chart", "head": map[string]string{"ref": "renovate/chart"}, "body": ""},
-		})
+		}
+		for _, pr := range f.prs { // pull requests opened through this fake that are still open
+			if st := f.prsByBranch[pr["head"]]; strings.HasPrefix(pr["head"], "ambit/delete-") && !st.Closed && !st.Merged {
+				open = append(open, map[string]any{"number": st.Number, "html_url": "u" + itoa(st.Number), "title": pr["title"], "head": map[string]string{"ref": pr["head"]}, "body": pr["body"]})
+			}
+		}
+		reply(200, open)
 	case r.Method == "GET" && strings.HasSuffix(r.URL.Path, "/pulls/9"):
 		reply(200, map[string]any{"number": 9, "html_url": "u9", "title": "Ambit: update access rule eng-time", "state": "closed", "merged": true,
 			"merge_commit_sha": "abc1234def", "merged_at": "2026-10-01T06:00:00Z", "head": map[string]any{"ref": "ambit/update-accessrule-eng-time-1", "repo": map[string]string{"full_name": "craftsman-apps/ambit-config-test"}},

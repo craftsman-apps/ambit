@@ -9,7 +9,7 @@ description: Use the tools that Ambit gives you from Claude Desktop, with the mc
 
 **Managed Claude Desktop (gateway mode): use the managed option instead.** When your organization manages Claude Desktop as in [Claude Desktop with Ambit's models](claude-desktop.md), Anthropic's configuration reference has the key `managedMcpServers` (added in Claude Desktop 1.2581.0). An entry can name a remote server (`transport` `http` or `sse`, and an `https` `url`) and a `headersHelper`: a script that prints the header as a JSON object, for example `{"Authorization": "Bearer ambit_..."}`. Claude Desktop runs it before requests and reuses the result for `headersHelperTtlSec` seconds (default 300) ([configuration reference](https://claude.com/docs/third-party/claude-desktop/configuration#managedmcpservers)). The helper can read the key from the keychain, as the helper for models does in [The key](claude-desktop.md#the-key). With the Ambit CLI, the helper is a script that wraps `ambit key print` (see below); without it, use the keychain scripts of that page. This needs no Node.js and no `mcp-remote`. **Not tested with Ambit.** The `url` must be `https`, so the quick-start address `http://mcp.localtest.me:8080/mcp` cannot be used with it. The rest of this page is for people whose Claude Desktop is not managed. They still need `mcp-remote`.
 
-For the managed option with the Ambit CLI, the `headersHelper` can be the script `/usr/local/bin/ambit-mcp-headers` (macOS and Linux, `chmod 755`). It prints the header from the key that `ambit connect` stored. Use the path of `ambit` on the computer and your LLM address. A key with the scope **LLM and MCP** serves this page and [the models page](claude-desktop.md). **Not tested with Claude Desktop.**
+For the managed option with the Ambit CLI, the `headersHelper` can be the script `/usr/local/bin/ambit-mcp-headers` (macOS and Linux, `chmod 755`). It prints the header from the key that `ambit connect` or `ambit key set --url <LLM address>` stored. Use the path of `ambit` on the computer and your LLM address. A key with the scope **LLM and MCP** serves this page and [the models page](claude-desktop.md). **Not tested with Claude Desktop.**
 
 ```sh
 #!/bin/sh
@@ -36,6 +36,19 @@ In the local file `claude_desktop_config.json`, Claude Desktop starts local prog
 2. A personal API key with the scope **MCP** or **LLM and MCP**. Make it in the console under **Keys**, as in [Connect your coding agents](coding-tools.md). The console shows the key once.
 3. The MCP address of the gateway. On the quick-start cluster it is `http://mcp.localtest.me:8080/mcp`. On a production install it is the `https` address that the **MCP** tab of the console shows. These examples use the quick-start address.
 4. Node.js, as above.
+
+## With the Ambit CLI: one command
+
+The Ambit CLI writes the header file and the config entry of steps 1 and 2 for you, and removes them again:
+
+```sh
+ambit connect claude-desktop-mcp --url http://mcp.localtest.me:8080/mcp
+ambit disconnect claude-desktop-mcp
+```
+
+Use your MCP address. The key comes from `--key-file`, `AMBIT_API_KEY` or a hidden prompt; it is also stored in your keychain for that address. Other servers and comments in `claude_desktop_config.json` stay, and the file is copied to `claude_desktop_config.json.ambit.bak` first. Then go on with [Check it works](#check-it-works). See [CLI reference](../cli.md#ambit-connect) for the details. **Tested in Claude Desktop: pending** (the files are covered by unit tests).
+
+Without the CLI, do steps 1 and 2 by hand.
 
 ## 1. Put the key in a file
 

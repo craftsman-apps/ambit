@@ -2,6 +2,19 @@
 
 For what each release changes, read the [release notes](https://ambitproject.dev/releases).
 
+## To the release with agentgateway v1.7.0
+
+- **Apply the new dependency CRDs first** (`crds.yaml` of the release, see [Install](install.md#upgrade-and-uninstall)).
+  The agentgateway CRDs only gain fields, so objects you have stay valid.
+- **The gateway pods are replaced one at a time.** On a local kind cluster with two gateway replicas, 177 MCP
+  requests sent during the upgrade all succeeded, and open MCP sessions, Budget counters and tool pins stayed.
+- **Some answers change.** A tool the person may not use is answered `unknown resource` (before: `Unknown tool:
+  <name>`). Gateway errors no longer include internal details. Every streamed chat request ends with a usage chunk,
+  also when the client turned it off. `/v1/messages` to OpenAI's own API is sent as a Responses request. See the
+  [release notes](https://ambitproject.dev/releases).
+- **Audit rows written before the upgrade keep their caller-less model refusals.** Only refusals after the upgrade
+  show the caller.
+
 ## To the release with access rules that name people
 
 - **Upgrade the controller and the ambit-guard together** (the chart does this). An older guard does not know `users`

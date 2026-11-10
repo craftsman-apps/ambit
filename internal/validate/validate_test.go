@@ -76,6 +76,14 @@ spec: { group: eng, groupDollarsPerDay: "1.000001" }`, "should match"},
 kind: Budget
 metadata: { name: eng }
 spec: { group: eng }`, "set at least one limit"},
+		{"per-minute limit of zero", `apiVersion: ambitproject.dev/v1alpha1
+kind: Budget
+metadata: { name: eng }
+spec: { group: eng, userRequestsPerMinute: 0 }`, "should be greater than or equal to 1"},
+		{"per-minute limit above a million", `apiVersion: ambitproject.dev/v1alpha1
+kind: Budget
+metadata: { name: eng }
+spec: { group: eng, groupRequestsPerMinute: 1000001 }`, "should be less than or equal to 1000000"},
 		{"formats without a baseURL", `apiVersion: ambitproject.dev/v1alpha1
 kind: Model
 metadata: { name: gemma }
@@ -185,6 +193,13 @@ func TestOtherObjectsAreSkipped(t *testing.T) {
 func TestDollarOnlyBudgetIsValid(t *testing.T) {
 	if p := check(t, "apiVersion: ambitproject.dev/v1alpha1\nkind: Budget\nmetadata: { name: ml }\nspec: { group: ml-research, groupDollarsPerDay: \"0.00005\", userDollarsPerDay: \"42949.67\" }\n"); len(p) != 0 {
 		t.Fatalf("%v", p)
+	}
+}
+
+// Issue #85: a per-minute limit alone is a Budget.
+func TestPerMinuteOnlyBudgetIsValid(t *testing.T) {
+	if p := check(t, "apiVersion: ambitproject.dev/v1alpha1\nkind: Budget\nmetadata: { name: eng }\nspec: { group: eng, userRequestsPerMinute: 30, groupRequestsPerMinute: 1000000 }\n"); len(p) != 0 {
+		t.Fatal(p)
 	}
 }
 

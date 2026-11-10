@@ -68,16 +68,19 @@ Prints the password of `admin@ambit.local` of the local cluster. Flag: `--name`.
 
 ```sh
 ambit connect <claude-code|codex|opencode|cursor> --url <llm address> --model <model id> [flags]
+ambit connect claude-desktop-mcp --url <mcp address> [flags]
 ```
 
 Adds Ambit's entries to the user-level config file of a coding tool, stores the key in the keychain of your computer, and ends with one test call in the tool's own request format. It never writes the key to a config file, and it never changes a project file. For what it writes for each tool, see [Connect your coding agents](guides/coding-tools.md#before-you-start). For `cursor` it prints the steps and writes nothing.
+
+`claude-desktop-mcp` connects Claude Desktop to Ambit's MCP tools, as in [Claude Desktop with Ambit's MCP tools](guides/claude-desktop-mcp.md). `--url` is the MCP address (for example `http://mcp.localtest.me:8080/mcp`) and `--model` is not used. It adds the entry `mcpServers.ambit` (the `mcp-remote@0.14.3` bridge started with `npx`, with `--allow-http` for an `http` address whose host is not `localhost`, `127.0.0.1` or `::1`) to `claude_desktop_config.json` (macOS `~/Library/Application Support/Claude/`, Windows `%APPDATA%\Claude\`, Linux `$XDG_CONFIG_HOME/Claude/` or `~/.config/Claude/`). It writes the key to the header file `~/.ambit/mcp-headers.txt` (mode `0600`, readable only by you on Windows too), because `mcp-remote` reads the key only from a file or from the config. This is the one file `ambit connect` writes that holds the key: its content is never printed, and the state file records only its SHA-256 hash. A header file that Ambit did not write is a conflict. It makes no test call: restart Claude Desktop and check Connectors. `ambit disconnect claude-desktop-mcp` removes the entry and deletes the header file while it still holds what connect wrote.
 
 Steps: read and parse the files (a file that does not parse stops the command, nothing is changed), find conflicts, get the key, print the diff of every file, ask `Write these changes? [y/N]`, store the key, write the files (each existing file is first copied to `<file>.ambit.bak`, mode `0600`, only the latest copy is kept), write the state file, make the test call. If a write fails after another file was written, the written files are put back.
 
 | Flag | Meaning |
 |---|---|
 | `--url <address>` | Required. The LLM gateway address, for example `https://llm.example.com`. It is normalised: scheme and host in lower case, no trailing `/` and no trailing `/v1`. Must be `http` or `https`. |
-| `--model <id>` | Required except for `cursor`. The model ID that clients send (the provider's ID). |
+| `--model <id>` | Required except for `cursor` and `claude-desktop-mcp`. The model ID that clients send (the provider's ID). |
 | `--console-url <address>` | The console address. It is saved so that `ambit disconnect` can print the page where you revoke the key. |
 | `--key-file <path>` | Read the key from this file. Without it: `AMBIT_API_KEY`, then a hidden prompt. A key is never a flag value. |
 | `--replace-key` | A key is stored for this address: ask for a new one and replace it. Without the flag the stored key is reused and nothing is asked. |
@@ -89,7 +92,9 @@ Steps: read and parse the files (a file that does not parse stops the command, n
 
 On Windows, `ambit connect opencode` asks PowerShell for its execution policy. Windows PowerShell 5.1 starts with the policy `Restricted`, and under `Restricted` or `AllSigned` it does not load the profile that holds the function. Then connect still writes the function, prints a `warn` line, and prints `next: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. Ambit never changes the policy: run that command yourself, or use `--shell none`.
 
-The key is checked for the format `ambit_` and 43 letters and digits. If the same command ran before and nothing changed, it prints `✓ <tool> is already connected to <url>` and makes only the test call. If the test call fails, the config stays; the output says what failed and ends with `to undo: ambit disconnect <tool>`.
+The key is checked for the format `ambit_` and 43 letters and digits. If the same command ran before and nothing changed, it prints `✓ <tool> is already connected to <url>` and makes only the test call. If the test call fails, the config stays; the output says what failed and ends with `to undo: ambit disconnect <tool>`. When a connect moves a tool to a new `--url` and no other tool uses the key of the old address, that key is deleted from the keychain, with the line that reminds you to revoke it.
+
+`connect`, `disconnect` and `key set` take the lock file `connect.json.lock` next to the state file, so two runs at the same time do not lose a record. A second run waits up to 10 seconds, then stops with exit 1. The lock is the operating system's file lock, so it ends with the process, also after Ctrl-C or a crash; the file itself stays.
 
 ## ambit disconnect
 
@@ -98,13 +103,14 @@ ambit disconnect <claude-code|codex|opencode|cursor> [flags]
 ambit disconnect --all [flags]
 ```
 
-Removes exactly what `ambit connect` added, and keeps every other byte of the file when nothing changed in between. For Codex and opencode this needs the state file `connect.json`: without it, the blank line that connect added before a block stays. An entry that you changed after connect stays, with a `!` line. A tool that is not recorded in the state file prints `✓ <tool> is not connected (nothing recorded)`; for Codex and opencode, a marked block that is found is still removed. When no other tool uses the key, the stored key is deleted. That does not revoke it: the last line says to revoke it in the console.
+Removes exactly what `ambit connect` added, and keeps every other byte of the file when nothing changed in between. For Codex and opencode this needs the state file `connect.json`: without it, the blank line that connect added before a block stays. An entry that you changed after connect stays, with a `!` line. A tool that is not recorded in the state file prints `✓ <tool> is not connected (nothing recorded)`; for Codex and opencode, a marked block that is found is still removed. When no other tool uses the key, the stored key is deleted. That does not revoke it: the last line says to revoke it in the console. With `--revoke`, each key that is deleted is first revoked at the console (`DELETE /api/keys/self`, see [Personal API keys](api-keys.md#revoke-a-key)). A key the console does not know (revoked or stopped already) gives a warning and is deleted. Any other failure (network, `429`, `5xx`) keeps the stored key and exits 1; the tools are already disconnected, and `ambit disconnect --all --revoke` finishes the work. A key stored with `ambit key set` is deleted only by `--all`.
 
 | Flag | Meaning |
 |---|---|
 | `--all` | Every tool recorded in the state file. It cannot be used with a tool name (exit 2). |
 | `--console-url <address>` | Overrides the console address saved at connect, for the last line. |
 | `--keep-key` | Do not delete the stored key, even when no tool uses it. |
+| `--revoke` | Revoke each key that is deleted, at the console. Needs the console address (`--console-url`, or the one saved at connect; else exit 2 and nothing changes). Cannot be used with `--keep-key` (exit 2). `--dry-run` prints `would revoke the key for <address> at <console>` and calls nothing. |
 | `--dry-run` | Print the diffs and change nothing. |
 
 ## ambit key print
@@ -115,12 +121,20 @@ ambit key print --url <llm address> [--reveal]
 
 Prints the key that `ambit connect` stored for the address to standard output, with a line end and nothing else. The tools that `ambit connect` configures run this command each time they start. It reads the keychain or the key file only: no network and no cluster. On a terminal it refuses (exit 2) unless you add `--reveal`. If no key is stored, it exits with 1 and writes the reason to standard error. It prints the key whenever its output is not a terminal (that is how the tools read it), so do not run it where its output is logged. It is the only command that prints a key as it is. See [Where the Ambit CLI keeps the key](api-keys.md#where-the-ambit-cli-keeps-the-key) for what the keychain protects and what it does not.
 
-`connect`, `disconnect` and `key print` print text only: `--output json` is a usage error (exit 2). They use the exit codes 0, 1 and 2, and never 3. A failure, including an error text from the operating system, goes through the same redaction as the other commands.
+## ambit key set
+
+```sh
+ambit key set --url <address> [--key-file <path>] [--key-store keychain|file] [--console-url <address>]
+```
+
+Stores a key for the address without connecting a tool, so that `ambit key print --url <address>` prints it. Use it for a helper that runs `ambit key print`, for example the `headersHelper` of a managed Claude Desktop ([Claude Desktop with Ambit's MCP tools](guides/claude-desktop-mcp.md)). The key comes from `--key-file`, else `AMBIT_API_KEY`, else a hidden prompt, and must be in the Ambit format. A key already stored for the address is replaced; when the old key was in the other store, it is deleted there. It prints one line, `✓ key for <address> stored in <store>`, and never the key. A later `ambit connect` to the same address reuses the key. `ambit disconnect --all` deletes a stored key that no tool uses.
+
+`connect`, `disconnect`, `key set` and `key print` print text only: `--output json` is a usage error (exit 2). They use the exit codes 0, 1 and 2, and never 3. A failure, including an error text from the operating system, goes through the same redaction as the other commands.
 
 | Case | Exit |
 |---|---|
 | Done, including "already connected", warnings, and a `--dry-run` that finds no problem | 0 |
-| Unknown tool, missing `--url` or `--model`, `--all` with a tool name, a bad `--url`, a key that is not in the Ambit format, `--output json`, an unknown flag such as `--revoke`; no terminal and no `--yes` | 2 |
+| Unknown tool, missing `--url` or `--model`, `--all` with a tool name, a bad `--url`, a key that is not in the Ambit format, `--output json`, an unknown flag, `--revoke` without a console address or with `--keep-key`; no terminal and no `--yes` | 2 |
 | A config file that does not parse, both `opencode.json` and `opencode.jsonc`, an opencode v2 config | 1 |
 | A conflict without `--force`, also under `--dry-run` | 1 |
 | A keychain error on macOS or Windows, a locked Secret Service | 1 |
@@ -128,6 +142,7 @@ Prints the key that `ambit connect` stored for the address to standard output, w
 | `ambit` runs from a temporary npx copy | 1 |
 | The test call failed | 1 |
 | `ambit key print`: no key stored | 1 |
+| `--revoke`: the console did not revoke the key (network, `429`, `5xx`) | 1 |
 
 ## ambit check
 
@@ -216,5 +231,5 @@ Prints the CLI version, the chart version it installs, and, when the cluster ans
 ## Files the CLI writes
 
 - A state file per local cluster: `~/Library/Application Support/ambit/local/<name>.json` (macOS), `~/.config/ambit/local/<name>.json` (Linux), `%AppData%\ambit\local\<name>.json` (Windows). `ambit local down` deletes it.
-- `ambit connect` records what it wrote in `connect.json` in the `ambit` folder of your user config folder (`~/Library/Application Support/ambit` on macOS, `~/.config/ambit` on Linux, `%AppData%\ambit` on Windows), mode `0600`. The file never holds a key. The fallback key file is in `keys/` in the same folder. Each tool's config file that `ambit connect` changed has a copy `<file>.ambit.bak`; `ambit disconnect` does not delete it.
+- `ambit connect` records what it wrote in `connect.json` in the `ambit` folder of your user config folder (`~/Library/Application Support/ambit` on macOS, `~/.config/ambit` on Linux, `%AppData%\ambit` on Windows), mode `0600`. The file never holds a key. `ambit connect claude-desktop-mcp` writes the header file `~/.ambit/mcp-headers.txt`, which holds the key (mode `0600`). The fallback key file is in `keys/` in the same folder. Each tool's config file that `ambit connect` changed has a copy `<file>.ambit.bak`; `ambit disconnect` does not delete it.
 - kind adds the context `kind-<name>` to your kubeconfig; `ambit local down` removes it.

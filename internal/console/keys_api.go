@@ -7,7 +7,11 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
+	"strings"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 type keySettingsView struct {
@@ -72,6 +76,9 @@ func (c *Catalog) registerKeys(mux *http.ServeMux, read func(func(http.ResponseW
 	mux.HandleFunc("GET /api/keys", read(c.myKeys))
 	mux.HandleFunc("POST /api/keys", allow("", c.createKey))
 	mux.HandleFunc("DELETE /api/keys/{id}", allow("", func(w http.ResponseWriter, r *http.Request, s Session) { c.revokeKey(w, r, s, false) }))
+	// The key itself is the only credential: no session wrapper, and the cookie is never read (D13).
+	selfLimit := rate.NewLimiter(rate.Every(2*time.Second), 10) // 30 a minute after a burst of 10, per console process
+	mux.HandleFunc("DELETE /api/keys/self", func(w http.ResponseWriter, r *http.Request) { c.revokeSelf(w, r, selfLimit) })
 	mux.HandleFunc("GET /api/admin/keys", adminRead(c.allKeys))
 	mux.HandleFunc("DELETE /api/admin/keys/{id}", allow("only admins can revoke other people's keys",
 		func(w http.ResponseWriter, r *http.Request, s Session) { c.revokeKey(w, r, s, true) }, RoleAdmin))
@@ -228,6 +235,34 @@ func (c *Catalog) expireKey(w http.ResponseWriter, r *http.Request, _ Session) {
 		return
 	}
 	if err := c.Keys.ExpireForTest(r.Context(), r.PathValue("id"), until); err != nil {
+		keyErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+var bearerKey = regexp.MustCompile(`^ambit_[0-9A-Za-z]{43}$`)
+
+// revokeSelf is DELETE /api/keys/self: `ambit disconnect --revoke` sends the key as a bearer token, and that key
+// is deleted. Malformed and unknown keys get the same answer.
+func (c *Catalog) revokeSelf(w http.ResponseWriter, r *http.Request, limit *rate.Limiter) {
+	w.Header().Set("Cache-Control", "no-store")
+	if !limit.Allow() {
+		w.Header().Set("Retry-After", "60")
+		writeErr(w, http.StatusTooManyRequests, "too many requests; try again in a minute")
+		return
+	}
+	const refused = "send your Ambit key as a bearer token"
+	key, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if !ok || !bearerKey.MatchString(key) {
+		writeErr(w, http.StatusUnauthorized, refused)
+		return
+	}
+	if err := c.Keys.RevokeSelf(r.Context(), key); err != nil {
+		if errors.Is(err, ErrNotFound) {
+			writeErr(w, http.StatusUnauthorized, refused)
+			return
+		}
 		keyErr(w, err)
 		return
 	}

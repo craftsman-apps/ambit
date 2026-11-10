@@ -80,7 +80,7 @@ func evalField(t *testing.T, expr string, act map[string]any) string {
 // model) and the model that answered.
 func llmCall(groups []any, asked, answered string) map[string]any {
 	return map[string]any{"jwt": map[string]any{"groups": groups}, "apiKey": map[string]any{},
-		"llm": map[string]any{"requestModel": answered}, "metadata": map[string]any{"agentgateway_user_model": asked}}
+		"llm": map[string]any{"requestModel": answered}, "metadata": map[string]any{"ambit_requested_model": asked}}
 }
 
 func TestWouldRefuseModelsAndRouters(t *testing.T) {
@@ -100,10 +100,10 @@ func TestWouldRefuseModelsAndRouters(t *testing.T) {
 		{"unknown model", llmCall([]any{"eng"}, "y/unknown", "y/unknown"), "n/a"},
 		{"key groups, not the JWT's", map[string]any{"jwt": map[string]any{"groups": []any{"sales"}},
 			"apiKey": map[string]any{"keyId": "k1", "groups": []any{"eng"}}, "llm": map[string]any{"requestModel": "openai/gpt"},
-			"metadata": map[string]any{"agentgateway_user_model": "openai/gpt"}}, "allow"},
+			"metadata": map[string]any{"ambit_requested_model": "openai/gpt"}}, "allow"},
 		{"key without the group, JWT with it", map[string]any{"jwt": map[string]any{"groups": []any{"eng"}},
 			"apiKey": map[string]any{"keyId": "k1", "groups": []any{"sales"}}, "llm": map[string]any{"requestModel": "openai/gpt"},
-			"metadata": map[string]any{"agentgateway_user_model": "openai/gpt"}}, "refuse:model"},
+			"metadata": map[string]any{"ambit_requested_model": "openai/gpt"}}, "refuse:model"},
 		{"router without router access", llmCall([]any{"sales"}, wire, "openai/gpt"), "refuse:router"},
 		{"router, default answered, allowed", llmCall([]any{"eng"}, wire, "anthropic/haiku"), "allow"},
 		{"router, line answered, only the default allowed", llmCall([]any{"eng"}, wire, "anthropic/sonnet"), "other-model"},

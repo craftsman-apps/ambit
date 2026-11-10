@@ -169,14 +169,99 @@ this command: the keychain keeps the key from other users and from config files,
 	print.Flags().StringVar(&urlFlag, "url", "", "LLM gateway address, for example https://llm.example.com")
 	print.Flags().BoolVar(&reveal, "reveal", false, "print on a terminal too")
 	addKeyringFlag(print, &service)
-	key.AddCommand(print)
+	key.AddCommand(print, a.keySetCmd())
 	return key
+}
+
+func (a *app) keySetCmd() *cobra.Command {
+	var f connectFlags
+	c := &cobra.Command{
+		Use:   "set --url <address>",
+		Short: "Store a key for an address without connecting a tool",
+		Long: `Stores the key in the operating system keychain (or the key file where there is no Secret Service), so that
+"ambit key print --url <address>" prints it. Use it for a helper that runs ambit key print, for example the
+headersHelper of a managed Claude Desktop. A key already stored for the address is replaced.
+
+The key comes from --key-file, else AMBIT_API_KEY, else a hidden prompt. It is never printed.
+ambit disconnect --all deletes a stored key that no tool uses.`,
+		Args: cobra.NoArgs,
+		RunE: run(func(cmd *cobra.Command, _ []string) error {
+			return a.runKeySet(cmd.Context(), f)
+		}),
+	}
+	fl := c.Flags()
+	fl.StringVar(&f.url, "url", "", "address the key is for, for example https://llm.example.com (required)")
+	fl.StringVar(&f.keyFile, "key-file", "", "read the key from this file (else AMBIT_API_KEY, else a hidden prompt)")
+	fl.StringVar(&f.keyStore, "key-store", "", "keychain or file (default: keychain; the file only where there is no Secret Service)")
+	fl.StringVar(&f.consoleURL, "console-url", "", "console address; disconnect prints the key page of the console from it")
+	addKeyringFlag(c, &f.service)
+	return c
+}
+
+// runKeySet stores the new key, saves the state file, then deletes the old key from the other store, so that the
+// state file names the store that holds the key at every step.
+func (a *app) runKeySet(ctx context.Context, f connectFlags) error {
+	p := a.printer()
+	if f.url == "" {
+		return out.Usage("--url", "is required", "ambit key set --url https://llm.example.com")
+	}
+	url, err := connect.NormalizeURL(f.url)
+	if err != nil {
+		return out.Usage("--url "+f.url, err.Error(), "ambit key set --url https://llm.example.com")
+	}
+	if f.keyStore != "" && f.keyStore != connect.StoreKeychain && f.keyStore != connect.StoreFile {
+		return out.Usage("--key-store "+f.keyStore, "must be keychain or file", "ambit key set --help")
+	}
+	d, err := a.connectEnv(f.service)
+	if err != nil {
+		return err
+	}
+	unlock, err := connect.LockState(d.StatePath)
+	if err != nil {
+		return &out.Error{What: "cannot change " + d.StatePath, Why: err.Error(), Code: out.ExitFailed}
+	}
+	defer unlock()
+	st, err := connect.LoadState(d.StatePath)
+	if err != nil {
+		return err
+	}
+	f.replaceKey = true
+	key, _, err := a.resolveKey(ctx, d, st, url, f)
+	if err != nil {
+		return err
+	}
+	old, hadOld := d.store(st, url)
+	store, warning, err := connect.Put(d.Keychain, d.File, d.GOOS, f.keyStore, url, key)
+	if err != nil {
+		return &out.Error{What: "store the key", Why: err.Error(), Next: "unlock your keychain, or run the command again with --key-store file", Code: out.ExitFailed}
+	}
+	if warning != "" {
+		p.Line("%s %s", p.Mark("warn"), warning)
+	}
+	kr := st.Keys[url]
+	oldStore := kr.Store
+	kr.Store, kr.Set = store, true
+	if f.consoleURL != "" {
+		kr.ConsoleURL = strings.TrimRight(f.consoleURL, "/")
+	}
+	st.SetKey(url, kr)
+	if err := d.save(st); err != nil {
+		return err
+	}
+	if hadOld && oldStore != store {
+		if err := old.Delete(url); err != nil {
+			return &out.Error{What: "delete the old key of " + url + " from " + storeName(d.GOOS, oldStore, d.File, url), Why: err.Error(),
+				Next: "unlock your keychain and delete it there; the new key is stored", Code: out.ExitFailed}
+		}
+	}
+	p.Line("%s key for %s stored in %s", p.Mark("ok"), url, storeName(d.GOOS, store, d.File, url))
+	return nil
 }
 
 func (a *app) connectCmd() *cobra.Command {
 	var f connectFlags
 	c := &cobra.Command{
-		Use:   "connect <claude-code|codex|opencode|cursor> --url <llm address> --model <model id>",
+		Use:   "connect <claude-code|codex|opencode|cursor|claude-desktop-mcp> --url <address> [--model <model id>]",
 		Short: "Point a coding tool at Ambit and store the key in your keychain",
 		Long: `Adds Ambit's entries to the tool's user config file, stores the key in the operating system keychain, and ends
 with one test call in the tool's own request format. The key is never written to a config file: the tool runs
@@ -186,6 +271,10 @@ Only user-level files are changed: ~/.claude/settings.json, ~/.codex/config.toml
 and, for opencode, a function in your shell profile. Each file is copied to <file>.ambit.bak first. Cursor has no
 config file for this: connect prints the steps and writes nothing.
 
+claude-desktop-mcp takes the MCP address as --url and no --model. It adds the entry "ambit" (mcp-remote) to
+claude_desktop_config.json and writes the key to ~/.ambit/mcp-headers.txt (mode 0600), because mcp-remote reads the
+key only from a file or from the config. It makes no test call.
+
 The key comes from the keychain if one is stored for the address, else --key-file, else AMBIT_API_KEY, else a
 hidden prompt. ambit disconnect removes exactly what connect added.`,
 		Args: cobra.ExactArgs(1),
@@ -194,8 +283,8 @@ hidden prompt. ambit disconnect removes exactly what connect added.`,
 		}),
 	}
 	fl := c.Flags()
-	fl.StringVar(&f.url, "url", "", "LLM gateway address, for example https://llm.example.com (required)")
-	fl.StringVar(&f.model, "model", "", "model ID that the tool sends (required except for cursor)")
+	fl.StringVar(&f.url, "url", "", "LLM gateway address, for example https://llm.example.com; the MCP address for claude-desktop-mcp (required)")
+	fl.StringVar(&f.model, "model", "", "model ID that the tool sends (required except for cursor and claude-desktop-mcp)")
 	fl.StringVar(&f.consoleURL, "console-url", "", "console address; disconnect prints the key page of the console from it")
 	fl.StringVar(&f.keyFile, "key-file", "", "read the key from this file (else AMBIT_API_KEY, else a hidden prompt)")
 	fl.BoolVar(&f.replaceKey, "replace-key", false, "ask for a new key even if one is stored for this address")
@@ -211,11 +300,12 @@ hidden prompt. ambit disconnect removes exactly what connect added.`,
 func (a *app) disconnectCmd() *cobra.Command {
 	var f disconnectFlags
 	c := &cobra.Command{
-		Use:   "disconnect <claude-code|codex|opencode|cursor> | --all",
+		Use:   "disconnect <claude-code|codex|opencode|cursor|claude-desktop-mcp> | --all",
 		Short: "Remove what ambit connect added to a tool's config",
 		Long: `Removes exactly the entries and blocks that ambit connect added, and keeps everything else in the file. An entry
 you changed after connect stays, with a warning. When no other tool uses the key, the stored key is deleted. That
-does not revoke it: revoke it in the console.`,
+does not revoke it: revoke it in the console, or add --revoke. --revoke sends each key that disconnect deletes to
+the console (DELETE /api/keys/self, authorized by the key itself), which revokes it at once.`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: run(func(cmd *cobra.Command, args []string) error {
 			return a.runDisconnect(cmd.Context(), args, f)
@@ -225,6 +315,7 @@ does not revoke it: revoke it in the console.`,
 	fl.BoolVar(&f.all, "all", false, "every tool recorded by ambit connect")
 	fl.StringVar(&f.consoleURL, "console-url", "", "console address for the revoke line (overrides the one saved at connect)")
 	fl.BoolVar(&f.keepKey, "keep-key", false, "do not delete the stored key")
+	fl.BoolVar(&f.revoke, "revoke", false, "revoke each key it deletes, at the console (needs the console address)")
 	fl.BoolVar(&f.dryRun, "dry-run", false, "print what would change; write and delete nothing")
 	addKeyringFlag(c, &f.service)
 	return c

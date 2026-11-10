@@ -26,6 +26,8 @@ type FileChange struct {
 	// KeepBackup leaves an existing .ambit.bak as it is. A re-connect uses it while the first backup is the only
 	// place that holds a secret connect removed.
 	KeepBackup bool
+	// Private writes the file with mode 0600 (and a user-only ACL on Windows) also when it existed with another mode.
+	Private bool
 }
 
 // FileResult says what WriteAll did to one file.
@@ -99,6 +101,9 @@ func writeOne(c FileChange) (FileResult, error) {
 		}
 		perm = fi.Mode().Perm()
 		r.Perm = perm
+		if c.Private {
+			perm = 0o600
+		}
 		if perm&0o200 == 0 {
 			return r, &out.Error{What: "cannot write " + c.Path, Why: "the file is read-only", Next: readOnlyNext(c.Path), Code: out.ExitFailed}
 		}

@@ -23,7 +23,8 @@ const fixture: Savings = {
     { group: "ml-research", compression: comp({ tokensSaved: 1_000_000, dollars: null, dollarsLow: null, dollarsHigh: null, priceSource: "none" }), routing: { requests: 0, dollars: null } },
   ],
   servers: [{ server: "github", type: "json", results: 40, bytesIn: 41_000_000, bytesOut: 14_000_000, tokensSaved: 9_800_000, omitted: 0 }],
-  routers: [{ router: "auto", baselineModels: ["claude-sonnet", "gemma"], requests: 12400, dollars: 182, unpricedModels: ["local-llama"], missing: false }],
+  routers: [{ router: "auto", baselineModels: ["claude-sonnet", "gemma"], requests: 12400, dollars: 182, unpricedModels: ["local-llama"], missing: false,
+    classifierRequests: 12400, classifierDollars: 1.86 }],
   notes: ["local-llama has no price, so it is not a baseline for router auto."],
 };
 const empty: Savings = { ...fixture, totals: { compression: comp({ results: 0, bytesIn: 0, bytesOut: 0, tokensSaved: 0, tokensLow: 0, tokensHigh: 0, dollars: null, dollarsLow: null, dollarsHigh: null, priceSource: "none" }), routing: { requests: 0, dollars: null } },
@@ -47,7 +48,7 @@ async function open(page: Page, body: unknown, status = 200) {
 }
 
 test("every figure is labelled as an estimate and every chart has a text table", async ({ page }) => {
-  await open(page, { from: "2026-10-03", to: "2026-11-02", since: "2026-10-30", savings: fixture });
+  await open(page, { from: "2026-10-03", to: "2026-11-02", since: "2026-10-30", classifierSince: "2026-11-01", savings: fixture });
   await expect(page.getByText("All figures are estimates.")).toBeVisible();
   await expect(page.getByText("counted since 2026-10-30")).toBeVisible();
   const totals = page.getByLabel("Totals");
@@ -60,7 +61,9 @@ test("every figure is labelled as an estimate and every chart has a text table",
   await expect(totals).toContainText("~$182.00");
   await expect(totals).toContainText("~$211.00");
   // a visible "how" line under each tile, and the caveats
-  await expect(totals).toContainText("Gross: the classifier's own cost is not subtracted");
+  await expect(totals).toContainText("Net of the classifier's own cost");
+  await expect(page.getByRole("table", { name: "Routing by router" })).toContainText("~$1.86");
+  await expect(page.getByText("is subtracted (counted since 2026-11-01)")).toBeVisible();
   await expect(page.getByLabel("Notes")).toContainText("local-llama has no price");
   // a text table for each chart, and the server and router tables
   for (const name of ["Dollars saved per day", "Savings by group", "Compression by server and type", "Routing by router"]) {

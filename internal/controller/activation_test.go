@@ -23,7 +23,9 @@ var gateStart = time.Date(2026, 10, 15, 10, 0, 0, 0, time.UTC)
 // gateReconciler has a fake clock that only the gate's sleeps move.
 func gateReconciler(objs ...client.Object) (*Reconciler, *time.Time) {
 	clock := gateStart
-	c := fake.NewClientBuilder().WithObjects(objs...).Build()
+	// The API server supports the field selector on reason; the fake client needs an index for it.
+	c := fake.NewClientBuilder().WithObjects(objs...).
+		WithIndex(&corev1.Event{}, "reason", func(o client.Object) []string { return []string{o.(*corev1.Event).Reason} }).Build()
 	r := &Reconciler{Client: c, Live: c, Namespace: "ambit-system", Now: func() time.Time { return clock },
 		Activation: &Activation{Timeout: 120 * time.Second, Settle: 3 * time.Second,
 			Sleep: func(_ context.Context, d time.Duration) error { clock = clock.Add(d); return nil }}}
@@ -319,7 +321,8 @@ func TestGateDoesNotWaitForAnObjectThatWasDeleted(t *testing.T) {
 // An object that the API server has but the cache has not seen yet is still waited for.
 func TestGateWaitsForAnObjectThatIsNotInTheCacheYet(t *testing.T) {
 	r, _ := gateReconciler()
-	r.Live = fake.NewClientBuilder().WithObjects(gatedModel(3)).Build()
+	r.Live = fake.NewClientBuilder().WithObjects(gatedModel(3)).
+		WithIndex(&corev1.Event{}, "reason", func(o client.Object) []string { return []string{o.(*corev1.Event).Reason} }).Build()
 	err := r.gate(t.Context(), []gated{{kind: "AgentgatewayModel", name: "gpt", generation: 3}}, nil, 120*time.Second)
 	if err == nil || !strings.HasSuffix(err.Error(), "generation 3: the object is missing") {
 		t.Fatalf("error %v", err)
@@ -349,5 +352,18 @@ func TestActivationFlagsAreChecked(t *testing.T) {
 		if got := fmt.Sprint(err); (c.want == "" && err != nil) || (c.want != "" && got != c.want) {
 			t.Errorf("timeout %v settle %v: %v, want %q", c.timeout, c.settle, err, c.want)
 		}
+	}
+}
+
+// agentgateway v1.7.0 puts warnings and errors in one NACK when both occur (upstream #3953); a resource with only a
+// warning was applied, so it is not named as rejected. The warning stays in the reason.
+func TestRejectedOfNamesErrorsOnly(t *testing.T) {
+	text := `[{"key":"model/ambit-system/gpt","warn":"unknown field"},{"key":"backend/ambit-system/mistral-x","error":"invalid enum"}]`
+	names, reason := rejectedOf(text, "ambit-system")
+	if len(names) != 1 || names[0] != "mistral-x" {
+		t.Fatalf("names %v, want [mistral-x]", names)
+	}
+	if !strings.Contains(reason, "model/ambit-system/gpt: unknown field") || !strings.Contains(reason, "invalid enum") {
+		t.Fatalf("reason %q", reason)
 	}
 }

@@ -97,7 +97,7 @@ mcp "$USER01_KEY" '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name
 ```
 
 ```text
-{"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"Unknown tool: time_convert_time"}}
+{"jsonrpc":"2.0","id":4,"error":{"code":-32602,"message":"unknown resource"}}
 HTTP 400
 ```
 

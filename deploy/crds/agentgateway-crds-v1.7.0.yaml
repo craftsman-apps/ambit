@@ -254,6 +254,17 @@ spec:
                                   rule: '!has(self.guardrail) || !has(self.endpointPreference)
                                     || !(self.endpointPreference in [''MantlePreferred'',
                                     ''MantleOnly''])'
+                              copilot:
+                                description: GitHub Copilot provider settings.
+                                properties:
+                                  model:
+                                    description: |-
+                                      Model name override.
+                                      If unset, the model name is taken from the request.
+                                    maxLength: 256
+                                    minLength: 1
+                                    type: string
+                                type: object
                               custom:
                                 description: |-
                                   Custom provider configures a non-managed or self-hosted LLM provider.
@@ -322,11 +333,13 @@ spec:
                                           enum:
                                           - AnthropicTokenCount
                                           - Completions
+                                          - Decisions
                                           - Embeddings
                                           - Messages
                                           - Realtime
                                           - Rerank
                                           - Responses
+                                          - SystemOne
                                           type: string
                                       required:
                                       - type
@@ -675,10 +688,11 @@ spec:
                                         type: object
                                       promptCaching:
                                         description: |-
-                                          Automatic prompt caching for supported
-                                          providers, currently AWS Bedrock.
+                                          Automatic prompt caching for supported providers: Anthropic, Anthropic
+                                          models on Vertex AI, and AWS Bedrock (Claude 3+ and Nova models).
                                           Reduces API costs by caching static content like system prompts and tool definitions.
-                                          Only applicable for Bedrock Claude 3+ and Nova models.
+                                          Cache marks sent by the client take precedence: if a request already has any,
+                                          the policy adds none.
                                         properties:
                                           cacheMessageOffset:
                                             description: |-
@@ -702,12 +716,14 @@ spec:
                                             description: |-
                                               Enables caching for tool definitions. Defaults to false.
                                               Inserts a cache point after all tool specifications.
+                                              Ignored for Bedrock Nova models, which do not support caching tools.
                                             type: boolean
                                           minTokens:
                                             description: |-
                                               Minimum estimated token count
                                               before caching is enabled. Uses rough heuristic (word count × 1.3) to estimate tokens.
-                                              Defaults to 1024. Bedrock requires at least 1,024 tokens for caching to be effective.
+                                              Applies to system prompt caching. Defaults to 1024; most models require at least
+                                              1,024 tokens for caching to be effective.
                                             minimum: 0
                                             type: integer
                                         type: object
@@ -2657,6 +2673,33 @@ spec:
                                                     Custom response message to return to the client. If not specified, defaults to
                                                     `The request was rejected due to inappropriate content`.
                                                   properties:
+                                                    headers:
+                                                      description: Headers to include
+                                                        in the rejection response.
+                                                      items:
+                                                        description: HTTPHeader represents
+                                                          an HTTP Header name and
+                                                          value as defined by RFC
+                                                          7230.
+                                                        properties:
+                                                          name:
+                                                            description: Name of the
+                                                              HTTP header, case-insensitive
+                                                            maxLength: 256
+                                                            minLength: 1
+                                                            pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
+                                                            type: string
+                                                          value:
+                                                            description: Value for
+                                                              the HTTP header
+                                                            maxLength: 4096
+                                                            minLength: 1
+                                                            type: string
+                                                        required:
+                                                        - name
+                                                        - value
+                                                        type: object
+                                                      type: array
                                                     message:
                                                       description: |-
                                                         Custom response message to return to the client. If not specified, defaults to
@@ -2674,15 +2717,17 @@ spec:
                                                 scope:
                                                   description: |-
                                                     Which parts of the request this guard inspects. When unset, defaults to
-                                                    `SystemPrompt` and `Messages`. Tool call inputs and outputs are not
-                                                    inspected unless `ToolInput`/`ToolOutput` are listed explicitly.
+                                                    `SystemPrompt`, `Messages`, and `ToolOutput`. Tool call inputs are not
+                                                    inspected unless `ToolInput` is listed explicitly. Webhook guards do not
+                                                    support scope and always inspect `SystemPrompt` and `Messages`.
                                                     In APIs that send tool arguments as opaque JSON, such as Completions, the
                                                     arguments are masked as a single string, meaning a prompt guard has the
                                                     potential to rewrite the arguments into invalid JSON.
                                                   items:
-                                                    description: Which category of
-                                                      request content a prompt guard
-                                                      inspects.
+                                                    description: |-
+                                                      Which category of request or response content a prompt guard inspects.
+                                                      Encrypted payloads are excluded. Signed response payloads are scanned but
+                                                      a mask that would change them rejects the response instead.
                                                     enum:
                                                     - Messages
                                                     - SystemPrompt
@@ -2837,13 +2882,11 @@ spec:
                                                   type: object
                                               type: object
                                               x-kubernetes-validations:
-                                              - message: 'scope: only regex and bedrockGuardrails
-                                                  guards support a non-default scope;
-                                                  other guard kinds always inspect
-                                                  the default (SystemPrompt + Messages)'
-                                                rule: '!has(self.scope) || has(self.regex)
-                                                  || has(self.bedrockGuardrails) ||
-                                                  (self.scope.size() == 2 && ''SystemPrompt''
+                                              - message: 'scope: webhook guards do
+                                                  not support scope; they always inspect
+                                                  SystemPrompt + Messages'
+                                                rule: '!has(self.scope) || !has(self.webhook)
+                                                  || (self.scope.size() == 2 && ''SystemPrompt''
                                                   in self.scope && ''Messages'' in
                                                   self.scope)'
                                               - message: exactly one of the fields
@@ -4233,6 +4276,33 @@ spec:
                                                     Custom response message to return to the client. If not specified, defaults to
                                                     `The response was rejected due to inappropriate content`.
                                                   properties:
+                                                    headers:
+                                                      description: Headers to include
+                                                        in the rejection response.
+                                                      items:
+                                                        description: HTTPHeader represents
+                                                          an HTTP Header name and
+                                                          value as defined by RFC
+                                                          7230.
+                                                        properties:
+                                                          name:
+                                                            description: Name of the
+                                                              HTTP header, case-insensitive
+                                                            maxLength: 256
+                                                            minLength: 1
+                                                            pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
+                                                            type: string
+                                                          value:
+                                                            description: Value for
+                                                              the HTTP header
+                                                            maxLength: 4096
+                                                            minLength: 1
+                                                            type: string
+                                                        required:
+                                                        - name
+                                                        - value
+                                                        type: object
+                                                      type: array
                                                     message:
                                                       description: |-
                                                         Custom response message to return to the client. If not specified, defaults to
@@ -4247,6 +4317,30 @@ spec:
                                                       minimum: 200
                                                       type: integer
                                                   type: object
+                                                scope:
+                                                  description: |-
+                                                    Which parts of the response this guard inspects. When unset, defaults to
+                                                    `Messages`. Tool calls generated by the model are not inspected unless
+                                                    `ToolInput` is listed explicitly; `ToolOutput` covers results of
+                                                    serverside tools.
+                                                    In APIs that send tool arguments as opaque JSON, such as Completions, the
+                                                    arguments are masked as a single string, meaning a prompt guard has the
+                                                    potential to rewrite the arguments into invalid JSON.
+                                                  items:
+                                                    description: |-
+                                                      Which category of request or response content a prompt guard inspects.
+                                                      Encrypted payloads are excluded. Signed response payloads are scanned but
+                                                      a mask that would change them rejects the response instead.
+                                                    enum:
+                                                    - Messages
+                                                    - SystemPrompt
+                                                    - ToolInput
+                                                    - ToolOutput
+                                                    type: string
+                                                  maxItems: 4
+                                                  minItems: 1
+                                                  type: array
+                                                  x-kubernetes-list-type: set
                                                 webhook:
                                                   description: Webhook that receives
                                                     responses for prompt guarding.
@@ -4391,6 +4485,13 @@ spec:
                                                   type: object
                                               type: object
                                               x-kubernetes-validations:
+                                              - message: 'scope: webhook guards do
+                                                  not support a non-default scope;
+                                                  they always inspect the default
+                                                  (Messages)'
+                                                rule: '!has(self.scope) || !has(self.webhook)
+                                                  || (self.scope.size() == 1 && ''Messages''
+                                                  in self.scope)'
                                               - message: exactly one of the fields
                                                   in [regex webhook bedrockGuardrails
                                                   googleModelArmor] must be set
@@ -4408,6 +4509,12 @@ spec:
                                             type: string
                                         type: object
                                         x-kubernetes-validations:
+                                        - message: streaming response guards only
+                                            support the Messages scope
+                                          rule: '!has(self.streaming) || self.streaming
+                                            != ''Enabled'' || !has(self.response)
+                                            || self.response.all(g, !has(g.scope)
+                                            || g.scope.all(s, s == ''Messages''))'
                                         - message: at least one of the fields in [request
                                             response] must be set
                                           rule: '[has(self.request),has(self.response)].filter(x,x==true).size()
@@ -4420,6 +4527,7 @@ spec:
                                           enum:
                                           - AnthropicTokenCount
                                           - Completions
+                                          - Decisions
                                           - Detect
                                           - Embeddings
                                           - GeminiCountTokens
@@ -4430,6 +4538,7 @@ spec:
                                           - Realtime
                                           - Rerank
                                           - Responses
+                                          - SystemOne
                                           type: string
                                         description: |-
                                           Rules for identifying the type of traffic to handle.
@@ -4823,8 +4932,9 @@ spec:
                                         type: array
                                         x-kubernetes-list-type: atomic
                                       crossAppAccess:
-                                        description: Cross App Access (Identity Assertion
-                                          / ID-JAG) authentication.
+                                        description: |-
+                                          Cross App Access (Identity Assertion / ID-JAG) authentication.
+                                          If this configuration is invalid, requests using it are rejected.
                                         properties:
                                           accessTokenScopes:
                                             description: |-
@@ -5807,8 +5917,9 @@ spec:
                                           rule: (has(self.header)?1:0)+(has(self.queryParameter)?1:0)+(has(self.cookie)?1:0)
                                             == 1
                                       oauthTokenExchange:
-                                        description: OAuth 2.0 token exchange (RFC
-                                          8693) / jwt-bearer (RFC 7523) authentication.
+                                        description: |-
+                                          OAuth 2.0 token exchange (RFC 8693) / jwt-bearer (RFC 7523) authentication.
+                                          If this configuration is invalid, requests using it are rejected.
                                         properties:
                                           actorToken:
                                             description: RFC 8693 delegation actor
@@ -7216,9 +7327,9 @@ spec:
                             - message: pathPrefix requires host to be set
                               rule: 'has(self.pathPrefix) ? has(self.host) : true'
                             - message: exactly one of the fields in [openai azureopenai
-                                azure anthropic gemini vertexai bedrock custom] must
-                                be set
-                              rule: (has(self.openai)?1:0)+(has(self.azureopenai)?1:0)+(has(self.azure)?1:0)+(has(self.anthropic)?1:0)+(has(self.gemini)?1:0)+(has(self.vertexai)?1:0)+(has(self.bedrock)?1:0)+(has(self.custom)?1:0)
+                                azure anthropic gemini vertexai bedrock custom copilot]
+                                must be set
+                              rule: (has(self.openai)?1:0)+(has(self.azureopenai)?1:0)+(has(self.azure)?1:0)+(has(self.anthropic)?1:0)+(has(self.gemini)?1:0)+(has(self.vertexai)?1:0)+(has(self.bedrock)?1:0)+(has(self.custom)?1:0)+(has(self.copilot)?1:0)
                                 == 1
                           maxItems: 16
                           minItems: 1
@@ -7393,6 +7504,17 @@ spec:
                           rule: '!has(self.guardrail) || !has(self.endpointPreference)
                             || !(self.endpointPreference in [''MantlePreferred'',
                             ''MantleOnly''])'
+                      copilot:
+                        description: GitHub Copilot provider settings.
+                        properties:
+                          model:
+                            description: |-
+                              Model name override.
+                              If unset, the model name is taken from the request.
+                            maxLength: 256
+                            minLength: 1
+                            type: string
+                        type: object
                       custom:
                         description: |-
                           Custom provider configures a non-managed or self-hosted LLM provider.
@@ -7460,11 +7582,13 @@ spec:
                                   enum:
                                   - AnthropicTokenCount
                                   - Completions
+                                  - Decisions
                                   - Embeddings
                                   - Messages
                                   - Realtime
                                   - Rerank
                                   - Responses
+                                  - SystemOne
                                   type: string
                               required:
                               - type
@@ -7648,8 +7772,9 @@ spec:
                     - message: pathPrefix requires host to be set
                       rule: 'has(self.pathPrefix) ? has(self.host) : true'
                     - message: exactly one of the fields in [openai azureopenai azure
-                        anthropic gemini vertexai bedrock custom] must be set
-                      rule: (has(self.openai)?1:0)+(has(self.azureopenai)?1:0)+(has(self.azure)?1:0)+(has(self.anthropic)?1:0)+(has(self.gemini)?1:0)+(has(self.vertexai)?1:0)+(has(self.bedrock)?1:0)+(has(self.custom)?1:0)
+                        anthropic gemini vertexai bedrock custom copilot] must be
+                        set
+                      rule: (has(self.openai)?1:0)+(has(self.azureopenai)?1:0)+(has(self.azure)?1:0)+(has(self.anthropic)?1:0)+(has(self.gemini)?1:0)+(has(self.vertexai)?1:0)+(has(self.bedrock)?1:0)+(has(self.custom)?1:0)+(has(self.copilot)?1:0)
                         == 1
                 type: object
                 x-kubernetes-validations:
@@ -7725,6 +7850,14 @@ spec:
                     items:
                       description: MCP target selection for this backend.
                       properties:
+                        condition:
+                          description: |-
+                            CEL expression evaluated per request; when it evaluates to false, the
+                            target is excluded from the virtual MCP. `mcp.target.name` is available.
+                            With `selector`, the condition applies to each selected target.
+                          maxLength: 16384
+                          minLength: 1
+                          type: string
                         name:
                           description: Name of the MCP target.
                           maxLength: 253
@@ -7734,6 +7867,9 @@ spec:
                         selector:
                           description: |-
                             Label selector used to select `Service` resources.
+                            Selected `Service` ports must set `appProtocol: agentgateway.dev/mcp` for
+                            streamable HTTP or `appProtocol: agentgateway.dev/mcp-sse` for SSE. Ports
+                            without a recognized MCP `appProtocol` value are ignored.
                             If policies are needed on a per-service basis, `AgentgatewayPolicy` can
                             target the desired `Service`.
                           properties:
@@ -8219,8 +8355,9 @@ spec:
                                       type: array
                                       x-kubernetes-list-type: atomic
                                     crossAppAccess:
-                                      description: Cross App Access (Identity Assertion
-                                        / ID-JAG) authentication.
+                                      description: |-
+                                        Cross App Access (Identity Assertion / ID-JAG) authentication.
+                                        If this configuration is invalid, requests using it are rejected.
                                       properties:
                                         accessTokenScopes:
                                           description: |-
@@ -9182,8 +9319,9 @@ spec:
                                         rule: (has(self.header)?1:0)+(has(self.queryParameter)?1:0)+(has(self.cookie)?1:0)
                                           == 1
                                     oauthTokenExchange:
-                                      description: OAuth 2.0 token exchange (RFC 8693)
-                                        / jwt-bearer (RFC 7523) authentication.
+                                      description: |-
+                                        OAuth 2.0 token exchange (RFC 8693) / jwt-bearer (RFC 7523) authentication.
+                                        If this configuration is invalid, requests using it are rejected.
                                       properties:
                                         actorToken:
                                           description: RFC 8693 delegation actor token.
@@ -10175,6 +10313,10 @@ spec:
                     x-kubernetes-list-map-keys:
                     - name
                     x-kubernetes-list-type: map
+                    x-kubernetes-validations:
+                    - message: mcp target condition requires at least two targets
+                        unless the target uses selector
+                      rule: self.size() > 1 || self.all(t, !has(t.condition) || has(t.selector))
                 required:
                 - targets
                 type: object
@@ -10360,10 +10502,11 @@ spec:
                         type: object
                       promptCaching:
                         description: |-
-                          Automatic prompt caching for supported
-                          providers, currently AWS Bedrock.
+                          Automatic prompt caching for supported providers: Anthropic, Anthropic
+                          models on Vertex AI, and AWS Bedrock (Claude 3+ and Nova models).
                           Reduces API costs by caching static content like system prompts and tool definitions.
-                          Only applicable for Bedrock Claude 3+ and Nova models.
+                          Cache marks sent by the client take precedence: if a request already has any,
+                          the policy adds none.
                         properties:
                           cacheMessageOffset:
                             description: |-
@@ -10387,12 +10530,14 @@ spec:
                             description: |-
                               Enables caching for tool definitions. Defaults to false.
                               Inserts a cache point after all tool specifications.
+                              Ignored for Bedrock Nova models, which do not support caching tools.
                             type: boolean
                           minTokens:
                             description: |-
                               Minimum estimated token count
                               before caching is enabled. Uses rough heuristic (word count × 1.3) to estimate tokens.
-                              Defaults to 1024. Bedrock requires at least 1,024 tokens for caching to be effective.
+                              Applies to system prompt caching. Defaults to 1024; most models require at least
+                              1,024 tokens for caching to be effective.
                             minimum: 0
                             type: integer
                         type: object
@@ -12078,6 +12223,31 @@ spec:
                                     Custom response message to return to the client. If not specified, defaults to
                                     `The request was rejected due to inappropriate content`.
                                   properties:
+                                    headers:
+                                      description: Headers to include in the rejection
+                                        response.
+                                      items:
+                                        description: HTTPHeader represents an HTTP
+                                          Header name and value as defined by RFC
+                                          7230.
+                                        properties:
+                                          name:
+                                            description: Name of the HTTP header,
+                                              case-insensitive
+                                            maxLength: 256
+                                            minLength: 1
+                                            pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
+                                            type: string
+                                          value:
+                                            description: Value for the HTTP header
+                                            maxLength: 4096
+                                            minLength: 1
+                                            type: string
+                                        required:
+                                        - name
+                                        - value
+                                        type: object
+                                      type: array
                                     message:
                                       description: |-
                                         Custom response message to return to the client. If not specified, defaults to
@@ -12094,14 +12264,17 @@ spec:
                                 scope:
                                   description: |-
                                     Which parts of the request this guard inspects. When unset, defaults to
-                                    `SystemPrompt` and `Messages`. Tool call inputs and outputs are not
-                                    inspected unless `ToolInput`/`ToolOutput` are listed explicitly.
+                                    `SystemPrompt`, `Messages`, and `ToolOutput`. Tool call inputs are not
+                                    inspected unless `ToolInput` is listed explicitly. Webhook guards do not
+                                    support scope and always inspect `SystemPrompt` and `Messages`.
                                     In APIs that send tool arguments as opaque JSON, such as Completions, the
                                     arguments are masked as a single string, meaning a prompt guard has the
                                     potential to rewrite the arguments into invalid JSON.
                                   items:
-                                    description: Which category of request content
-                                      a prompt guard inspects.
+                                    description: |-
+                                      Which category of request or response content a prompt guard inspects.
+                                      Encrypted payloads are excluded. Signed response payloads are scanned but
+                                      a mask that would change them rejects the response instead.
                                     enum:
                                     - Messages
                                     - SystemPrompt
@@ -12241,13 +12414,11 @@ spec:
                                   type: object
                               type: object
                               x-kubernetes-validations:
-                              - message: 'scope: only regex and bedrockGuardrails
-                                  guards support a non-default scope; other guard
-                                  kinds always inspect the default (SystemPrompt +
-                                  Messages)'
-                                rule: '!has(self.scope) || has(self.regex) || has(self.bedrockGuardrails)
-                                  || (self.scope.size() == 2 && ''SystemPrompt'' in
-                                  self.scope && ''Messages'' in self.scope)'
+                              - message: 'scope: webhook guards do not support scope;
+                                  they always inspect SystemPrompt + Messages'
+                                rule: '!has(self.scope) || !has(self.webhook) || (self.scope.size()
+                                  == 2 && ''SystemPrompt'' in self.scope && ''Messages''
+                                  in self.scope)'
                               - message: exactly one of the fields in [regex webhook
                                   openAIModeration bedrockGuardrails googleModelArmor]
                                   must be set
@@ -13445,6 +13616,31 @@ spec:
                                     Custom response message to return to the client. If not specified, defaults to
                                     `The response was rejected due to inappropriate content`.
                                   properties:
+                                    headers:
+                                      description: Headers to include in the rejection
+                                        response.
+                                      items:
+                                        description: HTTPHeader represents an HTTP
+                                          Header name and value as defined by RFC
+                                          7230.
+                                        properties:
+                                          name:
+                                            description: Name of the HTTP header,
+                                              case-insensitive
+                                            maxLength: 256
+                                            minLength: 1
+                                            pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
+                                            type: string
+                                          value:
+                                            description: Value for the HTTP header
+                                            maxLength: 4096
+                                            minLength: 1
+                                            type: string
+                                        required:
+                                        - name
+                                        - value
+                                        type: object
+                                      type: array
                                     message:
                                       description: |-
                                         Custom response message to return to the client. If not specified, defaults to
@@ -13458,6 +13654,30 @@ spec:
                                       minimum: 200
                                       type: integer
                                   type: object
+                                scope:
+                                  description: |-
+                                    Which parts of the response this guard inspects. When unset, defaults to
+                                    `Messages`. Tool calls generated by the model are not inspected unless
+                                    `ToolInput` is listed explicitly; `ToolOutput` covers results of
+                                    serverside tools.
+                                    In APIs that send tool arguments as opaque JSON, such as Completions, the
+                                    arguments are masked as a single string, meaning a prompt guard has the
+                                    potential to rewrite the arguments into invalid JSON.
+                                  items:
+                                    description: |-
+                                      Which category of request or response content a prompt guard inspects.
+                                      Encrypted payloads are excluded. Signed response payloads are scanned but
+                                      a mask that would change them rejects the response instead.
+                                    enum:
+                                    - Messages
+                                    - SystemPrompt
+                                    - ToolInput
+                                    - ToolOutput
+                                    type: string
+                                  maxItems: 4
+                                  minItems: 1
+                                  type: array
+                                  x-kubernetes-list-type: set
                                 webhook:
                                   description: Webhook that receives responses for
                                     prompt guarding.
@@ -13587,6 +13807,10 @@ spec:
                                   type: object
                               type: object
                               x-kubernetes-validations:
+                              - message: 'scope: webhook guards do not support a non-default
+                                  scope; they always inspect the default (Messages)'
+                                rule: '!has(self.scope) || !has(self.webhook) || (self.scope.size()
+                                  == 1 && ''Messages'' in self.scope)'
                               - message: exactly one of the fields in [regex webhook
                                   bedrockGuardrails googleModelArmor] must be set
                                 rule: (has(self.regex)?1:0)+(has(self.webhook)?1:0)+(has(self.bedrockGuardrails)?1:0)+(has(self.googleModelArmor)?1:0)
@@ -13603,6 +13827,11 @@ spec:
                             type: string
                         type: object
                         x-kubernetes-validations:
+                        - message: streaming response guards only support the Messages
+                            scope
+                          rule: '!has(self.streaming) || self.streaming != ''Enabled''
+                            || !has(self.response) || self.response.all(g, !has(g.scope)
+                            || g.scope.all(s, s == ''Messages''))'
                         - message: at least one of the fields in [request response]
                             must be set
                           rule: '[has(self.request),has(self.response)].filter(x,x==true).size()
@@ -13615,6 +13844,7 @@ spec:
                           enum:
                           - AnthropicTokenCount
                           - Completions
+                          - Decisions
                           - Detect
                           - Embeddings
                           - GeminiCountTokens
@@ -13625,6 +13855,7 @@ spec:
                           - Realtime
                           - Rerank
                           - Responses
+                          - SystemOne
                           type: string
                         description: |-
                           Rules for identifying the type of traffic to handle.
@@ -13994,8 +14225,9 @@ spec:
                         type: array
                         x-kubernetes-list-type: atomic
                       crossAppAccess:
-                        description: Cross App Access (Identity Assertion / ID-JAG)
-                          authentication.
+                        description: |-
+                          Cross App Access (Identity Assertion / ID-JAG) authentication.
+                          If this configuration is invalid, requests using it are rejected.
                         properties:
                           accessTokenScopes:
                             description: |-
@@ -14860,8 +15092,9 @@ spec:
                           rule: (has(self.header)?1:0)+(has(self.queryParameter)?1:0)+(has(self.cookie)?1:0)
                             == 1
                       oauthTokenExchange:
-                        description: OAuth 2.0 token exchange (RFC 8693) / jwt-bearer
-                          (RFC 7523) authentication.
+                        description: |-
+                          OAuth 2.0 token exchange (RFC 8693) / jwt-bearer (RFC 7523) authentication.
+                          If this configuration is invalid, requests using it are rejected.
                         properties:
                           actorToken:
                             description: RFC 8693 delegation actor token. TokenExchange
@@ -16104,8 +16337,8 @@ spec:
                         - policy
                         type: object
                       guardrails:
-                        description: '`guardrails` routes selected JSON-RPC methods
-                          through a remote policy server.'
+                        description: Remote and in-process CEL policy processors for
+                          MCP requests and responses.
                         properties:
                           processors:
                             description: |-
@@ -16116,6 +16349,34 @@ spec:
                               description: MCPGuardrailsProcessor selects a single
                                 policy processor. Exactly one variant must be set.
                               properties:
+                                expression:
+                                  description: In-process guardrail driven by CEL
+                                    expressions.
+                                  properties:
+                                    condition:
+                                      description: Condition gating the action; absent
+                                        means always.
+                                      maxLength: 16384
+                                      minLength: 1
+                                      type: string
+                                    reject:
+                                      description: Reject with this message.
+                                      maxLength: 4096
+                                      minLength: 1
+                                      type: string
+                                    transform:
+                                      description: |-
+                                        Returns a replacement body (`mcp.params` on requests or `mcp.result` on responses).
+                                        Use `merge` to preserve fields you do not wish to mutate; `null` leaves the body unchanged.
+                                      maxLength: 16384
+                                      minLength: 1
+                                      type: string
+                                  type: object
+                                  x-kubernetes-validations:
+                                  - message: exactly one of the fields in [reject
+                                      transform] must be set
+                                    rule: (has(self.reject)?1:0)+(has(self.transform)?1:0)
+                                      == 1
                                 methods:
                                   additionalProperties:
                                     description: MCPMethodPhase controls when an MCP
@@ -16281,9 +16542,10 @@ spec:
                               - methods
                               type: object
                               x-kubernetes-validations:
-                              - message: exactly one of the fields in [remote] must
-                                  be set
-                                rule: (has(self.remote)?1:0) == 1
+                              - message: exactly one of the fields in [remote expression]
+                                  must be set
+                                rule: (has(self.remote)?1:0)+(has(self.expression)?1:0)
+                                  == 1
                             maxItems: 16
                             minItems: 1
                             type: array
@@ -17184,11 +17446,13 @@ spec:
                           enum:
                           - AnthropicTokenCount
                           - Completions
+                          - Decisions
                           - Embeddings
                           - Messages
                           - Realtime
                           - Rerank
                           - Responses
+                          - SystemOne
                           type: string
                       required:
                       - type
@@ -20362,6 +20626,29 @@ spec:
                                 Custom response message to return to the client. If not specified, defaults to
                                 `The request was rejected due to inappropriate content`.
                               properties:
+                                headers:
+                                  description: Headers to include in the rejection
+                                    response.
+                                  items:
+                                    description: HTTPHeader represents an HTTP Header
+                                      name and value as defined by RFC 7230.
+                                    properties:
+                                      name:
+                                        description: Name of the HTTP header, case-insensitive
+                                        maxLength: 256
+                                        minLength: 1
+                                        pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
+                                        type: string
+                                      value:
+                                        description: Value for the HTTP header
+                                        maxLength: 4096
+                                        minLength: 1
+                                        type: string
+                                    required:
+                                    - name
+                                    - value
+                                    type: object
+                                  type: array
                                 message:
                                   description: |-
                                     Custom response message to return to the client. If not specified, defaults to
@@ -20378,14 +20665,17 @@ spec:
                             scope:
                               description: |-
                                 Which parts of the request this guard inspects. When unset, defaults to
-                                `SystemPrompt` and `Messages`. Tool call inputs and outputs are not
-                                inspected unless `ToolInput`/`ToolOutput` are listed explicitly.
+                                `SystemPrompt`, `Messages`, and `ToolOutput`. Tool call inputs are not
+                                inspected unless `ToolInput` is listed explicitly. Webhook guards do not
+                                support scope and always inspect `SystemPrompt` and `Messages`.
                                 In APIs that send tool arguments as opaque JSON, such as Completions, the
                                 arguments are masked as a single string, meaning a prompt guard has the
                                 potential to rewrite the arguments into invalid JSON.
                               items:
-                                description: Which category of request content a prompt
-                                  guard inspects.
+                                description: |-
+                                  Which category of request or response content a prompt guard inspects.
+                                  Encrypted payloads are excluded. Signed response payloads are scanned but
+                                  a mask that would change them rejects the response instead.
                                 enum:
                                 - Messages
                                 - SystemPrompt
@@ -20523,12 +20813,11 @@ spec:
                               type: object
                           type: object
                           x-kubernetes-validations:
-                          - message: 'scope: only regex and bedrockGuardrails guards
-                              support a non-default scope; other guard kinds always
-                              inspect the default (SystemPrompt + Messages)'
-                            rule: '!has(self.scope) || has(self.regex) || has(self.bedrockGuardrails)
-                              || (self.scope.size() == 2 && ''SystemPrompt'' in self.scope
-                              && ''Messages'' in self.scope)'
+                          - message: 'scope: webhook guards do not support scope;
+                              they always inspect SystemPrompt + Messages'
+                            rule: '!has(self.scope) || !has(self.webhook) || (self.scope.size()
+                              == 2 && ''SystemPrompt'' in self.scope && ''Messages''
+                              in self.scope)'
                           - message: exactly one of the fields in [regex webhook openAIModeration
                               bedrockGuardrails googleModelArmor] must be set
                             rule: (has(self.regex)?1:0)+(has(self.webhook)?1:0)+(has(self.openAIModeration)?1:0)+(has(self.bedrockGuardrails)?1:0)+(has(self.googleModelArmor)?1:0)
@@ -21705,6 +21994,29 @@ spec:
                                 Custom response message to return to the client. If not specified, defaults to
                                 `The response was rejected due to inappropriate content`.
                               properties:
+                                headers:
+                                  description: Headers to include in the rejection
+                                    response.
+                                  items:
+                                    description: HTTPHeader represents an HTTP Header
+                                      name and value as defined by RFC 7230.
+                                    properties:
+                                      name:
+                                        description: Name of the HTTP header, case-insensitive
+                                        maxLength: 256
+                                        minLength: 1
+                                        pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
+                                        type: string
+                                      value:
+                                        description: Value for the HTTP header
+                                        maxLength: 4096
+                                        minLength: 1
+                                        type: string
+                                    required:
+                                    - name
+                                    - value
+                                    type: object
+                                  type: array
                                 message:
                                   description: |-
                                     Custom response message to return to the client. If not specified, defaults to
@@ -21718,6 +22030,30 @@ spec:
                                   minimum: 200
                                   type: integer
                               type: object
+                            scope:
+                              description: |-
+                                Which parts of the response this guard inspects. When unset, defaults to
+                                `Messages`. Tool calls generated by the model are not inspected unless
+                                `ToolInput` is listed explicitly; `ToolOutput` covers results of
+                                serverside tools.
+                                In APIs that send tool arguments as opaque JSON, such as Completions, the
+                                arguments are masked as a single string, meaning a prompt guard has the
+                                potential to rewrite the arguments into invalid JSON.
+                              items:
+                                description: |-
+                                  Which category of request or response content a prompt guard inspects.
+                                  Encrypted payloads are excluded. Signed response payloads are scanned but
+                                  a mask that would change them rejects the response instead.
+                                enum:
+                                - Messages
+                                - SystemPrompt
+                                - ToolInput
+                                - ToolOutput
+                                type: string
+                              maxItems: 4
+                              minItems: 1
+                              type: array
+                              x-kubernetes-list-type: set
                             webhook:
                               description: Webhook that receives responses for prompt
                                 guarding.
@@ -21845,6 +22181,10 @@ spec:
                               type: object
                           type: object
                           x-kubernetes-validations:
+                          - message: 'scope: webhook guards do not support a non-default
+                              scope; they always inspect the default (Messages)'
+                            rule: '!has(self.scope) || !has(self.webhook) || (self.scope.size()
+                              == 1 && ''Messages'' in self.scope)'
                           - message: exactly one of the fields in [regex webhook bedrockGuardrails
                               googleModelArmor] must be set
                             rule: (has(self.regex)?1:0)+(has(self.webhook)?1:0)+(has(self.bedrockGuardrails)?1:0)+(has(self.googleModelArmor)?1:0)
@@ -21861,6 +22201,11 @@ spec:
                         type: string
                     type: object
                     x-kubernetes-validations:
+                    - message: streaming response guards only support the Messages
+                        scope
+                      rule: '!has(self.streaming) || self.streaming != ''Enabled''
+                        || !has(self.response) || self.response.all(g, !has(g.scope)
+                        || g.scope.all(s, s == ''Messages''))'
                     - message: at least one of the fields in [request response] must
                         be set
                       rule: '[has(self.request),has(self.response)].filter(x,x==true).size()
@@ -22152,6 +22497,7 @@ spec:
                 - Bedrock
                 - Cerebras
                 - Cohere
+                - Copilot
                 - Custom
                 - Deepinfra
                 - Deepseek
@@ -22164,7 +22510,9 @@ spec:
                 - Ollama
                 - OpenAI
                 - Openrouter
+                - Perplexity
                 - TogetherAI
+                - Typesafe
                 - VertexAI
                 - XAI
                 type: string
@@ -22193,6 +22541,177 @@ spec:
                 description: Request-time routing among concrete AgentgatewayModel
                   resources.
                 properties:
+                  callout:
+                    description: Model selection by calling an external HTTP service.
+                    properties:
+                      backendRef:
+                        description: |-
+                          `backendRef` selects a backend for this policy.
+                          Mutually exclusive with `url`.
+                        properties:
+                          group:
+                            default: ""
+                            description: Group of the referent, for example `gateway.networking.k8s.io`.
+                              Empty selects the core API group
+                            maxLength: 253
+                            pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                            type: string
+                          kind:
+                            default: Service
+                            description: Kubernetes resource kind of the referent,
+                              for example `Service`. Defaults to `Service`
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$
+                            type: string
+                          name:
+                            description: Name is the name of the referent.
+                            maxLength: 253
+                            minLength: 1
+                            type: string
+                          namespace:
+                            description: Namespace of the referent. Defaults to the
+                              local namespace. A cross-namespace reference requires
+                              a ReferenceGrant in the referent namespace
+                            maxLength: 63
+                            minLength: 1
+                            pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                            type: string
+                          port:
+                            description: Destination port number. Required when the
+                              referent is a Kubernetes `Service`
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                        required:
+                        - name
+                        type: object
+                        x-kubernetes-validations:
+                        - message: Must have port for Service reference
+                          rule: '(size(self.group) == 0 && self.kind == ''Service'')
+                            ? has(self.port) : true'
+                      body:
+                        description: |-
+                          CEL expression that computes the callout request body. Strings and bytes
+                          are used directly; other values are JSON-encoded. If unset, the original
+                          request body is forwarded.
+                        maxLength: 16384
+                        minLength: 1
+                        type: string
+                      cache:
+                        description: |-
+                          Reuse callout responses using CEL expressions as the cache key. On a cache
+                          hit, `transformation` is evaluated against the cached response. Keying on
+                          a session identifier makes routing sticky for that session.
+                        properties:
+                          key:
+                            description: |-
+                              Ordered list of CEL expressions evaluated against the request to
+                              construct the cache key.
+                            items:
+                              description: A Common Expression Language (CEL) expression.
+                              maxLength: 16384
+                              minLength: 1
+                              type: string
+                            maxItems: 16
+                            minItems: 1
+                            type: array
+                          maxEntries:
+                            description: |-
+                              Maximum number of callout responses to keep in the cache. If unset, this
+                              defaults to 10000.
+                            format: int32
+                            minimum: 1
+                            type: integer
+                          ttl:
+                            description: |-
+                              Duration string, such as `5m`, or a CEL expression that returns the
+                              duration that a cached callout response may be reused, or a timestamp
+                              when it expires. The expression is evaluated with `callout` available,
+                              before `transformation` is applied.
+                            maxLength: 16384
+                            minLength: 1
+                            type: string
+                        required:
+                        - key
+                        - ttl
+                        type: object
+                      fallback:
+                        description: |-
+                          Model used when the callout fails, returns a non-2xx or non-JSON
+                          response, or selects an unknown model. `transformation` is not applied to
+                          the fallback. If unset, the request is rejected.
+                        properties:
+                          model:
+                            description: |-
+                              Concrete model name selected through the referenced model. It is required
+                              when modelRef points to a wildcard match.model. When omitted, the referenced
+                              model's exact effective match.model is used.
+                            maxLength: 1024
+                            minLength: 1
+                            type: string
+                          modelRef:
+                            description: Same-namespace AgentgatewayModel resource
+                              selected by this target.
+                            properties:
+                              name:
+                                default: ""
+                                description: Name of the referent
+                                type: string
+                            type: object
+                            x-kubernetes-map-type: atomic
+                        required:
+                        - modelRef
+                        type: object
+                      headers:
+                        additionalProperties:
+                          description: A Common Expression Language (CEL) expression.
+                          maxLength: 16384
+                          minLength: 1
+                          type: string
+                        description: |-
+                          Headers to set on the callout request, computed from CEL expressions.
+                          Keys may be header names or the `:path`, `:method`, and `:authority`
+                          pseudo-headers.
+                        maxProperties: 64
+                        type: object
+                      transformation:
+                        additionalProperties:
+                          description: A Common Expression Language (CEL) expression.
+                          maxLength: 16384
+                          minLength: 1
+                          type: string
+                        description: |-
+                          CEL expressions that compute request payload fields from the callout
+                          response, overriding existing values. `callout.headers` holds the response
+                          headers and `callout.body` the decoded JSON response body. `model` is
+                          required and selects the concrete model name, which is matched against the
+                          effective match.model of models attached to the same listener.
+                        maxProperties: 64
+                        minProperties: 1
+                        type: object
+                        x-kubernetes-validations:
+                        - message: transformation must set model
+                          rule: has(self.model)
+                      url:
+                        description: |-
+                          `url` directly specifies the HTTP(S) endpoint for this policy.
+                          When the scheme is `https`, backend TLS is enabled automatically.
+                          Mutually exclusive with `backendRef`.
+                          URLs are opaque; referencing a Kubernetes service hostname like `hello.ns.svc.cluster.local`
+                          will not apply Service policies or load balancing.
+                        maxLength: 1024
+                        minLength: 1
+                        pattern: ^https?://[^/?#@]+(/[^?#]*)?$
+                        type: string
+                    required:
+                    - transformation
+                    type: object
+                    x-kubernetes-validations:
+                    - message: exactly one of the fields in [backendRef url] must
+                        be set
+                      rule: (has(self.backendRef)?1:0)+(has(self.url)?1:0) == 1
                   conditional:
                     description: Ordered condition-based model selection.
                     properties:
@@ -22330,9 +22849,9 @@ spec:
                     type: object
                 type: object
                 x-kubernetes-validations:
-                - message: exactly one of the fields in [weighted failover conditional]
-                    must be set
-                  rule: (has(self.weighted)?1:0)+(has(self.failover)?1:0)+(has(self.conditional)?1:0)
+                - message: exactly one of the fields in [weighted failover conditional
+                    callout] must be set
+                  rule: (has(self.weighted)?1:0)+(has(self.failover)?1:0)+(has(self.conditional)?1:0)+(has(self.callout)?1:0)
                     == 1
               visibility:
                 description: |-
@@ -23908,10 +24427,11 @@ spec:
                         type: object
                       promptCaching:
                         description: |-
-                          Automatic prompt caching for supported
-                          providers, currently AWS Bedrock.
+                          Automatic prompt caching for supported providers: Anthropic, Anthropic
+                          models on Vertex AI, and AWS Bedrock (Claude 3+ and Nova models).
                           Reduces API costs by caching static content like system prompts and tool definitions.
-                          Only applicable for Bedrock Claude 3+ and Nova models.
+                          Cache marks sent by the client take precedence: if a request already has any,
+                          the policy adds none.
                         properties:
                           cacheMessageOffset:
                             description: |-
@@ -23935,12 +24455,14 @@ spec:
                             description: |-
                               Enables caching for tool definitions. Defaults to false.
                               Inserts a cache point after all tool specifications.
+                              Ignored for Bedrock Nova models, which do not support caching tools.
                             type: boolean
                           minTokens:
                             description: |-
                               Minimum estimated token count
                               before caching is enabled. Uses rough heuristic (word count × 1.3) to estimate tokens.
-                              Defaults to 1024. Bedrock requires at least 1,024 tokens for caching to be effective.
+                              Applies to system prompt caching. Defaults to 1024; most models require at least
+                              1,024 tokens for caching to be effective.
                             minimum: 0
                             type: integer
                         type: object
@@ -25626,6 +26148,31 @@ spec:
                                     Custom response message to return to the client. If not specified, defaults to
                                     `The request was rejected due to inappropriate content`.
                                   properties:
+                                    headers:
+                                      description: Headers to include in the rejection
+                                        response.
+                                      items:
+                                        description: HTTPHeader represents an HTTP
+                                          Header name and value as defined by RFC
+                                          7230.
+                                        properties:
+                                          name:
+                                            description: Name of the HTTP header,
+                                              case-insensitive
+                                            maxLength: 256
+                                            minLength: 1
+                                            pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
+                                            type: string
+                                          value:
+                                            description: Value for the HTTP header
+                                            maxLength: 4096
+                                            minLength: 1
+                                            type: string
+                                        required:
+                                        - name
+                                        - value
+                                        type: object
+                                      type: array
                                     message:
                                       description: |-
                                         Custom response message to return to the client. If not specified, defaults to
@@ -25642,14 +26189,17 @@ spec:
                                 scope:
                                   description: |-
                                     Which parts of the request this guard inspects. When unset, defaults to
-                                    `SystemPrompt` and `Messages`. Tool call inputs and outputs are not
-                                    inspected unless `ToolInput`/`ToolOutput` are listed explicitly.
+                                    `SystemPrompt`, `Messages`, and `ToolOutput`. Tool call inputs are not
+                                    inspected unless `ToolInput` is listed explicitly. Webhook guards do not
+                                    support scope and always inspect `SystemPrompt` and `Messages`.
                                     In APIs that send tool arguments as opaque JSON, such as Completions, the
                                     arguments are masked as a single string, meaning a prompt guard has the
                                     potential to rewrite the arguments into invalid JSON.
                                   items:
-                                    description: Which category of request content
-                                      a prompt guard inspects.
+                                    description: |-
+                                      Which category of request or response content a prompt guard inspects.
+                                      Encrypted payloads are excluded. Signed response payloads are scanned but
+                                      a mask that would change them rejects the response instead.
                                     enum:
                                     - Messages
                                     - SystemPrompt
@@ -25789,13 +26339,11 @@ spec:
                                   type: object
                               type: object
                               x-kubernetes-validations:
-                              - message: 'scope: only regex and bedrockGuardrails
-                                  guards support a non-default scope; other guard
-                                  kinds always inspect the default (SystemPrompt +
-                                  Messages)'
-                                rule: '!has(self.scope) || has(self.regex) || has(self.bedrockGuardrails)
-                                  || (self.scope.size() == 2 && ''SystemPrompt'' in
-                                  self.scope && ''Messages'' in self.scope)'
+                              - message: 'scope: webhook guards do not support scope;
+                                  they always inspect SystemPrompt + Messages'
+                                rule: '!has(self.scope) || !has(self.webhook) || (self.scope.size()
+                                  == 2 && ''SystemPrompt'' in self.scope && ''Messages''
+                                  in self.scope)'
                               - message: exactly one of the fields in [regex webhook
                                   openAIModeration bedrockGuardrails googleModelArmor]
                                   must be set
@@ -26993,6 +27541,31 @@ spec:
                                     Custom response message to return to the client. If not specified, defaults to
                                     `The response was rejected due to inappropriate content`.
                                   properties:
+                                    headers:
+                                      description: Headers to include in the rejection
+                                        response.
+                                      items:
+                                        description: HTTPHeader represents an HTTP
+                                          Header name and value as defined by RFC
+                                          7230.
+                                        properties:
+                                          name:
+                                            description: Name of the HTTP header,
+                                              case-insensitive
+                                            maxLength: 256
+                                            minLength: 1
+                                            pattern: ^[A-Za-z0-9!#$%&'*+\-.^_\x60|~]+$
+                                            type: string
+                                          value:
+                                            description: Value for the HTTP header
+                                            maxLength: 4096
+                                            minLength: 1
+                                            type: string
+                                        required:
+                                        - name
+                                        - value
+                                        type: object
+                                      type: array
                                     message:
                                       description: |-
                                         Custom response message to return to the client. If not specified, defaults to
@@ -27006,6 +27579,30 @@ spec:
                                       minimum: 200
                                       type: integer
                                   type: object
+                                scope:
+                                  description: |-
+                                    Which parts of the response this guard inspects. When unset, defaults to
+                                    `Messages`. Tool calls generated by the model are not inspected unless
+                                    `ToolInput` is listed explicitly; `ToolOutput` covers results of
+                                    serverside tools.
+                                    In APIs that send tool arguments as opaque JSON, such as Completions, the
+                                    arguments are masked as a single string, meaning a prompt guard has the
+                                    potential to rewrite the arguments into invalid JSON.
+                                  items:
+                                    description: |-
+                                      Which category of request or response content a prompt guard inspects.
+                                      Encrypted payloads are excluded. Signed response payloads are scanned but
+                                      a mask that would change them rejects the response instead.
+                                    enum:
+                                    - Messages
+                                    - SystemPrompt
+                                    - ToolInput
+                                    - ToolOutput
+                                    type: string
+                                  maxItems: 4
+                                  minItems: 1
+                                  type: array
+                                  x-kubernetes-list-type: set
                                 webhook:
                                   description: Webhook that receives responses for
                                     prompt guarding.
@@ -27135,6 +27732,10 @@ spec:
                                   type: object
                               type: object
                               x-kubernetes-validations:
+                              - message: 'scope: webhook guards do not support a non-default
+                                  scope; they always inspect the default (Messages)'
+                                rule: '!has(self.scope) || !has(self.webhook) || (self.scope.size()
+                                  == 1 && ''Messages'' in self.scope)'
                               - message: exactly one of the fields in [regex webhook
                                   bedrockGuardrails googleModelArmor] must be set
                                 rule: (has(self.regex)?1:0)+(has(self.webhook)?1:0)+(has(self.bedrockGuardrails)?1:0)+(has(self.googleModelArmor)?1:0)
@@ -27151,6 +27752,11 @@ spec:
                             type: string
                         type: object
                         x-kubernetes-validations:
+                        - message: streaming response guards only support the Messages
+                            scope
+                          rule: '!has(self.streaming) || self.streaming != ''Enabled''
+                            || !has(self.response) || self.response.all(g, !has(g.scope)
+                            || g.scope.all(s, s == ''Messages''))'
                         - message: at least one of the fields in [request response]
                             must be set
                           rule: '[has(self.request),has(self.response)].filter(x,x==true).size()
@@ -27163,6 +27769,7 @@ spec:
                           enum:
                           - AnthropicTokenCount
                           - Completions
+                          - Decisions
                           - Detect
                           - Embeddings
                           - GeminiCountTokens
@@ -27173,6 +27780,7 @@ spec:
                           - Realtime
                           - Rerank
                           - Responses
+                          - SystemOne
                           type: string
                         description: |-
                           Rules for identifying the type of traffic to handle.
@@ -27542,8 +28150,9 @@ spec:
                         type: array
                         x-kubernetes-list-type: atomic
                       crossAppAccess:
-                        description: Cross App Access (Identity Assertion / ID-JAG)
-                          authentication.
+                        description: |-
+                          Cross App Access (Identity Assertion / ID-JAG) authentication.
+                          If this configuration is invalid, requests using it are rejected.
                         properties:
                           accessTokenScopes:
                             description: |-
@@ -28408,8 +29017,9 @@ spec:
                           rule: (has(self.header)?1:0)+(has(self.queryParameter)?1:0)+(has(self.cookie)?1:0)
                             == 1
                       oauthTokenExchange:
-                        description: OAuth 2.0 token exchange (RFC 8693) / jwt-bearer
-                          (RFC 7523) authentication.
+                        description: |-
+                          OAuth 2.0 token exchange (RFC 8693) / jwt-bearer (RFC 7523) authentication.
+                          If this configuration is invalid, requests using it are rejected.
                         properties:
                           actorToken:
                             description: RFC 8693 delegation actor token. TokenExchange
@@ -29652,8 +30262,8 @@ spec:
                         - policy
                         type: object
                       guardrails:
-                        description: '`guardrails` routes selected JSON-RPC methods
-                          through a remote policy server.'
+                        description: Remote and in-process CEL policy processors for
+                          MCP requests and responses.
                         properties:
                           processors:
                             description: |-
@@ -29664,6 +30274,34 @@ spec:
                               description: MCPGuardrailsProcessor selects a single
                                 policy processor. Exactly one variant must be set.
                               properties:
+                                expression:
+                                  description: In-process guardrail driven by CEL
+                                    expressions.
+                                  properties:
+                                    condition:
+                                      description: Condition gating the action; absent
+                                        means always.
+                                      maxLength: 16384
+                                      minLength: 1
+                                      type: string
+                                    reject:
+                                      description: Reject with this message.
+                                      maxLength: 4096
+                                      minLength: 1
+                                      type: string
+                                    transform:
+                                      description: |-
+                                        Returns a replacement body (`mcp.params` on requests or `mcp.result` on responses).
+                                        Use `merge` to preserve fields you do not wish to mutate; `null` leaves the body unchanged.
+                                      maxLength: 16384
+                                      minLength: 1
+                                      type: string
+                                  type: object
+                                  x-kubernetes-validations:
+                                  - message: exactly one of the fields in [reject
+                                      transform] must be set
+                                    rule: (has(self.reject)?1:0)+(has(self.transform)?1:0)
+                                      == 1
                                 methods:
                                   additionalProperties:
                                     description: MCPMethodPhase controls when an MCP
@@ -29829,9 +30467,10 @@ spec:
                               - methods
                               type: object
                               x-kubernetes-validations:
-                              - message: exactly one of the fields in [remote] must
-                                  be set
-                                rule: (has(self.remote)?1:0) == 1
+                              - message: exactly one of the fields in [remote expression]
+                                  must be set
+                                rule: (has(self.remote)?1:0)+(has(self.expression)?1:0)
+                                  == 1
                             maxItems: 16
                             minItems: 1
                             type: array
@@ -34194,18 +34833,19 @@ spec:
                     description: Retry policy.
                     properties:
                       attempts:
+                        default: 1
                         description: |-
                           Attempts specifies the maximum number of times an individual request
-                          from the gateway to a backend should be retried.
+                          from the Gateway to a backend should be retried in addition to the
+                          initial request.
 
                           If the maximum number of retries has been attempted without a successful
                           response from the backend, the Gateway MUST return an error.
 
-                          When this field is unspecified, the number of times to attempt to retry
-                          a backend request is implementation-specific.
+                          An explicit zero value MUST disable retries.
 
                           Support: Extended
-                        minimum: 1
+                        minimum: 0
                         type: integer
                       backoff:
                         description: 'Minimum duration to wait between retry attempts,
@@ -34237,8 +34877,6 @@ spec:
 
                             Implementations MAY support specifying discrete values in the 400-499 range,
                             which are often inadvisable to retry.
-
-                            <gateway:experimental>
                           maximum: 599
                           minimum: 400
                           type: integer

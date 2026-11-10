@@ -3,6 +3,7 @@ import Layout from '@theme/Layout';
 import Link from '@docusaurus/Link';
 import ThemedImage from '@theme/ThemedImage';
 import useBaseUrl from '@docusaurus/useBaseUrl';
+import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import UseCases from '../components/UseCases';
 import styles from './index.module.css';
 
@@ -13,7 +14,7 @@ const WHY = [
   ['Anyone who has the key can use any model.', 'Access rules based on your identity provider\'s groups decide which models and MCP servers each team may use.'],
   ['AI agents connect to work apps on their own, often through one shared service account.', 'Every MCP call passes one gateway. People connect their own app accounts, tools are checked, and personal data in results is masked.'],
   ['The cost shows up on next month\'s bill.', 'Daily limits per group and per person, in requests or in dollars.'],
-  ['Nobody can say who sent what to which model.', 'Every call is recorded, refusals included. Model refusals do not yet show who made them (an agentgateway bug; see Known limitations).'],
+  ['Nobody can say who sent what to which model.', 'Every call is recorded, refusals included.'],
   ['Someone leaves, and their keys work until someone remembers to rotate them.', 'The identity provider disables them, and their keys, sessions and app sign-ins stop at once.'],
 ];
 
@@ -40,6 +41,7 @@ function Themed({name, alt, className}: {name: string; alt: string; className?: 
 }
 
 export default function Home(): ReactNode {
+  const {version} = useDocusaurusContext().siteConfig.customFields as {version: string};
   return (
     <Layout
       title="The AI access layer for enterprises"
@@ -47,7 +49,7 @@ export default function Home(): ReactNode {
       <main className={styles.page}>
         <header className={styles.hero}>
           <div>
-            <p className={styles.eyebrow}>Alpha · v0.1.0 · Apache-2.0</p>
+            <p className={styles.eyebrow}>{`Alpha · v${version} · Apache-2.0`}</p>
             <h1>The AI access layer for enterprises.</h1>
             <p className={styles.lead}>
               A self-hosted gateway that decides who may use which AI models and work apps, sets spending limits,

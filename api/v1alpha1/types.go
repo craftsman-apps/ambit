@@ -512,10 +512,10 @@ type ConnectionList struct {
 	Items           []Connection `json:"items"`
 }
 
-// BudgetSpec limits LLM use per day for one group from the identity provider: requests, estimated dollars
-// (from Model prices), or both. Limits are shared across every gateway replica. A member of several
+// BudgetSpec limits LLM use for one group from the identity provider: requests per day, estimated dollars per day
+// (from Model prices), requests per minute, or any of them. Limits are shared across every gateway replica. A member of several
 // budgeted groups is counted against each of them.
-// +kubebuilder:validation:XValidation:rule="has(self.groupRequestsPerDay) || has(self.userRequestsPerDay) || has(self.groupDollarsPerDay) || has(self.userDollarsPerDay)",message="set at least one limit"
+// +kubebuilder:validation:XValidation:rule="has(self.groupRequestsPerDay) || has(self.userRequestsPerDay) || has(self.groupDollarsPerDay) || has(self.userDollarsPerDay) || has(self.groupRequestsPerMinute) || has(self.userRequestsPerMinute)",message="set at least one limit"
 // +kubebuilder:validation:XValidation:rule="!has(self.groupDollarsPerDay) || double(self.groupDollarsPerDay) > 0.0",message="groupDollarsPerDay must be greater than 0"
 // +kubebuilder:validation:XValidation:rule="!has(self.userDollarsPerDay) || double(self.userDollarsPerDay) > 0.0",message="userDollarsPerDay must be greater than 0"
 // +kubebuilder:validation:XValidation:rule="!has(self.groupDollarsPerDay) || double(self.groupDollarsPerDay) <= 42949.67",message="groupDollarsPerDay must be at most 42949.67"
@@ -541,6 +541,18 @@ type BudgetSpec struct {
 	// +kubebuilder:validation:Pattern=`^[0-9]{1,5}(\.[0-9]{1,5})?$`
 	// +optional
 	UserDollarsPerDay string `json:"userDollarsPerDay,omitempty"`
+	// GroupRequestsPerMinute is shared by everyone in the group, per clock minute (UTC). Unlike the daily limits, a
+	// request counts when it arrives, also when it is then refused, so a burst cannot get past it.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1000000
+	// +optional
+	GroupRequestsPerMinute *int64 `json:"groupRequestsPerMinute,omitempty"`
+	// UserRequestsPerMinute applies to each member separately, per clock minute (UTC), counted like
+	// GroupRequestsPerMinute.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1000000
+	// +optional
+	UserRequestsPerMinute *int64 `json:"userRequestsPerMinute,omitempty"`
 }
 
 type BudgetStatus struct {
@@ -555,8 +567,11 @@ type BudgetStatus struct {
 // +kubebuilder:printcolumn:name="User/day",type=integer,JSONPath=`.spec.userRequestsPerDay`
 // +kubebuilder:printcolumn:name="Group $/day",type=string,JSONPath=`.spec.groupDollarsPerDay`
 // +kubebuilder:printcolumn:name="User $/day",type=string,JSONPath=`.spec.userDollarsPerDay`
+// +kubebuilder:printcolumn:name="User/min",type=integer,JSONPath=`.spec.userRequestsPerMinute`,priority=1
+// +kubebuilder:printcolumn:name="Group/min",type=integer,JSONPath=`.spec.groupRequestsPerMinute`,priority=1
 
-// Budget caps a group's LLM requests per day. Over the limit the gateway answers 429.
+// Budget caps a group's LLM requests per day and per minute, and its estimated spend per day. Over a limit the
+// gateway answers 429.
 type Budget struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

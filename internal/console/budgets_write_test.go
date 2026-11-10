@@ -105,3 +105,31 @@ func TestBudgetDollarLimits(t *testing.T) {
 		t.Fatalf("updated: %+v", b.Spec)
 	}
 }
+
+// Issue #85: the per-minute limits are set, changed and refused like the daily ones.
+func TestBudgetPerMinuteLimits(t *testing.T) {
+	h, c, auth := catalogFixture(t)
+	admin := as(auth, RoleAdmin)
+	if r := do(t, h, "POST", "/api/budgets", admin, BudgetInput{Name: "eng", Group: "eng", UserRequestsPerMinute: ptr.To[int64](30)}); r.Code != http.StatusCreated {
+		t.Fatalf("create with a minute limit only: %d %s", r.Code, r.Body)
+	}
+	var b v1.Budget
+	if err := c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "eng"}, &b); err != nil || *b.Spec.UserRequestsPerMinute != 30 || b.Spec.GroupRequestsPerMinute != nil {
+		t.Fatalf("created: %+v %v", b.Spec, err)
+	}
+	if r := do(t, h, "PUT", "/api/budgets/eng", admin, BudgetInput{Group: "eng", GroupRequestsPerMinute: ptr.To[int64](300), UserRequestsPerDay: ptr.To[int64](9)}); r.Code != http.StatusOK {
+		t.Fatalf("update: %d %s", r.Code, r.Body)
+	}
+	b = v1.Budget{}
+	if err := c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "eng"}, &b); err != nil || *b.Spec.GroupRequestsPerMinute != 300 || b.Spec.UserRequestsPerMinute != nil || *b.Spec.UserRequestsPerDay != 9 {
+		t.Fatalf("updated: %+v %v", b.Spec, err)
+	}
+	for name, in := range map[string]BudgetInput{
+		"zero per minute":        {Name: "ops", Group: "ops", UserRequestsPerMinute: ptr.To[int64](0)},
+		"over a million per min": {Name: "ops", Group: "ops", GroupRequestsPerMinute: ptr.To[int64](1000001)},
+	} {
+		if r := do(t, h, "POST", "/api/budgets", admin, in); r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), "per minute") {
+			t.Errorf("%s: %d %s", name, r.Code, r.Body)
+		}
+	}
+}

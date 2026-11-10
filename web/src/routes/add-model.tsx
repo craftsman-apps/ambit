@@ -14,10 +14,47 @@ const nameRE = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
 const newOperation = () => Array.from(crypto.getRandomValues(new Uint8Array(10)), (b) => b.toString(16).padStart(2, "0")).join("");
 
 type Credentials = "entered" | "existing" | "cloud";
-type Unfinished = { secret: string; model: string; operation: string; pullRequest?: PullRequest & { closed: boolean; merged: boolean } };
+type Unfinished = { secret: string; model: string; operation: string; deleted?: boolean; pullRequest?: PullRequest & { closed: boolean; merged: boolean } };
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return <div><label className="block"><span className="mb-1 block text-small text-muted">{label}</span>{children}</label>{hint && <p className="mt-1 text-small text-muted">{hint}</p>}</div>;
+}
+
+// The keys an admin types for a provider: an API key, AWS keys (Bedrock) or a Google key file (Vertex AI). They stay
+// in this component's state until sent, and the caller clears them right after.
+export type KeyValues = { apiKey: string; accessKey: string; secretKey: string; sessionToken: string; googleKeyFile: string; fileName: string };
+export const emptyKeys: KeyValues = { apiKey: "", accessKey: "", secretKey: "", sessionToken: "", googleKeyFile: "", fileName: "" };
+
+export function keyBody(provider: string, v: KeyValues): Record<string, unknown> {
+  if (provider === "Bedrock") return { awsKeys: { accessKey: v.accessKey, secretKey: v.secretKey, ...(v.sessionToken && { sessionToken: v.sessionToken }) } };
+  if (provider === "VertexAI") return { googleKeyFile: v.googleKeyFile };
+  return { apiKey: v.apiKey };
+}
+
+export const enterLabel = (provider: string) =>
+  provider === "Bedrock" ? "Enter the keys here" : provider === "VertexAI" ? "Upload the key file" : "Enter the key here";
+
+export function KeyFields({ provider, v, set, fresh }: { provider: string; v: KeyValues; set: (v: KeyValues) => void; fresh?: boolean }) {
+  const pre = fresh ? "New " : "";
+  const secret = { className: input, type: "password", autoComplete: "off", spellCheck: false } as const;
+  if (provider === "Bedrock") return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      <Field label={`${pre}AWS access key ID`}><input {...secret} value={v.accessKey} onChange={(e) => set({ ...v, accessKey: e.target.value })} required /></Field>
+      <Field label={`${pre}AWS secret access key`}><input {...secret} value={v.secretKey} onChange={(e) => set({ ...v, secretKey: e.target.value })} required /></Field>
+      <Field label="AWS session token (optional)" hint="Only for temporary keys (access key ID ASIA...)."><input {...secret} value={v.sessionToken} onChange={(e) => set({ ...v, sessionToken: e.target.value })} /></Field>
+    </div>
+  );
+  if (provider === "VertexAI") return (
+    <Field label={`${pre}Google service-account key file`} hint={v.fileName ? `Selected: ${v.fileName}` : "A JSON file of type service_account, from Google Cloud IAM."}>
+      <input className={input} type="file" accept=".json,application/json" required={!v.googleKeyFile}
+        onChange={async (e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) set({ ...v, googleKeyFile: await f.text(), fileName: f.name }); }} />
+    </Field>
+  );
+  return (
+    <Field label={`${pre}API key`}>
+      <input {...secret} value={v.apiKey} onChange={(e) => set({ ...v, apiKey: e.target.value })} required />
+    </Field>
+  );
 }
 
 // Add a model (admins). A typed API key is stored only in Secret ambit-llm-<name>; the server never returns it.
@@ -36,11 +73,11 @@ export function AddModel({ onDone }: { onDone: () => void }) {
   const [region, setRegion] = useState("");
   const [projectId, setProjectId] = useState("");
   const [choice, setChoice] = useState<Credentials>("entered");
-  const [apiKey, setApiKey] = useState("");
+  const [keys, setKeys] = useState<KeyValues>(emptyKeys);
   const [secretName, setSecretName] = useState("");
   const [pr, setPR] = useState<PullRequest | null>(null);
   const cloud = cloudOnly(provider);
-  const credentials: Credentials = cloud && choice === "entered" ? "existing" : choice;
+  const credentials: Credentials = choice;
   const secrets = useQuery({ queryKey: ["model-secrets"], enabled: credentials === "existing", queryFn: () => getJSON<string[]>("/api/model-secrets") });
   const nameOK = nameRE.test(name);
   const save = useMutation({
@@ -53,12 +90,12 @@ export function AddModel({ onDone }: { onDone: () => void }) {
       }
       if (provider === "Bedrock" && region) body.bedrock = { region };
       if (provider === "VertexAI") body.vertexai = { projectId, ...(region && { region }) };
-      if (credentials === "entered") body.apiKey = apiKey;
+      if (credentials === "entered") Object.assign(body, keyBody(provider, keys));
       if (credentials === "existing") body.secretName = secretName;
       return sendJSON("POST", "/api/models", body);
     },
     onSuccess: (res) => {
-      setApiKey(""); // the key leaves the page as soon as it is sent
+      setKeys(emptyKeys); // the key leaves the page as soon as it is sent
       qc.invalidateQueries({ queryKey: ["models"] }); qc.invalidateQueries({ queryKey: ["model-secrets"] }); qc.invalidateQueries({ queryKey: ["unfinished-models"] });
       if (isProposed(res)) setPR(res.pullRequest); else onDone();
     },
@@ -118,14 +155,10 @@ export function AddModel({ onDone }: { onDone: () => void }) {
 
       <fieldset className="space-y-2">
         <legend className="mb-1 font-medium">How the provider key is given</legend>
-        {!cloud && (
-          <label className="flex items-center gap-2"><input type="radio" name="credentials" checked={credentials === "entered"} onChange={() => setChoice("entered")} /> Enter the key here</label>
-        )}
+        <label className="flex items-center gap-2"><input type="radio" name="credentials" checked={credentials === "entered"} onChange={() => setChoice("entered")} /> {enterLabel(provider)}</label>
         {credentials === "entered" && (
           <div className="ml-6 space-y-2">
-            <Field label="API key">
-              <input className={input} type="password" autoComplete="off" spellCheck={false} value={apiKey} onChange={(e) => setApiKey(e.target.value)} required />
-            </Field>
+            <KeyFields provider={provider} v={keys} set={setKeys} />
             <div className="space-y-1 rounded-md border border-line-soft bg-bg p-2 text-small text-muted" data-testid="key-caveat">
               <p>The key is stored in the Kubernetes Secret <span className="font-mono">ambit-llm-{name || "<name>"}</span> in the namespace <span className="font-mono">{namespace}</span>. Anyone who can read Secrets in this namespace can read the key. The console never shows the key again. For production, create the Secret with your secret manager (for example External Secrets) and choose <strong>Use an existing Secret</strong>.</p>
               {gitops && <p>The key is not put in Git. The console writes the Secret to the cluster now; the pull request adds only the Model. If you rebuild the cluster from Git, create the Secret again.</p>}
@@ -160,7 +193,8 @@ export function AddModel({ onDone }: { onDone: () => void }) {
   );
 }
 
-// Keys the console stored for a model that was never added (the pull request was closed, or a step failed).
+// Keys the console stored for a model that was never added (the pull request was closed, or a step failed), or whose
+// model was deleted while the key stayed (GitOps mode, or a failed removal).
 export function UnfinishedModels() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["unfinished-models"], queryFn: () => getJSON<Unfinished[]>("/api/models/unfinished") });
@@ -171,12 +205,12 @@ export function UnfinishedModels() {
   if (!q.data?.length) return null;
   return (
     <div className="mb-4 max-w-2xl rounded-md border border-line p-3" data-testid="unfinished-models">
-      <p className="font-medium">Unfinished additions</p>
-      <p className="mb-2 text-small text-muted">The console stored these keys, but the model was not added.</p>
+      <p className="font-medium">Keys without a model</p>
+      <p className="mb-2 text-small text-muted">The console stored these keys, but their model was not added or was deleted.</p>
       <ul className="space-y-1">
         {q.data.map((u) => (
           <li key={u.secret} className="flex flex-wrap items-center gap-2 text-small">
-            <span className="font-mono">{u.model}</span><span className="text-muted">key in <span className="font-mono">{u.secret}</span></span>
+            <span className="font-mono">{u.model}</span>{u.deleted && <span className="text-muted">(deleted)</span>}<span className="text-muted">key in <span className="font-mono">{u.secret}</span></span>
             <Button variant="outline" className="w-auto" disabled={remove.isPending} onClick={() => remove.mutate(u.secret)}>Remove key</Button>
           </li>
         ))}

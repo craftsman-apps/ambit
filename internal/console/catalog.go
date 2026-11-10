@@ -116,6 +116,10 @@ type ModelView struct {
 	Message       string   `json:"message"`
 	// Price in dollars per million tokens; nil when the model has none.
 	Price *v1.ModelPrice `json:"price"`
+	// KeySecret is the Secret of credentialsRef ("" with the gateway's cloud identity). ConsoleKey: the console created
+	// it for this model, so an admin can change the key here (always false for other roles).
+	KeySecret  string `json:"keySecret"`
+	ConsoleKey bool   `json:"consoleKey"`
 }
 
 type RuleView struct {
@@ -305,6 +309,8 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	mux.HandleFunc("GET /api/model-secrets", admin(c.secretNames))
 	mux.HandleFunc("GET /api/models/unfinished", admin(c.unfinishedModels))
 	mux.HandleFunc("DELETE /api/models/unfinished/{secret}", modelAdmin(c.removeModelKey))
+	mux.HandleFunc("PUT /api/models/{name}/key", allow("only admins can change model keys", c.changeModelKey, RoleAdmin))
+	mux.HandleFunc("DELETE /api/models/{name}", allow("only admins can delete models", c.deleteModel, RoleAdmin))
 	mux.HandleFunc("GET /api/prices/licence", read(func(w http.ResponseWriter, r *http.Request, _ Session) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Write([]byte(LiteLLMLicence))
@@ -422,17 +428,35 @@ func (c *Catalog) load(r *http.Request) ([]v1.Model, []v1.AccessRule, error) {
 	return ms.Items, rs.Items, nil
 }
 
-func (c *Catalog) listModels(w http.ResponseWriter, r *http.Request, _ Session) {
+func (c *Catalog) listModels(w http.ResponseWriter, r *http.Request, s Session) {
 	ms, _, err := c.load(r)
 	if err != nil {
 		serverErr(w, err)
 		return
+	}
+	consoleKeys := map[string]bool{} // model name -> its console key Secret exists
+	if s.Role == RoleAdmin {
+		var secs metav1.PartialObjectMetadataList
+		secs.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("SecretList"))
+		if err := c.Client.List(r.Context(), &secs, client.InNamespace(c.Namespace), client.HasLabels{modelSecretLabel}); err != nil {
+			serverErr(w, err)
+			return
+		}
+		for _, sec := range secs.Items {
+			if isConsoleKey(&sec, sec.Labels[modelSecretLabel]) {
+				consoleKeys[sec.Labels[modelSecretLabel]] = true
+			}
+		}
 	}
 	out := []ModelView{}
 	for _, m := range ms {
 		cond := meta.FindStatusCondition(m.Status.Conditions, "Ready")
 		v := ModelView{Name: m.Name, DisplayName: m.Spec.DisplayName, Model: m.Spec.Model, Provider: m.Spec.Provider,
 			AllowedGroups: nonNil(m.Status.AllowedGroups), AllowedUsers: nonNil(m.Status.AllowedUsers), AllSignedIn: m.Status.AllowAllSignedIn, Ready: "Unknown", Price: m.Spec.Price}
+		if ref := m.Spec.CredentialsRef; ref != nil {
+			v.KeySecret = ref.Name
+			v.ConsoleKey = ref.Name == llmSecretPrefix+m.Name && consoleKeys[m.Name]
+		}
 		if cond != nil {
 			v.Ready, v.Message = string(cond.Status), cond.Message
 		}

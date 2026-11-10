@@ -1,0 +1,1 @@
+- Console: Add model and Change key accept AWS keys for Bedrock (access key ID, secret access key, optional session token) and a Google service-account key file for Vertex AI. The console stores them in the Secret `ambit-llm-<name>` and never shows them. Tested with fake keys only (#168).

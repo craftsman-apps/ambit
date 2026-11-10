@@ -50,10 +50,10 @@ type ModelAddInput struct {
 	Azure    *v1.AzureSettings    `json:"azure,omitempty"`
 	Bedrock  *v1.BedrockSettings  `json:"bedrock,omitempty"`
 	VertexAI *v1.VertexAISettings `json:"vertexai,omitempty"`
-	// Credentials is "entered" (APIKey), "existing" (SecretName) or "cloud" (Bedrock and VertexAI only).
+	// Credentials is "entered" (ModelKeys), "existing" (SecretName) or "cloud" (Bedrock and VertexAI only).
 	Credentials string `json:"credentials"`
-	APIKey      string `json:"apiKey,omitempty"`
-	SecretName  string `json:"secretName,omitempty"`
+	ModelKeys
+	SecretName string `json:"secretName,omitempty"`
 }
 
 // UnfinishedModel is a console-created key Secret whose Model does not exist.
@@ -62,6 +62,8 @@ type UnfinishedModel struct {
 	Model       string            `json:"model"`
 	Operation   string            `json:"operation"`
 	PullRequest *PullRequestState `json:"pullRequest,omitempty"`
+	// Deleted: the model was deleted by a merged pull request of the console (GitOps mode); its key stayed.
+	Deleted bool `json:"deleted,omitempty"`
 }
 
 // modelProviders are the CRD's provider enum (api/v1alpha1/types.go); a test compares the two.
@@ -70,13 +72,16 @@ var modelProviders = []string{"Anthropic", "Azure", "Baseten", "Bedrock", "Cereb
 
 func cloudOnly(provider string) bool { return provider == "Bedrock" || provider == "VertexAI" }
 
-// redact removes the key (and its base64 form, which a Secret dump shows) from a message.
-func redact(msg, key string) string {
-	if key == "" {
-		return msg
+// redact removes each key (and its base64 form, which a Secret dump shows) from a message.
+func redact(msg string, keys ...string) string {
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		msg = strings.ReplaceAll(msg, key, "[key]")
+		msg = strings.ReplaceAll(msg, base64.StdEncoding.EncodeToString([]byte(key)), "[key]")
 	}
-	msg = strings.ReplaceAll(msg, key, "[key]")
-	return strings.ReplaceAll(msg, base64.StdEncoding.EncodeToString([]byte(key)), "[key]")
+	return msg
 }
 
 func modelBranch(in ModelAddInput) string {
@@ -85,14 +90,14 @@ func modelBranch(in ModelAddInput) string {
 
 // storedInput is the input without the key: what the Secret records for a retry.
 func (in ModelAddInput) storedInput() string {
-	in.APIKey = ""
+	in.ModelKeys = ModelKeys{}
 	b, _ := json.Marshal(in)
 	return string(b)
 }
 
 // check validates what needs no cluster; the CRD's own rules run later, in the dry-run create.
 func (in *ModelAddInput) check() error {
-	in.APIKey = strings.TrimSpace(in.APIKey)
+	in.ModelKeys.trim()
 	switch {
 	case !operationRE.MatchString(in.Operation):
 		return errors.New("missing operation ID; reload the page")
@@ -105,11 +110,8 @@ func (in *ModelAddInput) check() error {
 	}
 	switch in.Credentials {
 	case "entered":
-		if cloudOnly(in.Provider) {
-			return errors.New("keys for " + in.Provider + " are not entered in the console; use an existing Secret or the gateway's cloud identity")
-		}
-		if in.APIKey == "" {
-			return errors.New("the API key is empty")
+		if _, err := in.ModelKeys.entries(in.Provider); err != nil {
+			return err
 		}
 	case "existing":
 		if !strings.HasPrefix(in.SecretName, llmSecretPrefix) {
@@ -122,8 +124,8 @@ func (in *ModelAddInput) check() error {
 	default:
 		return errors.New("choose how the API key is given: enter it, use an existing Secret, or the gateway's cloud identity")
 	}
-	if in.Credentials != "entered" && in.APIKey != "" || in.Credentials != "existing" && in.SecretName != "" {
-		return errors.New("an API key or Secret name was sent that the chosen credential does not use")
+	if in.Credentials != "entered" && !in.ModelKeys.empty() || in.Credentials != "existing" && in.SecretName != "" {
+		return errors.New("a key or Secret name was sent that the chosen credential does not use")
 	}
 	return nil
 }
@@ -147,9 +149,10 @@ func (c *Catalog) addModel(w http.ResponseWriter, r *http.Request, s Session) {
 	if !decodeInto(w, r, &in) {
 		return
 	}
-	key := strings.TrimSpace(in.APIKey)
+	in.ModelKeys.trim()
+	keys := in.ModelKeys.secrets()
 	if err := in.check(); err != nil {
-		writeErr(w, http.StatusBadRequest, redact(err.Error(), key))
+		writeErr(w, http.StatusBadRequest, redact(err.Error(), keys...))
 		return
 	}
 	ctx := r.Context()
@@ -211,7 +214,7 @@ func (c *Catalog) addModel(w http.ResponseWriter, r *http.Request, s Session) {
 			if apierrors.IsAlreadyExists(err) {
 				writeErr(w, http.StatusConflict, "a model named "+in.Name+" already exists; choose another name")
 			} else {
-				apiErrRedacted(w, err, key)
+				apiErrRedacted(w, err, keys...)
 			}
 			return
 		}
@@ -229,8 +232,8 @@ func (c *Catalog) addModel(w http.ResponseWriter, r *http.Request, s Session) {
 		var status int
 		var err error
 		if created, status, err = c.ensureModelSecret(ctx, s, in); err != nil {
-			slog.Error("add model: key secret", "model", in.Name, "operation", in.Operation, "err", redact(err.Error(), key))
-			writeErr(w, status, redact(err.Error(), key))
+			slog.Error("add model: key secret", "model", in.Name, "operation", in.Operation, "err", redact(err.Error(), keys...))
+			writeErr(w, status, redact(err.Error(), keys...))
 			return
 		}
 	}
@@ -239,7 +242,7 @@ func (c *Catalog) addModel(w http.ResponseWriter, r *http.Request, s Session) {
 		return
 	}
 	if err := c.Client.Create(ctx, m); err != nil {
-		slog.Error("add model", "model", in.Name, "operation", in.Operation, "err", redact(err.Error(), key))
+		slog.Error("add model", "model", in.Name, "operation", in.Operation, "err", redact(err.Error(), keys...))
 		// The error may hide a Model that was stored (canceled request, timeout, a concurrent retry of this operation).
 		// Look again, without the request's context, before deleting the Secret.
 		lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
@@ -261,7 +264,7 @@ func (c *Catalog) addModel(w http.ResponseWriter, r *http.Request, s Session) {
 		if apierrors.IsAlreadyExists(err) {
 			writeErr(w, http.StatusConflict, "a model named "+in.Name+" already exists; choose another name")
 		} else {
-			apiErrRedacted(w, err, key)
+			apiErrRedacted(w, err, keys...)
 		}
 		return
 	}
@@ -270,14 +273,15 @@ func (c *Catalog) addModel(w http.ResponseWriter, r *http.Request, s Session) {
 }
 
 // apiErrRedacted is apiErr for a request that carries a key: the message is cleaned before it is shown.
-func apiErrRedacted(w http.ResponseWriter, err error, key string) {
+func apiErrRedacted(w http.ResponseWriter, err error, keys ...string) {
+	key := func(msg string) string { return redact(msg, keys...) }
 	switch {
 	case apierrors.IsInvalid(err) || apierrors.IsBadRequest(err):
-		writeErr(w, http.StatusBadRequest, redact(strings.TrimSpace(err.Error()), key))
+		writeErr(w, http.StatusBadRequest, key(strings.TrimSpace(err.Error())))
 	case apierrors.IsForbidden(err):
-		writeErr(w, http.StatusForbidden, "the console is not allowed to do that in Kubernetes: "+redact(err.Error(), key))
+		writeErr(w, http.StatusForbidden, "the console is not allowed to do that in Kubernetes: "+key(err.Error()))
 	default:
-		slog.Error("add model", "err", redact(err.Error(), key))
+		slog.Error("model key", "err", key(err.Error()))
 		writeErr(w, http.StatusInternalServerError, "the console could not reach Kubernetes; try again")
 	}
 }
@@ -327,7 +331,7 @@ func (c *Catalog) dropSecret(sec *corev1.Secret, in ModelAddInput) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), 10*time.Second)
 	defer cancel()
 	if err := c.Client.Delete(ctx, sec, client.Preconditions{UID: ptrUID(sec.UID)}); err != nil && !apierrors.IsNotFound(err) {
-		slog.Error("add model: the key secret was not removed; it is listed under Unfinished additions", "secret", sec.Name, "operation", in.Operation, "err", redact(err.Error(), in.APIKey))
+		slog.Error("add model: the key secret was not removed; it is listed under Keys without a model", "secret", sec.Name, "operation", in.Operation, "err", redact(err.Error(), in.ModelKeys.secrets()...))
 	}
 }
 
@@ -353,26 +357,33 @@ func (c *Catalog) ensureModelSecret(ctx context.Context, s Session, in ModelAddI
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: llmSecretPrefix + in.Name, Namespace: c.Namespace,
 		Labels:      map[string]string{"app.kubernetes.io/managed-by": "ambit-console", modelSecretLabel: in.Name},
 		Annotations: map[string]string{createdByKey: s.Email, operationKey: in.Operation, branchKey: modelBranch(in), modelInputKey: in.storedInput()}},
-		Type: corev1.SecretTypeOpaque, Data: map[string][]byte{"Authorization": []byte(in.APIKey)}}
+		Type: corev1.SecretTypeOpaque, Data: map[string][]byte{}}
+	entries, err := in.ModelKeys.entries(in.Provider)
+	if err != nil { // check() ran first; this is only a guard
+		return nil, http.StatusBadRequest, err
+	}
+	for k, v := range entries {
+		sec.Data[k] = []byte(v)
+	}
 	err = c.Client.Create(ctx, sec)
 	if err == nil {
 		return sec, 0, nil
 	}
 	exists := apierrors.IsAlreadyExists(err)
 	if !exists {
-		slog.Error("add model: create key secret", "secret", sec.Name, "operation", in.Operation, "err", redact(err.Error(), in.APIKey))
+		slog.Error("add model: create key secret", "secret", sec.Name, "operation", in.Operation, "err", redact(err.Error(), in.ModelKeys.secrets()...))
 	}
 	// An error that is not AlreadyExists may hide a Secret that was stored (timeout, canceled request): look at it.
 	var cur corev1.Secret
 	gctx, gcancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer gcancel()
 	if gerr := c.Client.Get(gctx, client.ObjectKeyFromObject(sec), &cur); gerr != nil {
-		slog.Error("add model: read key secret", "secret", sec.Name, "operation", in.Operation, "err", redact(gerr.Error(), in.APIKey))
+		slog.Error("add model: read key secret", "secret", sec.Name, "operation", in.Operation, "err", redact(gerr.Error(), in.ModelKeys.secrets()...))
 		return nil, http.StatusBadGateway, fmt.Errorf("could not store the key in Secret %s", sec.Name)
 	}
 	// The same operation, same input, same key. The comparison stays inside this process.
 	mine := cur.Annotations[operationKey] == in.Operation && cur.Annotations[modelInputKey] == in.storedInput() &&
-		subtle.ConstantTimeCompare(cur.Data["Authorization"], []byte(in.APIKey)) == 1
+		sameData(cur.Data, sec.Data)
 	switch {
 	case mine && !exists:
 		return &cur, 0, nil // stored after all: this request owns it, so it removes it if the Model fails
@@ -382,6 +393,17 @@ func (c *Catalog) ensureModelSecret(ctx context.Context, s Session, in ModelAddI
 		return nil, http.StatusBadGateway, fmt.Errorf("could not store the key in Secret %s", sec.Name)
 	}
 	return nil, http.StatusConflict, fmt.Errorf("a Secret named %s already exists; choose Use an existing Secret, or another name", sec.Name)
+}
+
+// sameData compares two Secret data maps in constant time per entry. The comparison stays inside this process.
+func sameData(a, b map[string][]byte) bool {
+	same := len(a) == len(b)
+	for k, v := range b {
+		if subtle.ConstantTimeCompare(a[k], v) != 1 {
+			same = false
+		}
+	}
+	return same
 }
 
 // proposeModel opens the pull request with the Model manifest only. The key is not in it.
@@ -415,12 +437,12 @@ func (c *Catalog) proposeModel(w http.ResponseWriter, r *http.Request, s Session
 	}
 	var invalid *InvalidChange
 	if errors.As(err, &invalid) {
-		writeErr(w, http.StatusBadRequest, redact(invalid.Error(), in.APIKey))
+		writeErr(w, http.StatusBadRequest, redact(invalid.Error(), in.ModelKeys.secrets()...))
 		return
 	}
 	if err != nil {
-		slog.Error("add model: pull request", "model", in.Name, "operation", in.Operation, "err", redact(err.Error(), in.APIKey))
-		writeErr(w, http.StatusBadGateway, "could not open the pull request in "+c.GitOps.Repository+"; retry, or remove the key under Unfinished additions")
+		slog.Error("add model: pull request", "model", in.Name, "operation", in.Operation, "err", redact(err.Error(), in.ModelKeys.secrets()...))
+		writeErr(w, http.StatusBadGateway, "could not open the pull request in "+c.GitOps.Repository+"; retry, or remove the key under Keys without a model")
 		return
 	}
 	logModelAdded(in, s, "gitops")
@@ -481,8 +503,8 @@ func (c *Catalog) unfinishedModels(w http.ResponseWriter, r *http.Request, _ Ses
 			serverErr(w, err)
 			return
 		}
-		u := UnfinishedModel{Secret: sec.Name, Model: name, Operation: op}
-		if c.GitOps != nil {
+		u := UnfinishedModel{Secret: sec.Name, Model: name, Operation: op, Deleted: err != nil && sec.Annotations[deleteBranchKey] != ""}
+		if c.GitOps != nil && !u.Deleted {
 			// ponytail: one GitHub lookup per addition not yet in the cluster, on every listing.
 			st, found, err := c.GitOps.Repo.PullRequestByBranch(ctx, sec.Annotations[branchKey])
 			if err != nil {
@@ -532,7 +554,9 @@ func (c *Catalog) removeModelKey(w http.ResponseWriter, r *http.Request, s Sessi
 		writeErr(w, http.StatusConflict, "the model "+m+" uses this Secret")
 		return
 	}
-	if c.GitOps != nil && sec.Annotations[branchKey] != "" {
+	// A Secret whose model a console pull request deleted: the add pull request was merged long ago; no Model uses
+	// it (checked above), so it is removed without looking at that pull request.
+	if c.GitOps != nil && sec.Annotations[branchKey] != "" && sec.Annotations[deleteBranchKey] == "" {
 		st, found, err := c.GitOps.Repo.PullRequestByBranch(ctx, sec.Annotations[branchKey])
 		if err != nil {
 			c.pullRequestStateFailed(w, err)
@@ -569,7 +593,7 @@ func (c *Catalog) removeModelKey(w http.ResponseWriter, r *http.Request, s Sessi
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// modelUsing returns the name of a Model whose credentialsRef names the Secret, or "".
+// modelUsing returns the name of a Model whose credentialsRef, or an additional endpoint's, names the Secret, or "".
 func (c *Catalog) modelUsing(ctx context.Context, secret string) (string, error) {
 	var ms v1.ModelList
 	if err := c.Client.List(ctx, &ms, client.InNamespace(c.Namespace)); err != nil {
@@ -578,6 +602,11 @@ func (c *Catalog) modelUsing(ctx context.Context, secret string) (string, error)
 	for _, m := range ms.Items {
 		if m.Spec.CredentialsRef != nil && m.Spec.CredentialsRef.Name == secret {
 			return m.Name, nil
+		}
+		for _, e := range m.Spec.AdditionalEndpoints {
+			if e.CredentialsRef != nil && e.CredentialsRef.Name == secret {
+				return m.Name, nil
+			}
 		}
 	}
 	return "", nil

@@ -1,0 +1,1 @@
+- `ambit lint <file or directory>...` warns on AccessRules that give wide access: `allSignedIn: true`, and a server without a `tools` list (every tool, including tools added later). `--strict` exits 1 when there is a warning.

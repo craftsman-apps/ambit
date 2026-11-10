@@ -98,8 +98,11 @@ What the gateway (agentgateway v1.6.0) cannot do yet:
 An admin adds a model on the Models page with **Add model**. The form asks for the name, the provider, the model ID
 and the settings the provider needs. For the API key, choose one of three ways:
 
-- **Enter the key here.** Not for Bedrock access keys or Vertex AI key files. The console stores the key in the Secret
-  `ambit-llm-<name>` and the Model names it.
+- **Enter the key here.** The console stores the key in the Secret `ambit-llm-<name>` and the Model names it. For
+  Bedrock the option is **Enter the keys here**: the AWS access key ID, the secret access key and, for temporary keys,
+  the session token (entries `accessKey`, `secretKey`, `sessionToken`). For Vertex AI it is **Upload the key file**: a
+  Google service-account key file (JSON, type `service_account`), stored as entry `credentials.json`. The page reads
+  the file in the browser and shows only its name.
 - **Use an existing Secret.** Choose one of the Secrets named `ambit-llm-*` in the namespace; the console lists names
   only and never reads their contents. Create one as shown in [Secrets](#secrets).
 - **Use the gateway's cloud identity.** Bedrock and Vertex AI only.
@@ -127,11 +130,17 @@ when in the annotations `ambitproject.dev/key-changed-by` and `ambitproject.dev/
 shown, logged or put in Git. This is the same in GitOps mode: the Model does not change, so there is no pull request.
 
 - New requests use the new key within a few seconds; requests already running finish with the old one.
+- For Bedrock and Vertex AI, **Change key** asks for the same fields as Add model and replaces every entry: a session
+  token that you leave empty is removed.
 - A model that is the classifier of a ModelRouter: the router gets the new key within about one minute (the
   controller re-reads classifier keys every minute).
 - **Change key** is offered only for a Secret the console created for this model. A Secret you made with `kubectl`
   or a secret manager is changed there: the console does not write it, because that tool would write the old value
   back.
+
+The console's checks of Bedrock keys and Vertex AI key files are tested with fake values only; Ambit has not run
+them against real AWS and Google accounts. The Secret entries are the ones the gateway reads (see
+[Secrets](#secrets)).
 
 ### Delete a model
 

@@ -376,3 +376,69 @@ func TestEmbeddingsCountWhenTheyArrive(t *testing.T) {
 		}
 	}
 }
+
+// Issue #85: per-minute limits are counted when a request arrives (unit Requests), in their own counters (keys
+// rpm_group, rpm_user), with the Budget's own number: a request is refused when it would make the count exceed it.
+func TestPerMinuteLimits(t *testing.T) {
+	b := v1.Budget{ObjectMeta: metav1.ObjectMeta{Name: "ml"}, Spec: v1.BudgetSpec{Group: "ml-research",
+		GroupRequestsPerMinute: ptr.To[int64](300), UserRequestsPerMinute: ptr.To[int64](30)}}
+	cfg, p := compileBudgets([]v1.Budget{b}, nil, "ambit-system", rl, "ambit-llm")
+	want := `descriptors:
+- descriptors:
+  - key: rpm_user
+    rate_limit:
+      requests_per_unit: 30
+      unit: minute
+  key: rpm_group
+  rate_limit:
+    requests_per_unit: 300
+    unit: minute
+  value: ml-research
+domain: ambit-llm
+`
+	if cfg != want {
+		t.Fatalf("ratelimit config:\n%s\nwant\n%s", cfg, want)
+	}
+	d, _, _ := unstructured.NestedSlice(p.Object, "spec", "traffic", "rateLimit", "global", "descriptors")
+	if len(d) != 2 {
+		t.Fatalf("gateway descriptors %v", d)
+	}
+	paths := `request.path in ["/v1/chat/completions", "/v1/messages", "/v1/responses", "/v1/embeddings"]`
+	group := paths + " ? (" + member("ml-research") + `) : ""`
+	for i, names := range [][]string{{"rpm_group"}, {"rpm_group", "rpm_user"}} {
+		dd := d[i].(map[string]any)
+		if dd["unit"] != "Requests" || dd["limitOverride"] != nil || dd["cost"] != nil {
+			t.Fatalf("descriptor %d: %v", i, dd)
+		}
+		entries := dd["entries"].([]any)
+		if len(entries) != len(names) {
+			t.Fatalf("descriptor %d entries %v", i, entries)
+		}
+		for j, n := range names {
+			e := entries[j].(map[string]any)
+			if e["name"] != n {
+				t.Fatalf("descriptor %d entry %d: %v", i, j, e)
+			}
+		}
+		if entries[0].(map[string]any)["expression"] != group {
+			t.Fatalf("group entry %v", entries[0])
+		}
+		if len(names) == 2 && entries[1].(map[string]any)["expression"] != principal() {
+			t.Fatalf("user entry %v", entries[1])
+		}
+	}
+}
+
+// A per-minute limit and a daily limit in one Budget: both trees in the config, the day descriptors unchanged.
+func TestPerMinuteNextToDailyLimits(t *testing.T) {
+	b := budget("eng", "eng", nil, ptr.To[int64](50))
+	b.Spec.UserRequestsPerMinute = ptr.To[int64](5)
+	cfg, p := compileBudgets([]v1.Budget{b}, nil, "ambit-system", rl, "ambit-llm")
+	if !strings.Contains(cfg, "key: rpm_group") || !strings.Contains(cfg, "key: group") || strings.Contains(cfg, "requests_per_unit: 5\n      unit: day") {
+		t.Fatalf("config:\n%s", cfg)
+	}
+	d, _, _ := unstructured.NestedSlice(p.Object, "spec", "traffic", "rateLimit", "global", "descriptors")
+	if len(d) != 3 { // day: after the answer and embeddings; minute: one
+		t.Fatalf("gateway descriptors %v", d)
+	}
+}

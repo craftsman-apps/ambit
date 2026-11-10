@@ -52,10 +52,11 @@ rules:
     resources: [accessrules, budgets, connections]
     verbs: [create, update, delete]
   # Edit price (Models page): the console changes only spec.price, admins only. Add model (Direct mode only)
-  # creates a Model, after a dry-run create. In GitOps mode the console never writes a Model; it validates offline.
+  # creates a Model, after a dry-run create; Delete model deletes one. In GitOps mode the console never writes a
+  # Model; it validates offline and deletes through a pull request.
   - apiGroups: [ambitproject.dev]
     resources: [models]
-    verbs: [create, update]
+    verbs: [create, update, delete]
   # Anyone signed in may request a server; approving one creates the Server, and records a decision
   # only in the request's status. Adding an app from a preset creates its Server too.
   - apiGroups: [ambitproject.dev]
@@ -72,9 +73,10 @@ rules:
   # Personal API keys: key Secrets, owner records (Secrets) and key events (ConfigMaps) in this namespace. RBAC
   # cannot limit by label; the ambit-keys-writer admission policy limits what the console
   # may change. The Lease elects the one console pod that writes keys; it is never deleted by the console.
+  # patch: Change key and Delete model (GitOps) write a model key Secret with a merge patch, never reading its data.
   - apiGroups: [""]
     resources: [secrets, configmaps]
-    verbs: [get, list, watch, create, update, delete]
+    verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: [coordination.k8s.io]
     resources: [leases]
     verbs: [get, create, update]

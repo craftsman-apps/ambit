@@ -120,10 +120,10 @@ HTTP/1.1 429 Too Many Requests
 retry-after: 56493
 content-type: application/json
 
-{"error":{"code":"budget_exceeded","message":"A daily Budget limit was reached: the request limit or the spending limit, for you or for your group. Requests are refused until midnight UTC (see the Retry-After header).","type":"insufficient_quota"}}
+{"error":{"code":"budget_exceeded","message":"A Budget limit was reached: a request or spending limit per minute or per day, for you or for your group. Try again after the number of seconds in the Retry-After header.","type":"insufficient_quota"}}
 ```
 
-Use `retry-after` to know when the limit ends. The gateway sends no `x-ratelimit-*` headers.
+Use `retry-after` to know when the limit ends: the seconds to midnight UTC for a daily limit, to the next minute for a per-minute limit alone. The gateway sends no `x-ratelimit-*` headers.
 
 ## See the use in the console
 

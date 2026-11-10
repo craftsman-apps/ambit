@@ -9,9 +9,10 @@ const SEMVER = '\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?';
 // Only these three patterns are install versions. Kubernetes versions, image tags and digests are not.
 const PATTERNS = [`releases/download/v(${SEMVER})`, `--version (${SEMVER})`, `cmd/ambit@v(${SEMVER})`];
 
-// latestRelease is the first "## <version> (YYYY-MM-DD)" heading; "## Unreleased" does not match.
+// latestRelease is the first "## <version> (YYYY-MM-DD)" heading; "## Unreleased" and prereleases ("0.3.0-rc.1") do not match.
+// The site build also reads it (docusaurus.config.ts) for the version on the homepage.
 export function latestRelease(changelog) {
-  const m = changelog.match(/^## (\d+\.\d+\.\d+\S*) \(\d{4}-\d{2}-\d{2}\)/m);
+  const m = changelog.match(/^## (\d+\.\d+\.\d+) \(\d{4}-\d{2}-\d{2}\)/m);
   if (!m) throw new Error('CHANGELOG.md has no "## <version> (YYYY-MM-DD)" heading');
   return m[1];
 }

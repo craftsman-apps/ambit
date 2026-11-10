@@ -17,12 +17,13 @@ The **Savings** page (Evidence → Savings, admins only) shows what Ambit saved 
 
 ## Where the numbers are stored
 
-The console keeps two small summary tables in ClickHouse, filled by materialized views when the collector writes a block of records:
+The console keeps three small summary tables in ClickHouse, filled by materialized views when the collector writes a block of records:
 
 | Table | One row for | Holds |
 |---|---|---|
 | `ambit_llm_daily_v1` | UTC day, group, router, model | requests, input tokens, output tokens |
 | `ambit_compress_daily_v1` | UTC day, group, server, type | compressed texts, bytes before, bytes after, cuts |
+| `ambit_classifier_daily_v1` | UTC day, group, router | classifier calls, input tokens, output tokens |
 
 The page reads about 30 days of summary rows instead of every record of the month. The summaries hold counts only: no email, no tool content, no prompt. Group names are the only identifying text in them.
 
@@ -85,14 +86,22 @@ For each LLM request that went through a router, the page counts:
 saving = cost of the most expensive priced model the router can choose - cost of the model that answered
 ```
 
-Both costs use the same tokens, those of the model that answered. The router and its candidate Models (`spec.default` and every route) are read when the page opens. The row is the unit: the most expensive model is taken for the tokens of one day, group, router and model, and the saving is never negative, because the answering Model is always a candidate.
+Both costs use the same tokens, those of the model that answered. The router and its candidate Models (`spec.default` and every route) are read when the page opens. The row is the unit: the most expensive model is taken for the tokens of one day, group, router and model.
+
+For a router of type `LLM` the figure is net: the cost of its classifier calls is subtracted.
+
+```
+net saving = saving above - classifier input tokens x input price - classifier output tokens x output price
+```
+
+`ambit-router` reads the classifier's token counts from its answer and puts them on the request it labels (headers `x-ambit-classifier-input-tokens` and `x-ambit-classifier-output-tokens`, which the gateway removes from what clients send, so a client cannot set them). The access log copies them into the request record, and the summary table `ambit_classifier_daily_v1` adds them up per day, group and router. The price is the one of the classifier Model (`spec.classifier.llm.model`) when the page opens. The router table shows the classifier's cost per router. A router whose classifier costs more than its routing saves shows a negative saving.
 
 What this means, and what it does not:
 
 - **The baseline is high.** Nobody would send everything to the most expensive model. Read the figure as the value of having a router, against the dearest choice, not as a measured bill.
 - **It can overstate for some people.** The candidate list does not depend on the person. Someone who may not use the dearest model falls through to a cheaper one, and is still credited against the dearest.
 - **Current configuration, not history.** A changed router or price changes past days. A router that no longer exists is listed as "router no longer exists" and is not priced. A Model without a price is not a baseline, and the page names it. If the answering Model has no price or is gone, its requests are named and left out of the dollar figure.
-- **Gross.** The cost of the classifier of an `LLM` router is not subtracted. Its tokens are in Prometheus only (`ambit_router_classifier_tokens_total`) and not in budgets.
+- **Classifier: what is not subtracted.** A classifier call that times out (the request goes on without a label) is not counted, because its tokens are not known. Days before the classifier summary existed (the page says from which day) are gross. A classifier Model without a price is not subtracted, and the page names it. A provider that reports only a total is priced as input tokens. Classifier tokens are still not counted in budgets.
 - Not counted: model fallback (`spec.fallback`), refused requests (they carry no tokens), prompt cache discounts, provider batch discounts.
 
 ## Groups and totals

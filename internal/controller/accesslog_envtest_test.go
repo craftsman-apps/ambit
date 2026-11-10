@@ -94,7 +94,7 @@ func TestAccessLogPolicyFromTheBase(t *testing.T) {
 		t.Errorf("owner %v", refs)
 	}
 	a := attributes(p)
-	if a["jwt.email"] != "jwt.email" || a["ambit.router"] != "metadata.agentgateway_user_model" || a["ambit.accessMode"] != `"enforce"` {
+	if a["jwt.email"] != "jwt.email" || a["ambit.router"] != "metadata.ambit_requested_model" || a["ambit.accessMode"] != `"enforce"` {
 		t.Errorf("attributes %v", a)
 	}
 	var first map[string]string

@@ -98,8 +98,11 @@ What the gateway (agentgateway v1.6.0) cannot do yet:
 An admin adds a model on the Models page with **Add model**. The form asks for the name, the provider, the model ID
 and the settings the provider needs. For the API key, choose one of three ways:
 
-- **Enter the key here.** Not for Bedrock access keys or Vertex AI key files. The console stores the key in the Secret
-  `ambit-llm-<name>` and the Model names it.
+- **Enter the key here.** The console stores the key in the Secret `ambit-llm-<name>` and the Model names it. For
+  Bedrock the option is **Enter the keys here**: the AWS access key ID, the secret access key and, for temporary keys,
+  the session token (entries `accessKey`, `secretKey`, `sessionToken`). For Vertex AI it is **Upload the key file**: a
+  Google service-account key file (JSON, type `service_account`), stored as entry `credentials.json`. The page reads
+  the file in the browser and shows only its name.
 - **Use an existing Secret.** Choose one of the Secrets named `ambit-llm-*` in the namespace; the console lists names
   only and never reads their contents. Create one as shown in [Secrets](#secrets).
 - **Use the gateway's cloud identity.** Bedrock and Vertex AI only.
@@ -117,8 +120,51 @@ In GitOps mode the console also says:
 
 The console never overwrites a Secret: if `ambit-llm-<name>` exists, choose **Use an existing Secret** or another
 name. If the pull request is closed without merging, or a step fails after the Secret was written, the Models page
-lists the key under **Unfinished additions**, with **Remove key**. To change or rotate a stored key, update the
-Secret with `kubectl`.
+lists the key under **Keys without a model**, with **Remove key**.
+
+### Change a model's key
+
+On the Models page an admin clicks **Change key** on a model's row, enters the new key and clicks **Save key**. The
+console writes it into the same Secret `ambit-llm-<name>` (same object, new value) and records who changed it and
+when in the annotations `ambitproject.dev/key-changed-by` and `ambitproject.dev/key-changed-at`. The key is never
+shown, logged or put in Git. This is the same in GitOps mode: the Model does not change, so there is no pull request.
+
+- New requests use the new key within a few seconds; requests already running finish with the old one.
+- For Bedrock and Vertex AI, **Change key** asks for the same fields as Add model and replaces every entry: a session
+  token that you leave empty is removed.
+- A model that is the classifier of a ModelRouter: the router gets the new key within about one minute (the
+  controller re-reads classifier keys every minute).
+- **Change key** is offered only for a Secret the console created for this model. A Secret you made with `kubectl`
+  or a secret manager is changed there: the console does not write it, because that tool would write the old value
+  back.
+
+The console's checks of Bedrock keys and Vertex AI key files are tested with fake values only; Ambit has not run
+them against real AWS and Google accounts. The Secret entries are the ones the gateway reads (see
+[Secrets](#secrets)).
+
+### Delete a model
+
+On the Models page an admin clicks **Delete**, then **Delete model**. The console refuses while something names the
+model, and says what:
+
+- an AccessRule that lists it in `models`;
+- a ModelRouter that uses it as `default`, in a route, or as its classifier;
+- another Model that lists it in `fallback`.
+
+Remove the model from those first. The console does not change them for you, so a delete never silently changes who
+may use what. The check reads the cluster; in GitOps mode a rule that names the model only in an open pull request is
+not seen.
+
+What happens to the key:
+
+| Mode | The Model | The Secret `ambit-llm-<name>` the console created | A Secret made outside the console |
+|---|---|---|---|
+| Direct | Deleted at once | Deleted with it, unless another Model (or its `additionalEndpoints`) uses it | Kept |
+| GitOps | A pull request deletes the manifest | Kept until the Model is gone; then listed under **Keys without a model** (marked deleted), removed with **Remove key** | Kept |
+
+If the console cannot delete the Secret in Direct mode, the Model is still deleted and the Secret is listed under
+**Keys without a model**. In GitOps mode a model that is not in the repository (made with `kubectl`) cannot be
+deleted by a pull request; delete it with `kubectl`.
 
 ## Azure OpenAI and Azure AI Foundry
 

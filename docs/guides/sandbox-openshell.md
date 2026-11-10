@@ -5,15 +5,15 @@ description: Run a coding agent inside an OpenShell sandbox whose only model end
 
 # Run agents in a sandbox such as OpenShell
 
-**What you get:** a coding agent that runs inside a sandbox on a computer, can reach models only through the Ambit gateway, and never holds the person's API key. Ambit records every model call under the person.
+**What you get:** a coding agent that runs inside a sandbox on a computer, may reach models only through the Ambit gateway, and does not receive the person's API key (it gets a placeholder). Ambit records every model call under the person.
 
-**Tested on 2026-11-10** with [OpenShell](https://github.com/NVIDIA/OpenShell) v0.1.7, opencode 1.19.5, Docker Desktop on macOS (Apple silicon), and Ambit at commit `d5e432c` (before release 0.4.0). OpenShell is at version 0.1.x and publishes a release about every week. Its profile format can change; use the version on this page, or check the steps again with a newer one.
+**Tested on 2026-11-10** with [OpenShell](https://github.com/NVIDIA/OpenShell) v0.1.7, opencode 1.19.5, Docker Desktop on macOS (Apple silicon), and Ambit at commit `d5e432c` (before release 0.4.0). OpenShell is at version 0.1.x; from v0.1.4 to v0.1.7 it published one release each week. Its profile format can change; use the version on this page, or check the steps again with a newer one.
 
 ## Two different jobs
 
 Ambit does not confine what an agent does on a machine. It decides which models and MCP servers a person may use, sets limits, and records the use. A sandbox does the other job: it decides which files, programs and network addresses the agent may use on the computer.
 
-Think of an office building. The sandbox is a room with one door, and the door leads only to the company's front desk (Ambit). The front desk checks who is asking and writes down every request.
+Think of an office building. With the policy in this guide, the sandbox is a room whose only door for model requests leads to the company's front desk (Ambit). The front desk checks who is asking and writes down every request.
 
 | | OpenShell | Ambit |
 |---|---|---|
@@ -23,7 +23,7 @@ Think of an office building. The sandbox is a room with one door, and the door l
 | Spending limits per group and person | No | Yes |
 | Record of every model call, under the person | No (it records what the sandboxed process did) | Yes |
 
-Together: the sandbox makes Ambit the only way out for model traffic, so an agent cannot use a key it finds on disk to call a provider directly. Ambit cannot stop that on its own.
+Together: the sandbox policy allows the Ambit host and denies other hosts, so an agent cannot use a key it finds on disk to call a provider directly. Ambit cannot stop that on its own. The test on this page checked direct calls to OpenAI and OpenRouter.
 
 ## Before you start
 
@@ -31,11 +31,11 @@ You need:
 
 - Ambit with model access, and its LLM address reachable from the computer (in this guide `https://llm.example.com`).
 - A personal API key of the person who runs the agent ([Personal API keys](../api-keys.md)), and a model the person may use.
-- Docker, and OpenShell v0.1.7. Follow the OpenShell [installation guide](https://docs.nvidia.com/openshell/latest/about/installation) and set `OPENSHELL_VERSION=v0.1.7` to install this version. Check with `openshell status`.
+- Docker, and OpenShell v0.1.7. Follow the OpenShell [installation guide for v0.1.7](https://github.com/NVIDIA/OpenShell/blob/v0.1.7/docs/about/installation.mdx) and set `OPENSHELL_VERSION=v0.1.7` to install this version. Check with `openshell status`.
 
 ## 1. Write the provider profile
 
-A provider profile tells OpenShell which host the agent may reach, which program may reach it, and which key to add. Save this as `ambit.yaml` and change `host`, `port` and `binaries`:
+A provider profile tells OpenShell which host the agent may reach, which program may reach it, and which stored key OpenShell adds to those requests. Save this as `ambit.yaml` and change `host`, `port` and `binaries`:
 
 ```yaml
 # OpenShell provider profile: the company's Ambit gateway as the only model endpoint.
@@ -64,7 +64,7 @@ endpoints:
 binaries: [/usr/local/bin/opencode]  # the agent program inside the sandbox image
 ```
 
-`binaries` names the program that may use this host and key. Another program in the sandbox, for example a shell command, cannot reach the host.
+`binaries` names the program that this profile allows to use the host and the key. It does not give other programs in the sandbox access to the host.
 
 ## 2. Import the profile and store the key
 
@@ -80,7 +80,7 @@ OpenShell keeps the key in its credential store. The sandbox never receives it.
 
 ## 3. Start the agent in a sandbox
 
-The agent configuration names Ambit as its only provider. For opencode, put it in `OPENCODE_CONFIG_CONTENT`. Use a model name that the person may use in Ambit:
+The agent configuration names Ambit as its only provider. opencode reads its configuration from the environment variable `OPENCODE_CONFIG_CONTENT` (the test used this). Use a model name that the person may use in Ambit:
 
 ```sh
 CFG='{"$schema":"https://opencode.ai/config.json","model":"ambit/MODEL",
@@ -99,7 +99,7 @@ Inside the sandbox, `AMBIT_API_KEY` holds a placeholder that starts with `opensh
 
 ## 4. Check both sides
 
-In Ambit, open **Audit** in the console and search for the person's email. Each model call of the agent is one row, with the person, the model and the key id.
+In Ambit, open **Audit** in the console and search for the person's email. Ambit records each model call as one row, with the person, the model and the key id; in the test, every call of the agent was there.
 
 In OpenShell, `openshell logs agent` shows every connection. A call to Ambit is allowed by the provider policy; a direct call to a provider is denied. These two lines are from [the test we ran](#the-test-we-ran) (timestamps removed), where the Ambit host was `host.openshell.internal:18080`:
 

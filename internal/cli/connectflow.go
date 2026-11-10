@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -209,6 +210,11 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	if err != nil {
 		return err
 	}
+	unlock, err := connect.LockState(d.StatePath)
+	if err != nil {
+		return &out.Error{What: "cannot change " + d.StatePath, Why: err.Error(), Code: out.ExitFailed}
+	}
+	defer unlock()
 	st, err := connect.LoadState(d.StatePath)
 	if err != nil {
 		return err
@@ -455,6 +461,13 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	if err := d.save(st); err != nil {
 		return err
 	}
+	if old := oldTool.URL; hadTool && old != url && !st.UsesURL(old, "") {
+		if _, ok := st.Keys[old]; ok { // no tool uses the key of the old address any more
+			if err := a.deleteKey(d, st, old, "", oldTool.Pending); err != nil {
+				p.Line("%s %s; ambit disconnect --all deletes it later", p.Mark("warn"), err.Error())
+			}
+		}
+	}
 
 	// 8: the test call.
 	if !f.noTest && tool != connect.ClaudeDesktopMCP {
@@ -644,6 +657,11 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 	if err != nil {
 		return err
 	}
+	unlock, err := connect.LockState(d.StatePath)
+	if err != nil {
+		return &out.Error{What: "cannot change " + d.StatePath, Why: err.Error(), Code: out.ExitFailed}
+	}
+	defer unlock()
 	st, err := connect.LoadState(d.StatePath)
 	if err != nil {
 		return err
@@ -775,46 +793,53 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 	if err := st.Save(d.StatePath); err != nil {
 		return err
 	}
-	var keyLines []string
 	var urlList []string
 	for u := range urls {
 		urlList = append(urlList, u)
 	}
 	sort.Strings(urlList)
 	for _, u := range urlList {
-		kr, hasKey := st.Keys[u]
-		if st.UsesURL(u, "") || f.keepKey || !hasKey {
+		if _, hasKey := st.Keys[u]; st.UsesURL(u, "") || f.keepKey || !hasKey {
 			continue
 		}
-		stores := []connect.Store{}
-		if s, ok := d.store(st, u); ok {
-			stores = append(stores, s)
-		}
-		if pendingURLs[u] {
-			stores = append(stores, d.Keychain, d.File)
-		}
-		for _, s := range stores {
-			if err := s.Delete(u); err != nil {
-				return &out.Error{What: "delete the stored key of " + u, Why: err.Error(), Next: "unlock your keychain, then run the command again", Code: out.ExitFailed}
-			}
-		}
-		delete(st.Keys, u)
-		if err := st.Save(d.StatePath); err != nil {
+		if err := a.deleteKey(d, st, u, f.consoleURL, pendingURLs[u]); err != nil {
 			return err
 		}
-		keyLines = append(keyLines, fmt.Sprintf("%s key for %s deleted from %s", p.Mark("ok"), u, storeName(d.GOOS, kr.Store, d.File, u)))
-		console := strings.TrimRight(f.consoleURL, "/")
-		if console == "" {
-			console = kr.ConsoleURL
-		}
-		if console != "" {
-			keyLines = append(keyLines, "  next: revoke the key in the console: "+console+"/keys (deleting it here does not revoke it)")
-		} else {
-			keyLines = append(keyLines, "  next: revoke the key in the console (Settings > Keys); deleting it here does not revoke it")
+	}
+	return nil
+}
+
+// deleteKey deletes the stored key of u (also from the other store when an interrupted connect may have put it
+// there), takes it out of the state file, and prints the line and the revoke reminder at once, so that a later
+// failure does not hide what was already deleted.
+func (a *app) deleteKey(d *connectDeps, st *connect.State, u, consoleURL string, pending bool) error {
+	p := a.printer()
+	kr := st.Keys[u]
+	stores := []connect.Store{}
+	if s, ok := d.store(st, u); ok {
+		stores = append(stores, s)
+	}
+	if pending {
+		stores = append(stores, d.Keychain, d.File)
+	}
+	for _, s := range stores {
+		if err := s.Delete(u); err != nil {
+			return &out.Error{What: "delete the stored key of " + u, Why: err.Error(), Next: "unlock your keychain, then run ambit disconnect --all", Code: out.ExitFailed}
 		}
 	}
-	for _, l := range keyLines {
-		p.Line("%s", l)
+	delete(st.Keys, u)
+	if err := d.save(st); err != nil {
+		return err
+	}
+	p.Line("%s key for %s deleted from %s", p.Mark("ok"), u, storeName(d.GOOS, kr.Store, d.File, u))
+	console := strings.TrimRight(consoleURL, "/")
+	if console == "" {
+		console = kr.ConsoleURL
+	}
+	if console != "" {
+		p.Line("  next: revoke the key in the console: %s/keys (deleting it here does not revoke it)", console)
+	} else {
+		p.Line("  next: revoke the key in the console (Settings > Keys); deleting it here does not revoke it")
 	}
 	return nil
 }
@@ -826,11 +851,19 @@ func (a *app) unrecordedBlocks(d *connectDeps, tool string) ([]*job, error) {
 	switch tool {
 	case connect.Codex:
 		paths = append(paths, connect.CodexConfigPath(d.Getenv, d.Home))
-	case connect.OpenCode:
-		if sh := connect.DetectShell(d.GOOS, d.Getenv("SHELL")); sh != connect.NoShell {
-			if sp, err := connect.ShellFile(sh, d.GOOS, d.Getenv, d.Home, d.Profile); err == nil {
+	case connect.OpenCode: // every shell's profile, not only $SHELL's: the person may have changed shells since
+		for _, sh := range []connect.Shell{connect.Bash, connect.Zsh, connect.Fish, connect.PowerShell} {
+			if sh == connect.PowerShell && d.GOOS != "windows" {
+				continue
+			}
+			if sp, err := connect.ShellFile(sh, d.GOOS, d.Getenv, d.Home, d.Profile); err == nil && !slices.Contains(paths, sp) {
 				paths = append(paths, sp)
 			}
+		}
+		if d.GOOS != "windows" { // the bash file of the other system, for a home directory shared or copied
+			paths = append(paths, filepath.Join(d.Home, ".bashrc"), filepath.Join(d.Home, ".bash_profile"))
+			slices.Sort(paths)
+			paths = slices.Compact(paths)
 		}
 	}
 	var jobs []*job

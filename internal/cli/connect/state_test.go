@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestStateRoundTrip(t *testing.T) {
@@ -76,5 +77,36 @@ func TestStateFileNeverHoldsTheKey(t *testing.T) {
 	b, _ := os.ReadFile(path)
 	if strings.Contains(string(b), "ambit_") {
 		t.Fatalf("state file holds a key: %s", b)
+	}
+}
+
+func TestLockStateWaitsForTheOtherRun(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ambit", "connect.json")
+	unlock, err := LockState(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := LockWait
+	LockWait = 300 * time.Millisecond
+	t.Cleanup(func() { LockWait = old })
+	if _, err := LockState(path); err == nil || !strings.Contains(err.Error(), "another ambit") {
+		t.Fatalf("a second lock was taken: %v", err)
+	}
+	go func() { time.Sleep(100 * time.Millisecond); unlock() }()
+	unlock2, err := LockState(path)
+	if err != nil {
+		t.Fatalf("the lock was not taken after release: %v", err)
+	}
+	unlock2()
+	// A lock left by a crashed run is taken over.
+	if err := os.WriteFile(path+".lock", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stale := time.Now().Add(-time.Hour)
+	os.Chtimes(path+".lock", stale, stale)
+	if u, err := LockState(path); err != nil {
+		t.Fatalf("stale lock: %v", err)
+	} else {
+		u()
 	}
 }

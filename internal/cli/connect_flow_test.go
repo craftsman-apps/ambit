@@ -454,9 +454,63 @@ func TestConnectUpdateToANewURLThenDisconnectRestoresTheFirstState(t *testing.T)
 	if r.readFile(codex) != seedCodex {
 		t.Fatalf("not restored:\n%s", r.readFile(codex))
 	}
-	// Both keys: the first one is no longer used by any tool, but it was never removed at the first update.
-	if len(r.kc) != 1 {
-		t.Logf("keys left: %v", r.kc)
+	// The key of the first address was deleted at the update, the second one at disconnect.
+	if len(r.kc) != 0 {
+		t.Fatalf("keys left: %v", r.kc)
+	}
+}
+
+func TestConnectToANewURLDeletesTheKeyOfTheOldOne(t *testing.T) {
+	g, g2, r := newGateway(t), newGateway(t), newRig(t)
+	kf := r.keyFile()
+	r.run("connect", "codex", "--url", g.URL, "--model", "m1", "--key-file", kf, "--console-url", "https://console.example.com", "--yes")
+	r.run("connect", "claude-code", "--url", g.URL, "--model", "m1", "--yes")
+	if code := r.run("connect", "codex", "--url", g2.URL, "--model", "m2", "--key-file", kf, "--yes"); code != 0 {
+		t.Fatalf("code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
+	}
+	if _, ok := r.kc[g.URL]; !ok || strings.Contains(r.stdout.String(), "key for "+g.URL+" deleted") {
+		t.Fatalf("the old key was deleted while claude-code uses it: %v\n%s", r.kc, r.stdout.String())
+	}
+	if code := r.run("connect", "claude-code", "--url", g2.URL, "--model", "m2", "--yes"); code != 0 {
+		t.Fatalf("code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
+	}
+	out := r.stdout.String()
+	if _, ok := r.kc[g.URL]; ok || !strings.Contains(out, "key for "+g.URL+" deleted") || !strings.Contains(out, "https://console.example.com/keys") {
+		t.Fatalf("the unused old key was not deleted, or no revoke line: %v\n%s", r.kc, out)
+	}
+	if st, _ := connect.LoadState(r.statePath); len(st.Keys) != 1 {
+		t.Fatalf("state keys: %+v", st.Keys)
+	}
+}
+
+// failingFor is a keychain whose Delete fails for one address.
+type failingFor struct {
+	memStore
+	url string
+}
+
+func (f failingFor) Delete(u string) error {
+	if u == f.url {
+		return errors.New("keyring is locked")
+	}
+	return f.memStore.Delete(u)
+}
+
+func TestDisconnectPrintsTheDeletedKeyWhenALaterDeletionFails(t *testing.T) {
+	g, g2, r := newGateway(t), newGateway(t), newRig(t)
+	kf := r.keyFile()
+	first, second := g.URL, g2.URL
+	if first > second {
+		first, second = second, first // keys are deleted in address order
+	}
+	r.run("connect", "codex", "--url", first, "--model", "m", "--key-file", kf, "--yes")
+	r.run("connect", "claude-code", "--url", second, "--model", "m", "--key-file", kf, "--yes")
+	r.keychain = failingFor{r.kc, second}
+	if code := r.run("disconnect", "--all", "--yes"); code != 1 {
+		t.Fatalf("code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
+	}
+	if !strings.Contains(r.stdout.String(), "key for "+first+" deleted") {
+		t.Fatalf("the first deleted key is not reported:\n%s%s", r.stdout.String(), r.stderr.String())
 	}
 }
 
@@ -835,5 +889,23 @@ func TestConnectTestCallTokenLimitReachedPassesWithANote(t *testing.T) {
 				t.Errorf("%s: output lacks %q:\n%s", tool, want, out)
 			}
 		}
+	}
+}
+
+func TestDisconnectOpenCodeWithoutTheStateFileFindsTheBlockAfterAShellChange(t *testing.T) {
+	g, r := newGateway(t), newRig(t)
+	zshrc := r.write(".zshrc", "export A=1\n")
+	r.run("connect", "opencode", "--url", g.URL, "--model", "m", "--key-file", r.keyFile(), "--yes")
+	if !strings.Contains(r.readFile(zshrc), "# >>> ambit") {
+		t.Fatalf("no block written:\n%s", r.readFile(zshrc))
+	}
+	os.Remove(r.statePath)
+	r.env["SHELL"] = "/bin/bash" // the person moved to bash after connect
+	if code := r.run("disconnect", "opencode", "--yes"); code != 0 {
+		t.Fatalf("code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
+	}
+	// Without the record, the blank line that connect put before the block stays.
+	if got := r.readFile(zshrc); strings.Contains(got, "ambit") || strings.TrimSpace(got) != "export A=1" {
+		t.Fatalf("the block in .zshrc stayed:\n%s", got)
 	}
 }

@@ -216,6 +216,11 @@ func (a *app) runKeySet(ctx context.Context, f connectFlags) error {
 	if err != nil {
 		return err
 	}
+	unlock, err := connect.LockState(d.StatePath)
+	if err != nil {
+		return &out.Error{What: "cannot change " + d.StatePath, Why: err.Error(), Code: out.ExitFailed}
+	}
+	defer unlock()
 	st, err := connect.LoadState(d.StatePath)
 	if err != nil {
 		return err

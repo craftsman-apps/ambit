@@ -19,7 +19,7 @@ import (
 	"github.com/craftsman-apps/ambit/internal/cli/out"
 )
 
-var connectTools = []string{connect.ClaudeCode, connect.Codex, connect.OpenCode, connect.Cursor}
+var connectTools = []string{connect.ClaudeCode, connect.Codex, connect.OpenCode, connect.Cursor, connect.ClaudeDesktopMCP}
 
 // ambitKeyFormat is what NewSecretKey produces.
 var ambitKeyFormat = regexp.MustCompile(`^ambit_[0-9A-Za-z]{43}$`)
@@ -43,6 +43,7 @@ type job struct {
 	plan   *connect.Plan         // connect
 	undo   *connect.Disconnected // disconnect
 	rec    connect.FileRecord    // disconnect: what connect recorded
+	secret bool                  // the file holds the key: never print its content
 }
 
 func (j *job) change() (connect.FileChange, bool) {
@@ -53,6 +54,7 @@ func (j *job) change() (connect.FileChange, bool) {
 			return c, false
 		}
 		c.After = j.plan.After
+		c.Private = j.secret
 		if j.prev != nil && len(j.prev.RemovedSecrets) > 0 {
 			c.KeepBackup = true // the first backup is the only place that holds a secret connect removed
 		}
@@ -154,6 +156,8 @@ func (a *app) toolFiles(d *connectDeps, tool string, f connectFlags) (jobs []*jo
 		jobs = append(jobs, &job{path: connect.ClaudeSettingsPath(d.Getenv, d.Home)})
 	case connect.Codex:
 		jobs = append(jobs, &job{path: connect.CodexConfigPath(d.Getenv, d.Home)})
+	case connect.ClaudeDesktopMCP:
+		jobs = append(jobs, &job{path: connect.ClaudeDesktopConfigPath(d.GOOS, d.Getenv, d.Home)}, &job{path: connect.MCPHeaderPath(d.Home), secret: true})
 	case connect.OpenCode:
 		path, err := connect.OpenCodePath(d.Getenv, d.Home, func(p string) bool { _, err := os.Stat(p); return err == nil })
 		if err != nil {
@@ -183,7 +187,7 @@ func (a *app) toolFiles(d *connectDeps, tool string, f connectFlags) (jobs []*jo
 func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error {
 	p := a.printer()
 	if !validTool(tool) {
-		return out.Usage("unknown tool "+tool, "choose claude-code, codex, opencode or cursor", "ambit connect --help")
+		return out.Usage("unknown tool "+tool, "choose claude-code, codex, opencode, cursor or claude-desktop-mcp", "ambit connect --help")
 	}
 	if f.url == "" {
 		return out.Usage("--url", "is required", "ambit connect "+tool+" --url https://llm.example.com --model <model id>")
@@ -192,7 +196,7 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	if err != nil {
 		return out.Usage("--url "+f.url, err.Error(), "ambit connect "+tool+" --url https://llm.example.com --model <model id>")
 	}
-	if tool != connect.Cursor && f.model == "" {
+	if tool != connect.Cursor && tool != connect.ClaudeDesktopMCP && f.model == "" {
 		return out.Usage("--model", "is required", "ambit connect "+tool+" --url "+url+" --model <model id>")
 	}
 	if f.keyStore != "" && f.keyStore != connect.StoreKeychain && f.keyStore != connect.StoreFile {
@@ -228,6 +232,10 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 		in := connect.Input{Path: j.path, File: j.before, Exists: j.exists, URL: url, Model: f.model, AmbitPath: ambitPath, GOOS: d.GOOS,
 			Force: f.force, Getenv: d.Getenv, Prev: j.prev}
 		switch {
+		case j.secret:
+			j.plan = planSecretFile(j)
+		case tool == connect.ClaudeDesktopMCP:
+			j.plan, err = connect.PlanClaudeDesktopMCP(in, jobs[1].path)
 		case tool == connect.ClaudeCode:
 			j.plan, err = connect.PlanClaudeCode(in)
 		case tool == connect.Codex:
@@ -241,6 +249,9 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 		if err != nil {
 			return planErr(err)
 		}
+		if j.secret && j.exists && !j.plan.Already {
+			j.plan.Conflicts = append(j.plan.Conflicts, connect.Conflict{What: "the file exists and ambit did not write it", Why: "it may hold another key; --force replaces it (the old file is kept in " + j.path + ".ambit.bak)"})
+		}
 		for _, c := range j.plan.Conflicts {
 			conflicts = append(conflicts, j.path+": "+c.String())
 		}
@@ -250,8 +261,14 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 			}
 		}
 	}
+	if tool == connect.ClaudeDesktopMCP && f.model != "" {
+		notes = append(notes, "--model is not used by claude-desktop-mcp")
+	}
 	if len(conflicts) > 0 && !f.force {
 		args := "ambit connect " + tool + " --url " + url + " --model " + f.model + " --force"
+		if tool == connect.ClaudeDesktopMCP {
+			args = "ambit connect " + tool + " --url " + url + " --force"
+		}
 		err := a.failLines(conflicts, args)
 		p.Line("  --force replaces these entries. The old value is kept so that ambit disconnect puts it back; a secret is kept in the backup file only.")
 		return err
@@ -267,6 +284,15 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	if !f.dryRun {
 		if key, reused, err = a.resolveKey(ctx, d, st, url, f); err != nil {
 			return err
+		}
+		for _, j := range jobs {
+			if j.secret { // the header file holds the key, so it is planned only now
+				j.plan.After = connect.MCPHeader(key)
+				j.plan.Record.SHA256 = connect.FileSum(j.plan.After)
+				if string(j.before) != string(j.plan.After) {
+					j.plan.Already, already = false, false
+				}
+			}
 		}
 	} else {
 		_, reused = st.Keys[url]
@@ -290,6 +316,10 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	}
 	if !already {
 		for _, j := range jobs {
+			if j.secret && !j.plan.Already {
+				p.Line("%s: holds the key, readable only by you (mode 0600)", j.path)
+				continue
+			}
 			if _, changes := j.change(); !changes {
 				p.Line("%s: no change", j.path)
 				continue
@@ -424,7 +454,7 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	}
 
 	// 8: the test call.
-	if !f.noTest {
+	if !f.noTest && tool != connect.ClaudeDesktopMCP {
 		if err := a.testCall(ctx, d, tool, url, f.model, key); err != nil {
 			return err
 		}
@@ -561,6 +591,8 @@ func (a *app) nextSteps(tool, url string, shell connect.Shell) {
 		p.Line("Restart Claude Code, then run /status: \"Anthropic base URL\" must show %s.", url)
 	case connect.Codex:
 		p.Line("Start codex and send one prompt.")
+	case connect.ClaudeDesktopMCP:
+		p.Line("Quit Claude Desktop completely and start it again, then check Connectors for \"ambit\". Node.js (npx) must be installed.")
 	case connect.OpenCode:
 		if shell != connect.NoShell {
 			p.Line("Open a new terminal before you start opencode. The function works only when opencode is started from that shell; an editor that starts opencode by itself does not see it.")
@@ -603,7 +635,7 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 	case !f.all && len(args) == 0:
 		return out.Usage("disconnect", "name a tool, or use --all", "ambit disconnect claude-code, or ambit disconnect --all")
 	case len(args) > 0 && !validTool(args[0]):
-		return out.Usage("unknown tool "+args[0], "choose claude-code, codex, opencode or cursor", "ambit disconnect --help")
+		return out.Usage("unknown tool "+args[0], "choose claude-code, codex, opencode, cursor or claude-desktop-mcp", "ambit disconnect --help")
 	}
 	d, err := a.connectEnv(f.service)
 	if err != nil {
@@ -641,9 +673,13 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 				if j.before, j.exists, err = readConfig(j.path); err != nil {
 					return err
 				}
-				if len(rec.Blocks) > 0 || len(rec.Wrote) > 0 {
+				j.secret = rec.Secret
+				switch {
+				case rec.Secret:
+					j.undo = connect.UnplanSecretFile(rec, j.before, j.exists)
+				case len(rec.Blocks) > 0 || len(rec.Wrote) > 0:
 					j.undo, err = connect.UnplanBlocks(&rec, j.before, j.exists)
-				} else {
+				default:
 					j.undo, err = connect.UnplanJSON(rec, j.before, j.exists)
 				}
 				if err != nil {
@@ -668,8 +704,12 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 		for _, j := range tj.jobs {
 			if c, ok := j.change(); ok {
 				changes, changed = append(changes, c), append(changed, j)
-				p.Line("%s", j.path)
-				p.Line("%s", diffText(j.path, j.before, true, j.undo.After, j.undo.Delete))
+				if j.secret {
+					p.Line("%s: holds the key; ambit deletes it", j.path)
+				} else {
+					p.Line("%s", j.path)
+					p.Line("%s", diffText(j.path, j.before, true, j.undo.After, j.undo.Delete))
+				}
 			}
 			for _, n := range j.undo.Notes {
 				p.Line("%s %s", p.Mark("warn"), n)
@@ -806,4 +846,18 @@ func (a *app) unrecordedBlocks(d *connectDeps, tool string) ([]*job, error) {
 		jobs = append(jobs, &job{path: path, before: b, exists: true, undo: u})
 	}
 	return jobs, nil
+}
+
+// planSecretFile plans the header file before the key is known: it is Ambit's when it still holds what an earlier
+// connect wrote. After and the hash are filled in once the key is read.
+func planSecretFile(j *job) *connect.Plan {
+	p := &connect.Plan{Record: connect.FileRecord{Path: j.path, Secret: true, Created: !j.exists}}
+	if j.prev != nil {
+		p.Record.Created, p.Record.Dirs, p.Record.Backup = j.prev.Created, j.prev.Dirs, j.prev.Backup
+		p.Already = j.exists && connect.FileSum(j.before) == j.prev.SHA256
+	}
+	if p.Already {
+		p.After, p.Record.SHA256 = j.before, j.prev.SHA256
+	}
+	return p
 }

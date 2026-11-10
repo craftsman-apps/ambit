@@ -37,6 +37,19 @@ In the local file `claude_desktop_config.json`, Claude Desktop starts local prog
 3. The MCP address of the gateway. On the quick-start cluster it is `http://mcp.localtest.me:8080/mcp`. On a production install it is the `https` address that the **MCP** tab of the console shows. These examples use the quick-start address.
 4. Node.js, as above.
 
+## With the Ambit CLI: one command
+
+The Ambit CLI writes the header file and the config entry of steps 1 and 2 for you, and removes them again:
+
+```sh
+ambit connect claude-desktop-mcp --url http://mcp.localtest.me:8080/mcp
+ambit disconnect claude-desktop-mcp
+```
+
+Use your MCP address. The key comes from `--key-file`, `AMBIT_API_KEY` or a hidden prompt; it is also stored in your keychain for that address. Other servers and comments in `claude_desktop_config.json` stay, and the file is copied to `claude_desktop_config.json.ambit.bak` first. Then go on with [Check it works](#check-it-works). See [CLI reference](../cli.md#ambit-connect) for the details. **Tested in Claude Desktop: pending** (the files are covered by unit tests).
+
+Without the CLI, do steps 1 and 2 by hand.
+
 ## 1. Put the key in a file
 
 The `mcp-remote` option `--header-file` reads headers from a file, one `Name: value` per line. With it, the key is neither in `claude_desktop_config.json` nor in the arguments of the process, where other users of the computer can read it ([mcp-remote README, "Custom Headers"](https://github.com/punkpeye/mcp-remote#custom-headers)).

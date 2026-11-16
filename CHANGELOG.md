@@ -13,11 +13,11 @@ Each pull request adds a file in changelog/unreleased/ (see its README); the rel
 ### What is new
 
 - **agentgateway v1.7.0.** The gateway is agentgateway v1.7.0 (was v1.6.0). A model call that the gateway refuses
-  itself (403 for a model the person may not use, 404 for a model that does not exist) now shows the caller on the
-  Audit page; before, these rows had no caller (issue #87).
+  itself (403 for a model the person may not use, 404 for a model that does not exist) now shows on the Audit page
+  the person who made the call; before, these rows had no person (issue #87).
 - **Per-minute request limits.** A Budget can now limit requests per clock minute (UTC):
   `userRequestsPerMinute` (each person) and `groupRequestsPerMinute` (the whole group). A request counts when it
-  arrives, also when it is then refused, so a burst cannot get past the limit. The console's Budgets page sets them
+  arrives, also when it is then refused, so many requests sent at the same time all count. The console's Budgets page sets them
   (issue #85). See [Budgets](docs/budgets.md).
 - **More on the Audit page.** A refused model call names the model the person asked for, `/v1/models` calls show as
   "Model list", and a second search lists requests made with a wrong, revoked or expired key (issue #117). In
@@ -42,8 +42,8 @@ Each pull request adds a file in changelog/unreleased/ (see its README); the rel
 - **Docusign preset version 2**, for Docusign's MCP server that now answers a request without a token with HTTP 401.
   An app made from version 1 does not change.
 - **New page: [Performance](docs/performance.md).** On one reference laptop with a local kind cluster (2026-11-10),
-  the gateway added about 1.3 to 1.4 ms at the median (p50) to a model call at 10 requests per second, and 1.4 to
-  4.3 ms at the median to an MCP tool call. These are numbers from one machine, not a guarantee; `test/bench.sh`
+  the gateway added 1.3 ms (personal API key) and 1.4 ms (company token) at the median (p50) to a model call at 10
+  requests per second, and 1.4 to 4.3 ms at the median to an MCP tool call. These are numbers from one machine, not a guarantee; `test/bench.sh`
   repeats the measurement on your cluster.
 - **New guide: [Run agents in a sandbox such as OpenShell](docs/guides/sandbox-openshell.md).** It makes the Ambit
   gateway the only model endpoint of an agent in an OpenShell sandbox.
@@ -90,8 +90,8 @@ signed. See [Supply chain](docs/compliance.md#supply-chain).
 
 - The Databricks and PagerDuty presets are still not verified and not offered in the console: their test accounts
   do not work (issue #244).
-- In one benchmark run, all 3,000 MCP requests through the gateway failed; the run before it and the two runs after
-  it had no errors, and the cause is not known (issue #274).
+- In one benchmark run (MCP tool calls with masking, 50 requests per second), all 3,000 requests through the gateway
+  failed. The other runs of the same case had no errors, and the cause is not known (issue #274).
 - The test mock model in `test/llm/mock.yaml` does not end a streamed answer with `finish_reason`, so a coding agent
   pointed at it sends requests without end (issue #275). Real providers are not affected; this is a test tool only.
 

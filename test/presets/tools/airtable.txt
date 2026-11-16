@@ -41,6 +41,7 @@ list_workspaces
 ping
 publish_form
 publish_interface
+report_missing_capability
 revert_action
 search_bases
 search_candidate_linked_records

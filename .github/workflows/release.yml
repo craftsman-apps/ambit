@@ -48,7 +48,7 @@ jobs:
           # Journey S6: an SBOM and build provenance travel with every image in the registry.
           sbom: true
           provenance: mode=max
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         with: { cosign-release: v3.1.3 }
       # Keyless: the signature is bound to this workflow's GitHub OIDC identity and logged in Sigstore's public
       # transparency log (Rekor). Signed by digest, so the signature covers exactly the image index pushed above.

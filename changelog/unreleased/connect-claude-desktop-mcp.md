@@ -1,1 +1,0 @@
-- `ambit connect claude-desktop-mcp --url <MCP address>` writes the `mcp-remote` entry to `claude_desktop_config.json` and the key to the header file `~/.ambit/mcp-headers.txt` (mode 0600); `ambit disconnect claude-desktop-mcp` removes both.

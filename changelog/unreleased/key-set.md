@@ -1,1 +1,0 @@
-- `ambit key set --url <address>` stores a key in the keychain without connecting a tool, so that `ambit key print` can serve a helper such as the `headersHelper` of a managed Claude Desktop.

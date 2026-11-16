@@ -8,6 +8,130 @@ For upgrade steps in detail, read [docs/upgrading.md](docs/upgrading.md).
 
 Each pull request adds a file in changelog/unreleased/ (see its README); the release assembles them here.
 
+## 0.4.0 (2026-11-16)
+
+### What is new
+
+- **agentgateway v1.7.0.** The gateway is agentgateway v1.7.0 (was v1.6.0). A model call that the gateway refuses
+  itself (403 for a model the person may not use, 404 for a model that does not exist) now shows the caller on the
+  Audit page; before, these rows had no caller (issue #87).
+- **Per-minute request limits.** A Budget can now limit requests per clock minute (UTC):
+  `userRequestsPerMinute` (each person) and `groupRequestsPerMinute` (the whole group). A request counts when it
+  arrives, also when it is then refused, so a burst cannot get past the limit. The console's Budgets page sets them
+  (issue #85). See [Budgets](docs/budgets.md).
+- **More on the Audit page.** A refused model call names the model the person asked for, `/v1/models` calls show as
+  "Model list", and a second search lists requests made with a wrong, revoked or expired key (issue #117). In
+  audit-only mode, a served call that no access rule judges is shown as "Served, no verdict" (issue #136).
+- **Model keys in the console.** An admin can change a model's API key (**Change key**) and delete a model
+  (**Delete**) on the Models page, also in GitOps mode (issues #166, #167). Add model and Change key accept AWS keys
+  for Bedrock and a Google service-account key file for Vertex AI (issue #168). The console never shows a stored key.
+- **The Savings page subtracts the classifier's cost.** For a ModelRouter of type `LLM`, the routing saving is now
+  net of what the classifier calls cost; a router whose classifier costs more than it saves shows a negative saving
+  (issue #216).
+- **Command-line tool (`ambit`):**
+  - `ambit key set --url <address>` stores a key in the keychain without connecting a tool.
+  - `ambit connect claude-desktop-mcp --url <MCP address>` connects Claude Desktop through `mcp-remote`;
+    `ambit disconnect claude-desktop-mcp` removes it.
+  - `ambit connect` and `ambit disconnect` are safer: a move to a new address deletes the old key when no tool uses
+    it, two runs at the same time do not lose state, and `ambit disconnect --revoke` revokes each deleted key at the
+    console, so it stops working at once (the console's new endpoint `DELETE /api/keys/self`).
+  - `ambit lint <file or directory>` warns on AccessRules that give wide access.
+- **Signed images and npm trusted publishing.** The console image is signed with cosign (keyless, Sigstore) from
+  this release; see "Verify the image signature" below. The npm packages are published through npm trusted
+  publishing (GitHub OIDC).
+- **Docusign preset version 2**, for Docusign's MCP server that now answers a request without a token with HTTP 401.
+  An app made from version 1 does not change.
+- **New page: [Performance](docs/performance.md).** On one reference laptop with a local kind cluster (2026-11-10),
+  the gateway added about 1.3 to 1.4 ms at the median (p50) to a model call at 10 requests per second, and 1.4 to
+  4.3 ms at the median to an MCP tool call. These are numbers from one machine, not a guarantee; `test/bench.sh`
+  repeats the measurement on your cluster.
+- **New guide: [Run agents in a sandbox such as OpenShell](docs/guides/sandbox-openshell.md).** It makes the Ambit
+  gateway the only model endpoint of an agent in an OpenShell sandbox.
+
+### Upgrade notes
+
+- **Apply the new dependency CRDs first** (`crds.yaml` of this release, with agentgateway v1.7.0's CRDs), then
+  upgrade `ambit-crds`, then `ambit`. See [Upgrade and uninstall](docs/install.md#upgrade-and-uninstall) and
+  [Upgrading](docs/upgrading.md). The agentgateway CRDs only gain fields, so objects you have stay valid.
+- **The Budget CRD has two new optional fields**, `userRequestsPerMinute` and `groupRequestsPerMinute`. Existing
+  Budgets need no change, and an older controller does not know the new fields.
+- **The policy `ambit-llm-usage` is removed.** The controller deletes this generated AgentgatewayPolicy during the
+  upgrade (issue #261). agentgateway v1.7.0 reports token usage for every streamed request itself, so dollar limits
+  still charge streamed answers.
+- **Embeddings requests count against daily request limits after the answer**, like other requests. An embeddings
+  request that the gateway refuses (403 or 429) no longer counts. Per-minute limits count every request when it
+  arrives.
+- **Some answers change.** A tool the person may not use is answered `unknown resource` (before: `Unknown tool:
+  <name>`). Gateway errors no longer include internal details; the status codes are the same. Every streamed chat
+  request ends with a usage chunk, also when the client set `stream_options.include_usage` to false. `/v1/messages`
+  requests to OpenAI's own API are sent as Responses requests. The text of a Budget refusal (429) no longer says
+  "daily", and `Retry-After` is the reset of the limit that refused.
+- **No new chart values.** The console needs two more rights, which the chart adds: delete Models, and patch the
+  model key Secrets.
+- **With an external ClickHouse**, the console creates a third summary table, `ambit_classifier_daily_v1`, and its
+  view. The user needs no rights beyond those of 0.3.0.
+- **Audit rows written before the upgrade keep their caller-less model refusals.** Only refusals after the upgrade
+  show the caller.
+
+### Verify the image signature
+
+With cosign 2.0 or newer:
+
+```sh
+cosign verify ghcr.io/craftsman-apps/ambit-console:0.4.0 \
+  --certificate-identity-regexp '^https://github.com/craftsman-apps/ambit/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+The command fails for an image that the release workflow did not sign on a `v*` tag. Releases before 0.4.0 are not
+signed. See [Supply chain](docs/compliance.md#supply-chain).
+
+### Known limits
+
+- The Databricks and PagerDuty presets are still not verified and not offered in the console: their test accounts
+  do not work (issue #244).
+- In one benchmark run, all 3,000 MCP requests through the gateway failed; the run before it and the two runs after
+  it had no errors, and the cause is not known (issue #274).
+- The test mock model in `test/llm/mock.yaml` does not end a streamed answer with `finish_reason`, so a coding agent
+  pointed at it sends requests without end (issue #275). Real providers are not affected; this is a test tool only.
+
+### All changes
+
+- Audit page: in audit-only mode, a served model request or tool call that no access rule judges (its mark is `n/a`) is now shown as a call, "Served, no verdict", instead of being sorted with protocol messages.
+- `ambit connect claude-desktop-mcp --url <MCP address>` writes the `mcp-remote` entry to `claude_desktop_config.json` and the key to the header file `~/.ambit/mcp-headers.txt` (mode 0600); `ambit disconnect claude-desktop-mcp` removes both.
+- `ambit connect` to a new `--url` deletes the stored key of the old address when no tool uses it any more, and prints the line to revoke it.
+- `ambit connect`, `disconnect` and `key set` take a lock file, so two runs at the same time do not lose a record of the state file.
+- `ambit disconnect opencode` without a state file looks for the shell function in the bash, zsh and fish profiles, not only in the profile of the current `$SHELL`.
+- `ambit disconnect` prints each deleted key at once, so a failure to delete a later key does not hide the earlier ones.
+- A key stored with `ambit key set` stays when the last tool that uses its address is disconnected or moved to another address; only `ambit disconnect --all` deletes it.
+- Console: Add model and Change key accept AWS keys for Bedrock (access key ID, secret access key, optional session token) and a Google service-account key file for Vertex AI. The console stores them in the Secret `ambit-llm-<name>` and never shows them. Tested with fake keys only (#168).
+- Console: an admin can change a model's API key on the Models page (**Change key**). The console writes the new key into the same Secret `ambit-llm-<name>` that it created when the model was added, also in GitOps mode, and never shows it. Secrets made outside the console are not changed (#166).
+- Console: an admin can delete a model (**Delete**). The console refuses while an access rule, a model router or another model's fallback names the model. In Direct mode it deletes the Model and the key Secret the console created; in GitOps mode it opens a pull request, and the key is listed under **Keys without a model** once the Model is gone (#167).
+- Console: **Unfinished additions** on the Models page is now **Keys without a model**. Remove key now also checks the Secrets of a model's `additionalEndpoints`.
+- `ambit key set --url <address>` stores a key in the keychain without connecting a tool, so that `ambit key print` can serve a helper such as the `headersHelper` of a managed Claude Desktop.
+- `ambit lint <file or directory>...` warns on AccessRules that give wide access: `allSignedIn: true`, and a server without a `tools` list (every tool, including tools added later). `--strict` exits 1 when there is a warning.
+- Docusign preset version 2: the Docusign MCP server now answers a request without a token with HTTP 401 and OAuth resource metadata (before: 403). Nothing changes for an app made from version 1; its URLs and scopes are the same.
+- Release images are signed with cosign (keyless, Sigstore) from 0.4.0. `docs/compliance.md` (Supply chain) shows the `cosign verify` command.
+- The release publishes the npm packages through npm trusted publishing (GitHub OIDC); the stored npm token stays only as a fallback until a release has published without it.
+- The console endpoint `DELETE /api/keys/self` revokes the key that is sent as the bearer token, and only that key. It reads no session cookie, is rate limited (30 a minute per console process), and writes the History action `revoke-self`.
+- `ambit disconnect --revoke` revokes each key it deletes at the console, so a key stops working at once.
+- Savings: the routing figure is now net of the classifier. For a ModelRouter of type `LLM`, ambit-router puts the classifier call's input and output tokens on the request, the audit record keeps them, and the Savings page subtracts their cost at the classifier Model's price. The router table shows the classifier's cost, and a router whose classifier costs more than it saves shows a negative saving. Classifier calls that time out, and days before this version, are not counted (#216).
+- Embeddings requests now count against daily request limits after the answer, like all other requests. An embeddings request that the gateway refuses (403 or 429) no longer counts. Per-minute limits are unchanged: they still count every request when it arrives.
+- Ambit no longer creates the policy `ambit-llm-usage`; the upgrade deletes it. The gateway (agentgateway v1.7.0) turns usage reporting on for every streamed request itself, so dollar limits still charge streamed answers.
+- The Audit page names the model a person asked for when the gateway refused it (403 or 404), and shows `/v1/models` calls as "Model list" (issue #117).
+- The Audit page has a second search: requests made with a wrong, revoked or expired key. They have no person; each row shows the time, path, status, the gateway's reason and the client address. The API is `GET /api/audit?invalidKey=true&from=&to=`.
+- New page [Performance](docs/performance.md): the time the Ambit gateway adds to a model call and to an MCP tool call, measured on one reference machine, and `test/bench.sh` to repeat the measurement.
+- The gateway is agentgateway v1.7.0 (was v1.6.0). Apply the new third-party CRDs before you upgrade the chart (`kubectl apply --server-side -f deploy/crds/`); see [Upgrading](https://ambitproject.dev/upgrading).
+- A model call that the gateway refuses itself (403 for a model the person may not use, 404 for a model that does not exist) now appears on the Audit page under the caller. Before, these rows had no caller (issue #87).
+- A tool call to a tool the person may not use is now answered `unknown resource` (it was `Unknown tool: <name>`), the same answer as for a tool that does not exist. The Audit page still shows it as refused by policy.
+- Every streamed chat request now ends with a usage chunk (token counts), also when the client set `stream_options.include_usage` to false. Before, only people in a group with a dollar limit got it.
+- `/v1/messages` requests to a Model with provider `OpenAI` and no `baseURL` (OpenAI's own API) are now sent to OpenAI as Responses requests, not Chat Completions. Thinking blocks from earlier turns are not sent to OpenAI in either format.
+- Gateway error answers no longer include internal details such as addresses or upstream error text. The status codes are unchanged.
+- New guide [Run agents in a sandbox such as OpenShell](docs/guides/sandbox-openshell.md): an OpenShell provider profile that makes the Ambit gateway the only model endpoint of an agent in a sandbox, tested with OpenShell v0.1.7 and opencode on 2026-11-10. The "When not to use Ambit" list says that Ambit does not confine what an agent does on a machine.
+- Budgets can limit requests per minute: `userRequestsPerMinute` (each person) and `groupRequestsPerMinute` (the whole group), per clock minute (UTC). A request counts when it arrives, also when it is then refused, so a burst cannot get past the limit. The console's Budgets page sets them (issue #85).
+- The text of a Budget refusal (HTTP 429) no longer says "daily": it covers per-minute and daily limits. `Retry-After` is the reset of the limit that refused: the rest of the minute for a per-minute limit, which is checked first, or the time to midnight UTC for a daily limit.
+- The homepage shows the latest released version, read from `CHANGELOG.md` at build time, instead of a fixed `v0.1.0`. The README badges show the latest release and the license.
+
 ## 0.3.0 (2026-11-09)
 
 ### What is new

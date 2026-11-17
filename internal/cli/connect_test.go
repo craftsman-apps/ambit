@@ -48,12 +48,13 @@ type connectRig struct {
 	saveState func(*connect.State, string) error // replaces saving the state file when set
 	profile   string                             // the PowerShell profile path; "" means there is no PowerShell
 	policy    func() (string, error)             // the PowerShell execution policy; nil means it is not asked
+	opencode  string                             // what opencode --version prints; "" means opencode is not installed
 }
 
 func newRig(t *testing.T) *connectRig {
 	home := t.TempDir()
 	return &connectRig{t: t, kc: memStore{}, file: memStore{}, statePath: filepath.Join(home, "state", "connect.json"), home: home,
-		env: map[string]string{"SHELL": "/bin/zsh"}}
+		env: map[string]string{"SHELL": "/bin/zsh"}, opencode: "1.18.34"}
 }
 
 const fakeAmbit = "/usr/local/bin/ambit-under-test"
@@ -81,7 +82,13 @@ func (r *connectRig) run(args ...string) int {
 			return r.profile, nil
 		},
 		ScriptPolicy: r.policy,
-		HTTP:         func(string) *http.Client { return http.DefaultClient }, CallLimit: 300 * time.Millisecond, CallEvery: 20 * time.Millisecond}
+		HTTP:         func(string) *http.Client { return http.DefaultClient }, CallLimit: 300 * time.Millisecond, CallEvery: 20 * time.Millisecond,
+		OpenCodeVersion: func() (string, error) {
+			if r.opencode == "" {
+				return "", errors.New(`exec: "opencode": executable file not found in $PATH`)
+			}
+			return r.opencode, nil
+		}}
 	if r.secret != "" {
 		d.ReadSecret = func(context.Context, string) (string, error) { return r.secret, nil }
 	}

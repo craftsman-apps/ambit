@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -155,7 +156,7 @@ func validTool(t string) bool {
 	return false
 }
 
-func (a *app) toolFiles(d *connectDeps, tool string, f connectFlags) (jobs []*job, notes []string, shell connect.Shell, err error) {
+func (a *app) toolFiles(d *connectDeps, tool string, f connectFlags, oc2 bool) (jobs []*job, notes []string, shell connect.Shell, err error) {
 	switch tool {
 	case connect.ClaudeCode:
 		jobs = append(jobs, &job{path: connect.ClaudeSettingsPath(d.Getenv, d.Home)})
@@ -169,6 +170,13 @@ func (a *app) toolFiles(d *connectDeps, tool string, f connectFlags) (jobs []*jo
 			return nil, nil, "", err
 		}
 		jobs = append(jobs, &job{path: path})
+		if oc2 { // the key file instead of the shell function
+			jobs = append(jobs, &job{path: connect.OpenCodeKeyPath(d.Getenv, d.Home), secret: true})
+			if f.shell != "" {
+				notes = append(notes, "--shell is not used with opencode 2: it reads the key from a file")
+			}
+			return jobs, notes, "", nil
+		}
 		shell = connect.DetectShell(d.GOOS, d.Getenv("SHELL"))
 		if f.shell != "" {
 			if shell, err = connect.ParseShell(f.shell); err != nil {
@@ -227,9 +235,16 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	if err != nil {
 		return err
 	}
-	jobs, notes, shell, err := a.toolFiles(d, tool, f)
+	oc2, ocNote := false, ""
+	if tool == connect.OpenCode {
+		oc2, ocNote = openCode2(d)
+	}
+	jobs, notes, shell, err := a.toolFiles(d, tool, f, oc2)
 	if err != nil {
 		return err
+	}
+	if ocNote != "" {
+		notes = append(notes, ocNote)
 	}
 
 	// 2 and 3: read the files, plan, find conflicts.
@@ -251,6 +266,9 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 		case tool == connect.Codex:
 			j.plan, err = connect.PlanCodex(in)
 		case i == 0:
+			if oc2 {
+				in.KeyFile = jobs[1].path
+			}
 			j.plan, err = connect.PlanOpenCode(in)
 		default:
 			in.Shell = string(shell)
@@ -265,7 +283,7 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 		for _, c := range j.plan.Conflicts {
 			conflicts = append(conflicts, j.path+": "+c.String())
 		}
-		if !j.exists {
+		if !j.exists && !j.secret { // the folder of a key file says nothing about the tool
 			if dir := filepath.Dir(j.path); !pathExists(dir) {
 				notes = append(notes, dir+" does not exist; ambit creates it. If "+tool+" is not installed yet, install it later")
 			}
@@ -273,6 +291,12 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	}
 	if tool == connect.ClaudeDesktopMCP && f.model != "" {
 		notes = append(notes, "--model is not used by claude-desktop-mcp")
+	}
+	var drops []*job // opencode 2: the opencode function of an earlier connect comes out of the shell profiles
+	if oc2 {
+		if drops, err = a.openCodeFunctions(d, st); err != nil {
+			return err
+		}
 	}
 	if len(conflicts) > 0 && !f.force {
 		args := "ambit connect " + tool + " --url " + url + " --model " + f.model + " --force"
@@ -287,6 +311,10 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	for _, j := range jobs {
 		already = already && j.plan.Already
 	}
+	for _, j := range drops {
+		_, changes := j.change()
+		already = already && !changes
+	}
 
 	// 4: the key.
 	var key string
@@ -297,7 +325,7 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 		}
 		for _, j := range jobs {
 			if j.secret { // the header file holds the key, so it is planned only now
-				j.plan.After = connect.MCPHeader(key)
+				j.plan.After = connect.SecretFile(tool, key)
 				j.plan.Record.SHA256 = connect.FileSum(j.plan.After)
 				if string(j.before) != string(j.plan.After) {
 					j.plan.Already, already = false, false
@@ -340,6 +368,17 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 				p.Line("backup: %s.ambit.bak", j.path)
 			}
 		}
+		for _, j := range drops {
+			if _, changes := j.change(); changes {
+				p.Line("%s: opencode 2 does not use the opencode function; ambit removes it", j.path)
+				p.Line("%s", diffText(j.path, j.before, true, j.undo.After, j.undo.Delete))
+			}
+		}
+	}
+	for _, j := range drops {
+		for _, n := range j.undo.Notes {
+			p.Line("%s %s", p.Mark("warn"), n)
+		}
 	}
 	for _, j := range jobs {
 		for _, w := range j.plan.Warnings {
@@ -381,6 +420,12 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 			changes, written = append(changes, c), append(written, j)
 		}
 	}
+	var removed []*job
+	for _, j := range drops {
+		if c, ok := j.change(); ok {
+			changes, removed = append(changes, c), append(removed, j)
+		}
+	}
 	newStore := ""
 	oldTool, hadTool := st.Tools[tool]
 	oldKey, hadKey := st.Keys[url]
@@ -396,7 +441,7 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 		kr.ConsoleURL = strings.TrimRight(f.consoleURL, "/")
 		st.SetKey(url, kr)
 	}
-	st.Tools[tool] = toolRecord(st, tool, url, jobs, true)
+	st.Tools[tool] = toolRecord(st, tool, url, jobs, drops, true)
 	if err := d.save(st); err != nil {
 		return err
 	}
@@ -458,7 +503,10 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 		}
 		p.Line("%s wrote %s", p.Mark("ok"), j.path)
 	}
-	st.Tools[tool] = toolRecord(st, tool, url, jobs, false)
+	for _, j := range removed {
+		p.Line("%s removed the opencode function from %s", p.Mark("ok"), j.path)
+	}
+	st.Tools[tool] = toolRecord(st, tool, url, jobs, drops, false)
 	if err := d.save(st); err != nil {
 		return err
 	}
@@ -476,19 +524,79 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 			return err
 		}
 	}
+	if oc2 {
+		p.Line("opencode 2 reads the key from %s when its background service starts.", jobs[1].path)
+		p.Line("If opencode is running, restart the service so that it reads the new settings: opencode service restart")
+		return nil
+	}
 	a.nextSteps(tool, url, shell)
 	return nil
 }
 
+// openCode2 reads `opencode --version`: opencode 2 gets the key file, opencode 1 the shell function. When opencode does
+// not answer, connect sets up opencode 2, the version a new install gets, and says so.
+func openCode2(d *connectDeps) (bool, string) {
+	v, err := d.OpenCodeVersion()
+	if err != nil {
+		return true, "opencode did not answer opencode --version (" + err.Error() + "); ambit sets it up for opencode 2. For opencode 1, make sure opencode is on your PATH and run the command again"
+	}
+	switch m := connect.OpenCodeMajor(v); {
+	case m == 1:
+		return false, ""
+	case m >= 2:
+		return true, ""
+	}
+	return true, "opencode --version printed " + strconv.Quote(v) + "; ambit sets it up for opencode 2"
+}
+
+// openCodeFunctions are the jobs that take the opencode function of an earlier connect out of the shell profiles:
+// the recorded ones, and any other profile with an Ambit block.
+func (a *app) openCodeFunctions(d *connectDeps, st *connect.State) ([]*job, error) {
+	var jobs []*job
+	for _, rec := range st.Tools[connect.OpenCode].Files {
+		if len(rec.Blocks) == 0 && len(rec.Wrote) == 0 {
+			continue
+		}
+		j := &job{path: rec.Path, rec: rec}
+		var err error
+		if j.before, j.exists, err = readConfig(j.path); err != nil {
+			return nil, err
+		}
+		if j.undo, err = connect.UnplanBlocks(&rec, j.before, j.exists); err != nil {
+			return nil, planErr(err)
+		}
+		jobs = append(jobs, j)
+	}
+	more, err := a.unrecordedBlocks(d, connect.OpenCode)
+	if err != nil {
+		return nil, err
+	}
+	for _, j := range more {
+		if !containsPath(jobs, j.path) {
+			jobs = append(jobs, j)
+		}
+	}
+	return jobs, nil
+}
+
 // toolRecord is what the state file says about tool after this connect. A file of an earlier connect that this one
-// does not use is still Ambit's.
-func toolRecord(st *connect.State, tool, url string, jobs []*job, pending bool) connect.ToolRecord {
+// does not use is still Ambit's, unless this connect takes Ambit's lines out of it (drops) and none stay. While
+// pending, the record keeps it: the write may not have happened.
+func toolRecord(st *connect.State, tool, url string, jobs, drops []*job, pending bool) connect.ToolRecord {
 	rec := connect.ToolRecord{URL: url, Pending: pending}
 	for _, j := range jobs {
 		rec.Files = append(rec.Files, j.plan.Record)
 	}
+	gone := func(path string) bool {
+		for _, j := range drops {
+			if j.path == path && len(j.undo.Notes) == 0 {
+				return true
+			}
+		}
+		return false
+	}
 	for _, old := range st.Tools[tool].Files {
-		if !containsPath(jobs, old.Path) {
+		if !containsPath(jobs, old.Path) && (pending || !gone(old.Path)) {
 			rec.Files = append(rec.Files, old)
 		}
 	}

@@ -1,9 +1,15 @@
 package connect
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/craftsman-apps/ambit/internal/cli/out"
 	"github.com/tailscale/hujson"
@@ -27,8 +33,52 @@ func OpenCodePath(getenv func(string) string, home string, exists func(string) b
 	return j, nil
 }
 
+// OpenCodeKeyPath is the file that opencode 2 reads the key from: <config base>/ambit/opencode-key, under the same
+// config base as opencode's own directory. opencode 2 sends model calls from a background service that does not see
+// the environment of the shell the person starts opencode in, so the key cannot come from a shell function.
+func OpenCodeKeyPath(getenv func(string) string, home string) string {
+	base := filepath.Join(home, ".config")
+	if x := getenv("XDG_CONFIG_HOME"); x != "" {
+		base = x
+	}
+	return filepath.Join(base, "ambit", "opencode-key")
+}
+
+// OpenCodeKey is the content of the key file: the key alone, without a line break, so that the header opencode
+// sends is right whether or not it trims the file.
+func OpenCodeKey(key string) []byte { return []byte(key) }
+
+// fileRef is the opencode variable that reads path. opencode resolves an absolute path on every system; on Windows
+// the path is written with forward slashes, so the JSON string holds no backslash escapes.
+func fileRef(path, goos string) string {
+	if goos == "windows" {
+		path = strings.ReplaceAll(path, `\`, "/")
+	}
+	return "{file:" + path + "}"
+}
+
+var versionNumber = regexp.MustCompile(`(\d+)\.\d+`)
+
+// OpenCodeMajor is the major version in the output of `opencode --version` ("opencode v2.2.5", "1.18.34"), or 0.
+func OpenCodeMajor(version string) int {
+	m := versionNumber.FindStringSubmatch(version)
+	if m == nil {
+		return 0
+	}
+	n, _ := strconv.Atoi(m[1])
+	return n
+}
+
+// OpenCodeVersion runs `opencode --version`. It does not start opencode's background service.
+func OpenCodeVersion() (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	b, err := exec.CommandContext(ctx, "opencode", "--version").Output()
+	return strings.TrimSpace(string(b)), err
+}
+
 // opencodeV2 reports whether a config uses the opencode v2 names: a top-level `providers`, or a provider with
-// `package` or `settings`. This version of ambit writes the v1 format that was tested live.
+// `package` or `settings`. opencode 1 does not read them.
 func opencodeV2(d *Doc) bool {
 	std, err := hujson.Standardize(append([]byte(nil), d.src...)) // Standardize blanks the comments in its argument
 	if err != nil {
@@ -55,27 +105,51 @@ func opencodeV2(d *Doc) bool {
 	return false
 }
 
-func opencodeSets(in Input) []Set {
+// opencodeContainer is where opencode 2's provider goes: `providers` (the v2 format) when the file has it or has
+// neither, else the older `provider`, which opencode 2 still reads. opencode 1 reads only `provider`.
+func opencodeContainer(d *Doc, in Input) string {
+	if in.KeyFile == "" {
+		return "provider"
+	}
+	if _, ok := d.Get("providers"); !ok {
+		if _, ok := d.Get("provider"); ok {
+			return "provider"
+		}
+	}
+	return "providers"
+}
+
+func opencodeSets(in Input, container string) []Set {
+	apiKey := "{env:AMBIT_API_KEY}" // opencode 1: the shell function sets it
+	if in.KeyFile != "" {
+		apiKey = fileRef(in.KeyFile, in.GOOS)
+	}
+	models := `"models":{` + marshalString(in.Model) + `:{"name":` + marshalString(in.Model) + `}}`
 	provider := `{"npm":"@ai-sdk/openai-compatible","name":"Ambit","options":{"baseURL":` + marshalString(in.URL+"/v1") +
-		`,"apiKey":"{env:AMBIT_API_KEY}"},"models":{` + marshalString(in.Model) + `:{"name":` + marshalString(in.Model) + `}}}`
+		`,"apiKey":` + marshalString(apiKey) + `},` + models + `}`
+	if container == "providers" {
+		provider = `{"name":"Ambit","package":"@opencode/ai/providers/openai-compatible","settings":{"baseURL":` +
+			marshalString(in.URL+"/v1") + `,"apiKey":` + marshalString(apiKey) + `},` + models + `}`
+	}
 	return []Set{
-		{Path: []string{"provider", "ambit"}, Value: provider},
+		{Path: []string{container, "ambit"}, Value: provider},
 		{Path: []string{"model"}, Value: marshalString("ambit/" + in.Model)},
 	}
 }
 
-// PlanOpenCode plans the entries of section 5.3 for the JSON file. A file that does not parse, and a v2 config,
-// are errors and change nothing.
+// PlanOpenCode plans the entries of section 5.3 for the JSON file. in.KeyFile set means opencode 2: the provider
+// reads the key from that file, in the `providers` or the `provider` format. Without it (opencode 1) a v2 config is
+// an error. A file that does not parse is an error. Errors change nothing.
 func PlanOpenCode(in Input) (*Plan, error) {
 	d, seed, err := parseOrNew(in)
 	if err != nil {
 		return nil, fmt.Errorf("%s is not valid JSON — %w", in.Path, err)
 	}
-	if opencodeV2(d) {
-		return nil, &out.Error{What: in.Path + " uses the opencode v2 config format", Why: "this version of ambit writes the v1 format",
-			Next: "add the Ambit provider by hand (see docs/guides/coding-tools.md), or wait for a newer ambit", Code: out.ExitFailed}
+	if in.KeyFile == "" && opencodeV2(d) {
+		return nil, &out.Error{What: in.Path + " uses the opencode v2 config format", Why: "opencode 1 does not read it",
+			Next: "update opencode to version 2 and run the command again, or add the Ambit provider by hand (see docs/guides/coding-tools.md)", Code: out.ExitFailed}
 	}
-	sets := opencodeSets(in)
+	sets := opencodeSets(in, opencodeContainer(d, in))
 	decidedModel := false
 	already := false
 	if in.Prev != nil {
@@ -91,9 +165,11 @@ func PlanOpenCode(in Input) (*Plan, error) {
 	}
 	p := &Plan{}
 	var removed []string
-	if _, ok := d.Get("provider", "ambit"); ok {
-		p.Conflicts = append(p.Conflicts, Conflict{What: "provider.ambit already exists", Why: "Ambit adds a provider of that name"})
-		removed = append(removed, "/provider/ambit") // it may hold a plain-text key: it stays in the backup only
+	for _, c := range []string{"provider", "providers"} {
+		if _, ok := d.Get(c, "ambit"); ok {
+			p.Conflicts = append(p.Conflicts, Conflict{What: c + ".ambit already exists", Why: "Ambit adds a provider of that name"})
+			removed = append(removed, "/"+c+"/ambit") // it may hold a plain-text key: it stays in the backup only
+		}
 	}
 	if m, ok := d.Get("model"); ok && !decidedModel && !jsonEqual(m, sets[1].Value) {
 		p.Conflicts = append(p.Conflicts, Conflict{What: "model is set to another value", Why: "opencode would keep using it instead of Ambit's"})

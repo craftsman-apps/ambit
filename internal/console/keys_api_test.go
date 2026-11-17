@@ -86,10 +86,15 @@ func TestKeysAPI(t *testing.T) {
 	var list struct {
 		Settings map[string]any
 		Keys     []map[string]any
+		URLs     map[string]string
 	}
 	json.Unmarshal([]byte(body), &list)
 	if list.Settings["enabled"] != true || len(list.Keys) != 1 || list.Keys[0]["lastUsed"] != nil || list.Keys[0]["owner"] != nil {
 		t.Fatalf("%s", body)
+	}
+	// The key's page shows the setup steps again from the same addresses, with a placeholder for the key.
+	if list.URLs["llm"] != created.URLs["llm"] || list.URLs["mcp"] != created.URLs["mcp"] {
+		t.Errorf("urls: %v", list.URLs)
 	}
 	if r := f.call(t, "POST", "/api/keys", ck, map[string]any{"name": "x", "scope": "llm", "days": 60}); r.Code != 400 {
 		t.Fatal("days 60 accepted:", r.Code)

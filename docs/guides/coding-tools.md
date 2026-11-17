@@ -27,9 +27,9 @@ You need the cluster from the [Quick start](../quick-start.md), with a model and
 - Model name: the provider's model name, not the name of the `Model` object. The console page **Models** shows it. The examples use `nvidia/nemotron-3-super-120b-a12b:free`.
 - A key: in the console, open **Keys**, choose **Create key**, choose the scope **LLM** (**MCP** or **LLM and MCP** for MCP) and an end date. The key starts with `ambit_`. The console shows it once. Treat it like a password. The next section shows the steps.
 
-`ambit connect <tool> --url <llm> --model <model>` needs the `ambit` CLI 0.2.0 or later ([install it](../quick-start.md#1-install-the-cli)). It asks for the key (hidden), shows a diff, and asks `Write these changes? [y/N]`. Then it stores the key in your system keychain, saves `<file>.ambit.bak`, writes the change, and makes one test call. It never writes the key to a file and never changes a project file. Options: `--dry-run` shows the diff and changes nothing; `--yes` with `--key-file <path>` or `AMBIT_API_KEY` is for scripts. If the file has an entry that defeats Ambit's, the command stops and lists it; `--force` replaces it. See [Where the Ambit CLI keeps the key](../api-keys.md#where-the-ambit-cli-keeps-the-key).
+`ambit connect <tool> --url <llm> --model <model>` needs the `ambit` CLI 0.2.0 or later ([install it](../quick-start.md#1-install-the-cli)). It asks for the key (hidden), shows a diff, and asks `Write these changes? [y/N]`. Then it stores the key in your system keychain, saves `<file>.ambit.bak`, writes the change, and makes one test call. It never changes a project file, and it writes the key to a file only for opencode 2, which cannot read it from the keychain (see [opencode](#opencode)). Options: `--dry-run` shows the diff and changes nothing; `--yes` with `--key-file <path>` or `AMBIT_API_KEY` is for scripts. If the file has an entry that defeats Ambit's, the command stops and lists it; `--force` replaces it. See [Where the Ambit CLI keeps the key](../api-keys.md#where-the-ambit-cli-keeps-the-key).
 
-Tested on 2026-10-14 with Nemotron at OpenRouter: Claude Code 2.1.299, Codex 0.159.3, opencode 1.18.34, Hermes Agent v0.13.0.
+Tested on 2026-10-14 with Nemotron at OpenRouter: Claude Code 2.1.299, Codex 0.159.3, opencode 1.18.34, Hermes Agent v0.13.0. opencode 2.2.5 was tested on 2026-11-17 with a mock model: `ambit connect opencode`, calls through the opencode service, a key change, and `ambit disconnect opencode`.
 
 ## Create a key and connect from the console
 
@@ -38,11 +38,13 @@ Tested on 2026-10-14 with Nemotron at OpenRouter: Claude Code 2.1.299, Codex 0.1
 3. In the form **New key**, fill in **Name** (for example `my laptop`), **Scope** (**LLM**, **MCP** or **LLM and MCP**) and **End date** (**30 days from now**, **90 days from now** or **365 days from now**).
 4. Choose **Create**.
 5. The console shows **Key ‘<name>’ created**. It says: "This is the only time the key is shown. Store it now." Choose **Copy** under **Key** and save the key.
-6. Under **Connect a tool**, if the scope includes LLM, pick the **Model name**. Then choose the tab of your tool.
+6. Under **Connect a tool**, if the scope includes LLM, pick the **Model name**. Then choose the tab of your tool. The **opencode** tab shows opencode 2 first; choose **opencode 1** under **Version** for the older version.
 7. Choose **Copy** next to the command, and run it in a terminal.
 8. Choose **Done**.
 
 The key is shown only once. After **Done**, the console cannot show it again. If you lose it, revoke it and create a new key.
+
+To see the steps again later, choose the key's name in the list on **Keys**. The key's page shows its name, scope, dates, last use and owner, the command `ambit key set --url <llm>` (it stores the key you saved in your keychain), and the same **Connect a tool** tabs. The tabs show `ambit_...` where the key goes: put in the key you saved.
 
 The sections below are the reference for each tool.
 
@@ -97,13 +99,49 @@ bearer_token_env_var = "AMBIT_API_KEY"
 
 ## opencode
 
-The **opencode** tab under **Connect a tool** gives the same command.
+The **opencode** tab under **Connect a tool** gives the same command. It shows the opencode 2 steps first; choose **opencode 1** for the older version.
+
+opencode 2 sends model calls from a background service (`opencode serve --service`), not from the `opencode` process that you start in a terminal. The service does not see the environment variables of your terminal, and opencode cannot run a command to read a key. So with opencode 2 the key is in a file that only you can read.
+
+- `ambit connect opencode` runs `opencode --version`. For opencode 2 it:
+  - writes the key to `~/.config/ambit/opencode-key` (`$XDG_CONFIG_HOME/ambit/opencode-key` when that variable is set). Only your user can read the file: mode `0600`, and on Windows an access list for your user only.
+  - adds the provider `ambit` and the `model` to `~/.config/opencode/opencode.json`. The provider reads the key with `"apiKey": "{file:<the key file>}"`. It uses the opencode 2 format (`providers`), or the older `provider` format when your file already uses it: opencode 2 reads both. Your other providers stay as they are.
+  - adds no shell function, and removes the function that an earlier `ambit connect opencode` added for opencode 1.
+- After `connect`, restart the opencode service so that it reads the new settings: `opencode service restart`.
+- To change the key, run `ambit key set --url <llm>` or `ambit connect opencode --replace-key`. Both write the new key into the key file. The running service keeps the old key until you run `opencode service restart`.
+- `ambit disconnect opencode` removes the provider and the model and deletes the key file.
+- If `opencode --version` does not answer (opencode is not installed, or not on your `PATH`), the command sets up opencode 2 and says so.
+- The key file holds the key as plain text. Like the keychain, it keeps the key from other users of the computer, but not from programs that run as your user.
+- By hand: write the key to the file, merge the provider into `opencode.json`, and restart the service. On Windows, use the **PowerShell** command of the **opencode** tab: it also limits the file to your user.
+
+```sh
+mkdir -p ~/.config/ambit && touch ~/.config/ambit/opencode-key && chmod 600 ~/.config/ambit/opencode-key && printf '%s' 'ambit_...' > ~/.config/ambit/opencode-key
+opencode service restart
+```
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "ambit/nvidia/nemotron-3-super-120b-a12b:free",
+  "providers": {
+    "ambit": {
+      "name": "Ambit",
+      "package": "@opencode/ai/providers/openai-compatible",
+      "settings": { "baseURL": "http://llm.localtest.me:8080/v1", "apiKey": "{file:~/.config/ambit/opencode-key}" },
+      "models": { "nvidia/nemotron-3-super-120b-a12b:free": { "name": "nvidia/nemotron-3-super-120b-a12b:free" } }
+    }
+  }
+}
+```
+
+- MCP: add a `mcp` block with `"type": "remote"`, `"url": "http://mcp.localtest.me:8080/mcp"`, `"headers": { "Authorization": "Bearer {file:~/.config/ambit/opencode-key}" }` and `"oauth": false`. opencode 1 reads `{file:...}` too.
+
+### opencode 1
 
 - `ambit connect opencode` adds the provider `ambit` and the `model` to `~/.config/opencode/opencode.json`. opencode cannot run a command to read a key, so the command also adds a shell function `opencode` to your shell profile. It sets `AMBIT_API_KEY` for that one process. Choose the shell with `--shell bash|zsh|fish|powershell`, or `--shell none` to write no function.
 - Open a new terminal after `connect`. An editor or launcher that starts opencode itself does not see the function.
-- If your file uses the opencode v2 format (a top-level `providers`), the command stops. Add the provider by hand.
+- If your file uses the opencode v2 format (a top-level `providers`), the command stops: opencode 1 does not read it.
 - By hand: merge this into `opencode.json` and run `export AMBIT_API_KEY=ambit_...`. The first start in a new data directory once hung for 5 minutes; stop it and start again.
-- MCP: add a `mcp` block with `"type": "remote"`, `"url": "http://mcp.localtest.me:8080/mcp"`, `"headers": { "Authorization": "Bearer {env:AMBIT_API_KEY}" }` and `"oauth": false`.
 
 ```json
 {
@@ -119,6 +157,12 @@ The **opencode** tab under **Connect a tool** gives the same command.
   }
 }
 ```
+
+### opencode shows "authorization failed"
+
+- What you see: opencode shows `authorization failed` (HTTP 403). The gateway log shows `ambit.identity="jwt"` for the call, which means the call had no key.
+- Cause: the opencode 2 background service sent no key. This happens when the provider reads the key from an environment variable (`{env:AMBIT_API_KEY}`, the opencode 1 setup): the service does not see the variable of your terminal, and opencode replaces a variable that is not set with an empty string. It also happens when the key file did not exist when the service started, and after a key change: the service keeps the old key until it restarts.
+- Fix: run `ambit connect opencode` again (with opencode 2 it switches to the key file), or set up the key file by hand as above. Then run `opencode service restart`.
 
 ## Cursor
 

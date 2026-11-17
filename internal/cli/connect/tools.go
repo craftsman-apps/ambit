@@ -29,6 +29,7 @@ type Input struct {
 	Getenv    func(string) string
 	Prev      *FileRecord // what an earlier connect of this tool wrote to this file
 	Shell     string      // the opencode wrapper: bash, zsh, fish or powershell
+	KeyFile   string      // opencode 2: the file the provider reads the key from
 }
 
 // Plan is the result of planning a connect.

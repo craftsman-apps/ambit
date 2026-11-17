@@ -177,9 +177,11 @@ func (c *Catalog) myKeys(w http.ResponseWriter, r *http.Request, s Session) {
 		keyErr(w, err)
 		return
 	}
-	// ?lastUsed=false (the banner on every page) skips the audit query
+	// ?lastUsed=false (the banner on every page) skips the audit query. urls: the key's page shows the setup steps
+	// again, with a placeholder where the key goes; the key itself is never sent again.
 	lastUsed := r.URL.Query().Get("lastUsed") != "false"
-	writeJSON(w, http.StatusOK, map[string]any{"settings": c.keySettings(), "keys": c.views(r.Context(), keys, false, lastUsed)})
+	writeJSON(w, http.StatusOK, map[string]any{"settings": c.keySettings(), "keys": c.views(r.Context(), keys, false, lastUsed),
+		"urls": map[string]string{"llm": c.LLMURL, "mcp": c.MCPURL}})
 }
 
 func (c *Catalog) allKeys(w http.ResponseWriter, r *http.Request, _ Session) {

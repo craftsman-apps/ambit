@@ -23,15 +23,19 @@ that person's token: the same access rules, budgets, audit records and offboardi
 2. Give the key a name, choose the scope and the end date, and create it.
 3. Copy the key, choose the tab for your tool and copy its snippet. The console fills in your company's addresses and
    the model name you choose. The tabs are Claude Code, Codex, opencode, Cursor, SDK (OpenAI and Anthropic) and MCP.
-   Where a tool reads an environment variable, the tab shows the line for bash or zsh, fish and PowerShell.
+   Where a tool reads an environment variable, the tab shows the line for bash or zsh, fish and PowerShell. The
+   opencode tab shows opencode 2 first, and opencode 1 under **Version**.
+4. To see the steps again later, choose the key's name in the list. The key's page shows its name, scope, dates, last
+   use and owner, the command `ambit key set --url <llm>`, and the same tabs with `ambit_...` where the key goes. It
+   never shows the key again.
 
 Clients can send the key as `Authorization: Bearer <key>` or as `x-api-key: <key>`. Both work on both
 gateways. Clients send the **provider's model ID** (for example `google/gemma-4-31b-it:free`), not the name of
 the Model object.
 
 With the `ambit` CLI you do not need to copy the snippets: `ambit connect <tool> --url <llm> --model <model>`
-writes the settings for Claude Code, Codex and opencode, and keeps the key in the keychain of your computer
-(see [Where the Ambit CLI keeps the key](#where-the-ambit-cli-keeps-the-key)).
+writes the settings for Claude Code, Codex and opencode, and keeps the key in the keychain of your computer; opencode 2
+reads it from a file that only you can read (see [Where the Ambit CLI keeps the key](#where-the-ambit-cli-keeps-the-key)).
 
 The console writes these snippets for you. `<llm>` is the LLM address (for example `https://llm.example.com`),
 `<mcp>` is the MCP address (for example `https://mcp.example.com/mcp`) and `<model>` is the provider's model ID.
@@ -87,6 +91,12 @@ minutes without a request it says "No request seen yet. Check the steps above, o
 
 `ambit connect` asks for the key once and stores it. It never writes the key into a tool's config file. The tool runs
 `ambit key print --url <llm>` to read it.
+
+Two tools cannot run a command to read the key, so `ambit connect` also writes the key to a file that only your user
+can read (mode `0600`; on Windows an access list for your user only): opencode 2 reads `~/.config/ambit/opencode-key`,
+because it sends model calls from a background service that does not see your terminal, and `claude-desktop-mcp` reads
+`~/.ambit/mcp-headers.txt`. `ambit key set` writes a new key into these files too, and `ambit disconnect` deletes them.
+Their content is never printed, and the state file holds only a hash of it.
 
 | System | Where the key is stored |
 |---|---|

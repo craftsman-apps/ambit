@@ -98,3 +98,74 @@ test("the hourly limit shows its message", async ({ page }) => {
     await revokeAll(page);
   }
 });
+
+// Every /api answer the page receives, as text: a key is shown once, so no later answer may hold it.
+function recordAnswers(page: Page) {
+  const bodies: Promise<string>[] = [];
+  page.on("response", (r) => { if (new URL(r.url()).pathname.startsWith("/api/")) bodies.push(r.text().catch(() => "")); });
+  return async () => Promise.all(bodies);
+}
+
+test("a key's page shows the setup again, never the key", async ({ page }) => {
+  await signInAsAdmin(page);
+  try {
+    const made = await createViaAPI(page, "e2e detail");
+    expect(made.status()).toBe(201);
+    const { key, view } = await made.json();
+    const answers = recordAnswers(page);
+    const list = await (await page.request.get("/api/keys")).json();
+    expect(list.urls.llm).toMatch(/^https?:\/\//); // the addresses for the steps, without a key
+    expect(JSON.stringify(list)).not.toContain(key);
+    await page.goto("/keys");
+    await page.getByRole("button", { name: "e2e detail" }).click();
+    await expect(page).toHaveURL(new RegExp(`/keys\\?key=${view.id}$`));
+    const detail = page.getByTestId("key-detail");
+    await expect(detail.getByRole("heading", { name: "Key ‘e2e detail’" })).toBeVisible();
+    await expect(page.getByTestId("key-starts-with")).toHaveText(key.slice(0, 10));
+    await expect(page.getByTestId("key-owner")).toHaveText("admin@ambit.local");
+    await expect(page.getByTestId("key-created")).toHaveText(view.created.slice(0, 10));
+    await expect(page.getByTestId("key-set-command")).toHaveText(`ambit key set --url ${list.urls.llm}`);
+    await expect(page.getByTestId("snippet-claudeCode-0")).toContainText('"ANTHROPIC_AUTH_TOKEN": "ambit_..."');
+    await expect(page.getByTestId("cli-command-claudeCode")).toContainText("ambit connect claude-code --url ");
+    await page.getByRole("tab", { name: "opencode" }).click();
+    await expect(page.getByTestId("snippet-opencode-0")).toContainText("'ambit_...' > ~/.config/ambit/opencode-key");
+    await expect(detail).not.toContainText(key);
+    // the page opens from its address too
+    await page.reload();
+    await expect(page.getByTestId("key-starts-with")).toHaveText(key.slice(0, 10));
+    await page.getByRole("button", { name: "Close" }).click();
+    await expect(page).toHaveURL(/\/keys$/);
+    await expect(page.getByTestId("key-detail")).toHaveCount(0);
+    for (const body of await answers()) expect(body).not.toContain(key);
+  } finally {
+    await revokeAll(page);
+  }
+});
+
+test("the opencode tab shows opencode 2 first and keeps opencode 1", async ({ page }) => {
+  await signInAsAdmin(page);
+  try {
+    await page.goto("/keys");
+    await page.getByRole("button", { name: "Create key" }).click();
+    await page.getByLabel("Name").fill("e2e opencode");
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+    const key = await page.getByTestId("new-key").textContent();
+    await page.getByRole("tab", { name: "opencode" }).click();
+    await expect(page.getByRole("button", { name: "opencode 2" })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("snippet-opencode-0")).toContainText(`chmod 600 ~/.config/ambit/opencode-key && printf '%s' '${key}' > ~/.config/ambit/opencode-key`);
+    await expect(page.getByTestId("snippet-opencode-1")).toContainText('"providers"');
+    await expect(page.getByTestId("snippet-opencode-1")).toContainText('"apiKey": "{file:~/.config/ambit/opencode-key}"');
+    await expect(page.getByTestId("snippet-opencode-2")).toHaveText("opencode service restart");
+    await expect(page.getByRole("tabpanel")).toContainText("authorization failed");
+    await page.getByRole("button", { name: "PowerShell" }).click();
+    await expect(page.getByTestId("snippet-opencode-0")).toContainText("icacls");
+    await page.getByRole("button", { name: "opencode 1" }).click();
+    await expect(page.getByTestId("snippet-opencode-0")).toContainText('"apiKey": "{env:AMBIT_API_KEY}"');
+    await expect(page.getByTestId("snippet-opencode-1")).toContainText(`$env:AMBIT_API_KEY = "${key}"`);
+    await page.getByRole("tab", { name: "MCP" }).click();
+    await expect(page.getByRole("tabpanel")).toContainText('"Authorization": "Bearer {file:~/.config/ambit/opencode-key}"');
+    await page.getByRole("button", { name: "Done" }).click();
+  } finally {
+    await revokeAll(page);
+  }
+});

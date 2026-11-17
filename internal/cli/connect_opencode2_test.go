@@ -44,7 +44,7 @@ func TestConnectOpenCode2WritesTheKeyFileThenDisconnect(t *testing.T) {
 			t.Errorf("output lacks %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, testAmbitKey) || strings.Contains(out, "opencode() {") {
+	if strings.Contains(out, testAmbitKey) || strings.Contains(out, "opencode() {") || strings.Contains(out, "install it later") {
 		t.Fatalf("output shows the key or the shell function:\n%s", out)
 	}
 	// A second run changes nothing.

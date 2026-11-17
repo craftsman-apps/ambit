@@ -283,7 +283,7 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 		for _, c := range j.plan.Conflicts {
 			conflicts = append(conflicts, j.path+": "+c.String())
 		}
-		if !j.exists {
+		if !j.exists && !j.secret { // the folder of a key file says nothing about the tool
 			if dir := filepath.Dir(j.path); !pathExists(dir) {
 				notes = append(notes, dir+" does not exist; ambit creates it. If "+tool+" is not installed yet, install it later")
 			}

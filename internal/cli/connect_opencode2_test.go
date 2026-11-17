@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -30,7 +31,8 @@ func TestConnectOpenCode2WritesTheKeyFileThenDisconnect(t *testing.T) {
 	}
 	out := r.stdout.String()
 	conf := r.readFile(oc)
-	if !strings.Contains(conf, `"providers"`) || !strings.Contains(conf, `"apiKey": "{file:`+kp+`}"`) || strings.Contains(conf, "AMBIT_API_KEY") || strings.Contains(conf, testAmbitKey) {
+	ref, _ := json.Marshal("{file:" + kp + "}") // a Windows path has backslashes, which JSON escapes
+	if !strings.Contains(conf, `"providers"`) || !strings.Contains(conf, `"apiKey": `+string(ref)) || strings.Contains(conf, "AMBIT_API_KEY") || strings.Contains(conf, testAmbitKey) {
 		t.Fatalf("opencode.json:\n%s", conf)
 	}
 	if r.readFile(kp) != testAmbitKey || r.readFile(zsh) != seedZsh {

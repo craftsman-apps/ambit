@@ -65,6 +65,9 @@ test("opencode: opencode 2 first, with the key in a user-only file and the servi
   assert.equal(keyFile.shells.fish, "mkdir -p ~/.config/ambit; and touch ~/.config/ambit/opencode-key; and chmod 600 ~/.config/ambit/opencode-key; and printf '%s' 'ambit_TESTKEY' > ~/.config/ambit/opencode-key");
   assert.match(keyFile.shells.powershell, /Set-Content -NoNewline -Path "\$HOME\\\.config\\ambit\\opencode-key" -Value 'ambit_TESTKEY'/);
   assert.match(keyFile.shells.powershell, /icacls .*\/inheritance:r \/grant:r "\$\{env:USERNAME\}:F"/);
+  // the ACL is set on the empty file first, and the key is written only when icacls succeeded
+  const ps = keyFile.shells.powershell;
+  assert.ok(ps.indexOf("icacls") < ps.indexOf("ambit_TESTKEY") && ps.includes("if ($LASTEXITCODE -eq 0) { Set-Content"), ps);
   const json = JSON.parse(t.blocks.find((b) => /opencode\.json/.test(b.label)).text);
   assert.equal(json.provider, undefined);
   assert.deepEqual(json.providers.ambit, { name: "Ambit", package: "@opencode/ai/providers/openai-compatible",

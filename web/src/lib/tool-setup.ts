@@ -47,7 +47,8 @@ const ocRestart = "opencode service restart";
 const writeKeyFile = (key: string): Record<Shell, string> => ({
   bash: `mkdir -p ~/.config/ambit && touch ${ocKeyFile} && chmod 600 ${ocKeyFile} && printf '%s' '${key}' > ${ocKeyFile}`,
   fish: `mkdir -p ~/.config/ambit; and touch ${ocKeyFile}; and chmod 600 ${ocKeyFile}; and printf '%s' '${key}' > ${ocKeyFile}`,
-  powershell: `New-Item -ItemType Directory -Force "$HOME\\.config\\ambit" | Out-Null; Set-Content -NoNewline -Path "$HOME\\.config\\ambit\\opencode-key" -Value '${key}'; icacls "$HOME\\.config\\ambit\\opencode-key" /inheritance:r /grant:r "\${env:USERNAME}:F" | Out-Null`,
+  // the file is limited to the person before the key goes in; no key is written when icacls fails
+  powershell: `New-Item -ItemType Directory -Force "$HOME\\.config\\ambit" | Out-Null; New-Item -ItemType File -Force "$HOME\\.config\\ambit\\opencode-key" | Out-Null; icacls "$HOME\\.config\\ambit\\opencode-key" /inheritance:r /grant:r "\${env:USERNAME}:F"; if ($LASTEXITCODE -eq 0) { Set-Content -NoNewline -Path "$HOME\\.config\\ambit\\opencode-key" -Value '${key}' }`,
 });
 
 export function toolTabs({ llm, mcp, key, model }: Setup, scope: Scope): ToolTab[] {

@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { sendJSON, useModels, useMyAccess } from "@/api";
+import { useNavigate, useSearch } from "@tanstack/react-router";
+import { sendJSON, useMe, useModels, useMyAccess } from "@/api";
 import { cn } from "@/lib/utils";
-import { FIRST_USE_TIMEOUT_MS, firstUseLine, nextTabId, shellNames, toolTabs, usableModelIds, type Block, type Shell as ShellName } from "@/lib/tool-setup";
+import { FIRST_USE_TIMEOUT_MS, firstUseLine, keySetCommand, nextTabId, shellNames, toolTabs, usableModelIds, type Block, type Scope, type Shell as ShellName } from "@/lib/tool-setup";
 import { Button } from "@/components/ui/button";
 import { Shell } from "@/components/shell";
 
@@ -10,8 +11,12 @@ export type KeyView = { id: string; name: string; prefix: string; scope: "llm" |
   expires: string; until: string; owner?: string; lastUsed: string | null;
   status: "active" | "stops-soon" | "stopped"; stopsBecause: "inactivity" | "end-date" };
 export type KeySettings = { enabled: boolean; inactivityDays: number; maxDays: number; lastUsedAvailable: boolean };
-export type KeyList = { settings: KeySettings; keys: KeyView[] };
-type Created = { key: string; view: KeyView; urls: { llm: string; mcp: string } };
+type URLs = { llm: string; mcp: string };
+// urls: the gateway addresses for the setup steps. The list never holds a plain key.
+export type KeyList = { settings: KeySettings; keys: KeyView[]; urls?: URLs };
+type Created = { key: string; view: KeyView; urls: URLs };
+// Where the key goes in the steps of a key that is no longer shown: the person puts in the key they saved.
+const KEY_PLACEHOLDER = "ambit_...";
 
 async function get<T>(url: string): Promise<T> {
   const r = await fetch(url, { credentials: "same-origin" });
@@ -65,29 +70,30 @@ function FirstUse({ id }: { id: string }) {
   return <p data-testid="first-use" role="status" className={line.kind === "seen" ? "text-ok" : line.kind === "timeout" ? "text-warn" : "text-muted"}>{line.text}</p>;
 }
 
-function KeyCreated({ created, onDone }: { created: Created; onDone: () => void }) {
+// The per-tool setup steps for a key: the plain key right after it is created, else KEY_PLACEHOLDER.
+function ConnectTool({ urls, keyText, scope }: { urls: URLs; keyText: string; scope: Scope }) {
   const models = useModels();
   const access = useMyAccess();
   const ids = usableModelIds(models.data, access.data);
   const [chosen, setChosen] = useState("");
   const model = chosen || ids[0] || "";
-  const tabs = toolTabs({ ...created.urls, key: created.key, model }, created.view.scope);
+  const tabs = toolTabs({ ...urls, key: keyText, model }, scope);
   const [active, setActive] = useState(tabs[0].id);
   const [shell, setShell] = useState<ShellName>("bash");
+  const [variantId, setVariantId] = useState("");
   const tab = tabs.find((t) => t.id === active) ?? tabs[0];
-  const firstShells = tab.blocks.findIndex((b) => b.shells);
+  const variant = tab.variants?.find((v) => v.id === variantId) ?? tab.variants?.[0];
+  const { steps, blocks } = variant ?? tab;
+  const firstShells = blocks.findIndex((b) => b.shells);
   const picker = <div role="group" aria-label="Shell" className="flex items-center gap-1"><span className="mr-1 text-muted">Shell</span>
     {(Object.keys(shellNames) as ShellName[]).map((k) => <Button key={k} type="button" variant={k === shell ? "primary" : "outline"} aria-pressed={k === shell}
       className="w-auto py-1" onClick={() => setShell(k)}>{shellNames[k]}</Button>)}</div>;
-  const block = (b: Block, i: number) => <div key={`${tab.id}-${i}-${b.shells ? shell : ""}`} className="space-y-3">{i === firstShells && picker}
+  const block = (b: Block, i: number) => <div key={`${tab.id}-${variant?.id ?? ""}-${i}-${b.shells ? shell : ""}`} className="space-y-3">{i === firstShells && picker}
     <CopyBlock text={b.shells ? b.shells[shell] : b.text} testId={`snippet-${tab.id}-${i}`} label={b.label} /></div>;
   return (
-    <div className="space-y-3 rounded-md border border-line p-4">
-      <h2 className="font-semibold">Key ‘{created.view.name}’ created</h2>
-      <p className="font-medium">This is the only time the key is shown. Store it now.</p>
-      <CopyBlock text={created.key} testId="new-key" label="Key" />
+    <>
       <h3 className="pt-1 font-semibold">Connect a tool</h3>
-      {created.view.scope !== "mcp" && (
+      {scope !== "mcp" && (
         <label className="flex items-center gap-2"><span className="text-muted">Model name</span>
           {ids.length ? <select className={cn(field, "w-auto")} value={model} onChange={(e) => setChosen(e.target.value)}>
             {ids.map((m) => <option key={m}>{m}</option>)}</select>
@@ -106,12 +112,56 @@ function KeyCreated({ created, onDone }: { created: Created; onDone: () => void 
           <CopyBlock text={tab.cli.command} testId={`cli-command-${tab.id}`} label="Command" />
           <p className="text-small text-muted">{tab.cli.note}</p></div>}
         {tab.cli && <h4 className="pt-1 font-medium text-muted">Or set it up by hand</h4>}
-        <ol className="list-decimal space-y-1 pl-5">{tab.steps.map((s) => <li key={s}>{s}</li>)}</ol>
-        {tab.blocks.map(block)}
+        {tab.variants && <div role="group" aria-label={`${tab.title} version`} className="flex items-center gap-1"><span className="mr-1 text-muted">Version</span>
+          {tab.variants.map((v) => <Button key={v.id} type="button" variant={v.id === variant?.id ? "primary" : "outline"} aria-pressed={v.id === variant?.id}
+            className="w-auto py-1" onClick={() => setVariantId(v.id)}>{v.title}</Button>)}</div>}
+        <ol className="list-decimal space-y-1 pl-5">{steps.map((s) => <li key={s}>{s}</li>)}</ol>
+        {blocks.map(block)}
       </div>
+    </>
+  );
+}
+
+function KeyCreated({ created, onDone }: { created: Created; onDone: () => void }) {
+  return (
+    <div className="space-y-3 rounded-md border border-line p-4">
+      <h2 className="font-semibold">Key ‘{created.view.name}’ created</h2>
+      <p className="font-medium">This is the only time the key is shown. Store it now.</p>
+      <CopyBlock text={created.key} testId="new-key" label="Key" />
+      <ConnectTool urls={created.urls} keyText={created.key} scope={created.view.scope} />
       <FirstUse id={created.view.id} />
       <Button className="w-auto" onClick={onDone}>Done</Button>
     </div>
+  );
+}
+
+// An existing key: its facts and the setup steps again. The console has only the key's hash, so the steps show
+// KEY_PLACEHOLDER where the person puts in the key they saved.
+function KeyDetail({ k, urls, lastUsedAvailable, onClose }: { k: KeyView; urls: URLs; lastUsedAvailable: boolean; onClose: () => void }) {
+  const me = useMe();
+  const facts: [string, string][] = [
+    ["Scope", scopeName[k.scope]], ["Starts with", k.prefix], ["Status", statusText(k)], ["Created", day(k.created)],
+    ["End date", day(k.expires)], ["Stops on", day(k.until)],
+    ["Last used", k.lastUsed ? day(k.lastUsed) : lastUsedAvailable ? "not yet" : "unknown"],
+    ["Owner", me.data?.email ?? ""],
+  ];
+  return (
+    <section aria-label={`Key ${k.name}`} data-testid="key-detail" className="space-y-3 rounded-md border border-line p-4">
+      <div className="flex items-start justify-between gap-4">
+        <h2 className="font-semibold">Key ‘{k.name}’</h2>
+        <Button variant="outline" className="w-auto py-1" onClick={onClose}>Close</Button>
+      </div>
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
+        {facts.map(([t, v]) => <div key={t} className="contents"><dt className="text-muted">{t}</dt>
+          <dd data-testid={`key-${t.toLowerCase().replace(/ /g, "-")}`} className={t === "Starts with" ? "font-mono text-small" : ""}>{v}</dd></div>)}
+      </dl>
+      <p>The console showed this key once, when it was created, and cannot show it again. Where the steps below show <span className="font-mono">{KEY_PLACEHOLDER}</span>, put in the key you saved. If you lost it, revoke this key and create a new one.</p>
+      <div className="space-y-1">
+        <CopyBlock text={keySetCommand(urls, k.scope)} testId="key-set-command" label="Store the key you saved in your keychain (ambit CLI)" />
+        <p className="text-small text-muted">It asks for the key (the input is hidden). After it, ambit connect and ambit key print use the stored key.</p>
+      </div>
+      <ConnectTool urls={urls} keyText={KEY_PLACEHOLDER} scope={k.scope} />
+    </section>
   );
 }
 
@@ -162,6 +212,10 @@ function CreateKey({ settings, onClose }: { settings: KeySettings; onClose: () =
 export function KeysPage() {
   const q = useKeys();
   const qc = useQueryClient();
+  const { key: shown } = useSearch({ from: "/keys" });
+  const navigate = useNavigate({ from: "/keys" });
+  const show = (id?: string) => navigate({ search: id ? { key: id } : {} });
+  const detail = q.data?.keys.find((k) => k.id === shown);
   const [creating, setCreating] = useState(false);
   const [confirm, setConfirm] = useState<string | null>(null);
   const revoke = useMutation({
@@ -181,6 +235,8 @@ export function KeysPage() {
         </div>
         {q.data && !enabled && <p className="text-muted">Keys are switched off by your administrator.</p>}
         {creating && q.data && <CreateKey settings={q.data.settings} onClose={() => setCreating(false)} />}
+        {detail && q.data?.urls && !creating && <KeyDetail key={detail.id} k={detail} urls={q.data.urls} lastUsedAvailable={q.data.settings.lastUsedAvailable} onClose={() => show()} />}
+        {shown && q.data && !detail && <p className="text-muted" role="status">This key does not exist any more.</p>}
         {q.isError && <p className="text-bad" role="alert">{q.error.message}</p>}
         {revoke.isError && <p className="text-bad" role="alert">{revoke.error.message}</p>}
         {q.data?.keys.length === 0 && <p className="text-muted">You have no keys.</p>}
@@ -192,7 +248,8 @@ export function KeysPage() {
             <tbody>
               {q.data.keys.map((k) => (
                 <tr key={k.id} className="border-b border-line-soft">
-                  <td className="py-1.5">{k.name}</td><td>{scopeName[k.scope]}</td>
+                  <td className="py-1.5"><button type="button" className="text-left text-accent underline-offset-2 hover:underline focus-visible:outline-2 focus-visible:outline-accent"
+                    aria-current={k.id === shown ? "true" : undefined} onClick={() => { setCreating(false); show(k.id); }}>{k.name}</button></td><td>{scopeName[k.scope]}</td>
                   <td className="font-mono text-small">{k.prefix}</td><td>{statusText(k)}</td><td>{day(k.until)}</td>
                   <td>{k.lastUsed ? day(k.lastUsed) : "unknown"}</td>
                   <td className="text-right">

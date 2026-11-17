@@ -43,7 +43,10 @@ const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/offboarding", component: OffboardingPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/apps", component: AppsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/apps/add/$id", component: AppPresetPage }),
-  createRoute({ getParentRoute: () => rootRoute, path: "/keys", component: KeysPage }),
+  createRoute({
+    getParentRoute: () => rootRoute, path: "/keys", component: KeysPage,
+    validateSearch: (s: Record<string, unknown>): { key?: string } => ({ key: typeof s.key === "string" ? s.key : undefined }),
+  }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/keys", component: SettingsKeysPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/audit", component: AuditPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/usage", component: UsagePage }),

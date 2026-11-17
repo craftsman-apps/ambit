@@ -5,8 +5,10 @@ export type Shell = "bash" | "fish" | "powershell";
 export type Setup = { llm: string; mcp: string; key: string; model: string };
 // A block is plain text, or the same environment variables written for each shell.
 export type Block = { label: string; text: string; shells?: undefined } | { label: string; shells: Record<Shell, string>; text?: undefined };
+// A variant is another version of the same tool (opencode 2 and opencode 1). steps and blocks of the tab are the first one's.
+export type Variant = { id: string; title: string; steps: string[]; blocks: Block[] };
 // cli: the ambit connect command for the tools it supports (claude-code, codex, opencode, cursor), shown before the manual steps.
-export type ToolTab = { id: string; title: string; steps: string[]; blocks: Block[]; warning?: string; cli?: { command: string; note: string } };
+export type ToolTab = { id: string; title: string; steps: string[]; blocks: Block[]; warning?: string; cli?: { command: string; note: string }; variants?: Variant[] };
 
 export const shellNames: Record<Shell, string> = { bash: "bash / zsh", fish: "fish", powershell: "PowerShell" };
 
@@ -34,6 +36,20 @@ const keepShell = "The variables last until you close the terminal. To keep them
 const askKey = "It asks for the key (the input is hidden), shows what it will change, and asks before it writes. The key goes to your keychain, not to a config file.";
 const connectCmd = (tool: string, llm: string, m: string) => ({ command: `ambit connect ${tool} --url ${llm} --model ${m}`, note: askKey });
 
+// The key the person saved goes into the keychain with this command (the address of the key's scope).
+export const keySetCommand = ({ llm, mcp }: { llm: string; mcp: string }, scope: Scope) => `ambit key set --url ${scope === "mcp" ? mcp : llm}`;
+
+// opencode 2 sends model calls from a background service that does not see the terminal, so it reads the key from a
+// file that only the person can read. opencode 1 reads {file:...} too.
+const ocKeyFile = "~/.config/ambit/opencode-key";
+const ocKeyRef = `{file:${ocKeyFile}}`;
+const ocRestart = "opencode service restart";
+const writeKeyFile = (key: string): Record<Shell, string> => ({
+  bash: `mkdir -p ~/.config/ambit && touch ${ocKeyFile} && chmod 600 ${ocKeyFile} && printf '%s' '${key}' > ${ocKeyFile}`,
+  fish: `mkdir -p ~/.config/ambit; and touch ${ocKeyFile}; and chmod 600 ${ocKeyFile}; and printf '%s' '${key}' > ${ocKeyFile}`,
+  powershell: `New-Item -ItemType Directory -Force "$HOME\\.config\\ambit" | Out-Null; Set-Content -NoNewline -Path "$HOME\\.config\\ambit\\opencode-key" -Value '${key}'; icacls "$HOME\\.config\\ambit\\opencode-key" /inheritance:r /grant:r "\${env:USERNAME}:F" | Out-Null`,
+});
+
 export function toolTabs({ llm, mcp, key, model }: Setup, scope: Scope): ToolTab[] {
   const m = model || "<model-id>";
   const tabs: ToolTab[] = [];
@@ -52,7 +68,18 @@ export function toolTabs({ llm, mcp, key, model }: Setup, scope: Scope): ToolTab
       "Add the settings to ~/.codex/config.toml. Put model and model_provider above the first [table] line.",
       "Set AMBIT_API_KEY in your terminal: Codex reads the key from it. " + keepShell + " Start Codex from that terminal.",
     ] });
-    tabs.push({ id: "opencode", title: "opencode", cli: connectCmd("opencode", llm, m), blocks: [
+    const opencode2: Variant = { id: "opencode2", title: "opencode 2", blocks: [
+      { label: "Key file, in your terminal", shells: writeKeyFile(key) },
+      { label: "~/.config/opencode/opencode.json", text: JSON.stringify({ $schema: "https://opencode.ai/config.json", model: `ambit/${m}`,
+        providers: { ambit: { name: "Ambit", package: "@opencode/ai/providers/openai-compatible", settings: { baseURL: `${llm}/v1`, apiKey: ocKeyRef },
+          models: { [m]: { name: m } } } } }, null, 2) },
+      { label: "Restart the opencode service", text: ocRestart },
+    ], steps: [
+      `Write the key to ${ocKeyFile} with the command below (Windows: %USERPROFILE%\\.config\\ambit\\opencode-key). Only you can read the file. Run it again when the key changes.`,
+      "Merge the provider into ~/.config/opencode/opencode.json. Keep your other settings.",
+      `opencode 2 sends model calls from a background service that does not see your terminal. Restart it after each change, so that it reads the settings and the key: ${ocRestart}. If opencode shows "authorization failed", the service has no key: check the file, then restart the service.`,
+    ] };
+    const opencode1: Variant = { id: "opencode1", title: "opencode 1", blocks: [
       { label: "~/.config/opencode/opencode.json", text: JSON.stringify({ $schema: "https://opencode.ai/config.json", model: `ambit/${m}`,
         provider: { ambit: { npm: "@ai-sdk/openai-compatible", name: "Ambit", options: { baseURL: `${llm}/v1`, apiKey: "{env:AMBIT_API_KEY}" },
           models: { [m]: { name: m } } } } }, null, 2) },
@@ -60,7 +87,10 @@ export function toolTabs({ llm, mcp, key, model }: Setup, scope: Scope): ToolTab
     ], steps: [
       "Merge the provider into ~/.config/opencode/opencode.json. Keep your other settings.",
       "Set AMBIT_API_KEY in your terminal: opencode reads the key from it. " + keepShell + " Start opencode from that terminal.",
-    ] });
+    ] };
+    tabs.push({ id: "opencode", title: "opencode", cli: { command: `ambit connect opencode --url ${llm} --model ${m}`,
+      note: askKey.replace("The key goes to your keychain, not to a config file.", `It finds your opencode version. For opencode 2 it also writes the key to ${ocKeyFile}, readable only by you: opencode cannot run a command to read the key, and its background service does not see your terminal.`) },
+      steps: opencode2.steps, blocks: opencode2.blocks, variants: [opencode2, opencode1] });
     const cursor: ToolTab = { id: "cursor", title: "Cursor", cli: { command: `ambit connect cursor --url ${llm} --model ${m}`, note: "Cursor has no config file for this: the command prints these steps with your address and writes nothing." }, blocks: [
       { label: "OpenAI API Key", text: key },
       { label: "Override OpenAI Base URL", text: `${llm}/v1` },
@@ -83,17 +113,18 @@ export function toolTabs({ llm, mcp, key, model }: Setup, scope: Scope): ToolTab
     ] });
   }
   if (scope !== "llm") {
-    const remote = `{env:AMBIT_API_KEY}`;
     tabs.push({ id: "mcp", title: "MCP", blocks: [
       { label: "Claude Code", text: `claude mcp add --transport http ambit ${mcp} --header "Authorization: Bearer ${key}"` },
       { label: "Codex: ~/.codex/config.toml", text: `[mcp_servers.ambit]\nurl = "${mcp}"\nbearer_token_env_var = "AMBIT_API_KEY"` },
+      { label: "Key for Codex, in your terminal", shells: vars([["AMBIT_API_KEY", key]]) },
       { label: "opencode: opencode.json", text: JSON.stringify({ mcp: { ambit: { type: "remote", url: mcp, oauth: false,
-        headers: { Authorization: `Bearer ${remote}` } } } }, null, 2) },
-      { label: "Key for Codex and opencode, in your terminal", shells: vars([["AMBIT_API_KEY", key]]) },
+        headers: { Authorization: `Bearer ${ocKeyRef}` } } } }, null, 2) },
+      { label: "Key file for opencode, in your terminal", shells: writeKeyFile(key) },
       { label: "Cursor (beta: being tested): ~/.cursor/mcp.json", text: JSON.stringify({ mcpServers: { ambit: { url: mcp, headers: { Authorization: `Bearer ${key}` } } } }, null, 2) },
     ], steps: [
       "Claude Code: run the command in a terminal.",
-      "Codex and opencode: merge the block into the file named in its label, set the variable in your terminal, and start the tool from that terminal. " + keepShell + " Keep \"oauth\": false in the opencode block: the gateway has no OAuth sign-in, so opencode does not need to try one.",
+      "Codex: merge the block into ~/.codex/config.toml, set the variable in your terminal, and start Codex from that terminal. " + keepShell,
+      `opencode: merge the block into ~/.config/opencode/opencode.json and write the key file. opencode 2 reads the key from the file because its background service does not see your terminal; restart it with ${ocRestart}. Keep "oauth": false: the gateway has no OAuth sign-in, so opencode does not need to try one.`,
       "Cursor: merge the block into ~/.cursor/mcp.json. This file holds the key, so keep it private. Cursor does not see variables set in a terminal when you start it from the dock or the Start menu.",
     ] });
   }

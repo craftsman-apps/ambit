@@ -1,7 +1,7 @@
 // The per-tool setup text on the "key created" screen. Pure functions, so they run without a browser.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { toolTabs, isPublicHttps, nextTabId, usableModelIds, firstUseLine, FIRST_USE_TIMEOUT_MS } from "../src/lib/tool-setup.ts";
+import { toolTabs, isPublicHttps, nextTabId, usableModelIds, firstUseLine, keySetCommand, FIRST_USE_TIMEOUT_MS } from "../src/lib/tool-setup.ts";
 
 const setup = { llm: "https://llm.example.com", mcp: "https://mcp.example.com/mcp", key: "ambit_TESTKEY", model: "acme/model-1" };
 const tab = (id, scope = "both") => toolTabs(setup, scope).find((t) => t.id === id);
@@ -50,8 +50,32 @@ test("Codex: config.toml provider with responses wire and env_key, key only in t
   assert.equal(vars.bash, 'export AMBIT_API_KEY="ambit_TESTKEY"');
 });
 
-test("opencode: opencode.json provider with the openai-compatible package", () => {
+test("opencode: opencode 2 first, with the key in a user-only file and the service restart", () => {
   const t = tab("opencode");
+  assert.deepEqual(t.variants.map((v) => [v.id, v.title]), [["opencode2", "opencode 2"], ["opencode1", "opencode 1"]]);
+  assert.deepEqual([t.steps, t.blocks], [t.variants[0].steps, t.variants[0].blocks]); // opencode 2 is what the tab shows first
+  const prose = t.steps.join("\n");
+  assert.match(prose, /~\/\.config\/opencode\/opencode\.json/);
+  assert.match(prose, /~\/\.config\/ambit\/opencode-key/);
+  assert.match(prose, /background service/);
+  assert.match(prose, /opencode service restart/);
+  assert.match(prose, /authorization failed/);
+  const keyFile = t.blocks.find((b) => b.shells);
+  assert.equal(keyFile.shells.bash, "mkdir -p ~/.config/ambit && touch ~/.config/ambit/opencode-key && chmod 600 ~/.config/ambit/opencode-key && printf '%s' 'ambit_TESTKEY' > ~/.config/ambit/opencode-key");
+  assert.equal(keyFile.shells.fish, "mkdir -p ~/.config/ambit; and touch ~/.config/ambit/opencode-key; and chmod 600 ~/.config/ambit/opencode-key; and printf '%s' 'ambit_TESTKEY' > ~/.config/ambit/opencode-key");
+  assert.match(keyFile.shells.powershell, /Set-Content -NoNewline -Path "\$HOME\\\.config\\ambit\\opencode-key" -Value 'ambit_TESTKEY'/);
+  assert.match(keyFile.shells.powershell, /icacls .*\/inheritance:r \/grant:r "\$\{env:USERNAME\}:F"/);
+  const json = JSON.parse(t.blocks.find((b) => /opencode\.json/.test(b.label)).text);
+  assert.equal(json.provider, undefined);
+  assert.deepEqual(json.providers.ambit, { name: "Ambit", package: "@opencode/ai/providers/openai-compatible",
+    settings: { baseURL: "https://llm.example.com/v1", apiKey: "{file:~/.config/ambit/opencode-key}" }, models: { "acme/model-1": { name: "acme/model-1" } } });
+  assert.equal(json.model, "ambit/acme/model-1");
+  assert.ok(t.blocks.some((b) => b.text === "opencode service restart"));
+  assert.ok(!JSON.stringify(json).includes(setup.key) && !text(t.variants[0]).includes("AMBIT_API_KEY"));
+});
+
+test("opencode 1: opencode.json provider with the openai-compatible package and the key in the terminal", () => {
+  const t = tab("opencode").variants[1];
   const json = JSON.parse(t.blocks[0].text);
   assert.match(t.steps.join("\n"), /~\/\.config\/opencode\/opencode\.json/);
   assert.equal(json.provider.ambit.npm, "@ai-sdk/openai-compatible");
@@ -60,6 +84,7 @@ test("opencode: opencode.json provider with the openai-compatible package", () =
   assert.ok(json.provider.ambit.models["acme/model-1"]);
   assert.equal(json.model, "ambit/acme/model-1");
   assert.ok(!t.blocks[0].text.includes(setup.key));
+  assert.equal(t.blocks[1].shells.bash, 'export AMBIT_API_KEY="ambit_TESTKEY"');
 });
 
 test("shell variants: bash/zsh, fish and PowerShell each use their own syntax", () => {
@@ -128,7 +153,9 @@ test("MCP tab: Claude Code, Codex, opencode and Cursor, with a static header and
   assert.doesNotMatch(oc.label, /beta/);
   const mcp = JSON.parse(oc.text).mcp.ambit;
   assert.deepEqual([mcp.type, mcp.url, mcp.oauth], ["remote", setup.mcp, false]);
-  assert.equal(mcp.headers.Authorization, "Bearer {env:AMBIT_API_KEY}");
+  // opencode 2's background service does not see the terminal: the header reads the key file (opencode 1 reads it too)
+  assert.equal(mcp.headers.Authorization, "Bearer {file:~/.config/ambit/opencode-key}");
+  assert.ok(t.blocks.some((b) => /opencode/.test(b.label) && b.shells && b.shells.bash.includes("~/.config/ambit/opencode-key")), "a block writes the key file");
   const cur = by(/Cursor/);
   assert.match(cur.label, /beta/);
   const c = JSON.parse(cur.text).mcpServers.ambit;
@@ -192,4 +219,20 @@ test("ambit connect: the key is never in the command, and the manual steps stay 
 test("ambit connect: without a model the command shows the placeholder", () => {
   const t = toolTabs({ ...setup, model: "" }, "llm").find((x) => x.id === "claudeCode");
   assert.match(t.cli.command, /--model <model-id>$/);
+});
+
+test("a key that is no longer shown: every tab uses the placeholder and never a real key", () => {
+  const placeholder = { ...setup, key: "ambit_..." };
+  for (const t of toolTabs(placeholder, "both")) {
+    for (const v of t.variants ?? [t]) {
+      for (const b of v.blocks) for (const s of b.shells ? Object.values(b.shells) : [b.text]) assert.ok(!s.includes("ambit_TESTKEY"), t.id);
+    }
+  }
+  assert.match(text(toolTabs(placeholder, "both").find((t) => t.id === "opencode")), /ambit_\.\.\./);
+});
+
+test("ambit key set: the address of the key's scope", () => {
+  assert.equal(keySetCommand(setup, "llm"), "ambit key set --url https://llm.example.com");
+  assert.equal(keySetCommand(setup, "both"), "ambit key set --url https://llm.example.com");
+  assert.equal(keySetCommand(setup, "mcp"), "ambit key set --url https://mcp.example.com/mcp");
 });

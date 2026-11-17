@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -28,19 +29,20 @@ const keyPrintPath = "ambit key print"
 
 // connectDeps is where connect, disconnect and key print keep their data. Tests replace it with in-memory stores.
 type connectDeps struct {
-	Keychain, File connect.Store
-	StatePath      string
-	GOOS           string
-	Home           string
-	Getenv         func(string) string
-	Bin            connect.BinEnv                                           // finds the ambit path that tool configs hold
-	Profile        func() (string, error)                                   // the PowerShell profile path
-	ScriptPolicy   func() (string, error)                                   // the execution policy of that PowerShell; nil: not asked
-	HTTP           func(url string) *http.Client                            // for the test call
-	CallLimit      time.Duration                                            // how long the test call waits for a 200
-	CallEvery      time.Duration                                            // between two tries
-	ReadSecret     func(ctx context.Context, prompt string) (string, error) // nil: there is no terminal to ask in
-	SaveState      func(st *connect.State, path string) error               // nil: st.Save; tests replace it to interrupt connect
+	Keychain, File  connect.Store
+	StatePath       string
+	GOOS            string
+	Home            string
+	Getenv          func(string) string
+	Bin             connect.BinEnv                                           // finds the ambit path that tool configs hold
+	Profile         func() (string, error)                                   // the PowerShell profile path
+	ScriptPolicy    func() (string, error)                                   // the execution policy of that PowerShell; nil: not asked
+	HTTP            func(url string) *http.Client                            // for the test call
+	CallLimit       time.Duration                                            // how long the test call waits for a 200
+	CallEvery       time.Duration                                            // between two tries
+	ReadSecret      func(ctx context.Context, prompt string) (string, error) // nil: there is no terminal to ask in
+	SaveState       func(st *connect.State, path string) error               // nil: st.Save; tests replace it to interrupt connect
+	OpenCodeVersion func() (string, error)                                   // the output of `opencode --version`
 }
 
 func (d *connectDeps) save(st *connect.State) error {
@@ -71,7 +73,7 @@ func (a *app) connectEnv(service string) (*connectDeps, error) {
 	}
 	d := &connectDeps{Keychain: connect.NewKeychain(service), File: fs, StatePath: path, GOOS: runtime.GOOS, Home: home,
 		Getenv: os.Getenv, Bin: connect.DefaultBinEnv(), Profile: connect.PowerShellProfile, HTTP: gatewayClient,
-		CallLimit: 20 * time.Second, CallEvery: time.Second}
+		CallLimit: 20 * time.Second, CallEvery: time.Second, OpenCodeVersion: connect.OpenCodeVersion}
 	if runtime.GOOS == "windows" {
 		d.ScriptPolicy = connect.PowerShellPolicy
 	}
@@ -123,7 +125,7 @@ func (a *app) keyCmd() *cobra.Command {
 		Use:   "print --url <llm address>",
 		Short: "Print the stored key (the tools run this to read it)",
 		Long: `Prints the stored key for the gateway address to standard output, followed by a newline, and nothing else.
-Claude Code, Codex and the opencode wrapper run this command each time they start.
+Claude Code, Codex and the opencode 1 wrapper run this command each time they start.
 
 It reads the keychain or the key file only: no network, no Kubernetes. On a terminal it refuses unless you pass
 --reveal, so the key does not end up in the scrollback by accident. Every program that runs as your user can run
@@ -180,7 +182,8 @@ func (a *app) keySetCmd() *cobra.Command {
 		Short: "Store a key for an address without connecting a tool",
 		Long: `Stores the key in the operating system keychain (or the key file where there is no Secret Service), so that
 "ambit key print --url <address>" prints it. Use it for a helper that runs ambit key print, for example the
-headersHelper of a managed Claude Desktop. A key already stored for the address is replaced.
+headersHelper of a managed Claude Desktop. A key already stored for the address is replaced, and so is the key in
+the files that ambit connect wrote for that address (the opencode 2 key file, the claude-desktop-mcp header file).
 
 The key comes from --key-file, else AMBIT_API_KEY, else a hidden prompt. It is never printed.
 ambit disconnect --all deletes a stored key that no tool uses.`,
@@ -255,6 +258,48 @@ func (a *app) runKeySet(ctx context.Context, f connectFlags) error {
 		}
 	}
 	p.Line("%s key for %s stored in %s", p.Mark("ok"), url, storeName(d.GOOS, store, d.File, url))
+	return a.renewKeyFiles(d, st, url, key)
+}
+
+// renewKeyFiles writes the new key into the files that hold the key and that connect wrote for url (the opencode 2 key
+// file, the claude-desktop-mcp header file). A file changed after connect keeps its content, with a warning.
+func (a *app) renewKeyFiles(d *connectDeps, st *connect.State, url, key string) error {
+	p := a.printer()
+	var tools []string
+	for name, tr := range st.Tools {
+		if tr.URL == url {
+			tools = append(tools, name)
+		}
+	}
+	sort.Strings(tools)
+	for _, name := range tools {
+		tr := st.Tools[name]
+		for i, rec := range tr.Files {
+			if !rec.Secret {
+				continue
+			}
+			b, exists, err := readConfig(rec.Path)
+			if err != nil {
+				return err
+			}
+			if exists && connect.FileSum(b) != rec.SHA256 {
+				p.Line("%s %s was changed after connect, so it still holds the old key; run ambit connect %s again", p.Mark("warn"), rec.Path, name)
+				continue
+			}
+			content := connect.SecretFile(name, key)
+			if err := connect.WriteSecret(rec.Path, content); err != nil {
+				return &out.Error{What: "write the new key to " + rec.Path, Why: err.Error(), Next: "run ambit connect " + name + " again", Code: out.ExitFailed}
+			}
+			tr.Files[i].SHA256 = connect.FileSum(content)
+			if err := d.save(st); err != nil {
+				return err
+			}
+			p.Line("%s wrote the new key to %s", p.Mark("ok"), rec.Path)
+			if name == connect.OpenCode {
+				p.Line("If opencode is running, restart its service so that it reads the new key: opencode service restart")
+			}
+		}
+	}
 	return nil
 }
 
@@ -289,7 +334,7 @@ hidden prompt. ambit disconnect removes exactly what connect added.`,
 	fl.StringVar(&f.keyFile, "key-file", "", "read the key from this file (else AMBIT_API_KEY, else a hidden prompt)")
 	fl.BoolVar(&f.replaceKey, "replace-key", false, "ask for a new key even if one is stored for this address")
 	fl.StringVar(&f.keyStore, "key-store", "", "keychain or file (default: keychain; the file only where there is no Secret Service)")
-	fl.StringVar(&f.shell, "shell", "", "opencode: bash, zsh, fish, powershell or none (default: detected)")
+	fl.StringVar(&f.shell, "shell", "", "opencode 1: bash, zsh, fish, powershell or none (default: detected)")
 	fl.BoolVar(&f.dryRun, "dry-run", false, "print what would change; write, store and call nothing")
 	fl.BoolVar(&f.force, "force", false, "replace a conflicting entry that ambit did not write")
 	fl.BoolVar(&f.noTest, "no-test", false, "skip the test call")

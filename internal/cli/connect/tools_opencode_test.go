@@ -90,7 +90,7 @@ func TestOpenCodeProviderValue(t *testing.T) {
 	}
 }
 
-// opencode v2 configs are refused with What, Why and next, and nothing is planned.
+// opencode 1 cannot read a v2 config: it is refused with What, Why and next, and nothing is planned.
 func TestOpenCodeRefusesV2(t *testing.T) {
 	for name, file := range map[string]string{
 		"providers":         `{"providers": {"x": {}}}`,
@@ -101,11 +101,170 @@ func TestOpenCodeRefusesV2(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			p, err := PlanOpenCode(opencodeInput(goldenStep{URL: "https://llm.example.com", Model: "m"}, []byte(file), true, nil))
 			var e *out.Error
-			if p != nil || !errors.As(err, &e) || e.Code != out.ExitFailed || !strings.Contains(e.What, "opencode v2 config format") || !strings.Contains(e.Why, "writes the v1 format") ||
-				e.Next != "add the Ambit provider by hand (see docs/guides/coding-tools.md), or wait for a newer ambit" {
+			if p != nil || !errors.As(err, &e) || e.Code != out.ExitFailed || !strings.Contains(e.What, "opencode v2 config format") || e.Why != "opencode 1 does not read it" ||
+				e.Next != "update opencode to version 2 and run the command again, or add the Ambit provider by hand (see docs/guides/coding-tools.md)" {
 				t.Fatalf("p = %v, err = %#v", p, err)
 			}
 		})
+	}
+}
+
+const ocKeyFile = "/home/a/.config/ambit/opencode-key"
+
+func opencode2Input(file string, exists bool, prev *FileRecord) Input {
+	in := opencodeInput(goldenStep{URL: "https://llm.example.com", Model: "acme/coder:free"}, []byte(file), exists, prev)
+	in.KeyFile = ocKeyFile
+	return in
+}
+
+// readOpenCode reads a planned file as opencode does (JSON with comments).
+func readOpenCode(t *testing.T, b []byte) map[string]any {
+	t.Helper()
+	raw, err := hujson.Standardize(append([]byte(nil), b...))
+	var v map[string]any
+	if err != nil || json.Unmarshal(raw, &v) != nil {
+		t.Fatalf("not JSON with comments: %v\n%s", err, b)
+	}
+	return v
+}
+
+func TestOpenCode2Formats(t *testing.T) {
+	const v2Provider = `{"name":"Ambit","package":"@opencode/ai/providers/openai-compatible","settings":{"baseURL":"https://llm.example.com/v1","apiKey":"{file:` + ocKeyFile + `}"},"models":{"acme/coder:free":{"name":"acme/coder:free"}}}`
+	const v1Provider = `{"npm":"@ai-sdk/openai-compatible","name":"Ambit","options":{"baseURL":"https://llm.example.com/v1","apiKey":"{file:` + ocKeyFile + `}"},"models":{"acme/coder:free":{"name":"acme/coder:free"}}}`
+	for _, tt := range []struct {
+		name, file string
+		exists     bool
+		container  string
+		provider   string
+		keep       []string // other providers that must stay: container/name
+	}{
+		{"no file: the v2 format", "", false, "providers", v2Provider, nil},
+		{"empty object: the v2 format", "{}\n", true, "providers", v2Provider, nil},
+		{"v2 file with another provider", "{\n  // mine\n  \"providers\": {\n    \"anthropic\": { \"settings\": { \"apiKey\": \"{env:ANTHROPIC_API_KEY}\" } },\n  },\n}\n", true, "providers", v2Provider, []string{"providers/anthropic"}},
+		{"old format kept, opencode 2 reads it", "{\n  \"provider\": { \"openai\": { \"options\": { \"apiKey\": \"{env:OPENAI_API_KEY}\" } } }\n}\n", true, "provider", v1Provider, []string{"provider/openai"}},
+		{"both formats: the v2 one", "{\"provider\": {\"a\": {}}, \"providers\": {\"b\": {}}}\n", true, "providers", v2Provider, []string{"provider/a", "providers/b"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := PlanOpenCode(opencode2Input(tt.file, tt.exists, nil))
+			if err != nil || len(p.Conflicts) > 0 {
+				t.Fatalf("err %v, conflicts %v", err, p.Conflicts)
+			}
+			v := readOpenCode(t, p.After)
+			got, _ := json.Marshal(v[tt.container].(map[string]any)["ambit"])
+			if !jsonEqual(tt.provider, string(got)) || v["model"] != "ambit/acme/coder:free" {
+				t.Fatalf("%s.ambit = %s, model = %v", tt.container, got, v["model"])
+			}
+			for _, k := range tt.keep {
+				c, name, _ := strings.Cut(k, "/")
+				if _, ok := v[c].(map[string]any)[name]; !ok {
+					t.Errorf("%s was lost:\n%s", k, p.After)
+				}
+			}
+			if strings.Contains(string(p.After), "AMBIT_API_KEY") {
+				t.Errorf("opencode 2 must not read the key from the environment:\n%s", p.After)
+			}
+			if !tt.exists {
+				return
+			}
+			// disconnect gives back the file byte for byte
+			d, err := UnplanJSON(p.Record, p.After, true)
+			if err != nil || string(d.After) != tt.file {
+				t.Fatalf("roundtrip: %v\n%s", err, d.After)
+			}
+		})
+	}
+}
+
+func TestOpenCode2RerunIsAlready(t *testing.T) {
+	const file = "{\n  \"theme\": \"tokyonight\",\n  \"providers\": { \"x\": {} },\n}\n"
+	p1, err := PlanOpenCode(opencode2Input(file, true, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := PlanOpenCode(opencode2Input(string(p1.After), true, &p1.Record))
+	if err != nil || !p2.Already || string(p2.After) != string(p1.After) || len(p2.Conflicts) > 0 {
+		t.Fatalf("second run: err %v, already %v\n%s", err, p2.Already, p2.After)
+	}
+}
+
+// A file connected for opencode 1 is switched to the key file without a conflict; disconnect still restores it.
+func TestOpenCode1To2(t *testing.T) {
+	const file = "{\n  \"theme\": \"tokyonight\"\n}\n"
+	p1, err := PlanOpenCode(opencodeInput(goldenStep{URL: "https://llm.example.com", Model: "acme/coder:free"}, []byte(file), true, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := PlanOpenCode(opencode2Input(string(p1.After), true, &p1.Record))
+	if err != nil || len(p2.Conflicts) > 0 || p2.Already {
+		t.Fatalf("err %v, conflicts %v, already %v", err, p2.Conflicts, p2.Already)
+	}
+	if strings.Contains(string(p2.After), "AMBIT_API_KEY") || !strings.Contains(string(p2.After), "{file:"+ocKeyFile+"}") {
+		t.Fatalf("still the opencode 1 entry:\n%s", p2.After)
+	}
+	d, err := UnplanJSON(p2.Record, p2.After, true)
+	if err != nil || string(d.After) != file {
+		t.Fatalf("roundtrip: %v\n%s", err, d.After)
+	}
+}
+
+// An ambit provider that connect did not write is a conflict in either format; --force replaces it.
+func TestOpenCode2Conflicts(t *testing.T) {
+	for _, file := range []string{`{"providers": {"ambit": {"settings": {"apiKey": "ambit_plain"}}}}`, `{"provider": {"ambit": {}}, "providers": {}}`} {
+		in := opencode2Input(file+"\n", true, nil)
+		p, err := PlanOpenCode(in)
+		if err != nil || len(p.Conflicts) != 1 || p.After != nil || !strings.HasSuffix(p.Conflicts[0].What, ".ambit already exists") {
+			t.Fatalf("%s: err %v, plan %+v", file, err, p)
+		}
+		in.Force = true
+		if p, err = PlanOpenCode(in); err != nil || p.After == nil || strings.Contains(string(p.After), "ambit_plain") || len(p.Record.RemovedSecrets) != 1 {
+			t.Fatalf("%s --force: err %v\n%s", file, err, p.After)
+		}
+	}
+}
+
+func TestOpenCode2WindowsKeyFile(t *testing.T) {
+	in := opencode2Input("{}\n", true, nil)
+	in.GOOS, in.KeyFile = "windows", `C:\Users\a\.config\ambit\opencode-key`
+	p, err := PlanOpenCode(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := readOpenCode(t, p.After)
+	if got := v["providers"].(map[string]any)["ambit"].(map[string]any)["settings"].(map[string]any)["apiKey"]; got != "{file:C:/Users/a/.config/ambit/opencode-key}" {
+		t.Fatalf("apiKey = %v", got)
+	}
+}
+
+func TestOpenCodeKeyPath(t *testing.T) {
+	env := map[string]string{}
+	getenv := func(k string) string { return env[k] }
+	if got := OpenCodeKeyPath(getenv, "/home/a"); got != filepath.Join("/home/a", ".config", "ambit", "opencode-key") {
+		t.Fatalf("got %s", got)
+	}
+	env["XDG_CONFIG_HOME"] = "/x/cfg"
+	if got := OpenCodeKeyPath(getenv, "/home/a"); got != filepath.Join("/x/cfg", "ambit", "opencode-key") {
+		t.Fatalf("XDG: got %s", got)
+	}
+}
+
+func TestOpenCodeMajor(t *testing.T) {
+	for in, want := range map[string]int{"opencode v2.2.5": 2, "2.2.5": 2, "1.18.34": 1, "v10.0.1\n": 10, "0.15.8": 0, "dev": 0, "": 0} {
+		if got := OpenCodeMajor(in); got != want {
+			t.Errorf("OpenCodeMajor(%q) = %d, want %d", in, got, want)
+		}
+	}
+}
+
+// The key file is deleted at disconnect only while it holds what connect wrote.
+func TestUnplanOpenCodeKeyFile(t *testing.T) {
+	key := OpenCodeKey("ambit_0123456789abcdefghijklmnopqrstuvwxyzABCDEFG")
+	rec := FileRecord{Path: ocKeyFile, Secret: true, SHA256: FileSum(key), Dirs: []string{"/home/a/.config/ambit"}}
+	if d := UnplanSecretFile(rec, key, true); !d.Delete || len(d.RemoveDirs) != 1 || len(d.Notes) != 0 {
+		t.Fatalf("%+v", d)
+	}
+	changed := []byte("ambit_0123456789abcdefghijklmnopqrstuvwxyzABCDEFH")
+	if d := UnplanSecretFile(rec, changed, true); d.Delete || len(d.Notes) != 1 {
+		t.Fatalf("changed file: %+v", d)
 	}
 }
 

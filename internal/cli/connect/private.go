@@ -48,3 +48,12 @@ func atomicWriteChecked(path string, data []byte, perm os.FileMode, check func()
 	}
 	return nil
 }
+
+// WriteSecret writes a file that holds the key (ambit key set renews it), readable by the current user only. A
+// missing directory is made with mode 0700.
+func WriteSecret(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return atomicWrite(path, data, 0o600)
+}

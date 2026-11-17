@@ -115,8 +115,16 @@ func PlanClaudeDesktopMCP(in Input, headerPath string) (*Plan, error) {
 	return p, nil
 }
 
-// headerLine is what a header file written by connect holds, with any key.
-var headerLine = regexp.MustCompile(`^Authorization: Bearer ambit_[0-9A-Za-z]{43}\n$`)
+// SecretFile is what a file that holds the key contains: the header line for mcp-remote, the key alone for opencode.
+func SecretFile(tool, key string) []byte {
+	if tool == OpenCode {
+		return OpenCodeKey(key)
+	}
+	return MCPHeader(key)
+}
+
+// headerLine is what a file written by connect that holds the key contains, with any key.
+var headerLine = regexp.MustCompile(`^(Authorization: Bearer ambit_[0-9A-Za-z]{43}\n|ambit_[0-9A-Za-z]{43})$`)
 
 // UnplanSecretFile plans the disconnect of a file that holds the key (rec.Secret). It is deleted only while it holds
 // exactly what connect wrote; otherwise it stays, with a note.

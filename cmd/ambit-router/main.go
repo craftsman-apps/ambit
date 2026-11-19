@@ -48,8 +48,12 @@ func run(concurrency int, drain time.Duration) error {
 	if err := router.Watch(ctx, cs, ns, store); err != nil {
 		return err
 	}
+	guard, err := router.LoadGuard(os.Getenv("AMBIT_PROMPT_GUARD"), &http.Client{})
+	if err != nil {
+		return err
+	}
 	reg := prometheus.NewRegistry()
-	h := &router.Handler{Store: store, Classifier: &router.LLM{HTTP: &http.Client{}}, Concurrency: concurrency, Metrics: router.NewMetrics(reg)}
+	h := &router.Handler{Store: store, Classifier: &router.LLM{HTTP: &http.Client{}}, Guard: guard, Concurrency: concurrency, Metrics: router.NewMetrics(reg)}
 	srv := router.NewServer(h, drain)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -75,7 +79,7 @@ func run(concurrency int, drain time.Duration) error {
 		srv.Shutdown()
 		close(stopped)
 	}()
-	slog.Info("ambit-router ready", "namespace", ns)
+	slog.Info("ambit-router ready", "namespace", ns, "promptGuard", guard != nil)
 	if err := srv.Serve(lis); err != nil {
 		return err
 	}

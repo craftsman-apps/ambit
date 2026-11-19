@@ -222,6 +222,9 @@ providers retry on 503, so the change completes later. Offboarding of SaaS grant
 ## How the gateway checks a key
 
 Every request to the LLM or MCP gateway must pass these checks. A request that fails one gets **403** (while keys are on).
+On the LLM gateway, a request with no key and no token at all (or an empty one, such as `Authorization: Bearer ` with
+nothing after it) gets 403 with the message "authorization failed: no Ambit key or token was sent", which says how to
+send a key. Every other refusal keeps its message.
 
 1. The request has a credential. If it carries `x-api-key`, or `Authorization: Bearer ambit_...`, it presents a
    key, and **only the key counts**. A token sent alongside is ignored.

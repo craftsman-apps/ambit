@@ -162,7 +162,7 @@ opencode service restart
 
 ### opencode shows "authorization failed"
 
-- What you see: opencode shows `authorization failed` (HTTP 403). The gateway log shows `ambit.identity="jwt"` for the call, which means the call had no key.
+- What you see: opencode shows `authorization failed: no Ambit key or token was sent` (HTTP 403). Ambit before 0.5.0 shows only `authorization failed`; there, the gateway log shows `ambit.identity="jwt"` for the call, which means the call had no key.
 - Cause: the opencode 2 background service sent no key. This happens when the provider reads the key from an environment variable (`{env:AMBIT_API_KEY}`, the opencode 1 setup): the service does not see the variable of your terminal, and opencode replaces a variable that is not set with an empty string. It also happens when the key file did not exist when the service started, and after a key change: the service keeps the old key until it restarts.
 - Fix: run `ambit connect opencode` again (with opencode 2 it switches to the key file), or set up the key file by hand as above. Then run `opencode service restart`.
 

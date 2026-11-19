@@ -2,6 +2,7 @@ package guard
 
 import (
 	"context"
+	"log/slog"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -15,8 +16,13 @@ type KubePins struct {
 
 func (k KubePins) Pins(ctx context.Context, server string) (approved, current map[string]string, pinned bool) {
 	var s v1.Server
-	if server == "" || k.Client.Get(ctx, client.ObjectKey{Namespace: k.Namespace, Name: server}, &s) != nil {
+	if server == "" {
 		return nil, nil, false
+	}
+	if err := k.Client.Get(ctx, client.ObjectKey{Namespace: k.Namespace, Name: server}, &s); err != nil {
+		// Unknown pins are not "no pins": nothing is approved, so every tool is hidden and every call refused (issue 300).
+		slog.Error("guard: cannot read the Server; its tools are refused", "server", server, "err", err)
+		return map[string]string{}, map[string]string{}, true
 	}
 	if len(s.Status.ApprovedTools) == 0 {
 		return nil, nil, false

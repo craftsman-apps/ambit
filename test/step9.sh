@@ -67,6 +67,12 @@ for kept in "2026-11-17 10:00:01 <CARD_NUMBER> declined" 192.168.100.207 v1.22.3
 done
 pass "1c other written forms masked, ordinary numbers kept: $(uv run --no-project python -c 'import json,sys;print(json.loads(sys.argv[1])["result"]["content"][0]["text"])' "$said")"
 
+# 1e · issue 298: object keys and numbers in structured content are masked; a Unix time in milliseconds is not
+idx=$(raw_call crm_get_index '{}')
+[[ "$idx" != *minsu.kim* && "$idx" != *4111111111111111* && "$idx" == *'"<EMAIL>"'* && "$idx" == *'"<CARD_NUMBER>"'* && "$idx" == *1763372401127* ]] ||
+  fail "1e structured content: $idx"
+pass "1e email key and card number masked in structured content, Unix time kept"
+
 # 1d · issue 335: the text of a server's JSON-RPC error is not stored in the audit log; its code is. (The client still
 #      receives the error text unmasked: the gateway does not send errors to the guard, issue 333.)
 ch() { kubectl -n "$NS" exec ambit-clickhouse-0 -- sh -c 'clickhouse-client --user ambit --password "$CLICKHOUSE_PASSWORD" -q "$0"' "$1"; }

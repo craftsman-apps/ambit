@@ -6,7 +6,7 @@ import {PAGES, latestRelease, installVersionProblems} from './check-install-vers
 const read = f => readFileSync(new URL(`../../${f}`, import.meta.url), 'utf8');
 const CL = '# Changelog\n\n## Unreleased\n\n- x\n\n## 0.2.2 (2026-10-17)\n\n- y\n\n## 0.1.0 (2026-10-12)\n';
 const good = 'R=https://github.com/o/r/releases/download/v0.2.2\nhelm install a --version 0.2.2\n';
-const pages = (over = {}) => ({'docs/local-up.md': good, 'docs/install.md': good, 'docs/quick-start.md': 'go install x/cmd/ambit@v0.2.2', ...over});
+const pages = (over = {}) => ({'docs/install-by-hand.md': good, 'docs/install.md': good, 'docs/quick-start.md': 'go install x/cmd/ambit@v0.2.2', ...over});
 
 test('the real CHANGELOG and pages agree', () => {
   assert.deepEqual(installVersionProblems(read('CHANGELOG.md'), Object.fromEntries(PAGES.map(f => [f, read(f)]))), []);
@@ -23,7 +23,7 @@ test('each of the three patterns is checked', () => {
   assert.equal(installVersionProblems(CL, pages({'docs/quick-start.md': old})).length, 3);
 });
 test('a required page with no match fails; quick-start may have none', () => {
-  assert.equal(installVersionProblems(CL, pages({'docs/local-up.md': 'no versions here'})).length, 1);
+  assert.equal(installVersionProblems(CL, pages({'docs/install-by-hand.md': 'no versions here'})).length, 1);
   assert.deepEqual(installVersionProblems(CL, pages({'docs/quick-start.md': 'nothing'})), []);
 });
 test('--version <new version> and other numbers are ignored', () => {

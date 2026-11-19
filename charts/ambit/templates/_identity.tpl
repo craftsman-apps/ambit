@@ -30,6 +30,17 @@ has(apiKey.keyId) && timestamp(apiKey.until) > request.startTime
 {{- define "ambit.identity.email" -}}
 (has(apiKey.keyId) ? apiKey.email : (({{ include "ambit.identity.hasEmail" . }}{{ if .verified }} && has(jwt.email_verified) && jwt.email_verified == true{{ end }}) ? jwt.email.trim().lowerAscii() : ""))
 {{- end -}}
+{{/* The caller as the access log records it (jwt.email, ambit.key_id); the guard's compression records use the same. */}}
+{{- define "ambit.identity.logEmail" -}}
+({{ include "ambit.identity.validKey" . }}) ? apiKey.email : (({{ include "ambit.identity.presented" . }}) ? "" : (has(jwt.email) ? jwt.email.trim().lowerAscii() : ""))
+{{- end -}}
+{{- define "ambit.identity.logKeyId" -}}
+({{ include "ambit.identity.validKey" . }}) ? apiKey.keyId : ""
+{{- end -}}
+{{/* The call ID ambit-guard returns for each tools/call (#203); "" for other requests. */}}
+{{- define "ambit.callId" -}}
+has(mcpGuardrails.callId) ? mcpGuardrails.callId : ""
+{{- end -}}
 {{- define "ambit.identity.principal" -}}
 {{- if .requireEmail -}}(has(apiKey.keyId) ? apiKey.email : jwt.email.trim().lowerAscii()){{- else -}}(has(apiKey.keyId) ? apiKey.email : (({{ include "ambit.identity.hasEmail" . }}) ? jwt.email.trim().lowerAscii() : jwt.sub)){{- end -}}
 {{- end -}}

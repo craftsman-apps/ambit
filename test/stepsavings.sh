@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Feature B acceptance (the Savings page):
-#   1 a compressed tool result writes one guard record to otel_logs: server, type, sizes and the caller's groups,
-#     no email, no content; a result that is not compressed writes none
+#   1 a compressed tool result writes one guard record to otel_logs: server, type, sizes, the caller's groups and
+#     email, no content; a result that is not compressed writes none
+#   1b #203: 20 parallel calls of user01 and 2 by user01's personal key: each record has the call ID of exactly one
+#     gateway row, with the same email, key ID and tool
+#   1c protection.compressionAudit.caller false: the record keeps the call ID and has no email and no key ID
 #   2 the console created the summary tables with the retention from the chart; the record reaches the summary;
 #     GET /api/savings is admin only and shows the call, with no email in the answer
 #   3 the summary views on this ClickHouse (the pinned image): equal to the Usage query, all-groups row, router rows,
@@ -48,8 +51,82 @@ wait_for 90 "raw crm_get_rows '{\"n\":300}' >/dev/null; [[ \$(ch \"SELECT count(
 row=$(ch "SELECT LogAttributes['mcp.target'], LogAttributes['ambit.compress.type'], LogAttributes['ambit.compress.mode'], toUInt64(LogAttributes['ambit.compress.bytes_in']) > toUInt64(LogAttributes['ambit.compress.bytes_out']), LogAttributes['jwt.groups'] FROM otel.otel_logs WHERE LogAttributes['ambit.kind']='compression' AND Timestamp >= '$since' LIMIT 1")
 [[ "$row" == $'crm\tjson\tlossless\t1\t["eng"]' ]] || fail "1 unexpected record: $row"
 whole=$(ch "SELECT toString(LogAttributes) || Body FROM otel.otel_logs WHERE LogAttributes['ambit.kind']='compression' AND Timestamp >= '$since' LIMIT 1")
-[[ "$whole" != *@* && "$whole" != *jwt.email* && "$whole" != *item-* ]] || fail "1 the record has an email or content: $whole"
-pass "1 guard record in otel_logs: crm, json, lossless, smaller output, groups [\"eng\"], no email, no content"
+[[ "$whole" == *"'jwt.email':'user01@example.com'"* && "$whole" == *"'ambit.call_id':'c_"* ]] || fail "1 the record does not name the caller and the call: $whole"
+[[ "$whole" != *minsu* && "$whole" != *item-* && "$whole" != *EMAIL* ]] || fail "1 the record has content: $whole"
+pass "1 guard record in otel_logs: crm, json, lossless, smaller output, groups [\"eng\"], user01's email, a call ID, no content"
+
+# 1b · #203: the record links to exactly one gateway row. 20 calls of user01 at once in one session (get_log and get_rows
+#      mixed, so the record's type checks the gateway's own tool name) and 2 by user01's personal key. The guard
+#      compresses 2 results at a time and passes the rest unchanged (no record): each compressed response the client
+#      got must have exactly one record.
+set_mode shorten
+wait_for 60 '[[ $(raw crm_get_log "{\"kib\":64}" | wc -c) -lt 30000 ]]' || fail "1b shorten did not apply"
+sign_in keycloak user01 user01-test-pass || fail "1b user01 sign-in"
+mkkey audit-203 mcp; AKEY=$KEY; AKID=$KID
+T1=$(token user01)
+wait_for 60 'tools "$AKEY"; [[ "$TOOLS" == *crm_get_log* ]]' || fail "1b the key does not see crm_get_log: $TOOLS"
+sleep 2; since=$(date -u +"%Y-%m-%d %H:%M:%S"); sleep 1
+P=$W/par; rm -rf "$P"; mkdir -p "$P"
+mcp_open "$T1"
+for i in $(seq 0 19); do
+  if (( i % 2 )); then echo get_log >"$P/tool$i"; a="{\"kib\":$((100 + i))}"; else echo get_rows >"$P/tool$i"; a="{\"n\":$((300 + i))}"; fi
+  ( raw "crm_$(cat "$P/tool$i")" "$a" >"$P/resp$i" ) &
+done
+( W=$P/k0; mkdir -p "$W"; mcp_open "$AKEY"; raw crm_get_log '{"kib":130}' >"$P/resp20" ) &
+( W=$P/k1; mkdir -p "$W"; mcp_open "$AKEY"; raw crm_get_rows '{"n":330}' >"$P/resp21" ) &
+echo get_log >"$P/tool20"; echo get_rows >"$P/tool21"
+wait
+uv run --no-project python - "$P" 22 <<'PY' >"$P/short" || fail "1b a call failed"
+import json, os, sys
+p, n = sys.argv[1], int(sys.argv[2])
+short = 0
+for i in range(n):
+    r = open(os.path.join(p, f"resp{i}")).read()
+    t = json.loads(r)["result"]["content"][0]["text"]
+    tool = open(os.path.join(p, f"tool{i}")).read().strip()
+    # get_log shortened: a marker; get_rows compressed: compact JSON instead of the tool's indented rows.
+    short += ("[ambit: " in t) if tool == "get_log" else ("\n    {" not in t)
+print(short)
+PY
+SHORT=$(cat "$P/short")
+GW="LogAttributes['ambit.kind'] = '' AND LogAttributes['mcp.method.name'] = 'tools/call' AND LogAttributes['mcp.target'] = 'crm' AND Timestamp >= '$since'"
+RC="LogAttributes['ambit.kind'] = 'compression' AND Timestamp >= '$since'"
+wait_for 120 "[[ \$(ch \"SELECT count() FROM otel.otel_logs WHERE $GW\") -ge 22 && \$(ch \"SELECT count() FROM otel.otel_logs WHERE $RC\") -ge $SHORT ]]" ||
+  fail "1b records did not arrive: gateway $(ch "SELECT count() FROM otel.otel_logs WHERE $GW") of 22, guard $(ch "SELECT count() FROM otel.otel_logs WHERE $RC") of $SHORT"
+sleep 3
+ch "SELECT LogAttributes['ambit.call_id'], LogAttributes['jwt.email'], LogAttributes['ambit.key_id'], LogAttributes['gen_ai.tool.name'] FROM otel.otel_logs WHERE $GW FORMAT TSV" >"$P/gw.tsv"
+ch "SELECT LogAttributes['ambit.call_id'], LogAttributes['jwt.email'], LogAttributes['ambit.key_id'], LogAttributes['gen_ai.tool.name'], LogAttributes['ambit.compress.type'], LogAttributes['ambit.compress.part'] FROM otel.otel_logs WHERE $RC FORMAT TSV" >"$P/rc.tsv"
+uv run --no-project python - "$P/gw.tsv" "$P/rc.tsv" 22 "$SHORT" "$AKID" <<'PY' || fail "1b records and gateway rows do not pair one to one"
+import sys
+rows = lambda f: [l.rstrip("\n").split("\t") for l in open(f) if l.strip()]
+gw, rc, n, short, kid = rows(sys.argv[1]), rows(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
+assert len(gw) == n, f"{len(gw)} gateway rows for {n} calls"
+gid = [g[0] for g in gw]
+assert all(gid) and len(set(gid)) == n, f"gateway call IDs empty or shared: {gid}"
+assert len(rc) == short, f"{len(rc)} records for {short} compressed responses"
+rid = [r[0] for r in rc]
+assert all(rid) and len(set(rid)) == short, f"record call IDs empty or shared: {rid}"
+by = {g[0]: g for g in gw}
+assert sum(g[2] == kid for g in gw) == 2, "the two key calls are not on the gateway rows"
+for cid, email, key, tool, typ, part in rc:
+    g = by.get(cid)
+    assert g, f"record {cid} has no gateway row"
+    assert email == g[1] == "user01@example.com" and key == g[2] and tool == g[3], f"record {cid} {email} {key} {tool} != gateway {g}"
+    assert typ == {"get_log": "logs", "get_rows": "json"}[g[3]] and part == "0", f"record {cid} type {typ} part {part} for {g[3]}"
+print(f"{n} gateway rows, {short} records, paired one to one; {sum(r[2] == kid for r in rc)} by the key")
+PY
+api DELETE "/api/keys/$AKID" >/dev/null || true
+pass "1b 22 parallel calls (2 by a personal key): $SHORT compressed, each record pairs with exactly one gateway row by ambit.call_id, same email, key ID and tool"
+
+# 1c · caller false: the record keeps the call ID and drops the person
+helm upgrade ambit charts/ambit -n "$NS" "${VALUES[@]}" --set evidence.enabled=true --set protection.compressionAudit.caller=false --wait --timeout 8m >/dev/null ||
+  fail "1c helm upgrade with compressionAudit.caller=false"
+since=$(date -u +"%Y-%m-%d %H:%M:%S")
+wait_for 120 "mcp_open \"\$(token user01)\"; raw crm_get_log '{\"kib\":100}' >/dev/null; [[ \$(ch \"SELECT count() FROM otel.otel_logs WHERE LogAttributes['ambit.kind']='compression' AND Timestamp >= '$since' AND LogAttributes['jwt.email'] = ''\") -gt 0 ]]" ||
+  fail "1c no record without an email in 120 s"
+row=$(ch "SELECT LogAttributes['ambit.call_id'] != '', mapContains(LogAttributes, 'jwt.email'), mapContains(LogAttributes, 'ambit.key_id') FROM otel.otel_logs WHERE LogAttributes['ambit.kind']='compression' AND Timestamp >= '$since' AND LogAttributes['jwt.email'] = '' LIMIT 1")
+[[ "$row" == $'1\t0\t0' ]] || fail "1c record: call ID, email, key ID = $row"
+pass "1c compressionAudit.caller=false: the record has a call ID, no jwt.email and no ambit.key_id"
 
 # 2 · the summary tables exist (the console creates them when otel_logs exists) and count the record of step 1
 n_objects() { ch "SELECT count() FROM system.tables WHERE database = 'otel' AND name LIKE 'ambit_%_daily_v1%'"; }

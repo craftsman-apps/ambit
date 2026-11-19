@@ -3,6 +3,8 @@ package guard
 import (
 	"context"
 	"net"
+	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -159,7 +161,101 @@ func TestRecordDoesNotChangeTheResult(t *testing.T) {
 	}
 }
 
-// End to end over gRPC: the record has sizes, names and groups as attributes, and no email and no content.
+// callMeta is the guard policy's response metadata with protection.compressionAudit.caller true: the caller as the
+// access log writes it (recordEmail, keyId) and the call from CheckRequest (callId, tool).
+func callMeta(callID, keyID string, groups ...string) *structpb.Struct {
+	m := groupsMeta("", groups...).AsMap()
+	m["email"], m["recordEmail"], m["keyId"], m["callId"], m["tool"] = "", "user05@acme.example", keyID, callID, "list_runs"
+	s, _ := structpb.NewStruct(m)
+	return s
+}
+
+// #203: the record names the caller and the call, with exactly the attributes of the spec (section 2). The guard's
+// own argument-limit email (empty here: not verified) is not used; the record takes recordEmail.
+func TestRecordNamesTheCallerAndTheCall(t *testing.T) {
+	f, addr := startCollector(t)
+	rec, err := NewRecorder(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rec.Close()
+	g := &Guard{Masker: Builtin{}, Compression: on(ModeShorten), Records: rec}
+	callAs(t, g, callMeta("c_0123456789abcdef0123456789abcdef", "k_7Hq", "eng"),
+		mustJSON(map[string]any{"content": []map[string]any{{"type": "text", "text": "short"}, {"type": "text", "text": issueList(100)}}}))
+	waitFor(t, "the record", func() bool { return len(f.attrs()) == 1 })
+	a := f.attrs()[0]
+	want := map[string]string{"ambit.kind": "compression", "mcp.target": "crm", "gen_ai.tool.name": "list_runs", "ambit.compress.type": "json",
+		"ambit.compress.mode": "shorten", "ambit.compress.part": "1", "jwt.groups": `["eng"]`, "jwt.email": "user05@acme.example",
+		"ambit.key_id": "k_7Hq", "ambit.call_id": "c_0123456789abcdef0123456789abcdef"}
+	for _, k := range []string{"ambit.compress.bytes_in", "ambit.compress.bytes_out", "ambit.compress.omitted"} {
+		if a[k] == "" {
+			t.Errorf("%s missing", k)
+		}
+		want[k] = a[k]
+	}
+	if !reflect.DeepEqual(a, want) {
+		t.Errorf("attributes:\n got %v\nwant %v", a, want)
+	}
+}
+
+// A caller with no group (a key owner without groups) is recorded with [] and still names the call; with
+// compressionAudit.caller false (no recordEmail, keyId) the record has the call and no person; a record from an older
+// guard policy (no callId, tool, recordEmail or keyId) writes none of those attributes, not empty ones.
+func TestRecordEmptyGroupsAndOldPolicy(t *testing.T) {
+	f, addr := startCollector(t)
+	rec, _ := NewRecorder(addr)
+	defer rec.Close()
+	g := &Guard{Masker: Builtin{}, Compression: on(ModeLossless), Records: rec}
+	body := mustJSON(map[string]any{"content": []map[string]any{{"type": "text", "text": issueList(100)}}})
+	callAs(t, g, callMeta("c_1", "", []string{}...), body)
+	callAs(t, g, groupsMeta("user05@acme.example", "eng"), body)
+	off := callMeta("c_2", "k_7Hq", "eng")
+	delete(off.Fields, "recordEmail")
+	delete(off.Fields, "keyId")
+	callAs(t, g, off, body)
+	waitFor(t, "three records", func() bool { return len(f.attrs()) == 3 })
+	a := f.attrs()
+	if a[0]["jwt.groups"] != "[]" || a[0]["ambit.call_id"] != "c_1" || a[0]["jwt.email"] != "user05@acme.example" {
+		t.Errorf("no groups: %v", a[0])
+	}
+	if _, ok := a[0]["ambit.key_id"]; ok {
+		t.Errorf("empty key ID written: %v", a[0])
+	}
+	for _, k := range []string{"ambit.call_id", "gen_ai.tool.name", "jwt.email", "ambit.key_id"} {
+		if _, ok := a[1][k]; ok {
+			t.Errorf("old policy: %s written: %v", k, a[1])
+		}
+	}
+	if _, ok := a[2]["jwt.email"]; ok || a[2]["ambit.call_id"] != "c_2" || a[2]["gen_ai.tool.name"] != "list_runs" || a[2]["ambit.key_id"] != "" {
+		t.Errorf("caller false: %v", a[2])
+	}
+}
+
+// CheckRequest makes a new call ID for every tools/call and returns it with the tool's own name; a callId in the
+// request's metadata (the policy evaluates it before the guard has answered, so it is "") is never used.
+func TestCheckRequestMakesTheCallID(t *testing.T) {
+	g := &Guard{Pins: pins, Masker: Builtin{}}
+	md, _ := structpb.NewStruct(map[string]any{"groups": []any{"eng"}, "callId": "c_chosen_by_someone"})
+	seen := map[string]bool{}
+	for range 10000 {
+		res, _ := g.CheckRequest(t.Context(), &extmcp.McpRequest{ServiceNames: []string{"crm"}, Method: "tools/call", MetadataContext: md,
+			McpRequest: []byte(`{"name":"get_customer","arguments":{"callId":"c_chosen_by_someone"}}`)})
+		f := res.GetMetadata().GetFields()
+		id := f["callId"].GetStringValue()
+		if res.GetPass() == nil || f["tool"].GetStringValue() != "get_customer" || !regexp.MustCompile(`^c_[0-9a-f]{32}$`).MatchString(id) || seen[id] {
+			t.Fatalf("result %v", res)
+		}
+		seen[id] = true
+	}
+	// Other methods get no call ID.
+	res, _ := g.CheckRequest(t.Context(), &extmcp.McpRequest{ServiceNames: []string{"crm"}, Method: "tools/list"})
+	if res.GetMetadata() != nil {
+		t.Errorf("tools/list: %v", res)
+	}
+}
+
+// End to end over gRPC: the record has sizes, names and groups as attributes, and no content. Without recordEmail
+// (protection.compressionAudit.caller false) it has no email, even though the guard's own email metadata is set.
 func TestRecorderSendsOTLP(t *testing.T) {
 	f, addr := startCollector(t)
 	rec, err := NewRecorder(addr)

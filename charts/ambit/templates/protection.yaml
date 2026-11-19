@@ -92,7 +92,17 @@ spec:
               backendRef: { name: ambit-guard, port: 9090 }
               failureMode: FailClosed
               # The caller's groups and email ("" without one) from the verified token, for argument limits in access rules.
-              metadata: { groups: {{ include "ambit.identity.groups" . | quote }}, email: {{ include "ambit.identity.email" (dict "verified" (ne (toString (.Values.accessRules | default dict).usersRequireVerifiedEmail) "false")) | quote }} }
+              # callId and tool: the guard's own values from the request, back on the response for its compression records.
+              # recordEmail and keyId: the caller as the access log records it, for the same records (#203).
+              metadata:
+                groups: {{ include "ambit.identity.groups" . | quote }}
+                email: {{ include "ambit.identity.email" (dict "verified" (ne (toString (.Values.accessRules | default dict).usersRequireVerifiedEmail) "false")) | quote }}
+                callId: {{ include "ambit.callId" . | quote }}
+                tool: {{ `has(mcpGuardrails.tool) ? mcpGuardrails.tool : ""` | quote }}
+                {{- if ne (toString ((.Values.protection.compressionAudit | default dict).caller)) "false" }}
+                recordEmail: {{ include "ambit.identity.logEmail" . | quote }}
+                keyId: {{ include "ambit.identity.logKeyId" . | quote }}
+                {{- end }}
               # The guard needs no credentials.
               disallowedRequestHeaders: [authorization, cookie, x-ambit-user]
             methods:

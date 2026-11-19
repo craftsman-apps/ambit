@@ -45,6 +45,13 @@ PowerShell (Windows):
 irm https://ambitproject.dev/install.ps1 | iex
 ```
 
+winget or Scoop (Windows). Both install the same `ambit.exe` as the GitHub release and check its SHA-256:
+
+```powershell
+winget install CraftsmanApps.Ambit
+scoop bucket add ambit https://github.com/craftsman-apps/scoop-ambit; scoop install ambit/ambit
+```
+
 npm (any system with Node.js). This runs the CLI without installing it; `npm install -g @craftsman-apps/ambit` installs it:
 
 ```sh

@@ -43,6 +43,8 @@ jobs:
         run: .github/scripts/changes_test.sh
       - name: The release workflow's highest-tag guard passes its tests
         run: .github/scripts/highest-tag_test.sh
+      - name: The Scoop and winget steps of the release skip, with exit 0, without their secrets
+        run: .github/scripts/release-skip_test.sh
 
   build:
     needs: changes
@@ -76,7 +78,7 @@ jobs:
       - name: Front end type-check and build
         run: cd web && npm ci --no-fund --no-audit && npm run build
       - name: npm packaging and Homebrew formula scripts (node:test)
-        run: node --test scripts/npm/ scripts/homebrew/
+        run: node --test scripts/npm/ scripts/homebrew/ scripts/scoop/ scripts/winget/
       - name: Go vet, unit and integration tests (envtest API server)
         run: go vet ./... && KUBEBUILDER_ASSETS="$(make -s envtest-assets)" go test -count=1 ./...
       - name: Result compression saves tokens (offline tokenizer)

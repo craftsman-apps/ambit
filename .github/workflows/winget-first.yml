@@ -1,0 +1,39 @@
+name: winget-first
+# The first submission of CraftsmanApps.Ambit to microsoft/winget-pkgs (spec D2 8.4, owner action O3), on a Windows
+# runner instead of a maintainer's Windows machine. A maintainer starts it once, after a stable release is
+# published and WINGET_TOKEN is in the Environment release-channels (owner action O4); Microsoft then reviews the
+# pull request. Later releases are submitted by the release workflow (Komac).
+on:
+  workflow_dispatch:
+    inputs:
+      version: { description: "release version, e.g. 0.5.0", required: true }
+permissions: {}
+
+jobs:
+  submit:
+    runs-on: windows-latest
+    environment: release-channels
+    permissions: { contents: read }
+    defaults: { run: { shell: pwsh } }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: 26 }
+      - name: checksums.txt of the release, proven to come from the release workflow
+        env: { GH_TOKEN: "${{ github.token }}", VERSION: "${{ inputs.version }}" }
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:VERSION -notmatch '^\d+\.\d+\.\d+$') { throw "not a stable release version: $env:VERSION" }
+          gh release download "v$env:VERSION" -p checksums.txt -D rel
+          gh attestation verify rel/checksums.txt --repo craftsman-apps/ambit --signer-workflow craftsman-apps/ambit/.github/workflows/release.yml
+          node scripts/winget/manifest.mjs --checksums rel/checksums.txt --version $env:VERSION --out winget
+      - name: wingetcreate (pinned by version and SHA-256), validate, submit
+        env: { WINGET_TOKEN: "${{ secrets.WINGET_TOKEN }}", VERSION: "${{ inputs.version }}" }
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:WINGET_TOKEN) { throw "WINGET_TOKEN is not set in the Environment release-channels (owner action O4)" }
+          Invoke-WebRequest https://github.com/microsoft/winget-create/releases/download/v1.28.1.0/wingetcreate.exe -OutFile wingetcreate.exe
+          $h = (Get-FileHash wingetcreate.exe -Algorithm SHA256).Hash.ToLower()
+          if ($h -ne '63d980ba79e97042395bd6eb5992c2db9e01e9e7a8a22958a95c288f27310413') { throw "wingetcreate.exe SHA-256 $h" }
+          if (Get-Command winget -ErrorAction SilentlyContinue) { winget validate --manifest winget }
+          ./wingetcreate.exe submit --token $env:WINGET_TOKEN --prtitle "New package: CraftsmanApps.Ambit version $env:VERSION" winget

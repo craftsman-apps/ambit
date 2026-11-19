@@ -9,6 +9,8 @@
 #   3 a viewer gets 403 on both endpoints, with no ZIP
 #   4 the offboarding export: keytest calls a model, is deactivated through SCIM and calls again (refused); the export's
 #     row for keytest has a last accepted call before, 0 accepted calls after and a first refused call after
+#   5 the access export for today: grants.csv equals the AccessRules (kubectl), with the published rules version; after
+#     a rule change the manifest lists both snapshots of the day
 # Run as one locked unit (CLAUDE.md): lockf /tmp/ambit-kind.lock sh -c 'make image install && test/stepevidence.sh'
 set -euo pipefail
 NS=${1:-ambit-system}
@@ -31,7 +33,7 @@ mock() { command curl -s -o "$W/llm" -w '%{http_code}' -H "Authorization: Bearer
 ch() { kubectl -n "$NS" exec "$CH_POD" -- sh -c 'clickhouse-client --user ambit --password "$CLICKHOUSE_PASSWORD" -q "$0"' "$1"; }
 cleanup() {
   [[ -n "$DEACTIVATED" ]] && { wait_for 60 '[[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_ON") == 200 ]]'; } >/dev/null 2>&1 || true
-  kubectl -n "$NS" delete "accessrules.$G" evidence-everyone-mock --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete "accessrules.$G" evidence-everyone-mock evidence-snapshot --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" exec "$CH_POD" -- rm -f /tmp/console.test /tmp/otel_logs.sql >/dev/null 2>&1 || true
   ch "DROP DATABASE IF EXISTS evidence_test SYNC" >/dev/null 2>&1 || true
 }
@@ -49,10 +51,10 @@ ch "SHOW CREATE TABLE otel.otel_logs FORMAT TSVRaw" > "$W/otel_logs.sql"
 kubectl -n "$NS" exec -i "$CH_POD" -- sh -c 'cat > /tmp/console.test && chmod +x /tmp/console.test' < "$W/console.test"
 kubectl -n "$NS" exec -i "$CH_POD" -- sh -c 'cat > /tmp/otel_logs.sql' < "$W/otel_logs.sql"
 ch "DROP DATABASE IF EXISTS evidence_test SYNC" >/dev/null; ch "CREATE DATABASE evidence_test" >/dev/null
-out=$(kubectl -n "$NS" exec "$CH_POD" -- sh -c "cd /tmp && env AMBIT_TEST_CLICKHOUSE_ADDR=127.0.0.1:8123 AMBIT_TEST_CLICKHOUSE_USER=ambit AMBIT_TEST_CLICKHOUSE_PASSWORD=\"\$CLICKHOUSE_PASSWORD\" AMBIT_TEST_OTEL_LOGS_DDL=/tmp/otel_logs.sql ./console.test -test.run '^(TestEvidenceOnClickHouse|TestOffboardingEvidenceOnClickHouse)\$' -test.v" 2>&1) ||
+out=$(kubectl -n "$NS" exec "$CH_POD" -- sh -c "cd /tmp && env AMBIT_TEST_CLICKHOUSE_ADDR=127.0.0.1:8123 AMBIT_TEST_CLICKHOUSE_USER=ambit AMBIT_TEST_CLICKHOUSE_PASSWORD=\"\$CLICKHOUSE_PASSWORD\" AMBIT_TEST_OTEL_LOGS_DDL=/tmp/otel_logs.sql ./console.test -test.run '^(TestEvidenceOnClickHouse|TestOffboardingEvidenceOnClickHouse|TestAccessEvidenceOnClickHouse)\$' -test.v" 2>&1) ||
   { echo "$out" | tail -30; fail "1 the export queries on ClickHouse"; }
-grep -q -- "--- PASS: TestEvidenceOnClickHouse" <<<"$out" && grep -q -- "--- PASS: TestOffboardingEvidenceOnClickHouse" <<<"$out" || fail "1 tests did not run: $(tail -5 <<<"$out")"
-pass "1 export queries on ClickHouse $(ch 'SELECT version()'): only gateway records, count matches, one-person filter, offboarding grace and accepted statuses, $(grep -o 'retention [^ ]* from [a-z]*' <<<"$out" || true)"
+grep -q -- "--- PASS: TestEvidenceOnClickHouse" <<<"$out" && grep -q -- "--- PASS: TestOffboardingEvidenceOnClickHouse" <<<"$out" && grep -q -- "--- PASS: TestAccessEvidenceOnClickHouse" <<<"$out" || fail "1 tests did not run: $(tail -5 <<<"$out")"
+pass "1 export queries on ClickHouse $(ch 'SELECT version()'): only gateway records, count matches, one-person filter, offboarding grace and accepted statuses, snapshot lookup, $(grep -o 'retention [^ ]* from [a-z]*' <<<"$out" || true)"
 
 # 2 · a closed period [from, to) around two requests: user09's model call and a wrong key
 from=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -163,4 +165,58 @@ PY
 [[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_ON") == 200 ]] || fail "4 reactivate: $(cat "$W/api")"
 DEACTIVATED=""
 pass "4 offboarding export: keytest's row is blocked, with a call before, 0 accepted calls after and a refused call after"
+# 5 · access review for today: grants.csv is the AccessRules in force, with the published rules version; after a rule
+#     change the manifest lists both snapshots of the day
+published() { kubectl -n "$NS" get configmap ambit-access-mode -o jsonpath='{.data.rulesVersion}'; }
+newest_snap() { ch "SELECT LogAttributes['ambit.rulesVersion'] FROM otel.otel_logs WHERE LogAttributes['ambit.kind'] = 'access-snapshot' ORDER BY Timestamp DESC LIMIT 1"; }
+access_zip() {
+  local code
+  code=$(command curl -s -b "$W/jar" -o "$W/access.zip" -w '%{http_code}' "$BASE/api/evidence/access.zip?date=$(date -u +%Y-%m-%d)")
+  [[ "$code" == 200 ]] || fail "5 access export answered $code: $(head -c 300 "$W/access.zip")"
+}
+for _ in $(seq 1 60); do [[ "$(newest_snap)" == "$(published)" ]] && break; sleep 2; done
+[[ "$(newest_snap)" == "$(published)" ]] || fail "5 no access snapshot of the rules in force ($(published)): '$(newest_snap)'"
+v1=$(published)
+sign_in keycloak user10 user10-test-pass
+access_zip
+kubectl -n "$NS" get accessrules -o json > "$W/rules.json"
+uv run --no-project python - "$W/access.zip" "$W/rules.json" "$v1" <<'PY' || fail "5 grants.csv is not the AccessRules in force"
+import csv, hashlib, io, json, sys, zipfile
+z = zipfile.ZipFile(sys.argv[1])
+m = json.loads(z.read("manifest.json"))
+for f in m["files"]:
+    assert hashlib.sha256(z.read(f["name"])).hexdigest() == f["sha256"], f["name"]
+got = {(r["rule"], r["who_type"], r["who"], r["what_type"], r["what"]) for r in csv.DictReader(io.StringIO(z.read("grants.csv").decode("utf-8"), newline=""))}
+versions = {r["rules_version"] for r in csv.DictReader(io.StringIO(z.read("grants.csv").decode("utf-8"), newline=""))}
+want = set()
+for o in json.load(open(sys.argv[2]))["items"]:
+    s = o["spec"]
+    who = [("group", g) for g in s.get("groups", [])] + [("service account" if u.endswith("@svc.ambit.internal") else "user", u) for u in s.get("users", [])]
+    if s.get("allSignedIn"):
+        who.append(("all-signed-in", "*"))
+    what = [("model", x) for x in s.get("models", [])]
+    for sv in s.get("servers", []):
+        what += [("tool", sv["name"] + "/" + t) for t in sv["tools"]] if sv.get("tools") else [("server", sv["name"])]
+    want |= {(o["metadata"]["name"], a, b, c, d) for a, b in who for c, d in what}
+def guard(v):
+    return "'" + v if v[:1] in ("=", "+", "-", "@", "\t", "\r") else v
+want = {tuple(guard(x) for x in t) for t in want}
+assert got == want, ("missing", sorted(want - got)[:5], "extra", sorted(got - want)[:5])
+assert versions <= {sys.argv[3]}, versions
+assert m["sources"]["snapshot"]["rulesVersion"] == sys.argv[3]
+PY
+kubectl -n "$NS" apply -f - >/dev/null <<EOF
+apiVersion: $G/v1alpha1
+kind: AccessRule
+metadata: { name: evidence-snapshot }
+spec: { groups: [evidence-snapshot], models: [mock-echo] }
+EOF
+for _ in $(seq 1 60); do [[ "$(published)" != "$v1" && "$(newest_snap)" == "$(published)" ]] && break; sleep 2; done
+v2=$(published)
+[[ "$v2" != "$v1" && "$(newest_snap)" == "$v2" ]] || fail "5 the rule change wrote no snapshot ($v1 -> $v2, newest '$(newest_snap)')"
+access_zip
+day=$(uv run --no-project python -c "import json,sys,zipfile;m=json.loads(zipfile.ZipFile(sys.argv[1]).read('manifest.json'));print(' '.join(sorted({s['rulesVersion'] for s in m['sources']['snapshotsOfTheDay']})), m['sources']['snapshot']['rulesVersion'])" "$W/access.zip")
+[[ "$day" == *"$v1"* && "$day" == *"$v2"* && "$day" == *" $v2" ]] || fail "5 snapshots of the day: '$day' (want $v1 and $v2, in force $v2)"
+kubectl -n "$NS" delete "accessrules.$G" evidence-snapshot --ignore-not-found >/dev/null
+pass "5 access export: grants.csv equals the AccessRules (rules version $v1); after a change the day lists $v1 and $v2"
 done_step evidence

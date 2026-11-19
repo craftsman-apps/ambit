@@ -10,7 +10,7 @@ type Call = { time: string; email: string; route: string; method: string; server
   // Audit-only mode: the verdict written when the request was served, the rules it was judged by, and its class.
   accessMode?: string; mark?: string; rulesVersion?: string; outcome?: Outcome;
   // The request path (/v1/models is a model list), and for a request with an invalid key the address it came from.
-  path?: string; identity?: string; clientAddress?: string };
+  path?: string; identity?: string; clientAddress?: string; keyId?: string };
 // A routed call shows the router and the model that answered, e.g. "auto → mock/echo (coding)".
 const target = (c: Call) => c.identity === "invalid key" ? `from ${c.clientAddress || "an unknown address"}` : c.router ? `${c.router} → ${c.model}${c.label || c.labelReason ? ` (${c.label || c.labelReason})` : ""}` : (c.server || c.model);
 type Usage = { day: string; group: string; requests: number; inputTokens: number; outputTokens: number; cost?: number; unpricedModels?: string[] };
@@ -118,7 +118,8 @@ export function AuditPage() {
                   {shown.map((c, i) => (
                     <tr key={i} className="border-b border-line-soft align-top">
                       <td className="whitespace-nowrap px-3 py-2 font-mono text-small">{utc(c.time)}</td>
-                      <td className="px-3 py-2 font-mono">{what(c)}</td>
+                      <td className="px-3 py-2 font-mono">{what(c)}{c.identity === "service account" && (
+                        <span data-testid="sa-badge" className="ml-1.5 whitespace-nowrap rounded border border-line px-1 font-sans text-small text-muted" title={`Called with the service account key ${c.keyId ?? ""}`}>service account</span>)}</td>
                       <td className="px-3 py-2 font-mono text-small">{target(c)}</td>
                       <td className="px-3 py-2"><OutcomeCell c={c} />
                         {c.error && <span className="block text-small text-muted">{c.error}</span>}</td>

@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { sendJSON } from "@/api";
+import { sendJSON, useConfig } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Shell } from "@/components/shell";
-import { day, statusText, type KeyList } from "@/routes/keys";
+import { day, isServiceAccount, statusText, type KeyList } from "@/routes/keys";
 
 type KeyEvent = { at: string; actor: string; action: string; keyId: string; email: string; detail: string };
 async function get<T>(url: string): Promise<T> {
@@ -23,6 +23,7 @@ export function SettingsKeysPage() {
     onSuccess: () => { setConfirm(null); qc.invalidateQueries({ queryKey: ["admin-keys"] }); qc.invalidateQueries({ queryKey: ["admin-key-events"] }); qc.invalidateQueries({ queryKey: ["keys"] }); },
   });
   const s = keys.data?.settings;
+  const config = useConfig();
   return (
     <Shell crumb="Settings / Keys">
       <section className="max-w-4xl space-y-5 p-5">
@@ -37,6 +38,7 @@ export function SettingsKeysPage() {
             <p className="text-small text-muted">Set in the Helm values (apiKeys.*)</p>
           </div>
         )}
+        {config.data?.mode === "gitops" && <p className="text-muted">Keys are written by the console directly, not through Git.</p>}
         {keys.isError && <p className="text-bad" role="alert">{keys.error.message}</p>}
         {revoke.isError && <p className="text-bad" role="alert">{revoke.error.message}</p>}
         <h2 className="font-semibold">All keys</h2>
@@ -48,7 +50,7 @@ export function SettingsKeysPage() {
             <tbody>
               {keys.data.keys.map((k) => (
                 <tr key={k.id} className="border-b border-line-soft">
-                  <td className="py-1.5">{k.owner}</td><td>{k.name}</td><td className="font-mono text-small">{k.prefix}</td>
+                  <td className="py-1.5">{k.owner}{isServiceAccount(k.owner) && <span className="ml-1.5 whitespace-nowrap rounded border border-line px-1 font-mono text-small text-muted">service account</span>}</td><td>{k.name}</td><td className="font-mono text-small">{k.prefix}</td>
                   <td>{statusText(k)}</td><td>{day(k.until)}</td><td>{k.lastUsed ? day(k.lastUsed) : "unknown"}</td>
                   <td className="text-right">
                     {confirm === k.id ? (

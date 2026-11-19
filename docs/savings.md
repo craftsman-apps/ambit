@@ -110,6 +110,6 @@ A person in two groups counts toward **both** groups, as on the Usage page. So t
 
 ## What the page does not show
 
-- Savings per person. The summaries hold no email, and the guard record has none.
+- Savings per person. The summaries hold no email and no key ID. The guard's records in `otel_logs` do name the caller (unless `protection.compressionAudit.caller` is `false`), but the page does not read them per person.
 - Savings of tool results that were not compressed, or that Ambit could not record. Records are sent on a best-effort basis: when the collector cannot be reached or the guard's queue (1,000 records) is full, the record is dropped and `ambit_guard_record_dropped_total` goes up. The page cannot see drops, so its totals can be incomplete. The alert `AmbitGuardRecordsDropped` (with `alerts.enabled`) tells you.
 - Compression of `structuredContent`, which the guard never changes, and savings of clients that do not send the text (see [Measured savings](concepts.md#measured-savings)).

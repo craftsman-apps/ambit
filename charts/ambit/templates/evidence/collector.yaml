@@ -69,13 +69,20 @@ data:
     frontend:
       accessLog:
         attributes:
+          # The text of an MCP server's JSON-RPC error can hold personal data the guard never sees (issue 335):
+          # never stored or logged. mcp.error.code stays.
+          remove: [mcp.error.message]
           add:
             {{- $v := include "ambit.identity.validKey" . }}{{ $p := include "ambit.identity.presented" . }}
-            - { name: jwt.email, expression: {{ printf "(%s) ? apiKey.email : ((%s) ? \"\" : (has(jwt.email) ? jwt.email.trim().lowerAscii() : \"\"))" $v $p | quote }} }
+            - { name: jwt.email, expression: {{ include "ambit.identity.logEmail" . | quote }} }
             - { name: jwt.groups, expression: {{ printf "(%s) ? apiKey.groups : ((%s) ? [] : (has(jwt.groups) ? jwt.groups : []))" $v $p | quote }} }
             # Overrides agentgateway's built-in jwt.sub (log.rs suppresses built-ins named here): never a JWT's subject on a key request.
             - { name: jwt.sub, expression: {{ printf "(%s) || (%s) ? \"\" : (has(jwt.sub) ? jwt.sub : \"\")" $v $p | quote }} }
-            - { name: ambit.key_id, expression: {{ printf "(%s) ? apiKey.keyId : \"\"" $v | quote }} }
+            - { name: ambit.key_id, expression: {{ include "ambit.identity.logKeyId" . | quote }} }
+            {{- if and .Values.mcp.enabled .Values.protection.enabled }}
+            # The call ID ambit-guard made for this tools/call; its compression records carry the same (#203).
+            - { name: ambit.call_id, expression: {{ include "ambit.callId" . | quote }} }
+            {{- end }}
             - { name: ambit.identity, expression: {{ include "ambit.identity.kind" . | quote }} }
             # The model name the client asked for (a ModelRouter such as "auto"); gen_ai.request.model is the one that answered.
             - { name: ambit.router, expression: "metadata.ambit_requested_model" }

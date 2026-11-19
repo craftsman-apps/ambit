@@ -11,7 +11,8 @@ const Status = "if(LogAttributes['http.response.status_code'] != '', LogAttribut
 // The gateway writes a verdict (ambit.wouldRefuse, ambit.wouldRefuseTool) into each record when it serves a request,
 // from the rules in force at that moment. Four outcomes, never mixed:
 //
-//	refused       the request got 401, 403 or 429 (sign-in, offboarding, unpriced model, budget): a real refusal
+//	refused       the request got 401, 403 or 429 (sign-in, offboarding, unpriced model, budget): a real refusal.
+//	              A refusal by the prompt guard (ambit.promptGuard holds reject) is not an access refusal: n/a
 //	would-refuse  served (2xx) and the mark is refuse:model, refuse:router or refuse:tool
 //	allow, other-model  served and the mark says so
 //	mark-missing  a call (an LLM request with a model, or an MCP tools/call), served, and its field is absent or
@@ -33,7 +34,7 @@ const classifySQL = `WITH {status} AS c_status,
      if(c_method != '', c_method = 'tools/call', c_model != '') AS c_is_call,
      multiIf(
        LogAttributes['ambit.accessMode'] != 'audit', 'n/a',
-       c_status IN ('401', '403', '429'), 'refused',
+       c_status IN ('401', '403', '429') AND NOT has(arrayMap(x -> splitByChar(':', x)[-1], JSONExtract(LogAttributes['ambit.promptGuard'], 'Array(String)')), 'reject'), 'refused',
        NOT startsWith(c_status, '2'), 'n/a',
        c_mark IN ('refuse:model', 'refuse:router', 'refuse:tool'), 'would-refuse',
        c_mark = 'allow', 'allow',
@@ -53,4 +54,4 @@ func With(q string) string {
 // MarkMissingLast24h counts the audit-mode call records of the last 24 hours with a missing or failed mark.
 var MarkMissingLast24h = With(`{classify}
 SELECT countIf(c_outcome = 'mark-missing') FROM otel_logs
-WHERE Timestamp >= now() - INTERVAL 24 HOUR AND LogAttributes['ambit.accessMode'] = 'audit'`)
+WHERE Timestamp >= now() - INTERVAL 24 HOUR AND LogAttributes['ambit.accessMode'] = 'audit' AND LogAttributes['ambit.kind'] = ''`)

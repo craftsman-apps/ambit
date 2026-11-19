@@ -218,7 +218,7 @@ jobs:
           - { name: a, steps: "0 1 2 3 3b 3c args", ui: true }
           - { name: b, steps: "8 fallback", ui: false }
           - { name: c, steps: "10 keys 9 compress sa", ui: false }
-          - { name: d, steps: "12 ext savings", ui: false }
+          - { name: d, steps: "12 ext savings evidence", ui: false }
           - { name: e, steps: "4a 4b 4c 4d 5 6 7 guard", ui: false }
     steps:
       # The runner's disk held the kind images, the build cache and Go's caches until "no space left on device"
@@ -228,9 +228,9 @@ jobs:
           df -h / | tail -1
           sudo nohup rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # test/stepsavings.sh builds the ClickHouse summary tests and runs them in the ClickHouse pod.
+      # test/stepsavings.sh and test/stepevidence.sh build the console's ClickHouse tests and run them in the ClickHouse pod.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        if: contains(matrix.part.steps, 'savings')
+        if: contains(matrix.part.steps, 'savings') || contains(matrix.part.steps, 'evidence')
         with: { go-version-file: go.mod }
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: 26, cache: npm, cache-dependency-path: web/package-lock.json }

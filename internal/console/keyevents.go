@@ -76,25 +76,42 @@ func (s *KeyService) eachEventMeta(ctx context.Context, fn func(m *metav1.Partia
 	}
 }
 
+// Record keeps one event that is not a key change (an evidence export) in the same history, with its retention.
+func (s *KeyService) Record(ctx context.Context, actor, action, detail string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.event(ctx, actor, action, "", "", detail)
+}
+
 // Events returns the newest recorded key events (at most historyMax), newest first. Pages are read one at a
-// time and only the newest historyMax are kept, so memory stays bounded however many events exist.
+// time and only the newest historyMax are kept, so memory stays bounded however many events exist. Evidence exports
+// share the history but are not key events: Settings → Evidence lists them.
 func (s *KeyService) Events(ctx context.Context) ([]KeyEvent, error) {
-	var keep []corev1.ConfigMap
+	return s.eventsWhere(ctx, func(action string) bool { return action != evidenceAction })
+}
+
+// eventsWhere is Events for the events whose action keep accepts.
+func (s *KeyService) eventsWhere(ctx context.Context, keep func(action string) bool) ([]KeyEvent, error) {
+	var kept []corev1.ConfigMap
 	newestFirst := func(a, b corev1.ConfigMap) int { return strings.Compare(b.Name, a.Name) } // name encodes time and order
 	for cont := ""; ; {
 		var l corev1.ConfigMapList
 		if err := s.Client.List(ctx, &l, s.eventListOpts(cont)...); err != nil {
 			return nil, err
 		}
-		keep = append(keep, l.Items...)
-		slices.SortFunc(keep, newestFirst)
-		keep = keep[:min(len(keep), historyMax)]
+		for _, cm := range l.Items {
+			if keep(cm.Data["action"]) {
+				kept = append(kept, cm)
+			}
+		}
+		slices.SortFunc(kept, newestFirst)
+		kept = kept[:min(len(kept), historyMax)]
 		if cont = l.Continue; cont == "" {
 			break
 		}
 	}
-	out := make([]KeyEvent, 0, len(keep))
-	for _, cm := range keep {
+	out := make([]KeyEvent, 0, len(kept))
+	for _, cm := range kept {
 		at, _ := time.Parse(time.RFC3339, cm.Annotations[keyEventAtAnn])
 		d := cm.Data
 		out = append(out, KeyEvent{At: at, Actor: d["actor"], Action: d["action"], KeyID: d["keyId"], Email: d["email"], Detail: d["detail"]})

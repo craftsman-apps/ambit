@@ -158,6 +158,8 @@ pass "4 ambit uninstall: no release left; CRDs and the AccessRule stay"
 
 # 5 · journey J3: the previous release installed with plain Helm as docs/install.md says, then ambit upgrade
 if [[ -n ${CLI_PREVIOUS:-} ]]; then
+  # Start from a cluster as a CLI_PREVIOUS user has it: the newer Ambit CRDs that step 4 kept go first.
+  kubectl get crd -o name | grep 'ambitproject.dev$' | xargs kubectl delete --wait >/dev/null || fail "5 delete the kept Ambit CRDs"
   R=https://github.com/craftsman-apps/ambit/releases/download/v$CLI_PREVIOUS
   curl -fsSL "$R/crds.yaml" -o "$W/crds.yaml" && curl -fsSL "$R/quickstart.yaml" -o "$W/quickstart-prev.yaml" || fail "5 download v$CLI_PREVIOUS"
   kubectl apply --server-side --force-conflicts -f "$W/crds.yaml" >/dev/null

@@ -16,7 +16,17 @@ Ambit is installed with two Helm charts. The charts and the console image are pu
 - A public HTTPS address for the console, and one for the LLM gateway (and one for MCP, if you use it). Cursor, for example, sends its requests from its own servers, so the address must be reachable from the internet.
 - An identity provider that Dex can connect to (OIDC, SAML, LDAP, GitHub and others), or one that issues OIDC tokens.
 
-## Install
+## Install with the ambit CLI
+
+Install the [ambit CLI](cli.md) of the Ambit version you want, write `values.yaml` (see the next section), and run:
+
+```sh
+ambit install -f values.yaml
+```
+
+It shows the target cluster and asks first, then installs the dependency CRDs, the chart `ambit-crds` and the chart `ambit`, waits for the pods, and runs the production checklist. Exit code 3 means that Ambit works but a production check failed. The result is the same two Helm releases as the commands below, so you can use `helm` and the CLI on the same install. See [ambit install](cli.md#ambit-install) for every flag, and for `--secret-file`, which creates the Secrets your values name from files.
+
+## Install with Helm only
 
 Install the dependency CRDs, the Ambit CRDs, and then Ambit. This page installs 0.4.0. To install another release, replace `0.4.0` with it.
 
@@ -201,7 +211,7 @@ helm upgrade ambit-crds oci://ghcr.io/craftsman-apps/charts/ambit-crds --version
 helm upgrade ambit oci://ghcr.io/craftsman-apps/charts/ambit --version <new version> -n ambit-system -f values.yaml --wait
 ```
 
-To remove Ambit, run `helm uninstall ambit -n ambit-system`, then `helm uninstall ambit-crds -n ambit-system`. The CRDs carry `helm.sh/resource-policy: keep`, so Helm leaves them, and your objects, in the cluster.
+To remove Ambit, run `ambit uninstall` (it asks you to type the context name), or `helm uninstall ambit -n ambit-system`, then `helm uninstall ambit-crds -n ambit-system`. The CRDs carry `helm.sh/resource-policy: keep`, so Helm leaves them, and your objects, in the cluster.
 
 ## Audit-only mode: start before the rules are complete
 

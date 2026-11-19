@@ -97,7 +97,7 @@ func (h *Handler) decide(ctx context.Context, start time.Time, snap *Snapshot, a
 	if !ok {
 		return Result{}
 	}
-	if !r.AllSignedIn && !slices.ContainsFunc(a.Groups, func(g string) bool { return slices.Contains(r.Groups, g) }) &&
+	if !(r.AllSignedIn && !identity.IsService(a.Email)) && !slices.ContainsFunc(a.Groups, func(g string) bool { return slices.Contains(r.Groups, g) }) &&
 		(a.Email == "" || !slices.Contains(r.Users, a.Email)) {
 		return Result{Reason: "denied"}
 	}

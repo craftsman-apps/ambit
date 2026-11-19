@@ -28,6 +28,7 @@ while IFS= read -r f; do
     docs/* | site/* | *.md | .gitignore | .github/dependabot.yml) ;;
     .github/workflows/site.yml | .github/workflows/release.yml | .github/workflows/codeql.yml) ;;
     .github/workflows/presets-contract.yml | .github/workflows/ci-cache.yml) ;;
+    .github/scripts/highest-tag.sh | .github/scripts/highest-tag_test.sh) ;;  # release.yml; tested in changes-test
     # Release packaging: GoReleaser puts LICENSE and NOTICE in every archive.
     LICENSE | NOTICE | .goreleaser.yaml) add snapshot ;;
     scripts/npm/* | scripts/homebrew/*) add build snapshot ;;
@@ -37,7 +38,7 @@ while IFS= read -r f; do
     # internal/cli/checks tests read the charts.
     charts/*) add $IMAGE cli_unit ;;
     Dockerfile | .dockerignore | Makefile | hack/*) add $IMAGE ;;
-    test/cli-local.sh | test/cli-partial.sh) add build cli_kind ;;
+    test/cli-local.sh | test/cli-partial.sh | test/cli-install.sh) add build cli_kind ;;
     test/quickstart.sh) add build quickstart ;;
     test/lib.sh) add build quickstart e2e ;;
     test/chart.sh | test/alerts.sh | test/alerts/*) add build ;;

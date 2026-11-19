@@ -111,6 +111,41 @@ func TestConnectOpenCode1ThenOpenCode2RemovesTheFunction(t *testing.T) {
 	}
 }
 
+// #305: connected for opencode 2, then opencode 1 is installed: connect again writes the opencode 1 entry and the
+// shell function, deletes the key file that connect wrote, and the state file no longer lists it.
+func TestConnectOpenCode2ThenOpenCode1DeletesTheKeyFile(t *testing.T) {
+	g, r := newGateway(t), newRig(t)
+	r.opencode = "opencode v2.2.5"
+	oc := r.write(".config/opencode/opencode.json", seedOpenCode)
+	zsh := r.write(".zshrc", seedZsh)
+	kp := r.openCodeKeyPath()
+	if code := r.run("connect", "opencode", "--url", g.URL, "--model", "m", "--key-file", r.keyFile(), "--yes"); code != 0 || !r.exists(kp) {
+		t.Fatalf("opencode 2: code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
+	}
+	r.opencode = "1.18.34"
+	if code := r.run("connect", "opencode", "--url", g.URL, "--model", "m", "--yes", "--shell", "zsh"); code != 0 {
+		t.Fatalf("opencode 1: code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
+	}
+	if c := r.readFile(oc); strings.Contains(c, `"providers"`) || !strings.Contains(c, "AMBIT_API_KEY") || !strings.Contains(r.readFile(zsh), "opencode() {") {
+		t.Fatalf("opencode.json:\n%s\nzshrc:\n%s", c, r.readFile(zsh))
+	}
+	if r.exists(kp) || !strings.Contains(r.stdout.String(), "deleted the opencode 2 key file "+kp) {
+		t.Fatalf("key file still there (%v) or not reported:\n%s", r.exists(kp), r.stdout.String())
+	}
+	st, err := connect.LoadState(r.statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range st.Tools[connect.OpenCode].Files {
+		if f.Path == kp {
+			t.Fatalf("the key file is still recorded: %+v", st.Tools[connect.OpenCode])
+		}
+	}
+	if code := r.run("disconnect", "--all", "--yes"); code != 0 || r.readFile(oc) != seedOpenCode || r.readFile(zsh) != seedZsh {
+		t.Fatalf("disconnect: code %d\n%s%s", code, r.stdout.String(), r.stderr.String())
+	}
+}
+
 // opencode is not installed (or does not answer): connect sets up opencode 2 and says why. --shell is not used.
 func TestConnectOpenCodeNotFoundSetsUpOpenCode2(t *testing.T) {
 	g, r := newGateway(t), newRig(t)

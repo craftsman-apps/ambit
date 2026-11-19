@@ -207,6 +207,41 @@ func TestOpenCode1To2(t *testing.T) {
 	}
 }
 
+// #305: a file connected for opencode 2 (only Ambit's own `providers` entry is v2) is switched back to opencode 1
+// without the "v2 config format" error; disconnect still restores the file. A v2 entry of the person's own is still
+// refused.
+func TestOpenCode2To1(t *testing.T) {
+	const file = "{\n  \"theme\": \"tokyonight\"\n}\n"
+	p1, err := PlanOpenCode(opencode2Input(file, true, nil))
+	if err != nil || !strings.Contains(string(p1.After), `"providers"`) {
+		t.Fatalf("opencode 2 connect: %v\n%s", err, p1.After)
+	}
+	v1 := goldenStep{URL: "https://llm.example.com", Model: "acme/coder:free"}
+	p2, err := PlanOpenCode(opencodeInput(v1, p1.After, true, &p1.Record))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p2.Conflicts) > 0 || p2.Already {
+		t.Fatalf("conflicts %v, already %v", p2.Conflicts, p2.Already)
+	}
+	if strings.Contains(string(p2.After), "providers") || strings.Contains(string(p2.After), "{file:") || !strings.Contains(string(p2.After), "{env:AMBIT_API_KEY}") {
+		t.Fatalf("still the opencode 2 entry:\n%s", p2.After)
+	}
+	d, err := UnplanJSON(p2.Record, p2.After, true)
+	if err != nil || string(d.After) != file {
+		t.Fatalf("roundtrip: %v\n%s", err, d.After)
+	}
+	own := "{\n  \"providers\": { \"x\": {} }\n}\n"
+	p1, err = PlanOpenCode(opencode2Input(own, true, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var e *out.Error
+	if _, err := PlanOpenCode(opencodeInput(v1, p1.After, true, &p1.Record)); !errors.As(err, &e) || !strings.Contains(e.What, "opencode v2 config format") {
+		t.Fatalf("a v2 entry of the person's own must still be refused: %v", err)
+	}
+}
+
 // An ambit provider that connect did not write is a conflict in either format; --force replaces it.
 func TestOpenCode2Conflicts(t *testing.T) {
 	for _, file := range []string{`{"providers": {"ambit": {"settings": {"apiKey": "ambit_plain"}}}}`, `{"provider": {"ambit": {}}, "providers": {}}`} {

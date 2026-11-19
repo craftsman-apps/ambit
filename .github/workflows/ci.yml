@@ -41,6 +41,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: The path rules in .github/scripts/changes.sh pass their tests
         run: .github/scripts/changes_test.sh
+      - name: The release workflow's highest-tag guard passes its tests
+        run: .github/scripts/highest-tag_test.sh
 
   build:
     needs: changes
@@ -215,7 +217,7 @@ jobs:
         part:
           - { name: a, steps: "0 1 2 3 3b 3c args", ui: true }
           - { name: b, steps: "8 fallback", ui: false }
-          - { name: c, steps: "10 keys 9 compress", ui: false }
+          - { name: c, steps: "10 keys 9 compress sa", ui: false }
           - { name: d, steps: "12 ext savings", ui: false }
           - { name: e, steps: "4a 4b 4c 4d 5 6 7 guard", ui: false }
     steps:
@@ -234,8 +236,17 @@ jobs:
         with: { node-version: 26, cache: npm, cache-dependency-path: web/package-lock.json }
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      # Docker Hub images come through Google's mirror (mirror.gcr.io), then Docker Hub itself if the mirror fails.
+      # On 2026-11-16 the runner could not pull ClickHouse and python from Docker Hub for 10 minutes, and the install
+      # timed out (#293). The images are pinned by digest, so the mirror cannot change them. CI only: kind/cluster.yaml
+      # is the file users get, and it stays as it is.
+      - name: kind config with a Docker Hub mirror
+        run: |
+          cp kind/cluster.yaml "$RUNNER_TEMP/kind-cluster.yaml"
+          printf '%s\n' 'containerdConfigPatches:' '  - |' '    [plugins."io.containerd.grpc.v1.cri".registry]' \
+            '      config_path = "/etc/containerd/certs.d"' >> "$RUNNER_TEMP/kind-cluster.yaml"
       - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
-        with: { config: kind/cluster.yaml, cluster_name: ambit, wait: 120s }
+        with: { config: "${{ runner.temp }}/kind-cluster.yaml", cluster_name: ambit, wait: 120s }
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { name: images, path: "${{ runner.temp }}" }
       # Keycloak needs about 100 s to start, and third-party images take time to pull: start both now, while the
@@ -243,6 +254,9 @@ jobs:
       - name: Start slow test services early
         run: |
           mkdir -p charts/ambit/charts && cp "$RUNNER_TEMP"/thirdparty/charts/*.tgz charts/ambit/charts/
+          docker exec ambit-control-plane sh -c 'mkdir -p /etc/containerd/certs.d/docker.io && printf "%s\n" \
+            "server = \"https://registry-1.docker.io\"" "[host.\"https://mirror.gcr.io\"]" "  capabilities = [\"pull\", \"resolve\"]" \
+            > /etc/containerd/certs.d/docker.io/hosts.toml'
           make install-crds
           kubectl create namespace ambit-system
           kubectl -n ambit-system apply -f test/keycloak/keycloak.yaml >/dev/null
@@ -359,6 +373,31 @@ jobs:
         run: |
           kubectl --context kind-ambit get pods -A || true
           kubectl --context kind-ambit -n ambit-system logs deploy/ambit-console --tail=100 || true
+
+  # Spec D2 section 9, cluster test 1: ambit install and ambit uninstall on a new kind cluster, with the branch
+  # image and charts. Also runs on draft PRs (see cli-local).
+  cli-install:
+    needs: [changes, image]
+    if: needs.changes.outputs.cli_kind == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
+        with: { install_only: true }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: images, path: "${{ runner.temp }}" }
+      - name: The CLI (dev build), the branch images and the chart dependencies
+        run: |
+          go build -tags dev -o bin/ambit ./cmd/ambit
+          gunzip -c "$RUNNER_TEMP/images.tar.gz" > "$RUNNER_TEMP/images.tar"
+          mkdir -p charts/ambit/charts && cp "$RUNNER_TEMP"/thirdparty/charts/*.tgz charts/ambit/charts/
+      - name: ambit install, a second install refused, ambit uninstall
+        env:
+          CLI_ARCHIVES: "${{ runner.temp }}/images.tar ${{ runner.temp }}/thirdparty/agentgateway.tar"
+        run: test/cli-install.sh  # prints the cluster's pods itself on a failure
 
   # Spec 9.2a: an interrupted local up is repaired, and a cluster ambit did not create is refused.
   # Also runs on draft PRs (see cli-local).

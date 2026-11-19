@@ -13,17 +13,47 @@ import (
 	"github.com/craftsman-apps/ambit/internal/cli/helmx"
 )
 
-// fakeHelm is a helmx.Client with fixed releases.
+// fakeHelm is a helmx.Client with fixed releases. It records every call that would change the cluster.
 type fakeHelm struct {
 	releases map[string]*helmx.Release
 	values   map[string]map[string]any // "name/user" or "name/all"
 	err      error
 	applied  []string
+	// For install, upgrade and uninstall.
+	list        []helmx.Release
+	listAllErr  error // List(true) fails, e.g. forbidden
+	applyVals   []map[string]any
+	applyOpts   []helmx.ApplyOptions
+	applyErr    error
+	uninstalled []string
+	renderErr   error
 }
 
-func (f *fakeHelm) Apply(_ context.Context, name, ref, version string, _ map[string]any) (helmx.Release, error) {
+func (f *fakeHelm) Apply(_ context.Context, name, ref, version string, vals map[string]any, o helmx.ApplyOptions) (helmx.Release, error) {
 	f.applied = append(f.applied, name+" "+ref+" "+version)
-	return helmx.Release{Name: name, Revision: 1, Status: "deployed"}, f.err
+	f.applyVals, f.applyOpts = append(f.applyVals, vals), append(f.applyOpts, o)
+	if f.applyErr != nil {
+		return helmx.Release{}, f.applyErr
+	}
+	return helmx.Release{Name: name, Revision: 1, Status: "deployed", ChartVersion: version}, f.err
+}
+func (f *fakeHelm) List(all bool) ([]helmx.Release, error) {
+	if all && f.listAllErr != nil {
+		return nil, f.listAllErr
+	}
+	return f.list, f.err
+}
+func (f *fakeHelm) Uninstall(name string) (helmx.Release, error) {
+	f.uninstalled = append(f.uninstalled, name)
+	for _, r := range f.list {
+		if r.Name == name {
+			return r, nil
+		}
+	}
+	return helmx.Release{}, errors.New("release: not found")
+}
+func (f *fakeHelm) Render(_ context.Context, name, _, _ string, _ map[string]any, _ string) (string, error) {
+	return "kind: ConfigMap\nmetadata: {name: " + name + "}\n", f.renderErr
 }
 func (f *fakeHelm) Get(name string) (*helmx.Release, error) { return f.releases[name], f.err }
 func (f *fakeHelm) Values(name string, all bool) (map[string]any, error) {

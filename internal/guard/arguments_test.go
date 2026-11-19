@@ -80,3 +80,16 @@ func TestCheckArgumentsUsers(t *testing.T) {
 		}
 	}
 }
+
+// allSignedIn grants every person, not a service account (SA-8 B): its argument limits never apply to one.
+func TestCheckArgumentsAllSignedInSkipsServiceAccounts(t *testing.T) {
+	loose := Grant{Rule: "everyone", AllSignedIn: true}
+	strict := Grant{Rule: "ci", Groups: []string{"eng-ci"}, Arguments: []v1.ArgumentRule{{Name: "region", OneOf: []string{"eu"}}}}
+	args := map[string]any{"region": "us"}
+	if r := CheckArguments([]Grant{loose, strict}, []string{"eng-ci"}, "user01@acme.com", "x", args); r != "" {
+		t.Errorf("a person gets the open rule: %q", r)
+	}
+	if r := CheckArguments([]Grant{loose, strict}, []string{"eng-ci"}, "ci@svc.ambit.internal", "x", args); !strings.Contains(r, "region must be one of eu") {
+		t.Errorf("a service account must get only its group's rule: %q", r)
+	}
+}

@@ -18,6 +18,7 @@ import { BudgetsPage } from "@/routes/budgets";
 import { DependenciesPage } from "@/routes/dependencies";
 import { KeysPage } from "@/routes/keys";
 import { SettingsKeysPage } from "@/routes/settings-keys";
+import { ServiceAccountsPage } from "@/routes/service-accounts";
 import "@fontsource/ibm-plex-sans/400.css";
 import "@fontsource/ibm-plex-sans/500.css";
 import "@fontsource/ibm-plex-sans/600.css";
@@ -48,6 +49,7 @@ const routeTree = rootRoute.addChildren([
     validateSearch: (s: Record<string, unknown>): { key?: string } => ({ key: typeof s.key === "string" ? s.key : undefined }),
   }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/keys", component: SettingsKeysPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/settings/service-accounts", component: ServiceAccountsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/audit", component: AuditPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/usage", component: UsagePage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/savings", component: SavingsPage }),

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"github.com/craftsman-apps/ambit/internal/identity"
 	"slices"
 	"strings"
 	"testing"
@@ -267,9 +268,10 @@ func TestFallbackCopyIsOpenOnlyToPeopleWhoMayUseBothModels(t *testing.T) {
 	if got := expr(t, objs["b"]); got != CEL(Access{Groups: []string{"ops"}}) {
 		t.Fatalf("the fallback Model itself keeps its own rule, got %s", got)
 	}
-	// Open to everyone on one side: the copy is the other side's rule, unchanged.
+	// Open to every person on one side: the copy also needs the other side's rule (a service account in ops may not
+	// use a, decision SA-8 B).
 	objs = byName(compileModels([]v1.Model{a, b}, []v1.AccessRule{rule("all", nil, true, "a"), rule("ops", []string{"ops"}, false, "b")}, route).Objects)
-	if got, want := expr(t, objs["a-fb1"]), CEL(Access{Groups: []string{"ops"}}); got != want {
+	if got, want := expr(t, objs["a-fb1"]), `(`+identity.Person+`) && (`+CEL(Access{Groups: []string{"ops"}})+`)`; got != want {
 		t.Fatalf("copy expression %s, want %s", got, want)
 	}
 	// No rule on the primary: nobody may use its name, so nobody is answered under it by the fallback.

@@ -214,7 +214,8 @@ type AccessRuleSpec struct {
 	// +kubebuilder:validation:items:MaxLength=254
 	// +kubebuilder:validation:items:Pattern=`^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$`
 	Users []string `json:"users,omitempty"`
-	// AllSignedIn allows everyone with a valid token.
+	// AllSignedIn allows every person with a valid token or personal key. It never grants a service account
+	// (<name>@svc.ambit.internal): name its group or identity in groups or users.
 	// +optional
 	AllSignedIn bool `json:"allSignedIn,omitempty"`
 	// Models lists Model object names in this namespace.

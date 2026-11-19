@@ -60,19 +60,42 @@ func PrincipalEmail(requireVerified bool) string {
 // PrincipalGroups are the groups of the same identity.
 const PrincipalGroups = `(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : []))`
 
-// Gate is the auth policy's Require rule: a presented key must be valid; otherwise the JWT must be.
-func Gate(requireEmail bool) string {
-	j := JWTGate(requireEmail)
-	if requireEmail {
-		j = "(" + j + ")"
+// Gate is the auth policy's Require rule: a presented key must be valid; otherwise the JWT must be. With services
+// false (serviceAccounts.enabled: false), a service account's key is refused too.
+func Gate(requireEmail, services bool) string {
+	k := ValidKey
+	if !services {
+		k += ` && !apiKey.email.endsWith("` + ServiceDomain + `")`
 	}
-	return `(` + PresentedKey + `) ? (` + ValidKey + `) : ` + j
+	return `(` + PresentedKey + `) ? (` + k + `) : (` + JWTGate(requireEmail) + `)`
 }
 
-// JWTGate is the JWT branch alone (keys switched off).
+// JWTGate is the JWT branch alone (keys switched off). A JWT whose identity is in the service account domain is
+// refused (guard 1: only a service account's key may carry it): its email, and with requireEmail false also its
+// subject, which then identifies a JWT without an email.
 func JWTGate(requireEmail bool) string {
+	email := `jwt.email.trim().lowerAscii().endsWith("` + ServiceDomain + `")`
 	if requireEmail {
-		return `has(jwt.sub) && ` + HasEmail()
+		return `has(jwt.sub) && ` + HasEmail() + ` && !` + email
 	}
-	return `has(jwt.sub)`
+	return `has(jwt.sub) && !jwt.sub.trim().lowerAscii().endsWith("` + ServiceDomain + `") && !(` + HasEmail() + ` && ` + email + `)`
 }
+
+// ServiceDomain ends every service account identity (<name>@svc.ambit.internal) and nothing else: the gateways
+// refuse it in a JWT, the console refuses it at sign-in, and SCIM refuses it. So a key's email ends with it if and
+// only if the key belongs to a service account.
+const ServiceDomain = "@svc.ambit.internal"
+
+// IsService reports whether email (in any case or spacing) is in the service account domain.
+func IsService(email string) bool {
+	c, ok := CanonicalEmail(email)
+	return ok && strings.HasSuffix(c, ServiceDomain)
+}
+
+// Person is true when the request's principal is not a service account: what an AccessRule's allSignedIn grants
+// (decision SA-8 B). Only a key can carry a service account identity (the gate refuses such a JWT), so it looks at
+// the key alone and never fails on a JWT without an email.
+const Person = `!(has(apiKey.keyId) && apiKey.email.endsWith("` + ServiceDomain + `"))`
+
+// Kind is the access log's ambit.identity: "service account", "key", "invalid key" or "jwt".
+const Kind = `(` + ValidKey + `) ? (apiKey.email.endsWith("` + ServiceDomain + `") ? "service account" : "key") : ((` + PresentedKey + `) ? "invalid key" : "jwt")`

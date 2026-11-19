@@ -73,7 +73,9 @@ off=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml
 ! grep -q apiKeyAuthentication <<<"$off" || { echo "FAIL chart: apiKeys.enabled=false must not render apiKeyAuthentication"; exit 1; }
 grep -q 'action: Require' <<<"$off" || { echo "FAIL chart: keys off keeps the Require rules"; exit 1; }
 noemail=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set llm.jwt.requireEmail=false --set mcp.jwt.requireEmail=false)
-! grep -q "jwt.email.trim().matches" <<<"$(sed -n '/name: ambit-llm-auth/,/^---/p' <<<"$noemail")" || { echo "FAIL chart: requireEmail=false must not require an email"; exit 1; }
+# requireEmail=true starts the JWT branch with has(jwt.sub) && has(jwt.email); false checks an email only to refuse the
+# service account domain
+! grep -q 'has(jwt.sub) && has(jwt.email)' <<<"$(sed -n '/name: ambit-llm-auth/,/^---/p' <<<"$noemail")" || { echo "FAIL chart: requireEmail=false must not require an email"; exit 1; }
 grep -q -- '--require-email=false' <<<"$noemail" || { echo "FAIL chart: controller flag"; exit 1; }
 check_qs "pols={x['metadata']['name']:x['spec'] for x in docs if x['kind']=='ValidatingAdmissionPolicy'}
 # No Lease-holder check in admission: the API server's parameter cache can go stale and lock out every key write.

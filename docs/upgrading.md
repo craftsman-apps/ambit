@@ -2,6 +2,21 @@
 
 For what each release changes, read the [release notes](https://ambitproject.dev/releases).
 
+## To the release with service accounts (0.5.0)
+
+- **`allSignedIn: true` no longer grants service accounts.** It means every person with a valid token or personal key.
+  No service account exists before this release, so nothing changes at the upgrade. When you add a service account,
+  name its group or its identity in a rule: a rule that relies on `allSignedIn` will not give it access.
+- **Tokens with an `@svc.ambit.internal` email are refused** by the gateways and the console sign-in. Such an address
+  cannot be a real mailbox (`.internal` is reserved for private use), so no person should have one.
+- **New Helm values** `serviceAccounts.enabled` (default `true`), `serviceAccounts.maxDays` (default `90`) and
+  `serviceAccounts.exposureDays` (default `7`). No CRD and no admission policy changes. The console records the new
+  settings once in the key History at its first start.
+- **Delete service accounts before a downgrade** below 0.5.0. An older console reads a service account as a person who
+  never signed in, so its hourly repair deletes the account's keys within an hour (fail closed). Until that repair
+  runs, the older gateways accept those keys as ordinary keys, also when `serviceAccounts.enabled` was `false`, and
+  no longer refuse tokens with the reserved email.
+
 ## To the release with agentgateway v1.7.0
 
 - **Apply the new dependency CRDs first** (`crds.yaml` of the release, see [Install](install.md#upgrade-and-uninstall)).

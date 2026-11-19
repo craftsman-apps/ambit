@@ -224,3 +224,24 @@ export function firstUseLine({ available, lastUsed, waitedMs }: { available?: bo
   if (waitedMs >= FIRST_USE_TIMEOUT_MS) return { kind: "timeout", text: "No request seen yet. Check the steps above, or see Audit." };
   return { kind: "waiting", text: "Waiting for the first request with this key…" };
 }
+
+// The setup steps for a service account key (a CI job or an agent): plain environment variables, and a GitHub
+// Actions workflow that reads the key from a repository secret. Other CI systems are in docs/service-accounts.md.
+export function ciTabs({ llm, mcp, key, model }: Setup, scope: Scope): ToolTab[] {
+  const m = model || "<model-id>";
+  const pairs: [string, string][] = [];
+  if (scope !== "mcp") pairs.push(["OPENAI_BASE_URL", `${llm}/v1`], ["OPENAI_API_KEY", key], ["ANTHROPIC_BASE_URL", llm], ["ANTHROPIC_API_KEY", key]);
+  if (scope !== "llm") pairs.push(["AMBIT_MCP_URL", mcp], ["AMBIT_API_KEY", key]);
+  const secret = "${{ secrets.AMBIT_API_KEY }}";
+  const yaml = ["env:", ...pairs.map(([k, v]) => `  ${k}: ${v === key ? secret : JSON.stringify(v)}`)].join("\n");
+  const mcpStep = scope !== "llm" ? ["MCP clients send the key as the header Authorization: Bearer <key> to AMBIT_MCP_URL."] : [];
+  const modelStep = scope !== "mcp" ? [`Send the model name ${m}: the provider's model name, not the name of the Model object.`] : [];
+  return [
+    { id: "env", title: "Environment variables", blocks: [{ label: "Environment variables", shells: vars(pairs) }],
+      steps: ["Set these where the job runs. Keep the key in the CI system's secret store, never in the repository.", ...modelStep, ...mcpStep] },
+    { id: "github", title: "GitHub Actions", blocks: [{ label: "Workflow (job or step level)", text: yaml }],
+      steps: ["In the repository: Settings → Secrets and variables → Actions → New repository secret. Name: AMBIT_API_KEY. Value: the key.",
+        "Add the env block to the job that calls the model. Use a GitHub environment with required reviewers when the key gives wide access: anyone who can change a workflow can read the secret.",
+        ...modelStep, ...mcpStep] },
+  ];
+}

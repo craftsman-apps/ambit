@@ -274,9 +274,6 @@ func serverClauses(name string, a *serverAccess) []string {
 }
 
 func withWho(cond string, who Access) string {
-	if who.AllSignedIn {
-		return cond
-	}
 	return cond + " && " + CEL(who)
 }
 

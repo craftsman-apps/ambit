@@ -51,7 +51,11 @@ type Printer struct {
 
 func New(o Options, r *Redactor) *Printer {
 	_, noColorEnv := lookupNoColor()
-	return &Printer{o: o, r: r, color: o.TTY && !o.NoColor && !noColorEnv && enableVT(textWriter(o))}
+	color := o.TTY && !o.NoColor && !noColorEnv && enableVT(textWriter(o))
+	if other := o.Err; color && other != nil && other != textWriter(o) {
+		color = enableVT(other) // another console handle: it must accept colour codes too (#108)
+	}
+	return &Printer{o: o, r: r, color: color}
 }
 
 // Redactor returns the Printer's redactor, for code that reads a secret.
@@ -129,15 +133,28 @@ func (p *Printer) Verbose() io.Writer {
 	}
 	pr, pw := io.Pipe()
 	go func() {
-		// Read in pieces of at most 64 KiB and keep draining, so a long line never blocks the writer.
-		// A line longer than that is printed in several pieces; a secret that spans two pieces is not matched.
+		// Read in pieces of at most 64 KiB and keep draining, so a long line never blocks the writer. A line
+		// longer than that is printed piece by piece; the end of each piece is kept for the next one, so a
+		// secret that spans two pieces is still matched (#108).
 		r := bufio.NewReaderSize(pr, 64*1024)
+		carry := ""
 		for {
-			b, _, err := r.ReadLine()
+			b, more, err := r.ReadLine()
 			if err != nil {
+				if carry != "" {
+					p.line(p.o.Err, carry)
+				}
 				return
 			}
-			p.line(p.o.Err, string(b))
+			s := carry + string(b)
+			if !more {
+				carry = ""
+				p.line(p.o.Err, s)
+				continue
+			}
+			var head string
+			head, carry = p.r.SplitSafe(s)
+			fmt.Fprint(p.o.Err, head)
 		}
 	}()
 	return pw

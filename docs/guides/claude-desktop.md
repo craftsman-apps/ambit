@@ -236,6 +236,7 @@ Open points, which are findings and not yet fixed:
 | What you see | Cause and fix |
 |---|---|
 | Claude Desktop shows the claude.ai sign-in only | `inferenceProvider` is missing or misspelled, or the app was running when the settings arrived. Quit it completely and start it again. |
+| `403 authorization failed: no Ambit key or token was sent` | The request had no key. Check that the helper prints the key. |
 | `403 authorization failed` | The key is wrong, revoked, expired, or has the scope **MCP** only. Also the base address ends in `/v1`, or the path is wrong (the gateway gives 403 for an unknown path). Make a new key with the scope **LLM**. |
 | `404 model_not_found` | The model name is not the `spec.model` of a `Model` object. Change `inferenceModels`. |
 | `403 Model authorization denied` | The token or key is valid, but no access rule allows the person to use the model. See [Different models for different teams](models-per-team.md). |

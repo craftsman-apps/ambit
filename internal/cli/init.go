@@ -143,6 +143,17 @@ func interview(p prompter, gitopsFiles bool) (*initResult, error) {
 		a, err := choose(q, d, "y", "n")
 		return a == "y", err
 	}
+	// secretName asks for the name of a Secret until the answer is a valid Kubernetes name, so nothing but a name
+	// (never a value with '=' or spaces) reaches the printed kubectl command.
+	secretName := func(q, def string) (string, error) {
+		for {
+			a, err := ask(q, def)
+			if err != nil || secretNameRE.MatchString(a) {
+				return a, err
+			}
+			q = "A Secret name has lower-case letters, digits, '-' and '.'. " + strings.TrimPrefix(q, "A Secret name has lower-case letters, digits, '-' and '.'. ")
+		}
+	}
 	var err error
 	must := func(s string, e error) string {
 		if err == nil {
@@ -195,7 +206,7 @@ func interview(p prompter, gitopsFiles bool) (*initResult, error) {
 		return nil, err
 	}
 	if sso != "later" {
-		secret := must(ask("Name of the Secret that holds the sign-in secret (you create it; the value is never asked here)", "ambit-sso"))
+		secret := must(secretName("Name of the Secret that holds the sign-in secret (you create it; the value is never asked here)", "ambit-sso"))
 		redirect := console + "/dex/callback"
 		conn := map[string]any{"type": sso, "id": "company", "name": "Company sign-in"}
 		var cfg map[string]any
@@ -267,9 +278,14 @@ func interview(p prompter, gitopsFiles bool) (*initResult, error) {
 	}
 
 	// 5. TLS.
-	tls, err := ask("Name of the TLS Secret (kubernetes.io/tls), or none", "ambit-tls")
-	if err != nil {
-		return nil, err
+	var tls string
+	for {
+		if tls, err = ask("Name of the TLS Secret (kubernetes.io/tls), or none", "ambit-tls"); err != nil {
+			return nil, err
+		}
+		if strings.EqualFold(tls, "none") || secretNameRE.MatchString(tls) {
+			break
+		}
 	}
 	if strings.EqualFold(tls, "none") {
 		put("gateway.tls.enabled", false)
@@ -286,7 +302,7 @@ func interview(p prompter, gitopsFiles bool) (*initResult, error) {
 		put("evidence.retention", must(ask("How long to keep audit records", "8760h")))
 		if mustYes(yes("Your own ClickHouse (not the one the chart installs)?", false)) {
 			put("evidence.clickhouse.external.host", must(ask("ClickHouse host", "clickhouse."+domain)))
-			s := must(ask("Name of the Secret with the ClickHouse password", "ambit-clickhouse-password"))
+			s := must(secretName("Name of the Secret with the ClickHouse password", "ambit-clickhouse-password"))
 			put("evidence.clickhouse.external.passwordSecret", s)
 			r.secrets = append(r.secrets, initSecret{name: s, kind: "generic", key: "password", hint: "<password>"})
 		}
@@ -303,7 +319,7 @@ func interview(p prompter, gitopsFiles bool) (*initResult, error) {
 		put("limits.failureMode", must(choose("When the budget store does not answer", "FailOpen", "FailOpen", "FailClosed")))
 		if mustYes(yes("Your own Valkey or Redis (keeps the counts on a restart)?", false)) {
 			put("limits.valkey.external.address", must(ask("Valkey address host:port", "valkey."+domain+":6379")))
-			s := must(ask("Name of the Secret with the Valkey password", "ambit-valkey-password"))
+			s := must(secretName("Name of the Secret with the Valkey password", "ambit-valkey-password"))
 			put("limits.valkey.external.passwordSecret", s)
 			r.secrets = append(r.secrets, initSecret{name: s, kind: "generic", key: "password", hint: "<password>"})
 		}
@@ -326,7 +342,7 @@ func interview(p prompter, gitopsFiles bool) (*initResult, error) {
 		put("gitops.branch", g.branch)
 		put("gitops.path", g.path)
 		put("gitops.github.appID", must(ask("GitHub App ID", "")))
-		s := must(ask("Name of the Secret with the GitHub App's private key", "ambit-github-app"))
+		s := must(secretName("Name of the Secret with the GitHub App's private key", "ambit-github-app"))
 		put("gitops.github.privateKeySecret", s)
 		r.secrets = append(r.secrets, initSecret{name: s, kind: "file", key: "private-key.pem", hint: "<the App's .pem file>"})
 		if gitopsFiles {

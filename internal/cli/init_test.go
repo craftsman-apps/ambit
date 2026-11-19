@@ -345,3 +345,31 @@ func yamlString(m map[string]any) string {
 	b, _ := yaml.Marshal(m)
 	return string(b)
 }
+
+// Codex review: only a valid Secret name reaches the printed kubectl command; an answer with '=' is asked again.
+func TestInitSecretNameIsAName(t *testing.T) {
+	dir := t.TempDir()
+	answers := []string{"x=REAL-VALUE", "my-sso"}
+	p := &seqSecret{answers: answers}
+	code, s := initRun(t, dir, p, false, "init")
+	if code != 0 || strings.Contains(s, "REAL-VALUE") || !strings.Contains(s, "create secret generic my-sso --from-literal=clientSecret=<client secret>") {
+		t.Fatalf("exit %d\n%s", code, s)
+	}
+}
+
+// seqSecret answers oidc sign-in and gives its answers, in order, to the Secret name question.
+type seqSecret struct{ answers []string }
+
+func (p *seqSecret) Ask(q, def string) (string, error) {
+	switch {
+	case strings.Contains(q, "Company sign-in"):
+		return "oidc", nil
+	case strings.Contains(q, "Gateway tokens"):
+		return "dex", nil
+	case strings.Contains(q, "sign-in secret"):
+		a := p.answers[0]
+		p.answers = p.answers[1:]
+		return a, nil
+	}
+	return def, nil
+}

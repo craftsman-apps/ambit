@@ -220,13 +220,14 @@ Without flags it runs the checks that apply: the pre-install group when Ambit is
 Installs Ambit on any cluster: the dependency CRDs (Gateway API, agentgateway, ToolHive), then the Helm releases `ambit-crds` and `ambit`. The result is two ordinary Helm releases, so `helm list`, `helm history`, `helm upgrade` and `helm rollback` keep working. The chart version is always the CLI's own version: to install another version of Ambit, use that version of the CLI.
 
 ```sh
-ambit install -f values.yaml [--secret-file <secret>/<key>=<path>]... [--timeout 10m] [--chart-repo oci://...] [--registry-config <file>] [--yes]
+ambit install -f values.yaml [--secret-file <secret>/<key>=<path>]... [--dry-run] [--timeout 10m] [--chart-repo oci://...] [--registry-config <file>] [--yes]
 ```
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `-f`, `--values <file>` | required | values file; may repeat (later files win, as in Helm) |
 | `--secret-file <secret>/<key>=<path>` | | create or update the Secret `<secret>` with the key `<key>` from the file's bytes before the install. May repeat. Only Secrets that the values name are accepted (see below). |
+| `--dry-run` | off | check, render and let the API server validate everything; change nothing (see below) |
 | `--timeout <duration>` | `10m` | how long to wait for the workloads |
 | `--chart-repo <repository>` | `oci://ghcr.io/craftsman-apps/charts` | a mirror of the chart registry |
 | `--registry-config <file>` | Helm's | Helm registry login file, for a private mirror |
@@ -240,6 +241,18 @@ Steps, each printed as one line with its duration:
 5. **Charts** `ambit-crds`, then `ambit`, exactly as `helm install` would install them (client-side apply, Helm's Secret storage), so Helm 3 and Helm 4 can read, upgrade and roll them back. A release left pending is never changed on its own.
 6. **Wait** for the workloads, with progress every 10 seconds.
 7. **Production checks**, the production group of `ambit check`. All pass: exit 0. Any fails: the failures are printed and the exit code is 3 (Ambit is installed and working; the setup is not production-ready yet).
+
+`--dry-run` writes nothing: no Secret, no CRD, no release, and it asks nothing. It prints the target, runs the preflight, then: the dependency CRDs go through a server-side apply with `dryRun=All` (the API server validates them and stores nothing); both charts are rendered; each rendered object whose kind exists on the cluster is validated by the API server (a server-side apply with `dryRun=All`), and an object whose CRD comes with the same install (on a fresh cluster: every Ambit and agentgateway object) is listed as "not validated: CRD not installed yet". When the namespace does not exist yet, its objects are validated in the namespace `default`. `--secret-file` files are read and checked (they exist and are not empty), not written. Exit 1 when the API server refuses an object.
+
+```
+Would apply 31 dependency CRDs (3 skipped: newer on the cluster: gateways.gateway.networking.k8s.io (...))
+Would install ambit-crds 0.5.0 (12 objects) and ambit 0.5.0 (84 objects) in ambit-system
+  validated by the API server: 41; not validated (CRD not installed yet): 43
+    Deployment ambit-console: validated
+    ...
+Would create or update Secret ambit-sso key clientSecret, from ./sso-secret.txt
+✓ dry run: nothing was changed
+```
 
 `--secret-file` reads the file, and the CLI redacts its content from every output line before it does anything else with it, also every line of a multi-line value such as a PEM key. It accepts only the Secret names that the values use: the `secretKeyRef` names in `dex.envVars`, `gateway.tls.certificateSecret`, `evidence.clickhouse.external.passwordSecret`, `limits.valkey.external.passwordSecret`, and `gitops.github.privateKeySecret` when `gitops.enabled` is true. A typo is a usage error (exit 2), so it never creates a stray Secret. The Secret is written with the Kubernetes API, not through Helm: the bytes are in no Helm release, `helm get values` cannot show them, and `helm uninstall` and `ambit uninstall` leave the Secret. An existing Secret gets only the given keys (a merge patch; the CLI never reads the Secret back, and its other keys and labels stay); a new one gets the label `ambitproject.dev/created-by=ambit-cli` (type `kubernetes.io/tls` for the TLS Secret, which needs `tls.crt` and `tls.key` in the same command). The namespace is created when it does not exist.
 

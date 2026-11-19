@@ -36,7 +36,7 @@ ch "DROP DATABASE IF EXISTS evidence_test SYNC" >/dev/null; ch "CREATE DATABASE 
 out=$(kubectl -n "$NS" exec "$CH_POD" -- sh -c "cd /tmp && env AMBIT_TEST_CLICKHOUSE_ADDR=127.0.0.1:8123 AMBIT_TEST_CLICKHOUSE_USER=ambit AMBIT_TEST_CLICKHOUSE_PASSWORD=\"\$CLICKHOUSE_PASSWORD\" AMBIT_TEST_OTEL_LOGS_DDL=/tmp/otel_logs.sql ./console.test -test.run '^TestEvidenceOnClickHouse\$' -test.v" 2>&1) ||
   { echo "$out" | tail -30; fail "1 the export queries on ClickHouse"; }
 grep -q -- "--- PASS: TestEvidenceOnClickHouse" <<<"$out" || fail "1 test did not run: $(tail -5 <<<"$out")"
-pass "1 export queries on ClickHouse $(ch 'SELECT version()'): only gateway records, count matches, one-person filter, $(grep -o 'retention [^ ]* from [a-z]*' <<<"$out")"
+pass "1 export queries on ClickHouse $(ch 'SELECT version()'): only gateway records, count matches, one-person filter, $(grep -o 'retention [^ ]* from [a-z]*' <<<"$out" || true)"
 
 # 2 · a closed period [from, to) around two requests: user09's model call and a wrong key
 from=$(date -u +%Y-%m-%dT%H:%M:%SZ)

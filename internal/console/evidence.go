@@ -217,11 +217,10 @@ func periodName(from, to time.Time) (string, string) {
 	return from.UTC().Format("2006-01-02"), to.UTC().Add(-time.Nanosecond).Format("2006-01-02")
 }
 
-// exportSettings are the ClickHouse settings of every export query: a time limit, and read-only (2: other settings
-// may still be set in the same request, which 1 would refuse).
+// exportContext has the ClickHouse settings of every export query: a time limit, and read-only.
 func exportContext(ctx context.Context, params clickhouse.Parameters) context.Context {
 	return clickhouse.Context(ctx, clickhouse.WithParameters(params),
-		clickhouse.WithSettings(clickhouse.Settings{"max_execution_time": int(exportLimit.Seconds()), "readonly": 2}))
+		clickhouse.WithSettings(clickhouse.Settings{"max_execution_time": int(exportLimit.Seconds()), "readonly": 1}))
 }
 
 // chTime is a DateTime64(9) parameter value.

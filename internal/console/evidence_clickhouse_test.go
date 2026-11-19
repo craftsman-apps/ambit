@@ -37,6 +37,9 @@ func TestEvidenceOnClickHouse(t *testing.T) {
 	insertLog(t, a, day.Add(4*time.Hour), map[string]string{"ambit.kind": "app-approval", "ambit.app.action": "approved", "ambit.actor": "admin@example.com",
 		"ambit.app.requested_by": "ana@example.com", "mcp.target": "github"})
 
+	if _, err := a.DB.ExecContext(exportContext(t.Context(), nil), "INSERT INTO otel_logs (Timestamp) VALUES (now64(9))"); err == nil {
+		t.Error("an export's settings allowed a write")
+	}
 	var want uint64
 	if err := a.DB.QueryRow(`SELECT count() FROM otel_logs WHERE LogAttributes['ambit.kind'] = '' AND Timestamp >= '2026-10-01' AND Timestamp < '2026-10-04'`).Scan(&want); err != nil || want != 6 {
 		t.Fatalf("seeded gateway records in the period: %d (%v)", want, err)

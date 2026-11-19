@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -147,7 +146,7 @@ func (a *app) install(ctx context.Context, f installFlags) error {
 	targetLine := fmt.Sprintf("Installing Ambit %s into context %s (%s), namespace %s", chartVersion(charts), c.Context, c.Server, ns)
 	if f.dryRun {
 		p.Line("%s (dry run)", targetLine)
-	} else if err := kube.Confirm(p, a.in, a.stdinTTY(), a.g.yes, []string{targetLine}, "Install?"); err != nil {
+	} else if err := kube.Confirm(p, a.stdin(), a.stdinTTY(), a.g.yes, []string{targetLine}, "Install?"); err != nil {
 		return err
 	}
 	step := stepper(p)
@@ -170,7 +169,7 @@ func (a *app) install(ctx context.Context, f installFlags) error {
 		return err
 	}
 	if f.dryRun {
-		return a.dryRun(ctx, p, c, h, charts, vals, plan, secrets)
+		return a.dryRun(ctx, p, c, h, charts, vals, plan, secrets, "install")
 	}
 	update, err := a.askCRDUpdates(p, plan)
 	if err != nil {
@@ -187,8 +186,13 @@ func (a *app) install(ctx context.Context, f installFlags) error {
 	}
 
 	// 4-7. Dependency CRDs, charts, wait, production checks.
-	return a.applyAndCheck(ctx, p, c, h, charts, vals, plan, update, f.timeout, "installed", "ambit install")
+	return a.applyAndCheck(ctx, p, c, h, charts, vals, plan, update, f.timeout, "installed", "ambit install", defaultNames, helmx.ApplyOptions{})
 }
+
+// relNames are the release names of the charts ambit-crds and ambit.
+type relNames struct{ crds, app string }
+
+var defaultNames = relNames{crds: "ambit-crds", app: "ambit"}
 
 // stepper prints each step as one line with its duration, like local up.
 func stepper(p *out.Printer) func(string, func() error) error {
@@ -202,7 +206,7 @@ func stepper(p *out.Printer) func(string, func() error) error {
 
 // applyAndCheck is steps 4 to 7 of install and upgrade.
 func (a *app) applyAndCheck(ctx context.Context, p *out.Printer, c *kube.Clients, h helmx.Client, charts local.Charts, vals map[string]any,
-	plan *crdPlan, update bool, timeout time.Duration, done, again string) error {
+	plan *crdPlan, update bool, timeout time.Duration, done, again string, names relNames, opts helmx.ApplyOptions) error {
 	step := stepper(p)
 	ns := a.g.namespace
 	if err := step("Dependency CRDs (Gateway API, agentgateway, ToolHive): "+plan.summary(update), func() error {
@@ -211,13 +215,17 @@ func (a *app) applyAndCheck(ctx context.Context, p *out.Printer, c *kube.Clients
 		return &out.Error{What: "the dependency CRDs were not applied", Why: err.Error(), Next: "run " + again + " again (add --verbose for details)"}
 	}
 	for _, rel := range []struct {
-		name string
-		vals map[string]any
-	}{{"ambit-crds", nil}, {"ambit", vals}} {
+		name, chart string
+		vals        map[string]any
+	}{{names.crds, "ambit-crds", nil}, {names.app, "ambit", vals}} {
 		var r helmx.Release
-		if err := step("Chart "+rel.name+" "+chartVersion(charts), func() error {
+		what := "Chart " + rel.chart + " " + chartVersion(charts)
+		if rel.name != rel.chart {
+			what += " (release " + rel.name + ")"
+		}
+		if err := step(what, func() error {
 			var err error
-			r, err = h.Apply(ctx, rel.name, charts.Ref(rel.name), charts.Version, rel.vals, helmx.ApplyOptions{})
+			r, err = h.Apply(ctx, rel.name, charts.Ref(rel.chart), charts.Version, rel.vals, opts)
 			return err
 		}); err != nil {
 			var pe *helmx.PendingError
@@ -395,7 +403,7 @@ func (a *app) askCRDUpdates(p *out.Printer, plan *crdPlan) (bool, error) {
 		p.Line("  %s", n)
 	}
 	p.Line("A second agentgateway or ToolHive installation on the same cluster is not supported by Ambit.")
-	if err := kube.Confirm(p, a.in, a.stdinTTY(), a.g.yes, nil, fmt.Sprintf("Update these %d CRDs?", len(plan.Update))); err != nil {
+	if err := kube.Confirm(p, a.stdin(), a.stdinTTY(), a.g.yes, nil, fmt.Sprintf("Update these %d CRDs?", len(plan.Update))); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -496,7 +504,7 @@ func (a *app) confirmByName(p *out.Printer, kctx string) error {
 		return out.Usage("no confirmation", "there is no terminal to ask in", "run the command again with --yes")
 	}
 	p.Line("Type the context name (%s) to uninstall:", kctx)
-	answer, _ := bufio.NewReader(a.in).ReadString('\n')
+	answer, _ := a.stdin().ReadString('\n')
 	if strings.TrimSpace(answer) != kctx {
 		return &out.Error{What: "cancelled", Why: fmt.Sprintf("the answer %q is not the context name %q", strings.TrimSpace(answer), kctx), Code: out.ExitFailed}
 	}

@@ -2,6 +2,12 @@
 
 For what each release changes, read the [release notes](https://ambitproject.dev/releases).
 
+`ambit upgrade -f values.yaml` does the upgrade in the right order (the dependency CRDs, `ambit-crds`, `ambit`) and
+lists the sections below that apply to your upgrade. It writes ordinary Helm releases, so `ambit upgrade` and
+`helm upgrade` are interchangeable, and `helm rollback` works on both. A release left in `pending-install` or
+`pending-upgrade` (a laptop that stopped in the middle of an upgrade) is refused; see
+[ambit upgrade](cli.md#ambit-upgrade) for `--recover-pending`.
+
 ## To the release with service accounts (0.5.0)
 
 - **Compression records name the caller.** With `evidence.enabled` and a Server with `resultCompression`, the guard's

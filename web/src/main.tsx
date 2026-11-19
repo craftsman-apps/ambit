@@ -10,6 +10,7 @@ import { ServersPage } from "@/routes/servers";
 import { SSOPage } from "@/routes/sso";
 import { ConnectionsPage } from "@/routes/connections";
 import { OffboardingPage } from "@/routes/offboarding";
+import { EvidencePage } from "@/routes/evidence";
 import { AppsPage } from "@/routes/apps";
 import { AppPresetPage } from "@/routes/app-preset";
 import { AuditPage, UsagePage } from "@/routes/audit";
@@ -42,6 +43,7 @@ const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/sign-in", component: SSOPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/connections", component: ConnectionsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/offboarding", component: OffboardingPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/settings/evidence", component: EvidencePage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/apps", component: AppsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/apps/add/$id", component: AppPresetPage }),
   createRoute({

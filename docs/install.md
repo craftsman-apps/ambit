@@ -200,8 +200,15 @@ The gateway then serves HTTPS on `gateway.tls.port` (default 8443), and plain HT
 
 ## Upgrade and uninstall
 
-Read [Upgrading](upgrading.md) before each upgrade. Apply the new release's dependency CRDs and upgrade the CRD chart
-first, then Ambit:
+Read [Upgrading](upgrading.md) before each upgrade. With the CLI of the new version:
+
+```sh
+ambit upgrade -f values.yaml
+```
+
+It finds the releases (also ones you installed with Helm), applies the dependency CRDs, upgrades `ambit-crds`, then
+`ambit`, waits and runs the production checklist. With Helm only, apply the new release's dependency CRDs and upgrade
+the CRD chart first, then Ambit:
 
 ```sh
 R=https://github.com/craftsman-apps/ambit/releases/download/v<new version>

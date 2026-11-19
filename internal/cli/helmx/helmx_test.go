@@ -208,3 +208,23 @@ func TestRenderChangesNothing(t *testing.T) {
 		t.Fatalf("Render stored a release: %+v", got)
 	}
 }
+
+// ambit upgrade --reuse-values: the values stored in the release stay (Helm's --reset-then-reuse-values), and
+// --recover-pending writes its own note on the revision it marks failed.
+func TestApplyReuseValuesAndRecoverNote(t *testing.T) {
+	c := pendingRelease(t, relcommon.StatusPendingUpgrade)
+	note := "marked failed by ambit upgrade --recover-pending"
+	r, err := c.Apply(context.Background(), "interop", "testdata/interop", "", map[string]any{"greeting": "ignored"},
+		ApplyOptions{RecoverPending: true, RecoverNote: note, ResetThenReuseValues: true})
+	if err != nil || r.Revision != 2 {
+		t.Fatalf("Apply = %+v, %v", r, err)
+	}
+	if v, _ := c.Values("interop", false); v["greeting"] != "one" {
+		t.Fatalf("user values = %v; want the stored greeting one", v)
+	}
+	s := c.(*sdk)
+	first, err := s.cfg.Releases.Get("interop", 1)
+	if err != nil || first.(*rel.Release).Info.Description != note {
+		t.Fatalf("revision 1 = %+v, %v", first, err)
+	}
+}

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -39,9 +40,16 @@ func (a *app) dryRun(ctx context.Context, p *out.Printer, c *kube.Clients, h hel
 		p.Line("  %d of them exist and would change; without --dry-run the CLI asks first: %s", len(plan.Update), strings.Join(plan.Update, ", "))
 	}
 
-	nsExists := true
-	if _, err := c.Kube.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{}); apierrors.IsNotFound(err) {
-		nsExists = false
+	// Namespaces that do not exist yet (the release namespace on a fresh cluster, and others the chart creates):
+	// the API server refuses a dry run in them, so their objects are validated in the namespace default.
+	missing := map[string]bool{}
+	nsExists := func(name string) bool {
+		if v, ok := missing[name]; ok {
+			return !v
+		}
+		_, err := c.Kube.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+		missing[name] = apierrors.IsNotFound(err)
+		return !missing[name]
 	}
 	kv := ""
 	if v, err := c.Kube.Discovery().ServerVersion(); err == nil {
@@ -82,8 +90,15 @@ func (a *app) dryRun(ctx context.Context, p *out.Printer, c *kube.Clients, h hel
 	}
 	p.Line("Would install %s in %s", strings.Join(counts, " and "), ns)
 	p.Line("  validated by the API server: %d; not validated (CRD not installed yet): %d", validated, notValidated)
-	if !nsExists {
-		p.Line("  the namespace %s does not exist yet: its objects were validated in the namespace default", ns)
+	var absent []string
+	for n, m := range missing {
+		if m {
+			absent = append(absent, n)
+		}
+	}
+	sort.Strings(absent)
+	if len(absent) > 0 {
+		p.Line("  namespaces that do not exist yet (%s): their objects were validated in the namespace default", strings.Join(absent, ", "))
 	}
 	for _, r := range results {
 		p.Line("    %s: %s", r.object, r.status)
@@ -100,9 +115,9 @@ func (a *app) dryRun(ctx context.Context, p *out.Printer, c *kube.Clients, h hel
 }
 
 // validateObject asks the API server to validate u by a server-side apply with dryRun=All. A kind the cluster does
-// not know yet (its CRD comes with the same install) is not validated. When the namespace does not exist yet, a
-// namespaced object is validated in the namespace default.
-func validateObject(ctx context.Context, c client.Client, u *unstructured.Unstructured, ns string, nsExists bool) (string, error) {
+// not know yet (its CRD comes with the same install) is not validated. A namespaced object whose namespace does
+// not exist yet is validated in the namespace default.
+func validateObject(ctx context.Context, c client.Client, u *unstructured.Unstructured, ns string, nsExists func(string) bool) (string, error) {
 	gvk := u.GroupVersionKind()
 	m, err := c.RESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version)
 	if meta.IsNoMatchError(err) {
@@ -113,11 +128,11 @@ func validateObject(ctx context.Context, c client.Client, u *unstructured.Unstru
 	}
 	o := u.DeepCopy()
 	if m.Scope.Name() == meta.RESTScopeNameNamespace {
-		if o.GetNamespace() == "" || o.GetNamespace() == ns {
+		if o.GetNamespace() == "" {
 			o.SetNamespace(ns)
-			if !nsExists {
-				o.SetNamespace(metav1.NamespaceDefault)
-			}
+		}
+		if !nsExists(o.GetNamespace()) {
+			o.SetNamespace(metav1.NamespaceDefault)
 		}
 	} else {
 		o.SetNamespace("")

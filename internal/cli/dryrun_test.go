@@ -25,6 +25,11 @@ spec:
   selector: {matchLabels: {app: c}}
   template: {metadata: {labels: {app: c}}, spec: {containers: [{name: c, image: x}]}}
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: ambit-console-grants, namespace: ambit-system-grants}
+rules: []
+---
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata: {name: ambit-llm}
@@ -37,9 +42,10 @@ spec: {}
 	for _, want := range []string{
 		"Installing Ambit 0.5.0 into context prod-eu (https://1.2.3.4:6443), namespace ambit-system (dry run)",
 		"Would apply 28 dependency CRDs",
-		"Would install ambit-crds 0.5.0 (1 objects) and ambit 0.5.0 (2 objects) in ambit-system",
-		"validated by the API server: 2; not validated (CRD not installed yet): 1",
-		"the namespace ambit-system does not exist yet",
+		"Would install ambit-crds 0.5.0 (1 objects) and ambit 0.5.0 (3 objects) in ambit-system",
+		"validated by the API server: 3; not validated (CRD not installed yet): 1",
+		"namespaces that do not exist yet (ambit-system, ambit-system-grants): their objects were validated in the namespace default",
+		"Role ambit-console-grants: validated",
 		"AgentgatewayPolicy ambit-llm: not validated (CRD not installed yet)",
 		"Deployment ambit-console: validated",
 		"Would create or update Secret ambit-sso key clientSecret, from " + r.path("secret.txt"),

@@ -370,9 +370,12 @@ func (c *Catalog) evidenceInfo(w http.ResponseWriter, r *http.Request, _ Session
 		Available bool   `json:"available"`
 		Reason    string `json:"reason,omitempty"`
 	}
-	exports := []exportInfo{{Name: "audit", Available: c.Audit != nil}}
+	exports := []exportInfo{{Name: "offboarding", Available: c.SCIM != nil}, {Name: "audit", Available: c.Audit != nil}}
+	if c.SCIM == nil {
+		exports[0].Reason = "SCIM is off, so there are no offboarding records"
+	}
 	if c.Audit == nil {
-		exports[0].Reason = "the audit store is off (evidence.enabled: false)"
+		exports[1].Reason = "the audit store is off (evidence.enabled: false)"
 	}
 	out := map[string]any{"exports": exports, "running": c.Evidence.running.Load(), "maxDays": c.Evidence.MaxDays, "maxRows": c.Evidence.MaxRows,
 		"retention": c.Evidence.Retention, "retentionFrom": "helm"}
@@ -400,8 +403,10 @@ func (c *Catalog) evidenceExport(w http.ResponseWriter, r *http.Request, s Sessi
 	switch {
 	case ok && name == "audit":
 		prepare = c.prepareAuditExport
+	case ok && name == "offboarding":
+		prepare = c.prepareOffboardingExport
 	default:
-		writeErr(w, http.StatusBadRequest, "unknown export: use audit.zip")
+		writeErr(w, http.StatusBadRequest, "unknown export: use audit.zip or offboarding.zip")
 		return
 	}
 	if !c.Evidence.running.CompareAndSwap(false, true) {

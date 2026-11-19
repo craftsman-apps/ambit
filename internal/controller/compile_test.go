@@ -70,15 +70,16 @@ func TestRulesMergePerModelSortedAndDeduplicated(t *testing.T) {
 	if got := expr(t, objs["nemotron"]); got != identity.PrincipalGroups+`.exists(g, g in ["finance", "ml-research"])` {
 		t.Fatalf("nemotron: %s", got)
 	}
-	if got := expr(t, objs["gemma"]); got != "true" {
+	if got := expr(t, objs["gemma"]); got != identity.Person {
 		t.Fatalf("gemma: %s", got)
 	}
 }
 
-func TestAllSignedInWinsOverGroups(t *testing.T) {
+// allSignedIn grants every person; merged with a group rule, the group still grants its service accounts (SA-8 B).
+func TestAllSignedInIsOredWithGroups(t *testing.T) {
 	r := compileModels([]v1.Model{model("gemma", "google/gemma:free")},
 		[]v1.AccessRule{rule("a", []string{"eng"}, false, "gemma"), rule("b", nil, true, "gemma")}, route)
-	if got := expr(t, r.Objects[0]); got != "true" {
+	if got := expr(t, r.Objects[0]); got != `(`+identity.Person+` || `+identity.PrincipalGroups+`.exists(g, g in ["eng"]))` {
 		t.Fatalf("got %s", got)
 	}
 }

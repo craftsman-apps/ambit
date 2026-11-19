@@ -3,6 +3,8 @@
 {{- end }}
 {{- if not (has (int .Values.apiKeys.maxDays) (list 30 90 365)) }}{{ fail "apiKeys.maxDays must be 30, 90 or 365" }}{{ end }}
 {{- if or (lt (int .Values.apiKeys.inactivityDays) 1) (gt (int .Values.apiKeys.inactivityDays) 365) }}{{ fail "apiKeys.inactivityDays must be 1-365" }}{{ end }}
+{{- if not (has (int .Values.serviceAccounts.maxDays) (list 30 90 365)) }}{{ fail "serviceAccounts.maxDays must be 30, 90 or 365" }}{{ end }}
+{{- if or (lt (int .Values.serviceAccounts.exposureDays) 0) (gt (int .Values.serviceAccounts.exposureDays) 30) }}{{ fail "serviceAccounts.exposureDays must be 0-30" }}{{ end }}
 {{- $ns := .Release.Namespace }}
 {{- $console := printf "system:serviceaccount:%s:ambit-console" $ns }}
 {{- $labels := list "ambitproject.dev/key" "ambitproject.dev/key-owner-record" "ambitproject.dev/key-event" }}

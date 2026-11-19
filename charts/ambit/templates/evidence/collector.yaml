@@ -76,7 +76,7 @@ data:
             # Overrides agentgateway's built-in jwt.sub (log.rs suppresses built-ins named here): never a JWT's subject on a key request.
             - { name: jwt.sub, expression: {{ printf "(%s) || (%s) ? \"\" : (has(jwt.sub) ? jwt.sub : \"\")" $v $p | quote }} }
             - { name: ambit.key_id, expression: {{ printf "(%s) ? apiKey.keyId : \"\"" $v | quote }} }
-            - { name: ambit.identity, expression: {{ printf "(%s) ? \"key\" : ((%s) ? \"invalid key\" : \"jwt\")" $v $p | quote }} }
+            - { name: ambit.identity, expression: {{ include "ambit.identity.kind" . | quote }} }
             # The model name the client asked for (a ModelRouter such as "auto"); gen_ai.request.model is the one that answered.
             - { name: ambit.router, expression: "metadata.ambit_requested_model" }
             # A classifier's label and its reason (set by ambit-router, PR 2); empty for type Rules.

@@ -24,7 +24,7 @@ func TestCELWithUsers(t *testing.T) {
 	}{
 		"users only":     {Access{Users: []string{"user01@acme.com", "user02@acme.com"}}, e + ` in ["user01@acme.com", "user02@acme.com"]`},
 		"groups + users": {Access{Groups: []string{"eng"}, Users: []string{"user01@acme.com"}}, `(` + g + `.exists(g, g in ["eng"]) || ` + e + ` in ["user01@acme.com"])`},
-		"allSignedIn":    {Access{AllSignedIn: true, Users: []string{"user01@acme.com"}}, "true"},
+		"allSignedIn":    {Access{AllSignedIn: true, Users: []string{"user01@acme.com"}}, `(` + identity.Person + ` || ` + e + ` in ["user01@acme.com"])`},
 		"nobody":         {Access{}, "false"},
 	} {
 		if got := CEL(c.a); got != c.want {
@@ -206,5 +206,55 @@ func TestRouterConfigCarriesUsers(t *testing.T) {
 	}
 	if conds["auto"].Reason == "DefaultNotAllowed" {
 		t.Fatalf("user01 may use both: %+v", conds["auto"])
+	}
+}
+
+// Decision SA-8 B: allSignedIn grants every person (JWT or personal key) and never a service account; a rule that
+// names the account's group or identity still grants it, also when merged with an allSignedIn rule. The same in the
+// three compile paths: the Model's policy (LLM), the MCP backend policy, and a fallback copy.
+func TestAllSignedInRefusesServiceAccounts(t *testing.T) {
+	sa := map[string]any{"keyId": "k9", "email": "ci-deploy@svc.ambit.internal", "groups": []any{"eng-ci"}}
+	person := map[string]any{"keyId": "k1", "email": "user01@acme.com", "groups": []any{"sales"}}
+	type caller struct {
+		name     string
+		jwt, key map[string]any
+	}
+	callers := []caller{{"person by JWT", user01, noKey}, {"person by key", noKey, person}, {"service account", noKey, sa}}
+	all := rule("all", nil, true, "gemma")
+	byGroup := rule("ci", []string{"eng-ci"}, false, "gemma")
+	byUser := v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "ci-user"}, Spec: v1.AccessRuleSpec{Users: []string{"ci-deploy@svc.ambit.internal"}, Models: []string{"gemma"}}}
+	for _, c := range []struct {
+		name  string
+		rules []v1.AccessRule
+		want  []bool // per caller
+	}{
+		{"allSignedIn alone", []v1.AccessRule{all}, []bool{true, true, false}},
+		{"allSignedIn + the account's group", []v1.AccessRule{all, byGroup}, []bool{true, true, true}},
+		{"allSignedIn + the account's identity", []v1.AccessRule{all, byUser}, []bool{true, true, true}},
+	} {
+		// LLM: the Model's own policy
+		llm := expr(t, compileModels([]v1.Model{model("gemma", "google/gemma:free")}, c.rules, route).Objects[0])
+		// MCP: the same rules granting a server
+		var mcpRules []v1.AccessRule
+		for _, r := range c.rules {
+			r.Spec.Models, r.Spec.Servers = nil, []v1.ServerAccess{{Name: "crm"}}
+			mcpRules = append(mcpRules, r)
+		}
+		mcp := mcpExpr(t, Compile(nil, []v1.Server{server("crm", "stdio")}, mcpRules, route))
+		// fallback: primary a open by the rules, fallback b open to everyone; the copy needs both
+		var fbRules []v1.AccessRule
+		for _, r := range c.rules {
+			r.Spec.Models = []string{"a"}
+			fbRules = append(fbRules, r)
+		}
+		fbRules = append(fbRules, rule("b-all", []string{"eng-ci"}, true, "b")) // CRD forbids both; Compile merges what it gets
+		fb := expr(t, byName(compileModels([]v1.Model{withFallback(model("a", "model-a"), "b"), model("b", "model-b")}, fbRules, route).Objects)["a-fb1"])
+		for i, cl := range callers {
+			for path, e := range map[string]string{"llm": llm, "mcp": mcp, "fallback": fb} {
+				if got := eval(t, e, cl.jwt, cl.key, "anything"); got != c.want[i] {
+					t.Errorf("%s, %s, %s: got %v, want %v\n%s", c.name, path, cl.name, got, c.want[i], e)
+				}
+			}
+		}
 	}
 }

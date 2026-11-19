@@ -88,6 +88,16 @@ apiKeys:
   # The longest end date a person may choose: 30, 90 or 365.
   maxDays: 365
 
+serviceAccounts:
+  # Service accounts (console: Settings / Service accounts): identities <name>@svc.ambit.internal for CI jobs and
+  # agents, created by admins. false: the emergency stop; creating accounts and keys is refused, the gateways refuse
+  # every service account key (kept, and accepted again when switched back on). Off as well when apiKeys.enabled is false.
+  enabled: true
+  # The longest end date of a service account key: 30, 90 or 365.
+  maxDays: 90
+  # Days a service account key keeps working after the admin who issued it is offboarded (0-30; 0: it stops at once).
+  exposureDays: 7
+
 routing:
   router:
     # ambit-router labels prompts for ModelRouters of type LLM. Installed but at 0 replicas until such a router

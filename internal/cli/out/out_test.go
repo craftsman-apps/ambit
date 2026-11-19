@@ -343,3 +343,21 @@ func TestNoColourWhenTheErrorConsoleCannotProcessEscapes(t *testing.T) {
 		t.Fatalf("colour codes although the error console cannot process them: %q", out.String())
 	}
 }
+
+// Codex review: a secret longer than the 256-byte hold-back, with characters that its encoded forms change, is
+// still redacted across the seam (the hold-back follows the longest registered form).
+func TestVerboseRedactsALongSecretAcrossThePieceSeam(t *testing.T) {
+	secret := strings.Repeat("long secret ", 60) // 720 bytes; QueryEscape and PathEscape forms differ
+	for _, offset := range []int{1, 300, len(secret) - 1} {
+		var errb lockedBuffer
+		p, _ := newTest(Options{Verbose: true, Err: &errb})
+		p.Redactor().Add(secret)
+		w := p.Verbose()
+		line := strings.Repeat("x", 64*1024-offset) + secret + "tail\n"
+		go func() { io.WriteString(w, line+"end\n"); w.(io.Closer).Close() }()
+		waitFor(t, &errb, "end")
+		if got := errb.String(); got != strings.Repeat("x", 64*1024-offset)+"[redacted]tail\nend\n" {
+			t.Fatalf("offset %d: secret not redacted whole (%d bytes out)", offset, len(got))
+		}
+	}
+}

@@ -77,6 +77,7 @@ func TestBuiltinMasksLeaveOrdinaryData(t *testing.T) {
 		"order 123456789, invoice 078051120",               // 9-digit numbers without an SSN label
 		"id 9001011234567 and 900101 1234567",              // RRN-like numbers without a label
 		"RRN 9013011234567",                                // labelled, but month 13 is no date
+		"RRN 9002311234567",                                // labelled, but February 31 is no date
 		"SSN 000051120 and ssn 666 05 1120",                // labelled, but not a valid SSN
 		"call 010-1234-5678 or 010-9876-5432",              // phone numbers
 		"at 37.5665350 126.9779690",                        // coordinates

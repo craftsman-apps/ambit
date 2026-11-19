@@ -51,7 +51,8 @@ wait_for 90 "raw crm_get_rows '{\"n\":300}' >/dev/null; [[ \$(ch \"SELECT count(
 row=$(ch "SELECT LogAttributes['mcp.target'], LogAttributes['ambit.compress.type'], LogAttributes['ambit.compress.mode'], toUInt64(LogAttributes['ambit.compress.bytes_in']) > toUInt64(LogAttributes['ambit.compress.bytes_out']), LogAttributes['jwt.groups'] FROM otel.otel_logs WHERE LogAttributes['ambit.kind']='compression' AND Timestamp >= '$since' LIMIT 1")
 [[ "$row" == $'crm\tjson\tlossless\t1\t["eng"]' ]] || fail "1 unexpected record: $row"
 whole=$(ch "SELECT toString(LogAttributes) || Body FROM otel.otel_logs WHERE LogAttributes['ambit.kind']='compression' AND Timestamp >= '$since' LIMIT 1")
-[[ "$whole" == *"'jwt.email':'user01@example.com'"* && "$whole" == *"'ambit.call_id':'c_"* ]] || fail "1 the record does not name the caller and the call: $whole"
+who=$(ch "SELECT LogAttributes['jwt.email'], match(LogAttributes['ambit.call_id'], '^c_[0-9a-f]{32}$') FROM otel.otel_logs WHERE LogAttributes['ambit.kind']='compression' AND Timestamp >= '$since' LIMIT 1")
+[[ "$who" == $'user01@example.com\t1' ]] || fail "1 the record does not name the caller and the call: $who $whole"
 [[ "$whole" != *minsu* && "$whole" != *item-* && "$whole" != *EMAIL* ]] || fail "1 the record has content: $whole"
 pass "1 guard record in otel_logs: crm, json, lossless, smaller output, groups [\"eng\"], user01's email, a call ID, no content"
 

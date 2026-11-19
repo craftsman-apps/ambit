@@ -199,11 +199,57 @@ func replace(text string, spans []span, with string) string {
 	return b.String()
 }
 
-// Regex applies the patterns and built-ins: the text to send (masked in mask mode), or errGuard in reject mode.
-func (g *Guard) Regex(text string) (string, error) {
-	if g == nil {
-		return text, nil
+// Msg is one message as the guard reads it: the role, and the content as text (a string, or the text parts).
+type Msg struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+func msgsOf(ms []message) []Msg {
+	out := make([]Msg, 0, len(ms))
+	for _, m := range ms {
+		var s string
+		if json.Unmarshal(m.Content, &s) != nil {
+			var parts []struct{ Type, Text string }
+			_ = json.Unmarshal(m.Content, &parts)
+			var b []string
+			for _, p := range parts {
+				if p.Type == "text" {
+					b = append(b, p.Text)
+				}
+			}
+			s = strings.Join(b, "\n")
+		}
+		out = append(out, Msg{m.Role, s})
 	}
+	return out
+}
+
+// lastUser is the content of the last user message ("" when there is none).
+func lastUser(ms []Msg) string {
+	for i := len(ms) - 1; i >= 0; i-- {
+		if ms[i].Role == "user" {
+			return ms[i].Content
+		}
+	}
+	return ""
+}
+
+// Regex applies the patterns and built-ins to every message, as the gateway does: the messages (masked in mask
+// mode), or errGuard when one matches in reject mode, so a request the gateway refuses is never classified.
+func (g *Guard) Regex(ms []Msg) ([]Msg, error) {
+	out := make([]Msg, len(ms))
+	for i, m := range ms {
+		t, err := g.regex(m.Content)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = Msg{m.Role, t}
+	}
+	return out, nil
+}
+
+func (g *Guard) regex(text string) (string, error) {
 	reject := g.Mode == "reject"
 	for _, re := range g.res {
 		var spans []span
@@ -234,24 +280,25 @@ func (g *Guard) Regex(text string) (string, error) {
 	return text, nil
 }
 
-// Hook asks the webhook (agentgateway's guardrail protocol, POST /request) about the text, as the gateway does in
-// reject and mask mode: it passes, masks or refuses. A failed call follows failureMode.
-func (g *Guard) Hook(ctx context.Context, text string) (string, error) {
-	if g == nil || g.Webhook == nil || g.Webhook.URL == "" {
-		return text, nil
+// Hook asks the webhook (agentgateway's guardrail protocol, POST /request) about the messages, as the gateway does
+// in reject and mask mode: it passes, masks or refuses. It returns the text for the classifier, the last user
+// message. A failed call follows failureMode.
+func (g *Guard) Hook(ctx context.Context, ms []Msg) (string, error) {
+	if g.Webhook == nil || g.Webhook.URL == "" {
+		return lastUser(ms), nil
 	}
-	out, err := g.hook(ctx, text)
+	out, err := g.hook(ctx, ms)
 	if err != nil && !errors.Is(err, errGuard) {
 		if g.Webhook.FailureMode == "FailOpen" {
-			return text, nil
+			return lastUser(ms), nil
 		}
 		return "", fmt.Errorf("%w (webhook failed, FailClosed: %v)", errGuard, err)
 	}
 	return out, err
 }
 
-func (g *Guard) hook(ctx context.Context, text string) (string, error) {
-	body, _ := json.Marshal(map[string]any{"body": map[string]any{"messages": []any{map[string]any{"role": "user", "content": text}}}})
+func (g *Guard) hook(ctx context.Context, ms []Msg) (string, error) {
+	body, _ := json.Marshal(map[string]any{"body": map[string]any{"messages": ms}})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.Webhook.URL, bytes.NewReader(body))
 	if err != nil {
 		return "", err
@@ -276,15 +323,24 @@ func (g *Guard) hook(ctx context.Context, text string) (string, error) {
 	}
 	raw, ok := a.Action["body"]
 	if !ok {
-		return text, nil // pass
+		return lastUser(ms), nil // pass
 	}
+	// mask: like the gateway, every message needs a role and a string content, or the answer is an error
 	var m struct {
 		Messages []struct {
-			Content string `json:"content"`
+			Role    *string `json:"role"`
+			Content *string `json:"content"`
 		} `json:"messages"`
 	}
-	if json.Unmarshal(raw, &m) != nil || len(m.Messages) == 0 {
+	if json.Unmarshal(raw, &m) != nil || m.Messages == nil {
 		return "", errors.New("webhook mask answer has no messages")
 	}
-	return m.Messages[len(m.Messages)-1].Content, nil
+	out := make([]Msg, 0, len(m.Messages))
+	for _, x := range m.Messages {
+		if x.Role == nil || x.Content == nil {
+			return "", errors.New("webhook mask answer has a message without role or content")
+		}
+		out = append(out, Msg{*x.Role, *x.Content})
+	}
+	return lastUser(out), nil
 }

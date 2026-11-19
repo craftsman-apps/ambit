@@ -105,9 +105,13 @@ func (h *Handler) decide(ctx context.Context, start time.Time, snap *Snapshot, a
 	if !ok {
 		return Result{Reason: "error"}
 	}
-	text, err := h.Guard.Regex(text)
-	if err != nil {
-		return Result{Reason: "guard"} // the gateway refuses this prompt; it never reaches the classifier
+	var guarded []Msg
+	if h.Guard != nil {
+		var err error
+		if guarded, err = h.Guard.Regex(msgsOf(req.Messages)); err != nil {
+			return Result{Reason: "guard"} // the gateway refuses this prompt; it never reaches the classifier
+		}
+		text = lastUser(guarded)
 	}
 	if l := snap.limits[r.Name]; l != nil && !l.Allow() {
 		return Result{Reason: "rate-limited"}
@@ -139,10 +143,13 @@ func (h *Handler) decide(ctx context.Context, start time.Time, snap *Snapshot, a
 		if r.LLM != nil {
 			key = snap.keys[r.LLM.CredentialKey]
 		}
-		text, err := h.Guard.Hook(cctx, text)
-		if err != nil {
-			ch <- out{err: err}
-			return
+		text := text
+		if h.Guard != nil {
+			var err error
+			if text, err = h.Guard.Hook(cctx, guarded); err != nil {
+				ch <- out{err: err}
+				return
+			}
 		}
 		x, used, err := h.Classifier.Classify(cctx, r, key, cut(text, r.MaxBytes))
 		if r.LLM != nil {

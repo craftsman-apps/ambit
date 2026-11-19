@@ -115,7 +115,10 @@ func TestSCIMOffboardingAndServiceAccounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	same := func(k Key) bool { got, err := s.Keys.getKey(ctx, k.ID); return err == nil && got.ResourceVersion == k.ResourceVersion }
+	same := func(k Key) bool {
+		got, err := s.Keys.getKey(ctx, k.ID)
+		return err == nil && got.ResourceVersion == k.ResourceVersion
+	}
 	// a member of eng with a personal key
 	member := provision(t, mux, "member@example.com")
 	if _, _, err := s.Keys.Create(ctx, Session{Email: "member@example.com", Groups: []string{"eng"}, SignedIn: time.Now().Unix()}, "laptop", ScopeLLM, 90); err != nil {

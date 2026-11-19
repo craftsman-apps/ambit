@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -83,18 +84,31 @@ func CheckArguments(grants []Grant, groups []string, email string, tool string, 
 
 // firstFailure checks one grant's limits. Arguments are decoded with json.Number, so a maximum is compared
 // exactly, and notContains sees every string (and key) inside a nested value as the server will receive it.
+// A limit holds for every key that equals its name without regard to case (strings.EqualFold, as Go's
+// encoding/json matches field names: "Query", "QUERY" and "ſql" reach a Go server as query and sql, issue 334).
 func firstFailure(rules []v1.ArgumentRule, args map[string]any) string {
 	for _, a := range rules {
-		v, present := args[a.Name]
+		var values []any
+		for k, v := range args {
+			if strings.EqualFold(k, a.Name) {
+				values = append(values, v)
+			}
+		}
 		if len(a.OneOf) > 0 {
-			if s, ok := v.(string); !present || !ok || !slices.Contains(a.OneOf, s) {
+			bad := len(values) == 0
+			for _, v := range values {
+				s, ok := v.(string)
+				bad = bad || !ok || !slices.Contains(a.OneOf, s)
+			}
+			if bad {
 				return fmt.Sprintf("argument %s must be one of %s", a.Name, strings.Join(a.OneOf, ", "))
 			}
 		}
-		if len(a.NotContains) > 0 && present {
+		for _, v := range values {
 			for _, text := range texts(v, nil) {
+				text = folded(text)
 				for _, bad := range a.NotContains {
-					if strings.Contains(strings.ToLower(text), strings.ToLower(bad)) {
+					if strings.Contains(text, folded(bad)) {
 						return fmt.Sprintf("argument %s must not contain %s", a.Name, bad)
 					}
 				}
@@ -102,14 +116,26 @@ func firstFailure(rules []v1.ArgumentRule, args map[string]any) string {
 		}
 		if a.Max != "" {
 			limit, okLimit := new(big.Rat).SetString(a.Max)
-			n, isNumber := v.(json.Number)
-			value, okValue := new(big.Rat).SetString(string(n))
-			if !okLimit || !present || !isNumber || !okValue || value.Cmp(limit) > 0 {
+			bad := !okLimit || len(values) == 0
+			for _, v := range values {
+				n, isNumber := v.(json.Number)
+				value, okValue := new(big.Rat).SetString(string(n))
+				bad = bad || !isNumber || !okValue || value.Cmp(limit) > 0
+			}
+			if bad {
 				return fmt.Sprintf("argument %s must be a number at most %s", a.Name, a.Max)
 			}
 		}
 	}
 	return ""
+}
+
+var sqlComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
+
+// folded is text for notContains: lower case, SQL comments (/* ... */) as a space, and every run of white space as
+// one space, so "DROP  TABLE", "DROP\tTABLE" and "DROP/**/TABLE" all contain "drop table" (issue 301).
+func folded(s string) string {
+	return strings.Join(strings.Fields(sqlComment.ReplaceAllString(strings.ToLower(s), " ")), " ")
 }
 
 // texts collects every string in a decoded JSON value: strings, object keys, and numbers as written.

@@ -85,8 +85,9 @@ for i in range(n):
     r = open(os.path.join(p, f"resp{i}")).read()
     t = json.loads(r)["result"]["content"][0]["text"]
     tool = open(os.path.join(p, f"tool{i}")).read().strip()
-    # get_log shortened: a marker. get_rows compressed: an object of columns and rows instead of the tool's list of rows.
-    short += ("[ambit: " in t) if tool == "get_log" else isinstance(json.loads(t), dict)
+    # get_log shortened: a marker. get_rows compressed: the guard writes compact JSON (a list or an object of columns
+    # and rows); the crm tool always sends its rows indented (test/crm/main.go).
+    short += ("[ambit: " in t) if tool == "get_log" else ("\n    {" not in t)
 print(short)
 PY
 SHORT=$(cat "$P/short")

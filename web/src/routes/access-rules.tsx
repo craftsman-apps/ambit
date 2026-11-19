@@ -140,7 +140,7 @@ function RuleDetailPanel({ name, isAdmin, gitops, repository, onEdit, onDeleted 
         <p className="text-small text-muted">AccessRule · {r.gitManaged ? "managed in Git" : r.createdBy ? `created in the console by ${r.createdBy}` : "applied directly to the cluster (for example with kubectl)"}</p>
       </div>
       <dl className="grid grid-cols-[76px_1fr] gap-x-3 gap-y-2">
-        <dt className="text-muted">Who</dt><dd>{r.allSignedIn ? "Everyone with a valid token" : <>
+        <dt className="text-muted">Who</dt><dd>{r.allSignedIn ? "Every signed-in person (not service accounts)" : <>
           {r.groups.length > 0 && <span className="block">Members of <b>{r.groups.join(", ")}</b></span>}
           {r.users.length > 0 && <span className="block">People: <span className="font-mono">{r.users.join(", ")}</span></span>}</>}</dd>
         <dt className="text-muted">Can use</dt>
@@ -232,7 +232,7 @@ function RuleForm({ name, repository, onDone }: { name?: string; repository?: st
               <PeopleField value={chosenUsers} onChange={setUsers} /></div>
           </div>
         )}
-        <label className="flex items-center gap-2"><input id="who-everyone" type="radio" checked={allSignedIn} onChange={() => setEveryone(true)} /> Everyone signed in</label>
+        <label className="flex items-center gap-2"><input id="who-everyone" type="radio" checked={allSignedIn} onChange={() => setEveryone(true)} /> Everyone signed in <span className="text-muted">(not service accounts)</span></label>
       </fieldset>
       <fieldset>
         <legend className="mb-1 text-muted">Can use</legend>

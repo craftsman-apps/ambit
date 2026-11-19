@@ -11,7 +11,8 @@ that person's token: the same access rules, budgets, audit records and offboardi
   a group in the identity provider, their keys lose that group at their next console sign-in. For an immediate
   effect, offboard the person (or revoke their keys).
 - A key is **not a service account**. It belongs to a person and stops when that person is offboarded or has
-  not signed in to the console for a while.
+  not signed in to the console for a while. For a CI job or a background agent, an admin creates a
+  [service account](service-accounts.md).
 - The key is **shown once**, when you create it. Ambit stores only a SHA-256 hash and a short display prefix
   (`ambit_` and 4 characters). If you lose a key, revoke it and create a new one.
 - Treat the key like a password: do not paste it into chat, tickets or a Git repository.
@@ -212,6 +213,10 @@ When the identity provider deactivates or deletes a person (SCIM), Ambit:
 
 Reactivating the person removes the block. Their old keys stay deleted. They create new ones.
 
+[Service account](service-accounts.md) keys are not affected, with one exception: when the person is an admin who
+issued a service account key, that key stops within `serviceAccounts.exposureDays` (default 7 days) unless it is
+rotated (the exposure rule).
+
 When the identity provider changes a person's email, Ambit deletes the keys under the old email. Keys follow
 the identity: the person creates new keys, which carry the new email.
 
@@ -232,7 +237,9 @@ Every request to the LLM or MCP gateway must pass these checks. A request that f
 5. The owner's groups (from the key) allow the model, the MCP tool and the budget, as for a token.
 
 A request without a key must carry a valid token, with a usable `email` claim unless `requireEmail` is
-`false`.
+`false`. A token whose email ends with `@svc.ambit.internal` (the [service account](service-accounts.md) domain) is
+refused; with `requireEmail: false`, so is a token without an email whose subject ends with it. With
+`serviceAccounts.enabled: false`, the keys of service accounts are refused at step 2.
 
 Before the request goes on, the gateway removes the `Authorization` and `x-api-key` headers. The provider or
 MCP server never receives the key. Ambit then adds the provider's own credential. Audit records show the key

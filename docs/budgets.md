@@ -95,6 +95,13 @@ spec:
   current minute (and of the current day) are lost.
 - The console's Budgets page shows the per-minute limits but not their use: a minute's count is gone a minute later.
 
+## Service accounts
+
+A [service account](service-accounts.md) counts as one person of its group: the `user*` limits give it its own
+counter, and the `group*` limits share the group's counter with the people in the group. So a CI job in a loop can
+use up its group's limit and refuse the people in that group for the rest of the minute or day. Give jobs a group of
+their own (for example `eng-ci`) with its own Budget.
+
 ## Applying a change
 
 A change to a Budget takes up to about a minute to apply: the rate limit service reads budgets from a mounted

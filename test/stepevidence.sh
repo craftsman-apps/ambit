@@ -156,6 +156,7 @@ m = json.loads(z.read("manifest.json"))
 for f in m["files"]:
     assert hashlib.sha256(z.read(f["name"])).hexdigest() == f["sha256"], f["name"]
 rows = [r for r in csv.DictReader(io.StringIO(z.read("offboarding.csv").decode("utf-8"), newline="")) if r["email"] == "keytest@example.com"]
+assert rows, "offboarding.csv has no row for keytest@example.com"
 r = rows[-1]
 print(r["gateway_blocked"], "last-before" if r["last_accepted_call_before"] else "no-last-before", r["accepted_calls_after"], "refused-after" if r["first_refused_call_after"] else "no-refused-after")
 PY

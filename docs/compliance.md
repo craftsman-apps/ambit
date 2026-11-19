@@ -20,7 +20,7 @@ This page is not legal advice.
 | Source | What it holds | How you get it |
 |---|---|---|
 | **Audit** page in the console (admins only) | Every call through the gateway: time (UTC), email, route, server, tool, model, status, tokens, routing label. Denied calls are included, with the model name the person asked for; model-list calls (`/v1/models`) are shown as "Model list". Requests with a wrong, revoked or expired key have no person: a second search lists them with time, path, status, the gateway's reason and the client address. A third search, **MCP app requests and approvals**, lists who asked for an MCP server, who approved or denied it, who approved changed tool definitions, and every refused attempt (for example a viewer who tried to approve, or a person who tried to approve their own request), with time, role, server, image or URL, comment and reason. | Search by email and dates, for requests with an invalid key, or for MCP app requests and approvals (email optional); **Export** to CSV. Needs `evidence.enabled: true`. |
-| **ClickHouse** table `otel_logs` | The same records, as the source data. | Your own SQL queries. Retention is `evidence.retention` (default `8760h`, one year). The key ID of a call made with a personal key or a service account key is in `LogAttributes['ambit.key_id']`; `LogAttributes['ambit.identity']` is `service account`, `key`, `invalid key` or `jwt`. The Audit page and its CSV do not show the key ID. The records of MCP app requests and decisions have `LogAttributes['ambit.kind'] = 'app-approval'`; see [MCP app requests and approvals](#mcp-app-requests-and-approvals). |
+| **ClickHouse** table `otel_logs` | The same records, as the source data. | Your own SQL queries. Retention is `evidence.retention` (default `8760h`, one year). The key ID of a call made with a personal key or a service account key is in `LogAttributes['ambit.key_id']`; `LogAttributes['ambit.identity']` is `service account`, `key`, `invalid key` or `jwt`. The Audit page and its CSV do not show the key ID. The records of MCP app requests and decisions have `LogAttributes['ambit.kind'] = 'app-approval'`; see [MCP app requests and approvals](#mcp-app-requests-and-approvals). The AccessRules in force are recorded as `LogAttributes['ambit.kind'] = 'access-snapshot'`; see [Access snapshots](#access-snapshots). |
 | **ClickHouse** tables `ambit_llm_daily_v1`, `ambit_compress_daily_v1`, `ambit_classifier_daily_v1` | Daily counts behind the Savings page: requests and tokens per day, group, router and model; compressed tool result texts and bytes per day, group, server and type; router classifier calls and tokens per day, group and router. They hold no email and no content. Group names are the only identifying text. | Your own SQL queries. Retention is `evidence.summaryRetention` (default `26280h`, three years). They count from the day the console created them; there is no backfill. |
 | **Usage** page (admins only) | Requests, tokens and estimated cost per group per day, for the last 30 days. | Console. |
 | **Kubernetes objects** (`AccessRule`, `Model`, `Server`, `Budget`, `ModelRouter`, `Connection`) | Who may use what. With GitOps mode, every change is a pull request with its author, reviewer and time. | `kubectl get`, or your configuration repository. |
@@ -59,6 +59,29 @@ ORDER BY Timestamp
 ```
 
 If the console cannot send a record to the collector, the step still happens, the console logs an error, and the alert `AmbitConsoleAuditSendFailed` fires (with `alerts.enabled`). The `ServerRequest` object still holds the request and its decision.
+
+### Access snapshots
+
+With `evidence.enabled`, the controller writes a record of every AccessRule in force into `otel_logs`, through the same collector, with the same retention (`evidence.retention`). With these records you can see who was allowed to use what on a past date, also after the rules changed. A record is written:
+
+- when a change of the rules or of the access mode is active in the gateway;
+- when only an AccessRule's text changes in a way the gateway does not see, for example an argument limit (the guard reads it directly);
+- when the controller starts;
+- once a day at 00:05 UTC, with the same content, so each day inside the retention has a record even when nothing changes.
+
+Fields: `ambit.kind` (`access-snapshot`), `ambit.rulesVersion` (the same value as `ambit.rulesVersion` on the gateway's records judged by these rules), `ambit.rulesHash` (SHA-256 of the body), `ambit.snapshot.accessMode` (`enforce` or `audit`). The body (`Body`) is a JSON array of every AccessRule, `{"name": ..., "spec": ...}`, sorted by name. The only personal data is the emails in `users`, which are in the AccessRules already. These records have no `jwt.email`, so the Audit, Usage and Savings pages do not count them.
+
+The rules in force at the end of a day D are in the newest record with `Timestamp` before the end of D:
+
+```sql
+SELECT Timestamp, LogAttributes['ambit.rulesVersion'] AS rules_version, LogAttributes['ambit.snapshot.accessMode'] AS mode, Body
+FROM otel_logs
+WHERE LogAttributes['ambit.kind'] = 'access-snapshot' AND Timestamp < '2026-10-01'
+ORDER BY Timestamp DESC
+LIMIT 1
+```
+
+Records start at the upgrade to 0.5.0; there are none for earlier dates. Sending is best effort: when the collector cannot be reached, or the AccessRules together are larger than 1 MiB, the record is dropped, `ambit_controller_record_dropped_total` goes up and the alert `AmbitControllerRecordsDropped` fires (with `alerts.enabled`). The rules still apply. A missing change shows as two records in a row with different `ambit.rulesHash` values.
 
 **Removing an app is not recorded here.** The console has no action that removes an approved MCP server. A `Server` is removed through your configuration repository in GitOps mode, where the Git history records it, or with `kubectl`, where the Kubernetes audit log of your cluster records it (if your cluster has audit logging on).
 

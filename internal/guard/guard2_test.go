@@ -1,12 +1,17 @@
 package guard
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/extmcp"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	k8sschema "k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func numArgs(t *testing.T, raw string) map[string]any {
@@ -99,5 +104,50 @@ func TestMaskingCoversKeysNumbersURIsResourcesAndPrompts(t *testing.T) {
 	// A resources/read result that is not an object is withheld too.
 	if _, withheld := respond(t, g, "resources/read", `["Kim,900101-1234567"]`); !withheld {
 		t.Error("resources/read list result passed")
+	}
+}
+
+// pinReader is a client.Reader that returns one Server, NotFound for other names, or an error.
+type pinReader struct {
+	obj *v1.Server
+	err bool
+}
+
+func (f pinReader) Get(_ context.Context, key client.ObjectKey, obj client.Object, _ ...client.GetOption) error {
+	if f.err {
+		return errors.New("cache not synced")
+	}
+	if f.obj == nil || key.Name != f.obj.Name {
+		return apierrors.NewNotFound(k8sschema.GroupResource{Resource: "servers"}, key.Name)
+	}
+	*(obj.(*v1.Server)) = *f.obj
+	return nil
+}
+
+func (pinReader) List(context.Context, client.ObjectList, ...client.ListOption) error { return nil }
+
+// Issue 300: when the Server cannot be read, pinning fails closed: nothing is approved, so every tool is hidden
+// and every call refused.
+func TestPinsFailClosedWhenTheServerCannotBeRead(t *testing.T) {
+	s := &v1.Server{}
+	s.Name = "crm"
+	s.Status.ApprovedTools = []v1.ToolPin{{Name: "get_customer", Fingerprint: good}}
+	s.Status.Tools = []v1.Tool{{Name: "get_customer", Fingerprint: good}}
+	for name, c := range map[string]struct {
+		r      pinReader
+		server string
+	}{"read error": {pinReader{err: true}, "crm"}, "no such Server": {pinReader{obj: s}, "other"}} {
+		approved, _, pinned := KubePins{Client: c.r, Namespace: "ambit-system"}.Pins(t.Context(), c.server)
+		if !pinned || len(approved) != 0 {
+			t.Errorf("%s: pinned=%v approved=%v, want pinned with nothing approved", name, pinned, approved)
+		}
+	}
+	if approved, _, pinned := (KubePins{Client: pinReader{obj: s}, Namespace: "ambit-system"}).Pins(t.Context(), "crm"); !pinned || approved["get_customer"] != good {
+		t.Errorf("readable Server: %v %v", pinned, approved)
+	}
+	g := &Guard{Pins: KubePins{Client: pinReader{err: true}, Namespace: "ambit-system"}, Masker: Builtin{}}
+	res, _ := g.CheckRequest(t.Context(), &extmcp.McpRequest{ServiceNames: []string{"crm"}, Method: "tools/call", McpRequest: []byte(`{"name":"get_customer","arguments":{}}`)})
+	if res.GetError() == nil {
+		t.Errorf("call passed while the Server could not be read: %v", res)
 	}
 }

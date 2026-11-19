@@ -112,6 +112,7 @@ opencode 2 sends model calls from a background service (`opencode serve --servic
 - After `connect`, restart the opencode service so that it reads the new settings: `opencode service restart`.
 - To change the key, run `ambit key set --url <llm>` or `ambit connect opencode --replace-key`. Both write the new key into the key file. The running service keeps the old key until you run `opencode service restart`.
 - `ambit disconnect opencode` removes the provider and the model and deletes the key file.
+- Back to opencode 1: run `ambit connect opencode` again. It writes the opencode 1 entry and the shell function and deletes the key file.
 - If `opencode --version` does not answer (opencode is not installed, or not on your `PATH`), the command sets up opencode 2 and says so.
 - The key file holds the key as plain text. Like the keychain, it keeps the key from other users of the computer, but not from programs that run as your user.
 - By hand: write the key to the file, merge the provider into `opencode.json`, and restart the service. On Windows, use the **PowerShell** command of the **opencode** tab: it also limits the file to your user.

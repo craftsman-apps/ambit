@@ -73,6 +73,9 @@ func WriteAll(changes []FileChange) ([]FileResult, error) {
 	for i, c := range changes {
 		r, err := writeOne(c)
 		if err != nil {
+			for j := len(r.Dirs) - 1; j >= 0; j-- { // the folders this write made; one that holds something stays
+				os.Remove(r.Dirs[j])
+			}
 			return nil, withRollback(err, rollback(changes[:i], done))
 		}
 		done = append(done, r)

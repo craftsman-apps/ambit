@@ -2,6 +2,7 @@ package connect
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -309,5 +310,18 @@ func TestWriteAllKeepsTheFirstBackupWhenAskedTo(t *testing.T) {
 	os.WriteFile(q, []byte("a"), 0o644)
 	if _, err := WriteAll([]FileChange{{Path: q, Before: []byte("a"), Exists: true, After: []byte("b"), KeepBackup: true}}); err != nil || read(t, q+".ambit.bak") != "a" {
 		t.Fatalf("%v %q", err, read(t, q+".ambit.bak"))
+	}
+}
+
+// #305, #257: a new file whose write fails leaves no folder that the write made (a NUL byte in the name makes the
+// write fail after its folders exist, on every system).
+func TestWriteAllFailedNewFileRemovesItsFolders(t *testing.T) {
+	base := t.TempDir()
+	p := filepath.Join(base, "ambit", "sub", "opencode-key\x00")
+	if _, err := WriteAll([]FileChange{{Path: p, After: []byte("x")}}); err == nil {
+		t.Fatal("the write must fail")
+	}
+	if _, err := os.Stat(filepath.Join(base, "ambit")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("a folder that the failed write made is still there: %v", err)
 	}
 }

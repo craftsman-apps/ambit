@@ -205,12 +205,12 @@ assert r==[{"webhook":{"action":"Audit","backendRef":{"name":"guard-hook","port"
   "prompt guard webhook only, audit mode: action Audit, the release namespace" --set-json 'llm.promptGuard.builtins=[]' --set llm.promptGuard.webhook.service=guard-hook
 long=$(printf 'a%.0s' $(seq 1 1025))
 for bad in "--set llm.promptGuard.mode=block" "--set-json llm.promptGuard.builtins=[\"Iban\"]" "--set llm.promptGuard.patterns[0]=$long" \
-    "--set llm.promptGuard.pattern=x" "--set llm.promptGuard.webhook.failureMode=Open" "--set llm.promptGuard.webhook.port=0" \
+    "--set llm.promptGuard.pattern=x" "--set llm.promptGuard.webhook.failureMode=Open" "--set llm.promptGuard.webhook.port=0" "--set llm.promptGuard.webhook.service=Guard_Hook" \
     "--set-json llm.promptGuard.builtins=[]" "--set llm.promptGuard.patterns[0]=(?=lookahead)" "--set llm.promptGuard.patterns[0]=a(b"; do
   # shellcheck disable=SC2086
   ! pg --set llm.promptGuard.enabled=true $bad >/dev/null 2>&1 || { echo "FAIL chart: prompt guard values must be refused: $bad"; exit 1; }
 done
-echo "PASS prompt guard: bad mode, built-in, long or invalid pattern, unknown key, failure mode, port, and nothing to check are refused"
+echo "PASS prompt guard: bad mode, built-in, long or invalid pattern, unknown key, failure mode, port, Service name, and nothing to check are refused"
 # helm upgrade --reuse-values from 0.1.0 (#81): the old release's values replace the chart's defaults, so every key
 # added since 0.1.0 is missing. Render every template with the chart's own values.yaml swapped for 0.1.0's.
 old=$(mktemp -d); trap 'rm -rf "$old"' EXIT

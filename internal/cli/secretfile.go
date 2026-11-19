@@ -100,10 +100,10 @@ func readSecretFiles(specs []string, vals map[string]any, r *out.Redactor) ([]se
 		if err != nil {
 			return nil, out.Usage("--secret-file "+spec, err.Error(), "check the path")
 		}
+		// The value as read, and the forms a library may print: without the line end, and without any white space.
 		r.Add(string(b))
-		if t := strings.TrimSpace(string(b)); t != string(b) {
-			r.Add(t)
-		}
+		r.Add(strings.TrimRight(string(b), "\r\n"))
+		r.Add(strings.TrimSpace(string(b)))
 		if len(strings.TrimSpace(string(b))) == 0 {
 			return nil, out.Usage("--secret-file "+spec, "the file is empty", "check the path")
 		}
@@ -125,9 +125,9 @@ func joinKeys(m map[string]string) string {
 }
 
 // writeSecretFiles creates or updates each Secret with the Kubernetes API, not through Helm, so the bytes are in
-// no Helm release. A merge patch sets only the given keys and the label: the Secret's other keys stay, and the CLI
-// never reads the Secret back. A Secret that does not exist is created (type kubernetes.io/tls for the gateway's
-// certificate Secret). The namespace is created first when it does not exist.
+// no Helm release. A merge patch sets only the given keys: the Secret's other keys and labels stay, and the CLI
+// never reads the Secret back. A Secret that does not exist is created with the created-by label (type
+// kubernetes.io/tls for the gateway's certificate Secret). The namespace is created first when it does not exist.
 func writeSecretFiles(ctx context.Context, cs kubernetes.Interface, ns string, files []secretFile, vals map[string]any) error {
 	if len(files) == 0 {
 		return nil
@@ -151,10 +151,8 @@ func writeSecretFiles(ctx context.Context, cs kubernetes.Interface, ns string, f
 	tlsName, _ := lookup(vals, "gateway.tls.certificateSecret").(string)
 	for _, name := range order {
 		data := bySecret[name]
-		patch, err := json.Marshal(map[string]any{
-			"metadata": map[string]any{"labels": map[string]string{createdByLabel: createdByValue}},
-			"data":     data, // []byte marshals as base64, as the API wants
-		})
+		// An existing Secret gets the given keys only: not the created-by label, because the CLI did not create it.
+		patch, err := json.Marshal(map[string]any{"data": data}) // []byte marshals as base64, as the API wants
 		if err != nil {
 			return err
 		}

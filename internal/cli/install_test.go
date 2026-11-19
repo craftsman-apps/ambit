@@ -276,7 +276,7 @@ func TestInstallPreflightFailureStops(t *testing.T) {
 }
 
 // 5.2 secret-file: the value is never in any output (--verbose on) and never in Helm values; an unknown Secret
-// name is exit 2; an existing Secret is updated in the one key only; the Secret gets the created-by label.
+// name is exit 2; an existing Secret is updated in the one key only, and keeps its labels.
 func TestInstallSecretFile(t *testing.T) {
 	const value = "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA1b2c3d4e5f6g7h8i9j0kLMNOPQRSTUVWXYZabcdefghij\nklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVWX==\n-----END RSA PRIVATE KEY-----\n"
 	existing := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ambit-sso", Namespace: "ambit-system"}, Data: map[string][]byte{"other": []byte("keep-me")}}
@@ -306,7 +306,7 @@ func TestInstallSecretFile(t *testing.T) {
 		}
 	}
 	got, err := r.kube.CoreV1().Secrets("ambit-system").Get(context.Background(), "ambit-sso", metav1.GetOptions{})
-	if err != nil || string(got.Data["clientSecret"]) != value || string(got.Data["other"]) != "keep-me" || got.Labels[createdByLabel] != createdByValue {
+	if err != nil || string(got.Data["clientSecret"]) != value || string(got.Data["other"]) != "keep-me" || got.Labels[createdByLabel] != "" {
 		t.Fatalf("Secret = %+v, %v", got, err)
 	}
 }
@@ -323,7 +323,7 @@ func TestSecretFileCreatesTLSSecret(t *testing.T) {
 		t.Fatalf("exit %d\n%s", code, s)
 	}
 	got, err := r.kube.CoreV1().Secrets("ambit-system").Get(context.Background(), "ambit-tls", metav1.GetOptions{})
-	if err != nil || got.Type != corev1.SecretTypeTLS || len(got.Data) != 2 {
+	if err != nil || got.Type != corev1.SecretTypeTLS || len(got.Data) != 2 || got.Labels[createdByLabel] != createdByValue {
 		t.Fatalf("Secret = %+v, %v", got, err)
 	}
 }

@@ -57,6 +57,14 @@ console: { image: { repository: ${IMG%:*}, tag: ${IMG##*:}, pullPolicy: Never } 
 YAML
 VALUES=(-f deploy/quickstart.yaml -f "$W/image.yaml")   # later files win, as in Helm
 
+# 0 · install --dry-run: the API server validates, and nothing is created (no release, no Ambit CRD, no namespace)
+"${A[@]}" install "${VALUES[@]}" --chart-dir charts --dry-run > "$W/dry.log" 2>&1 || { cat "$W/dry.log"; fail "0 ambit install --dry-run"; }
+grep -q '^Would install ambit-crds' "$W/dry.log" && grep -q 'dry run: nothing was changed' "$W/dry.log" || { cat "$W/dry.log"; fail "0 dry-run output"; }
+[[ $(helm list -A -q | wc -l) -eq 0 ]] || fail "0 the dry run made a release"
+! kubectl get crd accessrules.ambitproject.dev >/dev/null 2>&1 || fail "0 the dry run made a CRD"
+! kubectl get crd gateways.gateway.networking.k8s.io >/dev/null 2>&1 || fail "0 the dry run applied a dependency CRD"
+pass "0 ambit install --dry-run: validated, nothing created"
+
 # 1 · install into an empty cluster: exit 0, or 3 (installed and healthy; the quick-start values are not production)
 rc=0; "${A[@]}" install "${VALUES[@]}" --chart-dir charts --yes > "$W/install.log" 2>&1 || rc=$?
 cat "$W/install.log"

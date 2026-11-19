@@ -246,7 +246,11 @@ func (g *Guard) filterList(ctx context.Context, resp *extmcp.McpResponse) (*extm
 func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extmcp.McpResponseResult, error) {
 	var result map[string]any
 	if err := json.Unmarshal(resp.McpResponse, &result); err != nil {
-		return passResp(), nil
+		// A result must be an object; anything else (a list, a string, broken JSON) could hold text the walk below
+		// would never see.
+		slog.Error("guard: tool result is not a JSON object; result withheld", "server", strings.Join(resp.ServiceNames, ","))
+		return &extmcp.McpResponseResult{Result: &extmcp.McpResponseResult_Error{Error: &extmcp.AuthorizationError{
+			Code: extmcp.AuthorizationError_UNKNOWN, Reason: "the tool result is not a JSON object, so it could not be checked for personal data and was withheld"}}}, nil
 	}
 	// The decoded form is the only copy we need. Release the raw message now: a large result is held
 	// several times over while it is masked and encoded again, and the guard has a small memory limit.

@@ -27,6 +27,7 @@ type fakeHelm struct {
 	applyErr    error
 	uninstalled []string
 	renderErr   error
+	manifest    map[string]string // Render's manifest by release name; default: one ConfigMap
 }
 
 func (f *fakeHelm) Apply(_ context.Context, name, ref, version string, vals map[string]any, o helmx.ApplyOptions) (helmx.Release, error) {
@@ -53,7 +54,10 @@ func (f *fakeHelm) Uninstall(name string) (helmx.Release, error) {
 	return helmx.Release{}, errors.New("release: not found")
 }
 func (f *fakeHelm) Render(_ context.Context, name, _, _ string, _ map[string]any, _ string) (string, error) {
-	return "kind: ConfigMap\nmetadata: {name: " + name + "}\n", f.renderErr
+	if m, ok := f.manifest[name]; ok {
+		return m, f.renderErr
+	}
+	return "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: " + name + "}\n", f.renderErr
 }
 func (f *fakeHelm) Get(name string) (*helmx.Release, error) { return f.releases[name], f.err }
 func (f *fakeHelm) Values(name string, all bool) (map[string]any, error) {

@@ -28,6 +28,7 @@ type installFlags struct {
 	timeout             time.Duration
 	chartDir, chartRepo string
 	registryConfig      string
+	dryRun              bool
 }
 
 func (a *app) installCmd() *cobra.Command {
@@ -45,6 +46,7 @@ Exit code 3: Ambit is installed and healthy, but the production checklist has fa
 	fl.StringArrayVarP(&f.values, "values", "f", nil, "values file (required); may repeat: later files win, as in Helm")
 	fl.StringArrayVar(&f.secretFiles, "secret-file", nil, "create or update a Secret that the values name, from a file: <secret>/<key>=<path>; may repeat")
 	fl.DurationVar(&f.timeout, "timeout", 10*time.Minute, "how long to wait for the workloads")
+	fl.BoolVar(&f.dryRun, "dry-run", false, "check and render everything and let the API server validate it; change nothing")
 	fl.StringVar(&f.chartRepo, "chart-repo", ChartRepo, "OCI repository of the charts, for a mirror")
 	fl.StringVar(&f.registryConfig, "registry-config", "", "Helm registry config for a private registry (default: Helm's)")
 	addChartDirFlag(cmd, &f.chartDir)
@@ -141,9 +143,11 @@ func (a *app) install(ctx context.Context, f installFlags) error {
 	}
 	ns := a.g.namespace
 
-	// 1. Target and question.
-	if err := kube.Confirm(p, a.in, a.stdinTTY(), a.g.yes,
-		[]string{fmt.Sprintf("Installing Ambit %s into context %s (%s), namespace %s", chartVersion(charts), c.Context, c.Server, ns)}, "Install?"); err != nil {
+	// 1. Target and question (no question for a dry run: it writes nothing).
+	targetLine := fmt.Sprintf("Installing Ambit %s into context %s (%s), namespace %s", chartVersion(charts), c.Context, c.Server, ns)
+	if f.dryRun {
+		p.Line("%s (dry run)", targetLine)
+	} else if err := kube.Confirm(p, a.in, a.stdinTTY(), a.g.yes, []string{targetLine}, "Install?"); err != nil {
 		return err
 	}
 	step := stepper(p)
@@ -164,6 +168,9 @@ func (a *app) install(ctx context.Context, f installFlags) error {
 		return err
 	}); err != nil {
 		return err
+	}
+	if f.dryRun {
+		return a.dryRun(ctx, p, c, h, charts, vals, plan, secrets)
 	}
 	update, err := a.askCRDUpdates(p, plan)
 	if err != nil {

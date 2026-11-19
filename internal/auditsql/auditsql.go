@@ -54,4 +54,4 @@ func With(q string) string {
 // MarkMissingLast24h counts the audit-mode call records of the last 24 hours with a missing or failed mark.
 var MarkMissingLast24h = With(`{classify}
 SELECT countIf(c_outcome = 'mark-missing') FROM otel_logs
-WHERE Timestamp >= now() - INTERVAL 24 HOUR AND LogAttributes['ambit.accessMode'] = 'audit'`)
+WHERE Timestamp >= now() - INTERVAL 24 HOUR AND LogAttributes['ambit.accessMode'] = 'audit' AND LogAttributes['ambit.kind'] = ''`)

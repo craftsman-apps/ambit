@@ -25,7 +25,7 @@ func TestUpgradeHappyPath(t *testing.T) {
 		t.Fatalf("exit %d\n%s", code, s)
 	}
 	for _, want := range []string{
-		"Upgrade Ambit 0.4.0 → 0.5.0 in context prod-eu (https://1.2.3.4:6443), namespace ambit-system? [y/N]",
+		"Upgrade Ambit 0.4.0 → 0.5.0 in context prod-eu (https://1.2.3.4:6443), namespace ambit-system\nUpgrade? [y/N]",
 		"To the release with agentgateway v1.7.0 (0.4.0)", // not: 0.4.0 is installed
 		"✓ Chart ambit 0.5.0", "✓ Ambit 0.5.0 is upgraded in context prod-eu",
 	} {
@@ -121,6 +121,16 @@ func TestUpgradePendingRelease(t *testing.T) {
 }
 
 // 6.1 discovery: an install made by hand with other release names is upgraded under those names.
+// 5.3: the target is printed also with --yes (no question).
+func TestUpgradePrintsTargetWithYes(t *testing.T) {
+	r := newInstallRig(t)
+	r.helm.list = installed("0.4.0", "deployed", time.Now())
+	code, s := r.run("upgrade", "-f", r.path("values.yaml"), "--yes")
+	if code != 0 || !strings.Contains(s, "Upgrade Ambit 0.4.0 → 0.5.0 in context prod-eu (https://1.2.3.4:6443), namespace ambit-system\n") || strings.Contains(s, "[y/N]") {
+		t.Fatalf("exit %d\n%s", code, s)
+	}
+}
+
 func TestUpgradeUsesDiscoveredNames(t *testing.T) {
 	r := newInstallRig(t)
 	r.helm.list = []helmx.Release{{Name: "gw", Chart: "ambit", ChartVersion: "0.4.0", Status: "deployed", Namespace: "ambit-system"},

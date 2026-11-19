@@ -151,7 +151,7 @@ func (a *app) upgrade(ctx context.Context, f upgradeFlags) error {
 	}
 	if f.dryRun {
 		p.Line("%s (dry run)", target)
-	} else if err := kube.Confirm(p, a.stdin(), a.stdinTTY(), a.g.yes, nil, target+"?"); err != nil {
+	} else if err := kube.Confirm(p, a.stdin(), a.stdinTTY(), a.g.yes, []string{target}, "Upgrade?"); err != nil {
 		return err
 	}
 	step := stepper(p)

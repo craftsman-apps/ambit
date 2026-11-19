@@ -110,4 +110,27 @@ done
 (( in1 - in0 >= 24 && out1 - out0 >= 6 )) || fail "4 usage did not grow by both answers' tokens: input $in0 -> $in1, output $out0 -> $out1"
 uv run --no-project python -c "import sys; sys.exit(0 if float(sys.argv[2]) - float(sys.argv[1]) >= 0.000048 - 1e-12 else 1)" "$cost0" "$cost1" || fail "4 cost did not grow by the priced answers: $cost0 -> $cost1"
 pass "4 usage: two answers (one streamed) added $((in1 - in0)) input and $((out1 - out0)) output tokens and \$$(uv run --no-project python -c "import sys; print(f'{float(sys.argv[2]) - float(sys.argv[1]):.6f}')" "$cost0" "$cost1") to ml-research's cost"
+
+# 5 · issue #89: access snapshots. The controller records the AccessRules in force with the published rules version;
+#     a new AccessRule is recorded once its rules are active. Format of a row: "<rulesVersion> <mode> <rules> <has step7-snapshot>"
+snap() { ch "SELECT concat(LogAttributes['ambit.rulesVersion'], ' ', LogAttributes['ambit.snapshot.accessMode'], ' ', toString(length(JSONExtractArrayRaw(Body))), ' ', toString(position(Body, '\"step7-snapshot\"') > 0)) FROM otel.otel_logs WHERE LogAttributes['ambit.kind'] = 'access-snapshot' ORDER BY Timestamp DESC LIMIT 1"; }
+published() { kubectl -n "$NS" get configmap ambit-access-mode -o jsonpath='{.data.rulesVersion} {.data.mode}'; }
+nrules() { kubectl -n "$NS" get accessrules -o name | wc -l | tr -d ' '; }
+for _ in $(seq 1 30); do [[ "$(snap)" == "$(published) $(nrules) 0" ]] && break; sleep 2; done
+[[ "$(snap)" == "$(published) $(nrules) 0" ]] || fail "5 newest access snapshot '$(snap)' is not the rules in force '$(published) $(nrules) 0'"
+before=$(published)
+kubectl -n "$NS" apply -f - >/dev/null <<'YAML'
+apiVersion: ambitproject.dev/v1alpha1
+kind: AccessRule
+metadata: { name: step7-snapshot }
+spec:
+  groups: [step7-snapshot]
+  servers: [{ name: time, tools: [get_current_time] }]
+YAML
+for _ in $(seq 1 60); do [[ "$(published)" != "$before" && "$(snap)" == "$(published) $(nrules) 1" ]] && break; sleep 2; done
+[[ "$(snap)" == "$(published) $(nrules) 1" && "$(published)" != "$before" ]] || fail "5 a new AccessRule wrote no snapshot: '$(snap)', published '$(published)' (before '$before')"
+after=$(snap)
+kubectl -n "$NS" delete accessrule step7-snapshot --wait >/dev/null
+for _ in $(seq 1 60); do [[ "$(published)" == "$before" ]] && break; sleep 2; done
+pass "5 access snapshots: the rules in force ($before) were recorded; a new AccessRule wrote '$after'"
 done_step 7

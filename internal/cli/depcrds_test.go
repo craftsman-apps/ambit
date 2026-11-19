@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/craftsman-apps/ambit/internal/cli/assets"
 	"github.com/craftsman-apps/ambit/internal/cli/kube"
@@ -15,7 +14,7 @@ import (
 // differs is listed for the question.
 func TestPlanCRDsComparesUnversionedCRDs(t *testing.T) {
 	ctx := context.Background()
-	c := crfake.NewClientBuilder().WithScheme(kube.Scheme).Build()
+	c := fakeCtrl(nil)
 	bundle := assets.CRDBundle()
 	p, err := planCRDs(ctx, c, bundle)
 	if err != nil || len(p.Create) != 28 || len(p.Update) != 0 {

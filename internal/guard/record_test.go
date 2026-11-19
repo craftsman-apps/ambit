@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/craftsman-apps/ambit/internal/extmcp"
+	"github.com/craftsman-apps/ambit/internal/otlplog"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	collogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	"google.golang.org/grpc"
@@ -189,41 +190,20 @@ func TestRecorderSendsOTLP(t *testing.T) {
 	}
 }
 
-// A full queue drops and counts; Record never blocks.
-func TestRecorderFullQueueDrops(t *testing.T) {
-	r := &Recorder{queue: make(chan CompressionRecord, 2)}
-	before := testutil.ToFloat64(recordDropped.WithLabelValues(dropQueueFull))
-	done := make(chan struct{})
-	go func() {
-		for range 5 {
-			r.Record(CompressionRecord{Server: "crm"})
-		}
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Record blocked")
-	}
-	if d := testutil.ToFloat64(recordDropped.WithLabelValues(dropQueueFull)) - before; d != 3 {
-		t.Errorf("dropped %v, want 3", d)
-	}
-}
-
 // A collector that is down or refuses costs the records, counted, and does not fail the call.
 func TestRecorderCollectorDown(t *testing.T) {
 	f, addr := startCollector(t)
 	f.fail = true
 	rec, _ := NewRecorder(addr)
 	g := &Guard{Masker: Builtin{}, Compression: on(ModeLossless), Records: rec}
-	before := testutil.ToFloat64(recordDropped.WithLabelValues(dropSendFailed))
+	before := testutil.ToFloat64(recordDropped.WithLabelValues(otlplog.DropSendFailed))
 	res, err := g.CheckResponse(t.Context(), &extmcp.McpResponse{ServiceNames: []string{"crm"}, Method: "tools/call", MetadataContext: groupsMeta("", "eng"),
 		McpResponse: mustJSON(map[string]any{"content": []map[string]any{{"type": "text", "text": issueList(100)}}})})
 	if err != nil || res.GetMutated() == nil {
 		t.Fatalf("call failed: %v %v", res, err)
 	}
 	rec.Close() // flushes, so the failed export has happened
-	if d := testutil.ToFloat64(recordDropped.WithLabelValues(dropSendFailed)) - before; d != 1 {
+	if d := testutil.ToFloat64(recordDropped.WithLabelValues(otlplog.DropSendFailed)) - before; d != 1 {
 		t.Errorf("send_failed %v, want 1", d)
 	}
 	// And an address nobody listens on.
@@ -245,17 +225,17 @@ func TestRecorderBlockedCollectorDoesNotBlockCallers(t *testing.T) {
 	defer func() { close(release); s.Stop() }()
 	rec, _ := NewRecorder(lis.Addr().String())
 	start := time.Now()
-	for range 5 * recordQueue {
+	for range 5 * otlplog.Queue {
 		rec.Record(CompressionRecord{Server: "crm", Groups: []string{"eng"}})
 	}
 	if d := time.Since(start); d > time.Second {
-		t.Errorf("%d Record calls took %v with a collector that does not answer", 5*recordQueue, d)
+		t.Errorf("%d Record calls took %v with a collector that does not answer", 5*otlplog.Queue, d)
 	}
 	closed := make(chan struct{})
 	go func() { rec.Close(); close(closed) }()
 	select {
 	case <-closed:
-	case <-time.After(recordTimeout + 3*time.Second):
+	case <-time.After(otlplog.Timeout + 3*time.Second):
 		t.Fatal("Close did not return")
 	}
 }

@@ -17,6 +17,11 @@ func (h *recordingHelm) Apply(_ context.Context, _, _, _ string, _ map[string]an
 }
 func (h *recordingHelm) Get(string) (*helmx.Release, error)          { return nil, nil }
 func (h *recordingHelm) Values(string, bool) (map[string]any, error) { return nil, nil }
+func (h *recordingHelm) List(bool) ([]helmx.Release, error)          { return nil, nil }
+func (h *recordingHelm) Uninstall(string) (helmx.Release, error)     { return helmx.Release{}, nil }
+func (h *recordingHelm) Render(context.Context, string, string, string, map[string]any, string) (string, error) {
+	return "", nil
+}
 
 // #107: local up still recovers a pending release without asking: it installs only into a cluster it owns.
 func TestLocalUpRecoversPendingReleases(t *testing.T) {

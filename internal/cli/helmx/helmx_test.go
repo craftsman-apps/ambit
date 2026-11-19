@@ -32,7 +32,7 @@ func memClient(t *testing.T) Client {
 	cfg.KubeClient = &kubefake.PrintingKubeClient{Out: io.Discard}
 	cfg.Capabilities = common.DefaultCapabilities
 	cfg.RegistryClient = rc
-	return &sdk{cfg: cfg, settings: cli.New(), ns: "ambit-system"}
+	return &sdk{cfg: cfg, settings: cli.New(), ns: "ambit-system", allCfg: func() (*action.Configuration, error) { return cfg, nil }}
 }
 
 func TestApplyInstallsThenUpgrades(t *testing.T) {
@@ -160,5 +160,51 @@ func TestApplyRecoversPendingRelease(t *testing.T) {
 				t.Fatalf("Apply over a %s release = %+v, %v", st, got, err)
 			}
 		})
+	}
+}
+
+func TestListFindsReleasesByChart(t *testing.T) {
+	c := memClient(t)
+	ctx := context.Background()
+	for _, name := range []string{"my-ambit", "other"} {
+		if _, err := c.Apply(ctx, name, "testdata/interop", "", nil, ApplyOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, all := range []bool{false, true} {
+		rs, err := c.List(all)
+		if err != nil || len(rs) != 2 {
+			t.Fatalf("List(%v) = %+v, %v", all, rs, err)
+		}
+		for _, r := range rs {
+			if r.Chart != "interop" || r.Namespace != "ambit-system" || r.Status != "deployed" || r.Updated.IsZero() {
+				t.Errorf("List(%v): %+v", all, r)
+			}
+		}
+	}
+}
+
+func TestUninstallRemovesTheRelease(t *testing.T) {
+	c := memClient(t)
+	if _, err := c.Apply(context.Background(), "interop", "testdata/interop", "", nil, ApplyOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	r, err := c.Uninstall("interop")
+	if err != nil || r.Revision != 1 || r.Name != "interop" {
+		t.Fatalf("Uninstall = %+v, %v", r, err)
+	}
+	if got, err := c.Get("interop"); got != nil || err != nil {
+		t.Fatalf("Get after uninstall = %+v, %v", got, err)
+	}
+}
+
+func TestRenderChangesNothing(t *testing.T) {
+	c := memClient(t)
+	m, err := c.Render(context.Background(), "interop", "testdata/interop", "", map[string]any{"greeting": "rendered"}, "v1.31.0")
+	if err != nil || !strings.Contains(m, "rendered") || !strings.Contains(m, "kind: ConfigMap") {
+		t.Fatalf("Render = %q, %v", m, err)
+	}
+	if got, _ := c.Get("interop"); got != nil {
+		t.Fatalf("Render stored a release: %+v", got)
 	}
 }

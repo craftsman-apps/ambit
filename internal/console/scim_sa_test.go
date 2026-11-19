@@ -178,6 +178,23 @@ func TestSCIMEmailChangeExposes(t *testing.T) {
 	if got, _ := s.Keys.getKey(ctx, k.ID); time.Until(got.Until) > 7*24*time.Hour {
 		t.Fatalf("not exposed: %v", got.Until)
 	}
+	// an inactive user's email change exposes too (a key planted under the old email after the deactivation)
+	_, k2, err := s.Keys.CreateAccountKey(ctx, Session{Email: "other@example.com"}, "ci", "k2", ScopeLLM, 90)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oid := provision(t, mux, "other@example.com")
+	s.Keys.Services.ExposureDays = 30 // deactivation exposes to 30 days ...
+	if r := patchActive(t, mux, oid, false); r.Code != 200 {
+		t.Fatal(r.Code)
+	}
+	s.Keys.Services.ExposureDays = 7 // ... and the email change of the inactive user lowers it to 7
+	if r := scimDo(t, mux, "PUT", "/scim/v2/Users/"+oid, scimToken, scimUser("other2@example.com", false)); r.Code != 200 {
+		t.Fatalf("PUT inactive: %d %s", r.Code, r.Body)
+	}
+	if got, _ := s.Keys.getKey(ctx, k2.ID); time.Until(got.Until) > 7*24*time.Hour {
+		t.Fatalf("inactive email change not exposed: %v", got.Until)
+	}
 }
 
 // Section 7.3: when the exposure write fails, SCIM answers 503 with Retry-After: 30 and the retry completes it.

@@ -438,13 +438,16 @@ func (s *SCIM) replace(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if u.Active && u.Email != prev && s.Keys != nil && !reserved(prev, "email change") { // keys follow the identity: new keys go under the new email
-		if _, err := s.Keys.OffboardKeys(r.Context(), prev, "scim PUT email change"); err != nil && !errors.Is(err, ErrBadInput) {
-			slog.Error("scim: delete keys of the previous email", "email", prev, "err", err)
-			scimRetry(w)
-			return
+	if u.Email != prev && s.Keys != nil && !reserved(prev, "email change") {
+		if u.Active { // keys follow the identity: new keys go under the new email
+			if _, err := s.Keys.OffboardKeys(r.Context(), prev, "scim PUT email change"); err != nil && !errors.Is(err, ErrBadInput) {
+				slog.Error("scim: delete keys of the previous email", "email", prev, "err", err)
+				scimRetry(w)
+				return
+			}
 		}
-		// the person under the old email saw the service account keys they issued: the exposure rule applies
+		// the person under the old email saw the service account keys they issued: the exposure rule applies, also
+		// for an inactive user (idempotent: the deactivation already exposed them)
 		if _, err := s.Keys.ExposeIssuedBy(r.Context(), prev, "scim PUT email change"); err != nil && !errors.Is(err, ErrBadInput) {
 			slog.Error("scim: expose service account keys issued under the previous email", "email", prev, "err", err)
 			scimRetry(w)

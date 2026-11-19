@@ -1,0 +1,56 @@
+console:
+  host: console.example.com
+  url: https://console.example.com
+dex:
+  envVars:
+  - name: SSO_BIND_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        key: bindPassword
+        name: ambit-sso
+evidence:
+  enabled: true
+  retention: 8760h
+gateway:
+  replicas: 2
+  tls:
+    certificateSecret: ambit-tls
+    enabled: true
+limits:
+  enabled: true
+  failureMode: FailOpen
+llm:
+  enabled: true
+  host: llm.example.com
+  jwt:
+    dex: true
+mcp:
+  enabled: true
+  host: mcp.example.com
+  jwt:
+    dex: true
+protection:
+  enabled: true
+sso:
+  connectors:
+  - config:
+      bindDN: cn=ambit,dc=example,dc=com
+      bindPW: $SSO_BIND_PASSWORD
+      groupSearch:
+        baseDN: ou=groups,dc=example,dc=com
+        filter: (objectClass=groupOfNames)
+        nameAttr: cn
+        userMatchers:
+        - groupAttr: member
+          userAttr: DN
+      host: ldap.example.com:636
+      userSearch:
+        baseDN: ou=people,dc=example,dc=com
+        emailAttr: mail
+        filter: (objectClass=person)
+        idAttr: DN
+        nameAttr: cn
+        username: mail
+    id: company
+    name: Company sign-in
+    type: ldap

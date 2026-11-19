@@ -49,6 +49,8 @@ type app struct {
 	testChecks func(groups map[string]bool) []checks.Result
 	testTTY    bool
 	stdinBuf   *bufio.Reader
+	// testPrompter answers the questions of ambit init in tests.
+	testPrompter prompter
 }
 
 // stdin is standard input as one buffered reader for every question of a command.
@@ -165,6 +167,6 @@ func (a *app) root() *cobra.Command {
 	f.BoolVar(&a.g.noColor, "no-color", false, "no colour in the output")
 	f.BoolVar(&a.g.verbose, "verbose", false, "print library logs (secrets are redacted)")
 	root.AddCommand(a.validateCmd(), a.lintCmd(), a.versionCmd(), a.localCmd(), a.checkCmd(), a.keyCmd(), a.connectCmd(), a.disconnectCmd(),
-		a.installCmd(), a.upgradeCmd(), a.uninstallCmd())
+		a.initCmd(), a.installCmd(), a.upgradeCmd(), a.uninstallCmd())
 	return root
 }

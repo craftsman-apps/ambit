@@ -1,0 +1,34 @@
+console:
+  host: console.example.com
+  url: https://console.example.com
+evidence:
+  clickhouse:
+    external:
+      host: clickhouse.example.com
+      passwordSecret: ambit-clickhouse-password
+  enabled: true
+  retention: 8760h
+gateway:
+  replicas: 2
+  tls:
+    certificateSecret: ambit-tls
+    enabled: true
+limits:
+  enabled: true
+  failureMode: FailClosed
+  valkey:
+    external:
+      address: valkey.example.com:6379
+      passwordSecret: ambit-valkey-password
+llm:
+  enabled: true
+  host: llm.example.com
+  jwt:
+    dex: true
+mcp:
+  enabled: true
+  host: mcp.example.com
+  jwt:
+    dex: true
+protection:
+  enabled: true

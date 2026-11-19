@@ -402,6 +402,8 @@ jobs:
           go build -tags dev -o bin/ambit ./cmd/ambit
           gunzip -c "$RUNNER_TEMP/images.tar.gz" > "$RUNNER_TEMP/images.tar"
           mkdir -p charts/ambit/charts && cp "$RUNNER_TEMP"/thirdparty/charts/*.tgz charts/ambit/charts/
+      - name: Every values file of ambit init's golden tests renders with the chart (it needs the chart dependencies)
+        run: AMBIT_RENDER_CHARTS=1 go test -count=1 -run TestInitGoldenFilesRender ./internal/cli/
       - name: ambit install --dry-run, install, a model call, upgrade, Helm 3 and 4 rollback, uninstall, then 0.4.0 by Helm and ambit upgrade
         env:
           CLI_ARCHIVES: "${{ runner.temp }}/images.tar ${{ runner.temp }}/thirdparty/agentgateway.tar"
@@ -409,6 +411,23 @@ jobs:
           HELM4: "${{ runner.temp }}/helm4/helm"
           CLI_PREVIOUS: "0.4.0"
         run: test/cli-install.sh  # prints the cluster's pods itself on a failure
+
+  # Spec D2 3.1.1: the files of ambit init --gitops argocd on Argo CD on kind; the console must become Ready. The
+  # repository is served from the runner, so no GitHub repository or App is needed. Release charts and images.
+  cli-gitops-init:
+    needs: changes
+    if: needs.changes.outputs.cli_kind == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
+        with: { install_only: true }
+      - name: ambit init --gitops argocd, Argo CD syncs the files, the console becomes Ready
+        env: { CLI_PREVIOUS: "0.4.0" }
+        run: test/gitops/init-argocd.sh
 
   # Spec D2 decision CLI-8: the same script on a real cluster that is not kind. k3s runs directly on the runner (a
   # real kubelet, containerd, its own load balancer and storage class), without Docker in Docker.

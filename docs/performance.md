@@ -64,6 +64,33 @@ How to read the tables:
 
 Repeatability: in a first full run on the same cluster, the p50 of every cell was within 0.4 ms of the value above (the largest relative difference was 16 %: 2.9 ms against 2.5 ms). In one run of that first run (`mcp-mask` at 50 req/s) all 3,000 requests failed, and the logs did not show why. `test/bench.sh` now checks each MCP session with one call before it measures, and stops when more than 1 % of the requests of a run fail; the published numbers come from the second full run, in which no request failed.
 
+## Prompt guard
+
+Measured on 2026-11-19 on the branch of the pull request that added the guard (main at `d23898b` plus the guard), in the [reference environment](#reference-environment), with `SUITE=guard test/bench.sh`. **Reference numbers on one machine, not a guarantee.** Another Ambit kind cluster ran in the same Docker virtual machine during the measurement (more noise than the table above).
+
+In plain words: for prompts up to about 100 KB the [prompt guard](concepts.md#prompt-guard) added less time than the difference between two runs of the same request without it, so this method cannot measure it (under 1.5 ms at p50). For a 1 MB prompt it added about 5 ms. Coding agents send the whole conversation again with every request, so a long session sends prompts of hundreds of kilobytes.
+
+What was measured: model requests through the gateway with a personal API key, to the mock model, 10 requests per second, 3 interleaved runs of 70 seconds (10 seconds of warm-up), without and with the guard. The guard had the four default built-in patterns (`CreditCard`, `Ssn`, `Email`, `PhoneNumber`) and 3 patterns of its own (`(?i)ignore (all )?(previous|prior) instructions`, `AKIA[0-9A-Z]{16}`, `(?i)\bproject[- ]falcon\b`), mode `reject`. The prompts are a coding conversation (a system prompt, then user and assistant turns with code and build output) of 1.3 KB, 101 KB and 1.0 MB, and match no pattern: the usual case, in which the guard reads all of the text and lets it through. **Added** is the median of the case with the guard minus the median of the same prompt without it.
+
+| Prompt size | Without guard p50 / p99 | With guard p50 / p99 | Added p50 | Added p99 |
+|---|---|---|---|---|
+| 1.3 KB | 5.3 / 10.9 | 4.8 / 11.9 | below noise (< 1.5) | below noise (< 3.8) |
+| 101 KB | 5.8 / 12.8 | 7.0 / 13.1 | below noise (< 1.5) | below noise (< 2.4) |
+| 1.0 MB | 9.2 / 16.7 | 14.4 / 22.4 | 5.2 | 5.7 |
+
+All measurements, in milliseconds; the median of 3 runs, with the lowest and highest run in brackets:
+
+| Case | Rate (req/s) | p50 | p95 | p99 | Throughput (req/s) | Errors |
+|---|---|---|---|---|---|---|
+| llm-1kb | 10 | 5.3 [5.0-5.5] | 8.9 [8.6-9.2] | 10.9 [10.8-14.6] | 10.0 | 0 |
+| llm-1kb-guard | 10 | 4.8 [4.6-6.1] | 8.8 [8.2-9.5] | 11.9 [9.8-13.5] | 10.0 | 0 |
+| llm-100kb | 10 | 5.8 [5.4-6.8] | 9.9 [9.6-10.4] | 12.8 [12.0-14.4] | 10.0 | 0 |
+| llm-100kb-guard | 10 | 7.0 [6.3-7.8] | 10.6 [10.4-10.8] | 13.1 [13.0-13.2] | 10.0 | 0 |
+| llm-1mb | 10 | 9.2 [8.7-11.1] | 14.3 [13.3-14.4] | 16.7 [15.1-17.8] | 10.0 | 0 |
+| llm-1mb-guard | 10 | 14.4 [14.3-16.0] | 19.5 [19.2-21.6] | 22.4 [21.5-25.9] | 10.0 | 0 |
+
+The pull request had a gate at 100 KB: added p50 under 2 ms and added p99 under 10 ms. It passed (the added time was below the noise bounds of 1.5 ms and 2.4 ms). Prompts that match a pattern were not measured: in `reject` mode they end before the model, and in `mask` mode the guard also rewrites the prompt.
+
 ## What was measured
 
 A request through Ambit takes the time of the direct request plus the time the gateway adds: the check of the token or personal key, the access rule, the budget check, the audit record, and for MCP the guard (masking and, if it is on, compression). To see only that added time, the model and the MCP server are small test servers with no real model or app behind them, and each case through the gateway is compared with a separate measurement of direct requests to the same test server.
@@ -109,7 +136,9 @@ make kind-up image install
 lockf /tmp/ambit-kind.lock test/bench.sh
 ```
 
-Settings, as environment variables: `RATES` (default `10 50 100`), `RUNS` (default `3`), `DURATION` (default `70s`, warm-up included), `WARMUP` (default `10s`) and `OUT` (a directory for the raw results). A complete run with the defaults took about 65 minutes on the reference machine, setup included.
+To measure the prompt guard instead (the table under [Prompt guard](#prompt-guard), about 30 minutes): `lockf /tmp/ambit-kind.lock env SUITE=guard test/bench.sh`.
+
+Settings, as environment variables: `SUITE` (`latency`, the default, or `guard`), `RATES` (default `10 50 100`; `10` for `guard`), `RUNS` (default `3`), `DURATION` (default `70s`, warm-up included), `WARMUP` (default `10s`) and `OUT` (a directory for the raw results). A complete run with the defaults took about 65 minutes on the reference machine, setup included.
 
 To measure your own cluster, keep the method: send from a pod in the same cluster, and compare each case with a direct request to the same server.
 
@@ -118,4 +147,4 @@ To measure your own cluster, keep the method: send from a pod in the same cluste
 - The time of a real model. A model answer takes from hundreds of milliseconds to many seconds; the time the gateway adds is small next to it. The time of the provider's network is not in these numbers.
 - A cluster with several nodes, several gateway replicas, or a network between the client and the cluster.
 - The highest rate the gateway can carry. The rates here are fixed, and all parts (the gateway, the test servers, the sender, Keycloak and ClickHouse) share 4 CPUs.
-- Streaming answers, large prompts, and MCP results much larger than 10 KB. The guard's time grows with the size of a result.
+- Streaming answers, and MCP results much larger than 10 KB. Large prompts are measured only with and without the prompt guard (above). The guard's time grows with the size of a result.

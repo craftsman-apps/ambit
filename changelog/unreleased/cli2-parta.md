@@ -1,0 +1,7 @@
+- CLI: two `ambit local up` or `ambit local down` runs for the same `--name` no longer run at the same time; the second stops at once with exit 1 (#107).
+- CLI: with `--output json`, a failure prints `{"error": {"what", "why", "next", "code"}}` on standard output, and `ambit check --pre --local --output json` prints its JSON when the kind cluster cannot be checked (#107).
+- CLI: `--verbose` output redacts every line of a multi-line secret, such as a PEM private key, and a secret that a long line splits across two pieces (#108).
+- CLI: waiting for pods shows a Deployment whose rollout is in progress as `1/1 ready, 0/1 updated`, names workloads that have no pod next to the waiting pods, and names the cause instead of `context deadline exceeded` when the time runs out (#108).
+- CLI: `ambit local up --name` refuses the names that Windows reserves (`con`, `nul`, `com1` and others) on every system (#108).
+- CLI: the `--deep` audit check no longer counts the collector's `_created` series as sent records (#108).
+- Release workflow: a re-run of an older stable tag is no longer marked as the latest release and is not sent to Homebrew or npm (#108).

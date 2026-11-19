@@ -46,7 +46,7 @@ func TestHelm3Interop(t *testing.T) {
 
 	// 1. Two revisions written by the CLI's SDK.
 	for i, g := range []string{"one", "two"} {
-		r, err := c.Apply(ctx, name, "testdata/interop", "", map[string]any{"greeting": g})
+		r, err := c.Apply(ctx, name, "testdata/interop", "", map[string]any{"greeting": g}, ApplyOptions{})
 		if err != nil {
 			t.Fatalf("SDK revision %d: %v", i+1, err)
 		}
@@ -78,7 +78,7 @@ func TestHelm3Interop(t *testing.T) {
 	}
 
 	// 4. The CLI's SDK upgrades over Helm 3's revision (revision 5).
-	r, err := c.Apply(ctx, name, "testdata/interop", "", map[string]any{"greeting": "three"})
+	r, err := c.Apply(ctx, name, "testdata/interop", "", map[string]any{"greeting": "three"}, ApplyOptions{})
 	if err != nil {
 		t.Fatalf("SDK upgrade over a Helm 3 revision: %v", err)
 	}

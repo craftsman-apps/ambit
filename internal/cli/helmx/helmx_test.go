@@ -2,9 +2,11 @@ package helmx
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"helm.sh/helm/v4/pkg/action"
@@ -39,14 +41,14 @@ func TestApplyInstallsThenUpgrades(t *testing.T) {
 	if r, err := c.Get("interop"); err != nil || r != nil {
 		t.Fatalf("Get before install = %v, %v; want nil, nil", r, err)
 	}
-	r1, err := c.Apply(ctx, "interop", "testdata/interop", "", map[string]any{"greeting": "one"})
+	r1, err := c.Apply(ctx, "interop", "testdata/interop", "", map[string]any{"greeting": "one"}, ApplyOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if r1.Revision != 1 || r1.Chart != "interop" || r1.ChartVersion != "0.1.0" || r1.Status != "deployed" {
 		t.Fatalf("install = %+v", r1)
 	}
-	r2, err := c.Apply(ctx, "interop", "testdata/interop", "", map[string]any{"greeting": "two"})
+	r2, err := c.Apply(ctx, "interop", "testdata/interop", "", map[string]any{"greeting": "two"}, ApplyOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +63,7 @@ func TestApplyInstallsThenUpgrades(t *testing.T) {
 
 func TestValuesUserSuppliedVersusAll(t *testing.T) {
 	c := memClient(t)
-	if _, err := c.Apply(context.Background(), "interop", "testdata/interop", "", map[string]any{"extra": "x"}); err != nil {
+	if _, err := c.Apply(context.Background(), "interop", "testdata/interop", "", map[string]any{"extra": "x"}, ApplyOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	user, err := c.Values("interop", false)
@@ -104,27 +106,56 @@ current-context: x
 	}
 }
 
+// pendingRelease installs revision 1 and leaves it in status st, as a hard stop during the Helm step does.
+func pendingRelease(t *testing.T, st relcommon.Status) Client {
+	t.Helper()
+	c := memClient(t)
+	if _, err := c.Apply(context.Background(), "interop", "testdata/interop", "", map[string]any{"greeting": "one"}, ApplyOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	s := c.(*sdk)
+	last, err := s.cfg.Releases.Last("interop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := last.(*rel.Release)
+	r.Info.Status = st
+	if err := s.cfg.Releases.Update(r); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// #107: on a shared cluster another person may be in the middle of an upgrade. Without RecoverPending, Apply
+// refuses a pending release and changes nothing.
+func TestApplyRefusesPendingReleaseWithoutRecoverPending(t *testing.T) {
+	for _, st := range []relcommon.Status{relcommon.StatusPendingInstall, relcommon.StatusPendingUpgrade, relcommon.StatusPendingRollback} {
+		t.Run(string(st), func(t *testing.T) {
+			c := pendingRelease(t, st)
+			_, err := c.Apply(context.Background(), "interop", "testdata/interop", "", map[string]any{"greeting": "two"}, ApplyOptions{})
+			var pe *PendingError
+			if !errors.As(err, &pe) || pe.Name != "interop" || pe.Status != string(st) || pe.Revision != 1 || pe.Started.IsZero() {
+				t.Fatalf("err = %#v, want *PendingError for revision 1", err)
+			}
+			if !strings.Contains(err.Error(), "is "+string(st)+" since") {
+				t.Errorf("message = %q", err.Error())
+			}
+			got, _ := c.Get("interop")
+			if got.Revision != 1 || got.Status != string(st) {
+				t.Fatalf("the refused Apply changed the release: %+v", got)
+			}
+		})
+	}
+}
+
 // Final review, Minor 1: a hard stop during the Helm step leaves the last revision pending, which Helm refuses to
-// upgrade. Apply marks that revision failed (nothing is deleted) and goes on.
+// upgrade. With RecoverPending (local up on a cluster it owns) Apply marks that revision failed (nothing is
+// deleted) and goes on.
 func TestApplyRecoversPendingRelease(t *testing.T) {
 	for _, st := range []relcommon.Status{relcommon.StatusPendingInstall, relcommon.StatusPendingUpgrade} {
 		t.Run(string(st), func(t *testing.T) {
-			c := memClient(t)
-			ctx := context.Background()
-			if _, err := c.Apply(ctx, "interop", "testdata/interop", "", map[string]any{"greeting": "one"}); err != nil {
-				t.Fatal(err)
-			}
-			s := c.(*sdk)
-			last, err := s.cfg.Releases.Last("interop")
-			if err != nil {
-				t.Fatal(err)
-			}
-			r := last.(*rel.Release)
-			r.Info.Status = st
-			if err := s.cfg.Releases.Update(r); err != nil {
-				t.Fatal(err)
-			}
-			got, err := c.Apply(ctx, "interop", "testdata/interop", "", map[string]any{"greeting": "two"})
+			c := pendingRelease(t, st)
+			got, err := c.Apply(context.Background(), "interop", "testdata/interop", "", map[string]any{"greeting": "two"}, ApplyOptions{RecoverPending: true})
 			if err != nil || got.Status != "deployed" || got.Revision != 2 {
 				t.Fatalf("Apply over a %s release = %+v, %v", st, got, err)
 			}

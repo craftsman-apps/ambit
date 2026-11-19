@@ -2,6 +2,7 @@ package kube
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -31,6 +32,14 @@ func (e *NotReadyError) Error() string {
 func WaitWorkloads(ctx context.Context, cs kubernetes.Interface, ns string, required []string, every, timeout time.Duration, progress func(string)) error {
 	deadline := time.Now().Add(timeout)
 	for {
+		// When the caller's own deadline ended the wait (install --timeout), the reasons are still read, with a
+		// short context of their own: the error must name the cause, not "context deadline exceeded" (#108).
+		expired := errors.Is(ctx.Err(), context.DeadlineExceeded)
+		if expired {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+			defer cancel()
+		}
 		unmet, err := workloadsReady(ctx, cs, ns, required)
 		lastErr := err
 		if err == nil && len(unmet) == 0 {
@@ -47,7 +56,7 @@ func WaitWorkloads(ctx context.Context, cs kubernetes.Interface, ns string, requ
 				}
 			}
 		}
-		if time.Now().After(deadline) {
+		if expired || time.Now().After(deadline) {
 			e := &NotReadyError{Timeout: timeout}
 			for _, p := range waiting {
 				e.Pods = append(e.Pods, p.Name+": "+PodReason(&p, func(pod, container string) string { return lastLogLine(ctx, cs, ns, pod, container) }))
@@ -63,37 +72,46 @@ func WaitWorkloads(ctx context.Context, cs kubernetes.Interface, ns string, requ
 			names = append(names, p.Name)
 		}
 		sort.Strings(names)
-		switch {
-		case len(names) > 0:
-			progress("waiting for " + strings.Join(names, ", "))
-		case len(unmet) > 0:
-			progress("waiting for " + strings.Join(unmet, ", "))
-		default:
+		// The pods first, then every workload line: a waiting pod must not hide a workload with no pod at all.
+		parts := names
+		if len(names) > 0 {
+			parts = []string{strings.Join(names, ", ")}
+		}
+		parts = append(parts, unmet...)
+		if len(parts) > 0 {
+			progress("waiting for " + strings.Join(parts, "; "))
+		} else {
 			progress("waiting: API error: " + sanitize(lastErr.Error()))
 		}
 		select {
 		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				continue // the next round reads the reasons and returns them
+			}
 			return ctx.Err()
 		case <-time.After(every):
 		}
 	}
 }
 
-// workloadsReady returns one line for each workload that is not complete, or an API error.
+// workloadsReady returns one line for each workload that is not complete, and the last API error. A list that
+// fails does not drop what the other lists found (#108).
 func workloadsReady(ctx context.Context, cs kubernetes.Interface, ns string, required []string) ([]string, error) {
 	var unmet []string
+	var lastErr error
 	deps, err := cs.AppsV1().Deployments(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, err
-	}
-	for _, d := range deps.Items {
-		if !deploymentReady(&d) {
-			unmet = append(unmet, fmt.Sprintf("Deployment %s: %d/%d ready", d.Name, d.Status.ReadyReplicas, replicas(d.Spec.Replicas)))
+		lastErr = err
+	} else {
+		for _, d := range deps.Items {
+			if !deploymentReady(&d) {
+				unmet = append(unmet, deploymentLine(&d))
+			}
 		}
 	}
 	sts, err := cs.AppsV1().StatefulSets(ns).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return nil, err
+		return unmet, err
 	}
 	for _, s := range sts.Items {
 		if want := replicas(s.Spec.Replicas); s.Status.ReadyReplicas < want {
@@ -109,7 +127,20 @@ func workloadsReady(ctx context.Context, cs kubernetes.Interface, ns string, req
 			unmet = append(unmet, "no Deployment matches "+sel+" (missing)")
 		}
 	}
-	return unmet, nil
+	return unmet, lastErr
+}
+
+// deploymentLine says why a Deployment is not complete. During a rollout the old pods are still Ready, so the
+// ready count alone ("1/1 ready") would not explain the wait (#108).
+func deploymentLine(d *appsv1.Deployment) string {
+	want := replicas(d.Spec.Replicas)
+	switch {
+	case d.Status.ObservedGeneration < d.Generation:
+		return fmt.Sprintf("Deployment %s: the controller has not seen the new spec yet", d.Name)
+	case d.Status.UpdatedReplicas < want && d.Status.ReadyReplicas > 0:
+		return fmt.Sprintf("Deployment %s: %d/%d ready, %d/%d updated (rollout in progress)", d.Name, d.Status.ReadyReplicas, want, d.Status.UpdatedReplicas, want)
+	}
+	return fmt.Sprintf("Deployment %s: %d/%d ready", d.Name, d.Status.ReadyReplicas, want)
 }
 
 func replicas(r *int32) int32 {

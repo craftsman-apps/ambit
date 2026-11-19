@@ -15,7 +15,7 @@ description: Every command, flag and exit code of the ambit CLI, the checks of a
 | `--context <name>` | the current context | kubeconfig context |
 | `-n`, `--namespace <name>` | `ambit-system` | namespace of the Ambit releases |
 | `--yes` | off | do not ask for confirmation. Required without a terminal. |
-| `--output text\|json` | `text` | `json` only for `ambit check` and `ambit version`. Then stdout holds only the JSON; other lines go to stderr. |
+| `--output text\|json` | `text` | `json` only for `ambit check` and `ambit version`. Then stdout holds only the JSON; other lines go to stderr. A failure prints `{"error": {"what", "why", "next", "code"}}` on stdout, with `code` the exit code. |
 | `--no-color` | off | no colour. Colour is used only on a terminal, and never when `NO_COLOR` is set. |
 | `--verbose` | off | also print the logs of the Helm and kind libraries |
 
@@ -53,6 +53,8 @@ Creates a local Ambit on a kind cluster, or repairs one that `ambit local up` cr
 | `--registry-config <file>` | Helm's | Helm registry login file, for a private registry |
 
 The CLI uses only the kubectl context `kind-<name>` and gives back your previous current context after kind creates the cluster. It keeps an existing OpenRouter Secret on a repair unless you give a new key. Proxies: the CLI and the kind node use `HTTPS_PROXY` and `NO_PROXY` from the environment.
+
+Two runs at once: `ambit local up` and `ambit local down` take the lock file `<name>.lock` next to the state file for the whole run. A second run for the same name stops at once with exit 1 (`another ambit local up or down for "<name>" is running`). The lock is the operating system's file lock, so it ends with the process, also after Ctrl-C, a crash or `kill -9`. A release that an earlier, stopped run left in `pending-install` or `pending-upgrade` is marked failed and upgraded: `ambit local up` does this only on a cluster it created. The names `con`, `prn`, `aux`, `nul`, `com1` to `com9` and `lpt1` to `lpt9` cannot be used, on every system, because Windows does not allow them as file names.
 
 ## ambit local down
 

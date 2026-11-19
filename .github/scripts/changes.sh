@@ -28,6 +28,7 @@ while IFS= read -r f; do
     docs/* | site/* | *.md | .gitignore | .github/dependabot.yml) ;;
     .github/workflows/site.yml | .github/workflows/release.yml | .github/workflows/codeql.yml) ;;
     .github/workflows/presets-contract.yml | .github/workflows/ci-cache.yml) ;;
+    .github/scripts/highest-tag.sh | .github/scripts/highest-tag_test.sh) ;;  # release.yml; tested in changes-test
     # Release packaging: GoReleaser puts LICENSE and NOTICE in every archive.
     LICENSE | NOTICE | .goreleaser.yaml) add snapshot ;;
     scripts/npm/* | scripts/homebrew/*) add build snapshot ;;

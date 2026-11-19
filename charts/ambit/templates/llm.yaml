@@ -156,7 +156,11 @@ spec:
               {{- with .patterns }}
               matches: {{ toJson . }}
               {{- end }}
-            response: { message: {{ .rejectMessage | quote }} }
+            # One JSON body that both APIs read as an error: OpenAI clients read error.message, Anthropic clients
+            # type "error" and error.type.
+            response:
+              message: {{ dict "type" "error" "error" (dict "type" "permission_error" "code" "prompt_guard" "message" .rejectMessage) | toJson | quote }}
+              headers: [{ name: content-type, value: application/json }]
           {{- end }}
           {{- with .webhook }}{{ if .service }}
           # The webhook answers pass, mask or reject itself; in audit mode the gateway only records its answer.

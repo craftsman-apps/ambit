@@ -42,7 +42,7 @@ A group has one `Budget`. Limits count requests, estimated dollars, or both, per
 
 ### ModelRouter
 
-A router is a model name that clients can ask for. For each request the gateway picks one of your models by ordered `routes`, and only a model the person may use. See [Model routing](routing.md).
+A router is a model name that clients can ask for. For each request the gateway picks one of your models by ordered `routes`, and only a model the person may use. See [Model routing](routing.md). With the [prompt guard](#prompt-guard) on, a router of type `LLM` sends its classifier model only text that passed the guard's rules.
 
 ### Connection
 
@@ -120,7 +120,7 @@ llm:
       failureMode: FailClosed
 ```
 
-- **Modes.** `audit` lets every prompt through unchanged and records which ones the guard would refuse; start here and read the Audit page for a week. `reject` refuses a matching prompt with HTTP 403 and `rejectMessage` (plain text); the model is not called. `mask` replaces each match with a placeholder and sends the rest of the prompt to the model: `<CREDIT_CARD>`, `<EMAIL_ADDRESS>` and the like for the built-in patterns, `<masked>` for your own.
+- **Modes.** `audit` lets every prompt through unchanged and records which ones the guard would refuse; start here and read the Audit page for a week. `reject` refuses a matching prompt with HTTP 403 and `rejectMessage` in a JSON error body that OpenAI and Anthropic clients read as an error (`{"type": "error", "error": {"type": "permission_error", "code": "prompt_guard", "message": "<rejectMessage>"}}`); the model is not called. A refusal by the webhook keeps the webhook's own status and body. `mask` replaces each match with a placeholder and sends the rest of the prompt to the model: `<CREDIT_CARD>`, `<EMAIL_ADDRESS>` and the like for the built-in patterns, `<masked>` for your own.
 - **What is checked.** Requests to `/v1/chat/completions`, `/v1/messages` and `/v1/responses`, streaming requests included. The patterns read the system prompt, the messages and the tool results in the prompt; the webhook receives the system prompt and the messages. Neither reads the arguments of the tool calls in earlier turns. **Answers are not checked**: a check of a streamed answer would delay every answer. **Embeddings (`/v1/embeddings`) are not checked.**
 - **Built-in patterns** come from agentgateway: `CreditCard`, `Ssn` (US Social Security number), `Email`, `PhoneNumber`, `CaSin` (Canadian Social Insurance Number). There is no built-in pattern for Korean resident registration numbers; add your own pattern.
 - **Your own patterns** use the syntax of the Rust `regex` crate, the same as Go's: no look-around and no back-references. The chart refuses to install a pattern that Go cannot read, or one longer than 1,024 characters.
@@ -130,7 +130,12 @@ llm:
 - **Audit records.** Each guarded request's record says what the guard did, as `phase:guard:action` (for example `request:regex:reject`), never the matched text. The Audit page shows **Refused by prompt guard**, **Prompt guard would refuse** (audit mode) and **Masked by prompt guard**, apart from a refusal by an access rule (also a 403).
 - **One guard for every model.** The guard is one `AgentgatewayPolicy` (`ambit-llm-guard`) on the LLM route, so it covers every `Model`, `ModelRouter` and fallback. Ambit sets no guard on a single model: agentgateway would use a model's own guard instead of the route's, not both.
 - **Order of the checks** (tested on kind). The access rule runs first: a person who may not use a model gets the access rule's 403, and the guard does not read the prompt. A prompt the guard refuses is **not charged** to the daily request and dollar limits of a `Budget` (they are charged after the answer, and there is none), but it **is counted** by the per-minute limits (`userRequestsPerMinute`, `groupRequestsPerMinute`), which count a request when it arrives.
-- **A `ModelRouter` of type `LLM` sends the prompt to its classifier model before the guard runs.** `ambit-router` labels the prompt before the gateway picks the model, and the guard runs when the gateway calls the model. With `reject` or `mask`, the classifier model can still receive a prompt that the guard then refuses or masks. This follows from the order of agentgateway's policies; it is not tested. Use a classifier model in your cluster, or a router of type `Rules`, if that matters.
+- **A `ModelRouter` of type `LLM`: the classifier model gets only what passed the guard** (tested on kind). The gateway asks `ambit-router` for the label before it picks the model, and it runs the guard only when it calls the chosen model (agentgateway v1.7.0). So `ambit-router` applies the same rules itself, from the same Helm values, to the text it sends to the classifier (the last user message), in the same order: your patterns, the built-in patterns, then the webhook.
+  - `reject`: a prompt that matches is not sent to the classifier. The request gets no label (reason `guard`), and the gateway then refuses it with the guard's 403.
+  - `mask`: the classifier gets the masked text (`<CREDIT_CARD>`, `<masked>` and the like), and the webhook's masked text.
+  - `audit`: the classifier gets the prompt unchanged, as the model does, and the request's record says what the guard would have done.
+  - Differences from the gateway, all on the safe side or narrow: `PhoneNumber` in `ambit-router` counts any 7 to 15 digits that could be a phone number (the gateway also asks libphonenumber), so in `reject` mode a prompt with such a number (a date, an order number) can get no label and the default model while the gateway lets it through. In your own patterns, `ambit-router` uses Go's regular expressions, where `\d`, `\w`, `\s` and `\b` match ASCII only (Unicode in the gateway): a pattern that needs non-ASCII digits or letters to match can miss in `ambit-router`.
+  - With a webhook, `ambit-router` calls it too (one call per classified prompt, within the router's `timeout`), so the webhook Service must accept connections from the `ambit-router` pods.
 
 ## Compressing tool results
 

@@ -12,7 +12,7 @@ data:
   server.py: |
     import json, http.server, time
     USAGE = {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15}
-    COUNT = {"classify": 0, "auth": "", "models": {}, "webhook": 0}  # test hooks: the classifier (step 12), requests per model name (step fallback), webhook calls (step guard)
+    COUNT = {"classify": 0, "auth": "", "text": "", "models": {}, "webhook": 0}  # test hooks: the classifier (step 12; text: the last prompt it got, step guard), requests per model name (step fallback), webhook calls (step guard)
     class H(http.server.BaseHTTPRequestHandler):
         def log_message(self, *a): pass
         def do_GET(self):  # classifications answered, and the last classifier Authorization header
@@ -37,7 +37,7 @@ data:
             text = last if isinstance(last, str) else ""  # a multi-part message has a list content
             system = next((m.get("content") for m in body.get("messages", []) if m.get("role") == "system"), "") or ""
             if isinstance(system, str) and system.startswith("Classify the user's message"):  # ambit-router's classifier
-                COUNT["classify"] += 1; COUNT["auth"] = self.headers.get("authorization", "")
+                COUNT["classify"] += 1; COUNT["auth"] = self.headers.get("authorization", ""); COUNT["text"] = text
                 if text == "CLASSIFY-SLOW":
                     time.sleep(3)
                 label = "Coding, because" if text == "CLASSIFY-EXTRA" else ("coding" if ("code" in text.lower() or "python" in text.lower()) else "other")

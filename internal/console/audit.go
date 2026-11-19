@@ -128,7 +128,8 @@ SELECT Timestamp,
        LogAttributes['ambit.accessMode'], c_mark, LogAttributes['ambit.rulesVersion'], c_outcome, LogAttributes['url.path'],
        ` + promptGuardSQL + `
 FROM otel_logs
-WHERE (LogAttributes['jwt.email'] = {email:String}
+WHERE LogAttributes['ambit.kind'] = '' -- gateway records only: guard and console records (ambit.kind set) are not calls
+  AND (LogAttributes['jwt.email'] = {email:String}
        -- Some refusals (e.g. a model the user may not use) are logged with the token's subject but
        -- without the email attribute; match them through the subjects seen with this email.
        OR (LogAttributes['jwt.email'] = '' AND has({subs:Array(String)}, LogAttributes['jwt.sub'])))
@@ -147,7 +148,7 @@ ORDER BY Timestamp DESC
 LIMIT {limit:UInt32}`
 
 const subsSQL = `SELECT DISTINCT LogAttributes['jwt.sub'] FROM otel_logs
-WHERE LogAttributes['jwt.email'] = {email:String} AND LogAttributes['jwt.sub'] != '' LIMIT 100`
+WHERE LogAttributes['ambit.kind'] = '' AND LogAttributes['jwt.email'] = {email:String} AND LogAttributes['jwt.sub'] != '' LIMIT 100`
 
 // Calls lists one user's gateway calls in [from, to), newest first.
 func (a *Audit) Calls(ctx context.Context, email string, from, to time.Time, limit int) ([]Call, error) {
@@ -212,7 +213,7 @@ func (a *Audit) InvalidKeyCalls(ctx context.Context, from, to time.Time, limit i
 }
 
 const keysLastUsedSQL = `SELECT LogAttributes['ambit.key_id'], max(Timestamp) FROM otel_logs
-WHERE Timestamp >= {from:DateTime64(9)}
+WHERE Timestamp >= {from:DateTime64(9)} AND LogAttributes['ambit.kind'] = ''
   AND LogAttributes['ambit.key_id'] != '' AND has({ids:Array(String)}, LogAttributes['ambit.key_id'])
 GROUP BY LogAttributes['ambit.key_id']`
 

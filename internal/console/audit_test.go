@@ -121,6 +121,16 @@ func TestKeysLastUsedSQL(t *testing.T) {
 	}
 }
 
+// Records with ambit.kind set (the guard's compression records, the console's app records) are not gateway calls: a
+// query of calls, subjects or key use must skip them even when they name the person (#203).
+func TestGatewayQueriesSkipOtherRecordKinds(t *testing.T) {
+	for name, q := range map[string]string{"callsSQL": callsSQL, "subsSQL": subsSQL, "keysLastUsedSQL": keysLastUsedSQL} {
+		if !strings.Contains(q, "LogAttributes['ambit.kind'] = ''") {
+			t.Errorf("%s has no record-kind filter:\n%s", name, q)
+		}
+	}
+}
+
 // Usage reads the LLM summary for the days it holds completely and the scan for older days (issue #215).
 func TestUsageSplit(t *testing.T) {
 	d := func(s string) time.Time { x, _ := time.Parse("2006-01-02 15:04", s); return x }

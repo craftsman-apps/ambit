@@ -174,11 +174,35 @@ func TestHermesRefuses(t *testing.T) {
 		"providers is value": "providers: something\n",
 		"top is a list":      "- a\n- b\n",
 		"edited block":       "# >>> ambit: x\nmodel: y\n",
+		"model twice":        "model: {provider: auto}\nmodel:\n  default: other\n",
+		"quoted providers":   "\"providers\":\n  other:\n    api: https://example.com\n",
+		"ambit twice":        "providers:\n  ambit:\n    api: a\n  'ambit':\n    api: b\n",
 	} {
 		in := hermesIn(seed, true, nil)
 		in.Force = true
 		if p, err := PlanHermes(in, "/h"); err == nil {
 			t.Errorf("%s: no error, after:\n%s", name, p.After)
 		}
+	}
+}
+
+// A decision with --force is for one entry: after providers.ambit was replaced, the person's own mcp_servers.ambit
+// is still a conflict.
+func TestHermesForceIsPerEntry(t *testing.T) {
+	seed := "providers:\n  ambit:\n    api: https://old.example.com/v1\n"
+	in := hermesIn(seed, true, nil)
+	in.MCPURL, in.Force = "", true
+	p := mustHermes(t, in)
+	again := mustHermes(t, hermesIn(string(p.After), true, &p.Record))
+	again.Record = p.Record
+	if again.After == nil || len(again.Conflicts) != 0 {
+		// with --mcp-url but no mcp_servers yet: no conflict either
+		t.Fatalf("rerun: %v", again.Conflicts)
+	}
+	withMine := string(p.After) + "mcp_servers:\n  ambit:\n    command: mine\n"
+	in2 := hermesIn(withMine, true, &p.Record)
+	got := mustHermes(t, in2)
+	if len(got.Conflicts) != 1 || got.Conflicts[0].What != "mcp_servers.ambit already exists" {
+		t.Fatalf("conflicts %v", got.Conflicts)
 	}
 }

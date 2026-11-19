@@ -47,7 +47,7 @@ func HermesHeaderPath(home string) string {
 }
 
 var (
-	yamlTopKey   = regexp.MustCompile(`^([A-Za-z_][A-Za-z0-9_-]*)[ \t]*:(?:[ \t]+(.*))?$`)
+	yamlTopKey   = regexp.MustCompile(`^(?:"([^"]*)"|'([^']*)'|([A-Za-z_][A-Za-z0-9_-]*))[ \t]*:(?:[ \t]+(.*))?$`)
 	yamlChildKey = regexp.MustCompile(`^[ \t]+(?:"([^"]*)"|'([^']*)'|([A-Za-z0-9_.-]+))[ \t]*:(?:[ \t]|$)`)
 )
 
@@ -138,20 +138,31 @@ func PlanHermes(in Input, headerPath string) (*Plan, error) {
 		}
 	}
 	cur := ParseText(in.File)
-	var replacedBefore []string
+	var bodies []string // the blocks of an earlier connect
 	if blocks, err := cur.Blocks(); err != nil {
 		return nil, fmt.Errorf("%s: %w", in.Path, err)
 	} else if len(blocks) > 0 {
-		var notes []string
-		if notes, replacedBefore = removeBlocks(cur, in.Prev); len(notes) > 0 {
+		for _, b := range blocks {
+			bodies = append(bodies, cur.BlockBody(b))
+		}
+		if notes, _ := removeBlocks(cur, in.Prev); len(notes) > 0 {
 			return nil, fmt.Errorf("the Ambit block in %s was edited after connect — remove the lines between its markers by hand, then run the command again", in.Path)
 		}
 	}
-	// decided: the person let an earlier connect replace an entry of this name (ponytail: by name only, so
-	// providers.ambit and mcp_servers.ambit count as one; a second conflict of the other is then not reported).
-	decided := func(name string) bool {
-		for _, l := range replacedBefore {
-			if m := yamlChildKey.FindStringSubmatch(" " + strings.TrimLeft(l, " \t")); m != nil && m[1]+m[2]+m[3] == name {
+	// decided: the person let an earlier connect replace this entry (--force). A block holds the lines it replaced
+	// and the lines of one entry: the model, the provider (key_cmd) or the MCP server (mcp-remote).
+	decided := func(entry string) bool {
+		for _, b := range bodies {
+			ls := strings.Split(b, "\n")
+			if len(ls) == 0 || !strings.HasPrefix(ls[0], replacedPrefix) {
+				continue
+			}
+			m := yamlChildKey.FindStringSubmatch(" " + strings.TrimLeft(strings.TrimPrefix(ls[0], replacedPrefix), " \t"))
+			switch {
+			case m == nil:
+			case entry == "model" && m[1]+m[2]+m[3] == "model",
+				entry == "providers" && m[1]+m[2]+m[3] == "ambit" && strings.Contains(b, "key_cmd: "),
+				entry == "mcp_servers" && m[1]+m[2]+m[3] == "ambit" && strings.Contains(b, MCPRemote):
 				return true
 			}
 		}
@@ -163,14 +174,22 @@ func PlanHermes(in Input, headerPath string) (*Plan, error) {
 		return nil, err
 	}
 	lines := cur.lines
-	top := map[string]int{} // top-level key → its line
-	for i, l := range lines {
-		if m := yamlTopKey.FindStringSubmatch(l.text); m != nil {
-			top[m[1]] = i
-		}
-	}
 	cantEdit := func(key string) error {
 		return fmt.Errorf("%s sets %s in a way ambit cannot edit — change it by hand, then run the command again", in.Path, key)
+	}
+	top := map[string]int{} // top-level key → its line
+	for i, l := range lines {
+		m := yamlTopKey.FindStringSubmatch(l.text)
+		if m == nil {
+			continue
+		}
+		key := m[1] + m[2] + m[3]
+		if _, dup := top[key]; dup || m[3] == "" { // a key twice, or a quoted key: YAML reads the last one
+			if key == "model" || key == "providers" || key == "mcp_servers" {
+				return nil, cantEdit(key)
+			}
+		}
+		top[key] = i
 	}
 
 	p := &Plan{}
@@ -194,7 +213,7 @@ func PlanHermes(in Input, headerPath string) (*Plan, error) {
 			return nil
 		}
 		m := yamlTopKey.FindStringSubmatch(lines[i].text)
-		inline := yamlInline(m[2])
+		inline := yamlInline(m[4])
 		end := yamlEnd(lines, i, 0, len(lines))
 		first := -1
 		for j := i + 1; j < end; j++ {
@@ -214,20 +233,27 @@ func PlanHermes(in Input, headerPath string) (*Plan, error) {
 		if inline != "" || strings.HasPrefix(strings.TrimLeft(lines[first].text, " \t"), "-") || strings.Contains(ind, "\t") {
 			return cantEdit(key)
 		}
+		at := -1
 		for j := first; j < end; j++ {
 			s := lines[j].text
 			if !yamlContent(s) || yamlIndent(s) != len(ind) {
 				continue
 			}
 			if cm := yamlChildKey.FindStringSubmatch(s); cm != nil && cm[1]+cm[2]+cm[3] == "ambit" {
-				if !decided("ambit") {
-					p.Conflicts = append(p.Conflicts, Conflict{What: key + ".ambit already exists", Why: "Ambit adds an entry of that name"})
+				if at >= 0 { // twice: YAML reads the last one
+					return cantEdit(key + ".ambit")
 				}
-				ops = append(ops, tomlOp{at: j, del: yamlEnd(lines, j, len(ind), end) - j, rank: rank, body: indentLines(ind, entry)})
-				return nil
+				at = j
 			}
 		}
-		ops = append(ops, tomlOp{at: i + 1, rank: rank, body: indentLines(ind, entry)})
+		if at < 0 {
+			ops = append(ops, tomlOp{at: i + 1, rank: rank, body: indentLines(ind, entry)})
+			return nil
+		}
+		if !decided(key) {
+			p.Conflicts = append(p.Conflicts, Conflict{What: key + ".ambit already exists", Why: "Ambit adds an entry of that name"})
+		}
+		ops = append(ops, tomlOp{at: at, del: yamlEnd(lines, at, len(ind), end) - at, rank: rank, body: indentLines(ind, entry)})
 		return nil
 	}
 	if err := child("providers", hermesProviderLines(in), 3); err != nil {

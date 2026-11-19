@@ -3,8 +3,8 @@ import {fileURLToPath} from 'node:url';
 
 const root = new URL('../../', import.meta.url);
 // The pages that name the version a reader installs. The first two must contain at least one match.
-export const PAGES = ['docs/local-up.md', 'docs/install.md', 'docs/quick-start.md'];
-const REQUIRED = ['docs/local-up.md', 'docs/install.md'];
+export const PAGES = ['docs/install-by-hand.md', 'docs/install.md', 'docs/quick-start.md'];
+const REQUIRED = ['docs/install-by-hand.md', 'docs/install.md'];
 const SEMVER = '\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?';
 // Only these three patterns are install versions. Kubernetes versions, image tags and digests are not.
 const PATTERNS = [`releases/download/v(${SEMVER})`, `--version (${SEMVER})`, `cmd/ambit@v(${SEMVER})`];

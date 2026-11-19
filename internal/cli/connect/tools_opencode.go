@@ -145,10 +145,6 @@ func PlanOpenCode(in Input) (*Plan, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s is not valid JSON — %w", in.Path, err)
 	}
-	if in.KeyFile == "" && opencodeV2(d) {
-		return nil, &out.Error{What: in.Path + " uses the opencode v2 config format", Why: "opencode 1 does not read it",
-			Next: "update opencode to version 2 and run the command again, or add the Ambit provider by hand (see docs/guides/coding-tools.md)", Code: out.ExitFailed}
-	}
 	sets := opencodeSets(in, opencodeContainer(d, in))
 	decidedModel := false
 	already := false
@@ -162,6 +158,12 @@ func PlanOpenCode(in Input) (*Plan, error) {
 		if _, err := d.Remove(in.Prev.Entries); err != nil {
 			return nil, err
 		}
+	}
+	// After the earlier connect's entries are out: an opencode 2 connect's own `providers` entry is no reason to
+	// refuse opencode 1 (#305).
+	if in.KeyFile == "" && opencodeV2(d) {
+		return nil, &out.Error{What: in.Path + " uses the opencode v2 config format", Why: "opencode 1 does not read it",
+			Next: "update opencode to version 2 and run the command again, or add the Ambit provider by hand (see docs/guides/coding-tools.md)", Code: out.ExitFailed}
 	}
 	p := &Plan{}
 	var removed []string

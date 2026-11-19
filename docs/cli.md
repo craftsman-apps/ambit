@@ -35,7 +35,7 @@ The CLI never prints the OpenRouter key, the admin password or tokens: one outpu
 
 ## ambit local up
 
-Creates a local Ambit on a kind cluster, or repairs one that `ambit local up` created. Press Ctrl+C once to stop (the command says how to remove a cluster it created); press it a second time to end the process at once. Steps: preflight (the `L` checks below), cluster, the third-party CRDs, the charts `ambit-crds` and `ambit` (with progress every 10 seconds), a model, the access rule `everyone-local`, a test call, and a summary. See [Install locally by hand](local-up.md) for each object.
+Creates a local Ambit on a kind cluster, or repairs one that `ambit local up` created. Press Ctrl+C once to stop (the command says how to remove a cluster it created); press it a second time to end the process at once. Steps: preflight (the `L` checks below), cluster, the third-party CRDs, the charts `ambit-crds` and `ambit` (with progress every 10 seconds), a model, the access rule `everyone-local`, a test call, and a summary. See [Install locally by hand](install-by-hand.md) for each object.
 
 | Flag | Default | Meaning |
 |---|---|---|
@@ -62,7 +62,7 @@ Deletes the kind cluster that `ambit local up` created, after it asks (`--yes` s
 
 Prints the password of `admin@ambit.local` of the local cluster. Flag: `--name`.
 
-`local up` repair, `local down` and `local password` act only on a cluster with both marks of `ambit local up`, a state file and a node label; see [A cluster that ambit did not create](local-up.md#a-cluster-that-ambit-did-not-create).
+`local up` repair, `local down` and `local password` act only on a cluster with both marks of `ambit local up`, a state file and a node label; see [A cluster that ambit did not create](install-by-hand.md#a-cluster-that-ambit-did-not-create).
 
 ## ambit connect
 
@@ -74,7 +74,7 @@ ambit connect claude-desktop-mcp --url <mcp address> [flags]
 
 Adds Ambit's entries to the user-level config file of a coding tool, stores the key in the keychain of your computer, and ends with one test call in the tool's own request format. It never writes the key to a config file, and it never changes a project file. For what it writes for each tool, see [Connect your coding agents](guides/coding-tools.md#before-you-start). For `cursor` it prints the steps and writes nothing.
 
-For `opencode` it runs `opencode --version` first. opencode 2 sends model calls from a background service that does not see your terminal, so for opencode 2 connect writes the key to the key file `~/.config/ambit/opencode-key` (`$XDG_CONFIG_HOME/ambit/opencode-key` when that variable is set; mode `0600`, readable only by you on Windows too) and the provider reads it with `{file:<path>}`. It writes the opencode 2 format (`providers`), or the older `provider` format when the file uses it; other providers stay. It adds no shell function, removes the function that an earlier connect added for opencode 1, and ends with the line to restart the service: `opencode service restart`. Like the header file of `claude-desktop-mcp`, the key file's content is never printed and the state file records only its SHA-256 hash. When `opencode --version` does not answer, connect sets up opencode 2 and says so. For opencode 1 it writes the `provider` format with `{env:AMBIT_API_KEY}` and adds a shell function that sets the variable, as before.
+For `opencode` it runs `opencode --version` first. opencode 2 sends model calls from a background service that does not see your terminal, so for opencode 2 connect writes the key to the key file `~/.config/ambit/opencode-key` (`$XDG_CONFIG_HOME/ambit/opencode-key` when that variable is set; mode `0600`, readable only by you on Windows too) and the provider reads it with `{file:<path>}`. It writes the opencode 2 format (`providers`), or the older `provider` format when the file uses it; other providers stay. It adds no shell function, removes the function that an earlier connect added for opencode 1, and ends with the line to restart the service: `opencode service restart`. Like the header file of `claude-desktop-mcp`, the key file's content is never printed and the state file records only its SHA-256 hash. When `opencode --version` does not answer, connect sets up opencode 2 and says so. For opencode 1 it writes the `provider` format with `{env:AMBIT_API_KEY}` and adds a shell function that sets the variable, as before; it replaces the entry of an earlier connect for opencode 2 and deletes that connect's key file (a key file changed after connect stays, with a warning).
 
 `hermes`, `kilocode` and `pi` add Ambit as an OpenAI-compatible provider (Chat Completions) and make it the default model, as in [Connect your coding agents](guides/coding-tools.md#hermes-agent):
 

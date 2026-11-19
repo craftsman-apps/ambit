@@ -46,8 +46,10 @@ FROM otel_logs
 WHERE ` + evidenceCallsWhere + `
 ORDER BY Timestamp`)
 
-const evidenceCallsCountSQL = `SELECT count() FROM otel_logs
-WHERE ` + evidenceCallsWhere
+// evidenceCountSQL counts the rows of calls.csv and compression.csv, the files that can be large, for the maxRows check.
+const evidenceCountSQL = `SELECT count() FROM otel_logs
+WHERE (` + evidenceCallsWhere + `)
+   OR (` + evidenceCompressionWhere + `)`
 
 const evidenceAppSQL = appEventsSelect + `
 ORDER BY Timestamp`
@@ -59,9 +61,11 @@ const evidenceCompressionSQL = `SELECT Timestamp, LogAttributes['ambit.call_id']
        toInt64OrZero(LogAttributes['ambit.compress.part']), toInt64OrZero(LogAttributes['ambit.compress.bytes_in']),
        toInt64OrZero(LogAttributes['ambit.compress.bytes_out']), toInt64OrZero(LogAttributes['ambit.compress.omitted']), LogAttributes['jwt.groups']
 FROM otel_logs
-WHERE LogAttributes['ambit.kind'] = 'compression' AND Timestamp >= {from:DateTime64(9)} AND Timestamp < {to:DateTime64(9)}
-  AND ({email:String} = '' OR LogAttributes['jwt.email'] = {email:String})
+WHERE ` + evidenceCompressionWhere + `
 ORDER BY Timestamp`
+
+const evidenceCompressionWhere = `LogAttributes['ambit.kind'] = 'compression' AND Timestamp >= {from:DateTime64(9)} AND Timestamp < {to:DateTime64(9)}
+  AND ({email:String} = '' OR LogAttributes['jwt.email'] = {email:String})`
 
 var compressionHeader = []string{"time", "call_id", "email", "key_id", "server", "tool", "type", "mode", "part", "bytes_in", "bytes_out",
 	"omitted", "groups"}
@@ -157,7 +161,7 @@ func (c *Catalog) prepareAuditExport(ctx context.Context, q url.Values) (*export
 	}
 	params := clickhouse.Parameters{"from": chTime(from), "to": chTime(to), "email": email, "subjects": arrayLiteral(subjects)}
 	var n uint64
-	if err := c.Audit.DB.QueryRowContext(exportContext(ctx, params), evidenceCallsCountSQL).Scan(&n); err != nil {
+	if err := c.Audit.DB.QueryRowContext(exportContext(ctx, params), evidenceCountSQL).Scan(&n); err != nil {
 		return nil, err
 	}
 	if int64(n) > c.Evidence.MaxRows {

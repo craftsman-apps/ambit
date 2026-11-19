@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -162,7 +163,8 @@ func TestServiceAccountWarnings(t *testing.T) {
 	}
 	var got accountsAnswer
 	_ = json.Unmarshal(f.call(t, "GET", "/api/admin/service-accounts", admin, nil).Body.Bytes(), &got)
-	w := got.Accounts[0].Warnings
+	w := got.Accounts[0].Warnings // in key order; both keys were created in the same second, so sort
+	slices.Sort(w)
 	if len(w) != 2 || w[0] != `Key "eval-1" not used for 34 days.` ||
 		w[1] != `Key "eval-2" was issued by a person who was offboarded. It stops on 2026-11-27 09:00 UTC unless you rotate it.` {
 		t.Fatalf("warnings %q", w)

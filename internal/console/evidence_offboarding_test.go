@@ -23,13 +23,16 @@ func withSCIM(t *testing.T, e *evidenceFixture, recs ...OffboardingRecord) {
 	}
 }
 
-// keyEvent writes one key history event at a given time, as KeyService.event does.
+// evidenceKeyEvent is one key history event at a given time, as KeyService.event writes it.
+func evidenceKeyEvent(at time.Time, action, keyID, email string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "ambit-key-event-" + strings.ReplaceAll(action, "-", "") + "-" + keyID + "-" + at.Format("20060102150405"), Namespace: testNS,
+		Labels: map[string]string{keyEventLabel: "true"}, Annotations: map[string]string{keyEventAtAnn: at.Format(time.RFC3339), keyEventActionAnn: action}},
+		Data: map[string]string{"actor": "scim", "action": action, "keyId": keyID, "email": email, "detail": ""}}
+}
+
 func keyEvent(t *testing.T, e *evidenceFixture, at time.Time, action, email string) {
 	t.Helper()
-	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "ambit-key-event-" + strings.ReplaceAll(action, "-", "") + at.Format("150405"), Namespace: testNS,
-		Labels: map[string]string{keyEventLabel: "true"}, Annotations: map[string]string{keyEventAtAnn: at.Format(time.RFC3339), keyEventActionAnn: action}},
-		Data: map[string]string{"actor": "scim", "action": action, "keyId": "k1", "email": email, "detail": ""}}
-	if err := e.kube.Create(t.Context(), cm); err != nil {
+	if err := e.kube.Create(t.Context(), evidenceKeyEvent(at, action, "k1", email)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -66,7 +69,7 @@ func TestOffboardingExport(t *testing.T) {
 	keyEvent(t, e, at.Add(time.Second), "offboard-delete", "ana@example.com")
 	keyEvent(t, e, at.Add(2*time.Second), "create", "ana@example.com") // not an offboarding action
 	keyEvent(t, e, at.AddDate(0, -1, 0), "revoke", "ana@example.com")  // before the period
-	keyEvent(t, e, at.Add(3*time.Second), "exposed", "svc-ci@service.ambit")
+	keyEvent(t, e, at.Add(3*time.Second), "exposed", "svc-ci@svc.ambit.internal")
 
 	resp, body, err := e.get(t, t.Context(), "/api/evidence/offboarding.zip?from=2026-10-01&to=2026-10-31", e.admin)
 	if err != nil || resp.StatusCode != 200 {

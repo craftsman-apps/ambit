@@ -142,7 +142,7 @@ func LockState(path string) (func(), error) {
 	}
 	deadline := time.Now().Add(LockWait)
 	for {
-		ok, err := tryLock(f)
+		ok, err := TryLock(f)
 		if err != nil {
 			f.Close()
 			return nil, err

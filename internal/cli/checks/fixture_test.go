@@ -48,7 +48,7 @@ type fakeHelm struct {
 	err       error
 }
 
-func (f *fakeHelm) Apply(context.Context, string, string, string, map[string]any) (helmx.Release, error) {
+func (f *fakeHelm) Apply(context.Context, string, string, string, map[string]any, helmx.ApplyOptions) (helmx.Release, error) {
 	return helmx.Release{}, errors.New("checks never install")
 }
 func (f *fakeHelm) Get(n string) (*helmx.Release, error) { return f.rel[n], f.err }

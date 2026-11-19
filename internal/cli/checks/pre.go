@@ -66,6 +66,9 @@ func r2Permissions(ctx context.Context, e *Env) Result {
 
 // R3: which releases are installed.
 func r3Installed(_ context.Context, e *Env) Result {
+	if e.Helm == nil {
+		return res(Unknown, "live objects", "the Helm releases in %s cannot be read: no Helm client", e.Namespace)
+	}
 	crds, err := e.Helm.Get("ambit-crds")
 	if err != nil {
 		return releaseErr(err, e.Namespace)

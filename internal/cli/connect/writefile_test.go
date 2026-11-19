@@ -2,6 +2,7 @@ package connect
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -309,5 +310,39 @@ func TestWriteAllKeepsTheFirstBackupWhenAskedTo(t *testing.T) {
 	os.WriteFile(q, []byte("a"), 0o644)
 	if _, err := WriteAll([]FileChange{{Path: q, Before: []byte("a"), Exists: true, After: []byte("b"), KeepBackup: true}}); err != nil || read(t, q+".ambit.bak") != "a" {
 		t.Fatalf("%v %q", err, read(t, q+".ambit.bak"))
+	}
+}
+
+// #305, #257: a new file whose write fails leaves no folder that the write made (a NUL byte in the name makes the
+// write fail after its folders exist, on every system).
+func TestWriteAllFailedNewFileRemovesItsFolders(t *testing.T) {
+	base := t.TempDir()
+	p := filepath.Join(base, "ambit", "sub", "opencode-key\x00")
+	if _, err := WriteAll([]FileChange{{Path: p, After: []byte("x")}}); err == nil {
+		t.Fatal("the write must fail")
+	}
+	if _, err := os.Stat(filepath.Join(base, "ambit")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("a folder that the failed write made is still there: %v", err)
+	}
+}
+
+// #257: a config file that is a link to a file that does not exist (a dotfiles link whose target is missing) is not
+// replaced by a plain file: the write stops, and the link stays.
+func TestWriteAllRefusesADanglingLink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symbolic links need extra rights on Windows")
+	}
+	dir := t.TempDir()
+	p := filepath.Join(dir, "opencode.json")
+	if err := os.Symlink(filepath.Join(dir, "dotfiles", "opencode.json"), p); err != nil {
+		t.Fatal(err)
+	}
+	_, err := WriteAll([]FileChange{{Path: p, After: []byte("{}\n")}})
+	var e *out.Error
+	if !errors.As(err, &e) || !strings.Contains(e.Why, "link to "+filepath.Join(dir, "dotfiles", "opencode.json")) {
+		t.Fatalf("err = %#v", err)
+	}
+	if fi, err := os.Lstat(p); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the link was replaced: %v", err)
 	}
 }

@@ -60,3 +60,13 @@ test('/docs/changelog redirects to /releases, before the trailing-slash rule', (
   const go = path => routes.find(r => r.status === 308 && new RegExp(r.src).test(path));
   for (const p of ['/docs/changelog', '/docs/changelog/']) assert.equal(go(p).headers.Location, '/releases', p);
 });
+
+test('/docs/local-up redirects to /docs/install-by-hand (#320), before the trailing-slash rule', () => {
+  const b = mkdtempSync(join(tmpdir(), 'b-')); writeFileSync(join(b, 'index.html'), 'home');
+  const o = join(mkdtempSync(join(tmpdir(), 'o-')), 'output');
+  writeVercelOutput(b, o);
+  const {routes} = JSON.parse(readFileSync(join(o, 'config.json'), 'utf8'));
+  const go = path => routes.find(r => r.status === 308 && new RegExp(r.src).test(path));
+  for (const p of ['/docs/local-up', '/docs/local-up/']) assert.equal(go(p).headers.Location, '/docs/install-by-hand', p);
+  assert.equal(go('/docs/install-by-hand'), undefined, 'the new page does not redirect');
+});

@@ -257,6 +257,9 @@ func CallWith(ctx context.Context, c *http.Client, llmURL, token, model string, 
 				last, lastStatus = err.Error(), 0
 			}
 		}
+		if last == "" {
+			last = "no answer: each request was still waiting when the time ran out"
+		}
 		if time.Now().After(deadline) {
 			return "", false, &NoAnswerError{Limit: limit, LastStatus: lastStatus, Last: last}
 		}

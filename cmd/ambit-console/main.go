@@ -59,6 +59,19 @@ func keySettingsFromEnv() (console.KeySettings, error) {
 	return k, nil
 }
 
+// serviceSettingsFromEnv reads the serviceAccounts.* values; values the service cannot work with stop the start.
+func serviceSettingsFromEnv() (console.ServiceSettings, error) {
+	s := console.ServiceSettings{Enabled: os.Getenv("AMBIT_SA_ENABLED") != "false",
+		MaxDays: envInt("AMBIT_SA_MAX_DAYS", 90), ExposureDays: envInt("AMBIT_SA_EXPOSURE_DAYS", 7)}
+	if s.MaxDays != 30 && s.MaxDays != 90 && s.MaxDays != 365 {
+		return s, fmt.Errorf("AMBIT_SA_MAX_DAYS is %d; it must be 30, 90 or 365", s.MaxDays)
+	}
+	if s.ExposureDays < 0 || s.ExposureDays > 30 {
+		return s, fmt.Errorf("AMBIT_SA_EXPOSURE_DAYS is %d; it must be 0 to 30", s.ExposureDays)
+	}
+	return s, nil
+}
+
 // retry runs f until it succeeds or ctx ends. Dex may still be starting when the console starts.
 func retry(ctx context.Context, what string, f func() error) error {
 	for delay := time.Second; ; delay = min(delay*2, 15*time.Second) {
@@ -163,7 +176,11 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	keySvc := &console.KeyService{Client: objects, Namespace: ns, Now: time.Now, Settings: keySettings}
+	services, err := serviceSettingsFromEnv()
+	if err != nil {
+		return err
+	}
+	keySvc := &console.KeyService{Client: objects, Namespace: ns, Now: time.Now, Settings: keySettings, Services: services}
 	go console.RunLeader(ctx, kube, ns, podName, keySvc.StartTerm, keySvc.EndTerm)
 	go func() { // the hourly full repair bounds any stale write or interrupted refresh to one hour
 		t := time.NewTicker(time.Hour)

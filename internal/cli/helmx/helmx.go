@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"time"
 
 	"helm.sh/helm/v4/pkg/action"
 	"helm.sh/helm/v4/pkg/chart"
@@ -35,11 +36,32 @@ type Client interface {
 	// Apply installs the release if it does not exist, else upgrades it. It does not wait for pods: the caller
 	// waits with its own progress output. ref is a chart directory or an oci:// reference; version is ignored
 	// for a directory.
-	Apply(ctx context.Context, name, ref, version string, vals map[string]any) (Release, error)
+	// A release left in pending-install, pending-upgrade or pending-rollback is refused with a *PendingError,
+	// unless o.RecoverPending is set.
+	Apply(ctx context.Context, name, ref, version string, vals map[string]any, o ApplyOptions) (Release, error)
 	// Get returns nil, nil when the release does not exist.
 	Get(name string) (*Release, error)
 	// Values returns the values the user supplied (all=false, like `helm get values`) or every computed value.
 	Values(name string, all bool) (map[string]any, error)
+}
+
+// ApplyOptions change how Apply treats the existing release.
+type ApplyOptions struct {
+	// RecoverPending marks a pending last revision as failed, then upgrades over it. Only for a release that no
+	// one else can be working on: `ambit local up` sets it after its ownership check (#107).
+	RecoverPending bool
+}
+
+// PendingError is a release whose last revision is pending: an operation is running, or one was stopped before
+// it finished. Helm keeps no other lock, so the CLI does not touch it on its own.
+type PendingError struct {
+	Name, Status, Description string
+	Revision                  int
+	Started                   time.Time
+}
+
+func (e *PendingError) Error() string {
+	return fmt.Sprintf("the release %s is %s since %s (revision %d)", e.Name, e.Status, e.Started.UTC().Format(time.RFC3339), e.Revision)
 }
 
 // Options select the cluster and namespace. Log receives the SDK's log lines; nil turns them off.
@@ -99,7 +121,7 @@ func (h *sdk) Get(name string) (*Release, error) {
 	return toRelease(r), nil
 }
 
-func (h *sdk) Apply(ctx context.Context, name, ref, version string, vals map[string]any) (Release, error) {
+func (h *sdk) Apply(ctx context.Context, name, ref, version string, vals map[string]any, o ApplyOptions) (Release, error) {
 	cur, err := h.Get(name)
 	if err != nil {
 		return Release{}, err
@@ -120,6 +142,9 @@ func (h *sdk) Apply(ctx context.Context, name, ref, version string, vals map[str
 		return *toRelease(r.(*rel.Release)), nil
 	}
 	if strings.HasPrefix(cur.Status, "pending-") {
+		if !o.RecoverPending {
+			return Release{}, h.pending(name)
+		}
 		if err := h.failPending(name); err != nil {
 			return Release{}, err
 		}
@@ -139,11 +164,24 @@ func (h *sdk) Apply(ctx context.Context, name, ref, version string, vals map[str
 	return *toRelease(r.(*rel.Release)), nil
 }
 
+// pending describes the pending last revision of name.
+func (h *sdk) pending(name string) error {
+	last, err := h.cfg.Releases.Last(name)
+	if err != nil {
+		return err
+	}
+	r, ok := last.(*rel.Release)
+	if !ok || r.Info == nil {
+		return fmt.Errorf("release %s: unexpected type %T", name, last)
+	}
+	return &PendingError{Name: name, Status: r.Info.Status.String(), Description: r.Info.Description, Revision: r.Version, Started: r.Info.LastDeployed}
+}
+
 // failPending marks a revision that a hard stop left in pending-install or pending-upgrade as failed. Helm refuses
 // to upgrade a pending revision, but upgrades a failed one. This is the safest recovery: nothing in the cluster is
 // deleted or rolled back (a rollback needs an earlier revision, which a first install lacks), and the next upgrade
 // applies the chart over whatever the stopped operation left. It assumes no other operation on the release is
-// running, which holds for `ambit local up` on a cluster the CLI owns.
+// running, which holds for `ambit local up` on a cluster the CLI owns; only ApplyOptions.RecoverPending calls it.
 func (h *sdk) failPending(name string) error {
 	last, err := h.cfg.Releases.Last(name)
 	if err != nil {

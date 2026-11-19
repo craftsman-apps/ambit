@@ -303,3 +303,20 @@ test("ambit key set: the address of the key's scope", () => {
   assert.equal(keySetCommand(setup, "both"), "ambit key set --url https://llm.example.com");
   assert.equal(keySetCommand(setup, "mcp"), "ambit key set --url https://mcp.example.com/mcp");
 });
+
+test("service account key: environment variables and GitHub Actions; the workflow never holds the key", async () => {
+  const { ciTabs } = await import("../src/lib/tool-setup.ts");
+  const llm = ciTabs(setup, "llm");
+  assert.deepEqual(llm.map((t) => t.id), ["env", "github"]);
+  assert.match(llm[0].blocks[0].shells.bash, /export OPENAI_BASE_URL="https:\/\/llm.example.com\/v1"/);
+  assert.match(llm[0].blocks[0].shells.bash, /export ANTHROPIC_API_KEY="ambit_TESTKEY"/);
+  assert.doesNotMatch(text(llm[0]), /AMBIT_MCP_URL/);
+  const wf = llm[1].blocks[0].text;
+  assert.match(wf, /^env:\n {2}OPENAI_BASE_URL: "https:\/\/llm.example.com\/v1"\n {2}OPENAI_API_KEY: \$\{\{ secrets.AMBIT_API_KEY \}\}/);
+  assert.doesNotMatch(wf, /ambit_TESTKEY/);
+  assert.match(llm[1].steps.join("\n"), /New repository secret\. Name: AMBIT_API_KEY/);
+  assert.match(llm[1].steps.join("\n"), /anyone who can change a workflow can read the secret/);
+  const mcp = ciTabs(setup, "mcp");
+  assert.doesNotMatch(text(mcp), /OPENAI_/);
+  assert.match(mcp[1].blocks[0].text, /AMBIT_MCP_URL: "https:\/\/mcp.example.com\/mcp"\n {2}AMBIT_API_KEY: \$\{\{ secrets.AMBIT_API_KEY \}\}/);
+});

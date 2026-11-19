@@ -84,7 +84,7 @@ func TestRulesRouterLines(t *testing.T) {
 	want := [][2]string{
 		{`(` + autoCEL + `) && ` + pathOK + ` && ([` + textOf + `].exists(t, type(t) == string && [t.lowerAscii()].exists(l, l.contains("python") || l.contains("traceback")))) && (` + mlCEL + `)`, "sonnet"},
 		{`(` + autoCEL + `) && ` + pathOK + ` && ([` + textOf + `].exists(t, type(t) == string && size(t) >= 2000 && size(t) <= 90000)) && (` + mlCEL + `)`, "pro"},
-		{`(` + autoCEL + `) && (true)`, "gemma"},
+		{`(` + autoCEL + `) && (` + identity.Person + `)`, "gemma"},
 	}
 	got := targets(t, o)
 	if len(got) != len(want) {

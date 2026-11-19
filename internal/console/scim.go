@@ -79,6 +79,7 @@ type OffboardingRecord struct {
 	SessionsEnded   int           `json:"sessionsEnded"`
 	GatewayBlocked  bool          `json:"gatewayBlocked"`
 	KeysDeleted     int           `json:"keysDeleted"`
+	KeysExposed     int           `json:"keysExposed"` // service account keys this person issued (exposure rule)
 	KeysError       string        `json:"keysError,omitempty"`
 	CompleteSuccess bool          `json:"completeSuccess"`
 
@@ -87,6 +88,18 @@ type OffboardingRecord struct {
 
 // mustRetry is true when keys may remain and a later attempt can delete them.
 func (r OffboardingRecord) mustRetry() bool { return r.KeysError != "" && !r.keysUnusable }
+
+// reserved reports, and logs, a SCIM change that names an address of the service account domain (guard 4): the
+// identity provider cannot create, offboard, block or reactivate a service account.
+func reserved(email, what string) bool {
+	if !identity.IsService(email) {
+		return false
+	}
+	slog.Error("scim: refused; the address is reserved for service accounts", "email", email, "change", what)
+	return true
+}
+
+const reservedDetail = "this address is reserved for Ambit service accounts"
 
 func scimRetry(w http.ResponseWriter) {
 	w.Header().Set("Retry-After", "30")
@@ -303,6 +316,10 @@ func (s *SCIM) create(w http.ResponseWriter, r *http.Request) {
 		scimErr(w, http.StatusBadRequest, "userName and an email are required")
 		return
 	}
+	if reserved(b.email(), "create") {
+		scimErr(w, http.StatusBadRequest, reservedDetail)
+		return
+	}
 	users, err := s.all(r.Context())
 	if err != nil {
 		scimErr(w, http.StatusInternalServerError, "could not read users")
@@ -375,6 +392,9 @@ func (s *SCIM) setActive(ctx context.Context, u *SCIMUser, active bool, trigger,
 
 // activate lifts the gateway block, then clears the keys "offboarded" flag. Both steps are idempotent.
 func (s *SCIM) activate(ctx context.Context, email string) error {
+	if reserved(email, "activate") {
+		return nil
+	}
 	if err := s.setBlocked(ctx, email, false); err != nil {
 		slog.Error("scim: unblock", "email", email, "err", err)
 		return err
@@ -400,6 +420,10 @@ func (s *SCIM) replace(w http.ResponseWriter, r *http.Request) {
 	if !readBody(w, r, &b) {
 		return
 	}
+	if reserved(b.email(), "replace") {
+		scimErr(w, http.StatusBadRequest, reservedDetail)
+		return
+	}
 	prev := u.Email
 	if b.UserName != "" {
 		u.UserName = b.UserName
@@ -414,9 +438,18 @@ func (s *SCIM) replace(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if u.Active && u.Email != prev && s.Keys != nil { // keys follow the identity: new keys go under the new email
-		if _, err := s.Keys.OffboardKeys(r.Context(), prev, "scim PUT email change"); err != nil && !errors.Is(err, ErrBadInput) {
-			slog.Error("scim: delete keys of the previous email", "email", prev, "err", err)
+	if u.Email != prev && s.Keys != nil && !reserved(prev, "email change") {
+		if u.Active { // keys follow the identity: new keys go under the new email
+			if _, err := s.Keys.OffboardKeys(r.Context(), prev, "scim PUT email change"); err != nil && !errors.Is(err, ErrBadInput) {
+				slog.Error("scim: delete keys of the previous email", "email", prev, "err", err)
+				scimRetry(w)
+				return
+			}
+		}
+		// the person under the old email saw the service account keys they issued: the exposure rule applies, also
+		// for an inactive user (idempotent: the deactivation already exposed them)
+		if _, err := s.Keys.ExposeIssuedBy(r.Context(), prev, "scim PUT email change"); err != nil && !errors.Is(err, ErrBadInput) {
+			slog.Error("scim: expose service account keys issued under the previous email", "email", prev, "err", err)
 			scimRetry(w)
 			return
 		}
@@ -517,6 +550,10 @@ func (s *SCIM) remove(w http.ResponseWriter, r *http.Request) {
 // blocks their gateway tokens, and writes a record. It logs one line per grant as evidence.
 func (s *SCIM) Offboard(ctx context.Context, email, trigger string) OffboardingRecord {
 	rec := OffboardingRecord{Email: email, At: s.now(), Trigger: trigger, Grants: []GrantResult{}, CompleteSuccess: true}
+	if reserved(email, "offboard") { // nothing is changed, and nothing is retried
+		rec.CompleteSuccess = false
+		return rec
+	}
 	grants, err := s.Conns.Store.List(ctx, email)
 	if err != nil {
 		slog.Error("offboarding: list grants", "email", email, "err", err)
@@ -549,6 +586,14 @@ func (s *SCIM) Offboard(ctx context.Context, email, trigger string) OffboardingR
 			rec.KeysError, rec.CompleteSuccess = err.Error(), false
 			rec.keysUnusable = errors.Is(err, ErrBadInput)
 		}
+		// Exposure rule: the service account keys this person issued stop within serviceAccounts.exposureDays.
+		n, err = s.Keys.ExposeIssuedBy(ctx, email, trigger)
+		rec.KeysExposed = n
+		if err != nil {
+			slog.Error("offboarding: expose service account keys", "email", email, "err", err)
+			rec.KeysError, rec.CompleteSuccess = strings.TrimPrefix(rec.KeysError+"; "+err.Error(), "; "), false
+			rec.keysUnusable = rec.keysUnusable && errors.Is(err, ErrBadInput)
+		}
 	}
 	s.saveRecord(ctx, rec)
 	slog.Info("offboarding: done", "email", email, "trigger", trigger, "grants", len(rec.Grants), "sessionsEnded", rec.SessionsEnded, "complete", rec.CompleteSuccess)
@@ -558,6 +603,9 @@ func (s *SCIM) Offboard(ctx context.Context, email, trigger string) OffboardingR
 // setBlocked adds or removes the email in the ConfigMap the controller turns into a gateway Deny rule,
 // so tokens the identity provider already issued stop working now rather than when they expire.
 func (s *SCIM) setBlocked(ctx context.Context, email string, blocked bool) error {
+	if reserved(email, "block") {
+		return nil
+	}
 	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		var cm corev1.ConfigMap
 		err := s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: OffboardedConfigMap}, &cm)

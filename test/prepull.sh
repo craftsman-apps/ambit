@@ -12,6 +12,7 @@ agw=$(sed -n 's/^AGENTGATEWAY_VERSION ?= //p' Makefile)
   cat test/*/*.yaml
 } | sed -nE 's/^[[:space:]-]*image:[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p' | grep -v -e '^ambit-' -e ':dev$' -e '{{' | sort -u > "$list"
 echo "cr.agentgateway.dev/agentgateway:$agw" >> "$list"
+# A failed pull prints crictl's last error line (#293: the reason was not kept).
 # Images CI already loaded (the agentgateway ones, from hack/thirdparty-cache.sh) are not pulled again.
-xargs -P 4 -I{} sh -c 'if docker exec '"$NODE"' crictl inspecti -q "{}" >/dev/null 2>&1; then echo "present {}";
-  elif docker exec '"$NODE"' crictl pull "{}" >/dev/null 2>&1; then echo "pulled {}"; else echo "not pulled {}"; fi' < "$list"
+xargs -P 4 -I{} sh -c 'if docker exec "$0" crictl inspecti -q "$1" >/dev/null 2>&1; then echo "present $1";
+  elif err=$(docker exec "$0" crictl pull "$1" 2>&1); then echo "pulled $1"; else echo "not pulled $1: $(echo "$err" | tail -1)"; fi' "$NODE" {} < "$list"

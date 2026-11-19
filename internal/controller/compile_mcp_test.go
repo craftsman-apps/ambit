@@ -79,10 +79,10 @@ func TestToolRulesCompileToOneExpression(t *testing.T) {
 	}
 }
 
-func TestAllSignedInOnAllToolsDropsTheGroupCheck(t *testing.T) {
+func TestAllSignedInOnAllToolsIsEveryPerson(t *testing.T) {
 	r := Compile(nil, []v1.Server{server("time", "stdio")},
 		[]v1.AccessRule{toolRule("everyone", nil, true, v1.ServerAccess{Name: "time"})}, route)
-	if got := mcpExpr(t, r); got != `mcp.tool.target == "time"` {
+	if got := mcpExpr(t, r); got != `mcp.tool.target == "time" && `+identity.Person {
 		t.Fatalf("got %s", got)
 	}
 }

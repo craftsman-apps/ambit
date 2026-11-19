@@ -79,6 +79,33 @@ llm:
     jwksURL: ""
     # Refuse gateway JWTs without a usable email claim. Offboarding, per-person budgets and audit are keyed by email; with false, such tokens are identified by their subject and offboarding cannot block them before they expire.
     requireEmail: true
+  # Prompt guard (docs/concepts.md, "Prompt guard"): the gateway checks the prompt of every chat, messages and
+  # responses request before it reaches a model. Prompts only: answers are not checked. Embeddings are not checked.
+  # The text never leaves the cluster: regular expressions run in the gateway, and the webhook must be a Service in
+  # the cluster. The audit record says what the guard did (never the matched text).
+  promptGuard:
+    enabled: false
+    # audit: record what the guard would refuse, and let the prompt through unchanged (start here).
+    # reject: refuse a matching prompt with 403 and rejectMessage; the model is not called.
+    # mask: replace each match with a placeholder (for example <CREDIT_CARD>) and send the rest to the model.
+    #   With a webhook, the webhook decides itself whether to pass, mask or refuse.
+    mode: audit
+    # Patterns built into the gateway: CreditCard, Ssn (US Social Security number), Email, PhoneNumber, CaSin
+    # (Canadian Social Insurance Number). [] for none.
+    builtins: [CreditCard, Ssn, Email, PhoneNumber]
+    # Your own regular expressions (Rust regex syntax: no look-around, no back-references), at most 1,024
+    # characters each. Example: ['(?i)ignore (all )?previous instructions', 'AKIA[0-9A-Z]{16}']
+    patterns: []
+    # The error message of a refused prompt (mode reject).
+    rejectMessage: "The prompt was refused by the prompt guard of this gateway."
+    # An optional guard of your own, run after the patterns: POST /request on this Service (agentgateway's
+    # guardrail webhook protocol). Empty service: no webhook.
+    webhook:
+      service: ""
+      namespace: ""     # empty: the release namespace
+      port: 8000
+      # FailClosed refuses the prompt when the webhook does not answer; FailOpen lets it through.
+      failureMode: FailClosed
 
 apiKeys:
   # Personal API keys (console: Keys). false: the gateways accept JWTs only; existing keys are kept but refused.
@@ -87,6 +114,16 @@ apiKeys:
   inactivityDays: 30
   # The longest end date a person may choose: 30, 90 or 365.
   maxDays: 365
+
+serviceAccounts:
+  # Service accounts (console: Settings / Service accounts): identities <name>@svc.ambit.internal for CI jobs and
+  # agents, created by admins. false: the emergency stop; creating accounts and keys is refused, the gateways refuse
+  # every service account key (kept, and accepted again when switched back on). Off as well when apiKeys.enabled is false.
+  enabled: true
+  # The longest end date of a service account key: 30, 90 or 365.
+  maxDays: 90
+  # Days a service account key keeps working after the admin who issued it is offboarded (0-30; 0: it stops at once).
+  exposureDays: 7
 
 routing:
   router:

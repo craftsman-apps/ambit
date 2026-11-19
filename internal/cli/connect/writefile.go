@@ -73,6 +73,9 @@ func WriteAll(changes []FileChange) ([]FileResult, error) {
 	for i, c := range changes {
 		r, err := writeOne(c)
 		if err != nil {
+			for j := len(r.Dirs) - 1; j >= 0; j-- { // the folders this write made; one that holds something stays
+				os.Remove(r.Dirs[j])
+			}
 			return nil, withRollback(err, rollback(changes[:i], done))
 		}
 		done = append(done, r)
@@ -85,6 +88,9 @@ func writeOne(c FileChange) (FileResult, error) {
 	target := c.Path
 	if t, err := filepath.EvalSymlinks(c.Path); err == nil {
 		target = t
+	} else if to, lerr := os.Readlink(c.Path); lerr == nil { // a link to nothing: writing would replace the link (#257)
+		return r, &out.Error{What: "cannot write " + c.Path, Why: "it is a link to " + to + ", which does not exist",
+			Next: "create " + to + " or remove the link, then run the command again", Code: out.ExitFailed}
 	}
 	if !c.Exists {
 		dirs, err := makeDirs(filepath.Dir(target))

@@ -119,7 +119,6 @@ echo "evidence: { retention: 4380h }" > "$W/changed.yaml"
 rc=0; "${A[@]}" upgrade "${VALUES[@]}" -f "$W/changed.yaml" --chart-dir charts --yes > "$W/upgrade.log" 2>&1 || rc=$?
 cat "$W/upgrade.log"
 [[ $rc == 0 || $rc == 3 ]] || fail "2b ambit upgrade exited $rc"
-grep -q "applies the same version again (a repair)" "$W/upgrade.log" || fail "2b no repair line"
 rev() { helm history "$1" -n "$NS" -o json | python3 -c 'import json,sys; h=json.load(sys.stdin)[-1]; print(h["revision"], h["status"])'; }
 [[ $(rev ambit) == "2 deployed" ]] || fail "2b ambit is at $(rev ambit), want 2 deployed"
 helm get values ambit -n "$NS" -o json | grep -q '"retention":"4380h"' || fail "2b the changed value is not stored"

@@ -127,17 +127,35 @@ func TestSummariesOnClickHouse(t *testing.T) {
 	insertLog(t, a, d2, llm("user1@example.com", `["eng"]`, "gemma", "auto", 500, 50))                                  // routed
 	insertLog(t, a, d2, llm("user2@example.com", `[]`, "gemma", "", 70, 7))                                             // no group
 	insertLog(t, a, d2, llm("user3@example.com", "", "gemma", "", 9999, 9999))                                          // no jwt.groups key: in neither
-	insertLog(t, a, d2, map[string]string{"mcp.method.name": "tools/call", "mcp.target": "crm", "jwt.email": "user1@example.com", "http.status": "200", "jwt.groups": `["eng"]`})
+	insertLog(t, a, d2, map[string]string{"mcp.method.name": "tools/call", "mcp.target": "crm", "jwt.email": "user1@example.com", "http.status": "200", "jwt.groups": `["eng"]`, "ambit.key_id": "k1"})
 	callsBefore, mmBefore := audit()
+	used := func() time.Time {
+		got, err := a.KeysLastUsed(ctx, []string{"k1"}, d1.Add(-48*time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got["k1"]
+	}
+	usedBefore := used()
 
+	// Guard records name the caller like the gateway's record of the same call (#203): email, subject, key ID.
+	person := func(m map[string]string) map[string]string {
+		m["jwt.email"], m["jwt.sub"], m["ambit.key_id"] = "user1@example.com", "sub-of-user1", "k1"
+		return m
+	}
 	insertLog(t, a, d1, guardRecord("crm", "json", `["eng","ml-research"]`, 29000, 10000))
-	insertLog(t, a, d2, guardRecord("crm", "json", `["eng"]`, 29000, 10000))
+	insertLog(t, a, d2, person(guardRecord("crm", "json", `["eng"]`, 29000, 10000)))
 	insertLog(t, a, d2, guardRecord("crm", "logs", `[]`, 24000, 1000))
-	insertLog(t, a, d2, guardRecord("crm", "logs", "", 24000, 1000)) // a record without groups is not a savings row
+	insertLog(t, a, d2.Add(time.Hour), person(guardRecord("crm", "logs", "", 24000, 1000))) // a record without groups is not a savings row
+	// Any other record kind that names the person (none does today) is not a call either.
+	insertLog(t, a, d2.Add(time.Hour), map[string]string{"ambit.kind": AppRecordKind, "ambit.app.action": "approved", "jwt.email": "user1@example.com", "jwt.sub": "sub-of-user1", "ambit.key_id": "k1"})
 
-	// T10: Audit and the mark-missing check give the same answer with guard records present.
+	// T10: Audit, key last use and the mark-missing check give the same answer with guard and console records present.
 	if callsAfter, mmAfter := audit(); callsAfter != callsBefore || mmAfter != mmBefore {
 		t.Errorf("guard records changed the audit: calls %d -> %d, mark-missing %d -> %d", callsBefore, callsAfter, mmBefore, mmAfter)
+	}
+	if usedAfter := used(); !usedAfter.Equal(usedBefore) || usedBefore.IsZero() {
+		t.Errorf("guard records changed the key's last use: %v -> %v", usedBefore, usedAfter)
 	}
 
 	// T1: the LLM summary equals the Usage query for requests and tokens, per day, group and model.

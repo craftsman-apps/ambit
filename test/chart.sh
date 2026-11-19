@@ -159,6 +159,8 @@ qs=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml 
 assert "--access-mode=audit" in c, c
 e=one("Deployment","ambit-console")["spec"]["template"]["spec"]["containers"][0]["env"]
 assert {"name":"AMBIT_ACCESS_MODE","value":"audit"} in e, e' "access.mode=audit reaches the controller and the console"
+qs=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set protection.enabled=true) check_qs 'm=one("AgentgatewayPolicy","ambit-mcp-guard")["spec"]["backend"]["mcp"]["guardrails"]["processors"][0]["methods"]
+assert m=={"tools/list":"Response","tools/call":"Full","resources/read":"Response","prompts/get":"Response"}, m' "the guard masks tool results, resource reads and prompts (issue 297)"
 # The controller writes the access-log policy (same name); the chart renders only its static part, unchanged.
 check_qs 'assert not [x for x in docs if x["kind"]=="AgentgatewayPolicy" and x["metadata"]["name"]=="ambit-access-log"]
 s=yaml.safe_load(one("ConfigMap","ambit-access-log-base")["data"]["spec.yaml"])

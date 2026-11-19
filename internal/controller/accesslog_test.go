@@ -15,6 +15,7 @@ const testBase = `targetRefs: [{ group: gateway.networking.k8s.io, kind: Gateway
 frontend:
   accessLog:
     attributes:
+      remove: [mcp.error.message]
       add:
         - { name: jwt.email, expression: "jwt.email" }
         - { name: ambit.router, expression: "metadata.ambit_requested_model" }
@@ -42,6 +43,10 @@ func TestAccessLogPolicyAddsModeAndRulesVersion(t *testing.T) {
 	}
 	if refs := p.GetOwnerReferences(); len(refs) != 1 || refs[0].Kind != "ConfigMap" || refs[0].Name != AccessLogBase || refs[0].UID != "base-uid" {
 		t.Errorf("owner %v", refs)
+	}
+	// Issue 335: the base's removed built-ins (the text of MCP errors) stay removed in the written policy.
+	if rm, _, _ := unstructured.NestedStringSlice(p.Object, "spec", "frontend", "accessLog", "attributes", "remove"); !slices.Equal(rm, []string{"mcp.error.message"}) {
+		t.Errorf("remove %v", rm)
 	}
 	attrs, _, _ := unstructured.NestedSlice(p.Object, "spec", "frontend", "accessLog", "attributes", "add")
 	var got [][2]string

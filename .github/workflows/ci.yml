@@ -410,6 +410,56 @@ jobs:
           CLI_PREVIOUS: "0.4.0"
         run: test/cli-install.sh  # prints the cluster's pods itself on a failure
 
+  # Spec D2 decision CLI-8: the same script on a real cluster that is not kind. k3s runs directly on the runner (a
+  # real kubelet, containerd, its own load balancer and storage class), without Docker in Docker.
+  cli-install-k3s:
+    needs: [changes, image]
+    if: needs.changes.outputs.cli_kind == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with: { version: v3.22.0 }
+      - name: Helm 4 (checked against its published SHA-256)
+        run: |
+          v=v4.3.0; d="$RUNNER_TEMP/helm4"; mkdir -p "$d"; cd "$d"
+          curl -fsSLO "https://get.helm.sh/helm-$v-linux-amd64.tar.gz"
+          curl -fsSL "https://get.helm.sh/helm-$v-linux-amd64.tar.gz.sha256sum" | sha256sum --check --strict
+          tar xzf "helm-$v-linux-amd64.tar.gz" && mv linux-amd64/helm helm && ./helm version --short
+      - name: k3s (pinned, checked against the release's SHA-256), started on the runner
+        run: |
+          v=v1.33.5%2Bk3s1; d="$RUNNER_TEMP/k3s"; mkdir -p "$d"; cd "$d"
+          curl -fsSLO "https://github.com/k3s-io/k3s/releases/download/$v/k3s"
+          curl -fsSL "https://github.com/k3s-io/k3s/releases/download/$v/sha256sum-amd64.txt" | grep -E ' k3s$' | sha256sum --check --strict
+          chmod +x k3s && sudo install k3s /usr/local/bin/k3s
+          sudo sh -c 'nohup k3s server --disable traefik --write-kubeconfig-mode 644 > /tmp/k3s.log 2>&1 &'
+          for _ in $(seq 1 60); do [ -f /etc/rancher/k3s/k3s.yaml ] && k3s kubectl get nodes 2>/dev/null | grep -q ' Ready' && break; sleep 3; done
+          k3s kubectl get nodes -o wide
+          cp /etc/rancher/k3s/k3s.yaml "$RUNNER_TEMP/k3s.kubeconfig"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: images, path: "${{ runner.temp }}" }
+      - name: The CLI (dev build), the branch images in k3s's containerd, and the chart dependencies
+        run: |
+          go build -tags dev -o bin/ambit ./cmd/ambit
+          gunzip -c "$RUNNER_TEMP/images.tar.gz" > "$RUNNER_TEMP/images.tar"
+          sudo k3s ctr images import "$RUNNER_TEMP/images.tar"
+          sudo k3s ctr images import "$RUNNER_TEMP/thirdparty/agentgateway.tar"
+          mkdir -p charts/ambit/charts && cp "$RUNNER_TEMP"/thirdparty/charts/*.tgz charts/ambit/charts/
+      - name: test/cli-install.sh on k3s
+        env:
+          CLI_KUBECONFIG: "${{ runner.temp }}/k3s.kubeconfig"
+          CLI_CONTEXT: default
+          HELM3: helm
+          HELM4: "${{ runner.temp }}/helm4/helm"
+          CLI_PREVIOUS: "0.4.0"
+        run: test/cli-install.sh
+      - name: k3s log on failure
+        if: failure()
+        run: sudo tail -n 100 /tmp/k3s.log || true
+
   # Spec 9.2a: an interrupted local up is repaired, and a cluster ambit did not create is refused.
   # Also runs on draft PRs (see cli-local).
   cli-partial:

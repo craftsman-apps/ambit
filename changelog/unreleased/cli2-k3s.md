@@ -1,0 +1,1 @@
+- CI: `ambit install`, `upgrade` and `uninstall` are tested on k3s as well as on kind, so the CLI is proven on a cluster that is not kind (#78).

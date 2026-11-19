@@ -44,6 +44,8 @@ type fakeCH struct {
 	app       [][]driver.Value
 	subjects  []string
 	queries   []string
+	snapshots [][]driver.Value   // access snapshots: time, rules version, hash, mode, body (oldest first)
+	seen      [][]driver.Value   // rows of peopleSeenSQL
 	stats     [][]driver.Value   // answers of offboardStatsSQL, in call order
 	after     [][][]driver.Value // rows of offboardCallsAfterSQL, in call order
 }
@@ -68,7 +70,7 @@ func (c fakeConn) QueryContext(ctx context.Context, q string, _ []driver.NamedVa
 	switch {
 	case strings.Contains(q, "system.tables"):
 		return one(1, f.engine), nil
-	case strings.HasPrefix(q, "SELECT count(), min(Timestamp)"):
+	case q == oldestRecordSQL:
 		return one(2, f.total, f.oldest), nil
 	case q == subsSQL:
 		return &fakeRows{ctx: ctx, f: f, cols: 1, n: len(f.subjects), row: func(i int) []driver.Value { return []driver.Value{f.subjects[i]} }}, nil
@@ -83,6 +85,20 @@ func (c fakeConn) QueryContext(ctx context.Context, q string, _ []driver.NamedVa
 		f.calls = 0
 		f.mu.Unlock()
 		return &fakeRows{ctx: ctx, f: f, cols: len(callsHeader), n: n, row: f.callRow, failAfter: f.failAfter, blockAt: f.blockAt}, nil
+	case q == firstSnapshotSQL:
+		if len(f.snapshots) == 0 {
+			return one(2, int64(0), time.Unix(0, 0)), nil
+		}
+		return one(2, int64(len(f.snapshots)), f.snapshots[0][0]), nil
+	case q == snapshotInForceSQL: // the test sets only snapshots before the date's end
+		if len(f.snapshots) == 0 {
+			return &fakeRows{ctx: ctx, f: f, cols: 5}, nil
+		}
+		return one(5, f.snapshots[len(f.snapshots)-1]...), nil
+	case q == snapshotsOfDaySQL:
+		return &fakeRows{ctx: ctx, f: f, cols: 4, n: len(f.snapshots), row: func(i int) []driver.Value { return f.snapshots[i][:4] }}, nil
+	case q == peopleSeenSQL:
+		return &fakeRows{ctx: ctx, f: f, cols: 5, n: len(f.seen), row: func(i int) []driver.Value { return f.seen[i] }}, nil
 	case q == offboardStatsSQL:
 		f.mu.Lock()
 		v := f.stats[0]

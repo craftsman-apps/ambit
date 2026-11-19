@@ -139,3 +139,50 @@ func TestOffboardingEvidenceOnClickHouse(t *testing.T) {
 		t.Errorf("calls-after.csv statuses %v", statuses)
 	}
 }
+
+// The access export on a real ClickHouse: the snapshot in force at the end of D is the newest before it (15:00 of
+// two on D), both are listed; a date before the first snapshot is a 404 that names it; people seen per group.
+func TestAccessEvidenceOnClickHouse(t *testing.T) {
+	a := clickhouseTestDB(t, "evidence_test")
+	d := time.Date(2026, 12, 31, 0, 0, 0, 0, time.UTC)
+	snap := func(at time.Time, version, body string) {
+		q := fmt.Sprintf("INSERT INTO otel_logs (Timestamp, LogAttributes, Body) VALUES ('%s', {'ambit.kind':'access-snapshot','ambit.rulesVersion':%s,'ambit.rulesHash':'h-%s','ambit.snapshot.accessMode':'enforce'}, %s)",
+			at.Format("2006-01-02 15:04:05.000000000"), sq(version), version, sq(body))
+		if _, err := a.DB.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap(d.AddDate(0, 0, -3), "old000000000", `[{"name":"r","spec":{"groups":["eng"],"models":["old"]}}]`)
+	snap(d.Add(10*time.Hour), "ten000000000", `[{"name":"r","spec":{"groups":["eng"],"models":["ten"]}}]`)
+	snap(d.Add(15*time.Hour), "fif000000000", `[{"name":"r","spec":{"groups":["eng"],"models":["fifteen"]}}]`)
+	snap(d.AddDate(0, 0, 1).Add(time.Hour), "next00000000", `[{"name":"r","spec":{"groups":["eng"],"models":["next"]}}]`)
+	insertLog(t, a, d.Add(-24*time.Hour), map[string]string{"jwt.email": "ana@example.com", "jwt.groups": `["eng","ml"]`, "http.status": "200"})
+	insertLog(t, a, d.Add(-48*time.Hour), map[string]string{"jwt.email": "ana@example.com", "jwt.groups": `["eng"]`, "http.status": "403"})
+	insertLog(t, a, d.AddDate(0, 0, -100), map[string]string{"jwt.email": "bob@example.com", "jwt.groups": `["eng"]`, "http.status": "200"}) // over 90 days before
+
+	e := newEvidenceFixture(t, nil)
+	e.cat.Audit = a
+	resp, body, err := e.get(t, t.Context(), "/api/evidence/access.zip?date=2026-12-31", e.admin)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("%v %v %s", resp.StatusCode, err, body)
+	}
+	files, m := csvFiles(t, body)
+	if g := files["grants.csv"]; len(g) != 2 || g[1][0] != "2026-12-31T15:00:00Z" || g[1][1] != "fif000000000" || g[1][7] != "fifteen" {
+		t.Errorf("grants.csv %v", g)
+	}
+	ofDay, _ := json.Marshal(m.Sources["snapshotsOfTheDay"])
+	if !strings.Contains(string(ofDay), "ten000000000") || !strings.Contains(string(ofDay), "fif000000000") || strings.Contains(string(ofDay), "old0") {
+		t.Errorf("snapshots of the day %s", ofDay)
+	}
+	var seen []string
+	for _, r := range files["people-seen.csv"][1:] {
+		seen = append(seen, r[0]+" "+r[1]+" "+r[4])
+	}
+	if strings.Join(seen, ", ") != "eng ana@example.com 2, ml ana@example.com 1" {
+		t.Errorf("people-seen.csv %v", seen)
+	}
+	resp, body, _ = e.get(t, t.Context(), "/api/evidence/access.zip?date=2026-12-01", e.admin)
+	if resp.StatusCode != 404 || !strings.Contains(string(body), "Snapshots exist from 2026-12-28") {
+		t.Errorf("before the first snapshot: %d %s", resp.StatusCode, body)
+	}
+}

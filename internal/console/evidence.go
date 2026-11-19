@@ -254,6 +254,8 @@ type auditSource struct {
 	Oldest        *time.Time `json:"oldestRecordKept"`
 }
 
+const oldestRecordSQL = "SELECT count(), min(Timestamp) FROM otel_logs"
+
 func (c *Catalog) auditSource(ctx context.Context) (auditSource, error) {
 	src := auditSource{Retention: c.Evidence.Retention, RetentionFrom: "helm"}
 	var engine string
@@ -266,7 +268,7 @@ func (c *Catalog) auditSource(ctx context.Context) (auditSource, error) {
 	}
 	var n uint64
 	var oldest time.Time
-	if err := c.Audit.DB.QueryRowContext(exportContext(ctx, nil), "SELECT count(), min(Timestamp) FROM otel_logs").Scan(&n, &oldest); err != nil {
+	if err := c.Audit.DB.QueryRowContext(exportContext(ctx, nil), oldestRecordSQL).Scan(&n, &oldest); err != nil {
 		return src, err
 	}
 	if n > 0 {
@@ -370,12 +372,13 @@ func (c *Catalog) evidenceInfo(w http.ResponseWriter, r *http.Request, _ Session
 		Available bool   `json:"available"`
 		Reason    string `json:"reason,omitempty"`
 	}
-	exports := []exportInfo{{Name: "offboarding", Available: c.SCIM != nil}, {Name: "audit", Available: c.Audit != nil}}
-	if c.SCIM == nil {
-		exports[0].Reason = "SCIM is off, so there are no offboarding records"
-	}
+	exports := []exportInfo{{Name: "access", Available: c.Audit != nil}, {Name: "offboarding", Available: c.SCIM != nil}, {Name: "audit", Available: c.Audit != nil}}
 	if c.Audit == nil {
-		exports[1].Reason = "the audit store is off (evidence.enabled: false)"
+		exports[0].Reason = "the audit store is off (evidence.enabled: false); access snapshots are kept there"
+		exports[2].Reason = "the audit store is off (evidence.enabled: false)"
+	}
+	if c.SCIM == nil {
+		exports[1].Reason = "SCIM is off, so there are no offboarding records"
 	}
 	out := map[string]any{"exports": exports, "running": c.Evidence.running.Load(), "maxDays": c.Evidence.MaxDays, "maxRows": c.Evidence.MaxRows,
 		"retention": c.Evidence.Retention, "retentionFrom": "helm"}
@@ -386,6 +389,12 @@ func (c *Catalog) evidenceInfo(w http.ResponseWriter, r *http.Request, _ Session
 			return
 		}
 		out["retention"], out["retentionFrom"], out["oldestRecord"] = src.Retention, src.RetentionFrom, src.Oldest
+		first, err := c.firstSnapshot(r.Context())
+		if err != nil {
+			storeErr(w, err)
+			return
+		}
+		out["snapshotsSince"] = first
 	}
 	h, err := c.exportHistory(r.Context())
 	if err != nil {
@@ -405,8 +414,10 @@ func (c *Catalog) evidenceExport(w http.ResponseWriter, r *http.Request, s Sessi
 		prepare = c.prepareAuditExport
 	case ok && name == "offboarding":
 		prepare = c.prepareOffboardingExport
+	case ok && name == "access":
+		prepare = c.prepareAccessExport
 	default:
-		writeErr(w, http.StatusBadRequest, "unknown export: use audit.zip or offboarding.zip")
+		writeErr(w, http.StatusBadRequest, "unknown export: use access.zip, offboarding.zip or audit.zip")
 		return
 	}
 	if !c.Evidence.running.CompareAndSwap(false, true) {

@@ -125,4 +125,45 @@ spec:
         remove: [x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset]
         {{- end }}
         body: 'has(metadata.ambitUnknownPath) && metadata.ambitUnknownPath ? {"error": {"type": "not_found", "message": "no such path on the Ambit LLM gateway: " + request.path + "; check the base URL"}} : {{ if .Values.limits.enabled }}(metadata.ambitBudgetRefusal ? (request.path == "/v1/messages" ? {"type": "error", "error": {"type": "rate_limit_error", "message": "A Budget limit was reached: a request or spending limit per minute or per day, for you or for your group. Try again after the number of seconds in the Retry-After header."}} : {"error": {"message": "A Budget limit was reached: a request or spending limit per minute or per day, for you or for your group. Try again after the number of seconds in the Retry-After header.", "type": "insufficient_quota", "code": "budget_exceeded"}}) : null){{ else }}null{{ end }}'
+{{- with .Values.llm.promptGuard }}{{ if .enabled }}
+{{- if not (or .builtins .patterns .webhook.service) }}
+{{- fail "llm.promptGuard.enabled=true needs builtins, patterns or webhook.service: a guard with nothing to check would only look like protection" }}
+{{- end }}
+{{- range .patterns }}
+{{- /* Go and the gateway's Rust regex share their syntax (no look-around, no back-references): a pattern Go refuses
+fails here, at install, instead of in the gateway. */}}
+{{- $_ := mustRegexMatch . "" }}
+{{- end }}
+---
+# Prompt guard (llm.promptGuard): checks the prompt of every request on the LLM route before it reaches a model.
+# Ambit sets no promptGuard on a model (AgentgatewayModel): a model's own would replace this one for that model.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: ambit-llm-guard
+spec:
+  targetRefs: [{ group: gateway.networking.k8s.io, kind: HTTPRoute, name: ambit-llm }]
+  backend:
+    ai:
+      promptGuard:
+        request:
+          {{- if or .builtins .patterns }}
+          - regex:
+              action: {{ get (dict "audit" "Audit" "reject" "Reject" "mask" "Mask") .mode }}
+              {{- with .builtins }}
+              builtins: {{ toJson . }}
+              {{- end }}
+              {{- with .patterns }}
+              matches: {{ toJson . }}
+              {{- end }}
+            response: { message: {{ .rejectMessage | quote }} }
+          {{- end }}
+          {{- with .webhook }}{{ if .service }}
+          # The webhook answers pass, mask or reject itself; in audit mode the gateway only records its answer.
+          - webhook:
+              action: {{ eq $.Values.llm.promptGuard.mode "audit" | ternary "Audit" "Reject" }}
+              backendRef: { name: {{ .service | quote }}{{ with .namespace }}, namespace: {{ . | quote }}{{ end }}, port: {{ .port }} }
+              failureMode: {{ .failureMode }}
+          {{- end }}{{ end }}
+{{- end }}{{ end }}
 {{- end }}

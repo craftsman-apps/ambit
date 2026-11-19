@@ -26,7 +26,7 @@ const (
 	// ownerKindLabel marks a service account's owner record, so the accounts can be listed without reading every
 	// person's record. Listings also require ownerRecordLabel, which admission protects.
 	ownerKindLabel = "ambitproject.dev/key-owner-kind"
-	annPrefix        = "ambitproject.dev/key-"
+	annPrefix      = "ambitproject.dev/key-"
 )
 
 type Scope string

@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -269,5 +270,60 @@ func TestAccessLogWrittenBeforeReady(t *testing.T) {
 	q, _ := accessLogOf(ctx, ns)
 	if a := attributes(q); len(a) != 1 || a["ambit.accessMode"] != `"audit"` {
 		t.Fatalf("startup rewrote the leader's policy: %v", a)
+	}
+}
+
+// Access snapshots (evidence exports): one at the first active pass, none while nothing changes, one when only an
+// argument limit changes (the rules version stays), one on a mode change.
+func TestAccessSnapshotsFollowTheRulesInForce(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-snapshots"
+	namespace(t, ns)
+	ctx := t.Context()
+	createBase(t, ns)
+	ar := &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "eng", Namespace: ns}, Spec: v1.AccessRuleSpec{Groups: []string{"eng"},
+		Servers: []v1.ServerAccess{{Name: "github", Tools: []string{"list_issues"}, Arguments: []v1.ArgumentRule{{Name: "per_page", Max: "10"}}}}}}
+	if err := envClient.Create(ctx, ar); err != nil {
+		t.Fatal(err)
+	}
+	c := &captured{}
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}, ArgumentLimits: true,
+		Snapshots: &Snapshots{Send: c.send}}
+	pass := func() map[string]string {
+		t.Helper()
+		if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+			t.Fatal(err)
+		}
+		d, err := accessMode(ctx, ns)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	first := pass()
+	if c.n() != 1 || attrsOf(c.recs[0])["ambit.rulesVersion"] != first["rulesVersion"] || attrsOf(c.recs[0])["ambit.snapshot.accessMode"] != "enforce" {
+		t.Fatalf("first pass: %d records (published %v)", c.n(), first)
+	}
+	pass()
+	if c.n() != 1 {
+		t.Errorf("no change: %d records, want 1", c.n())
+	}
+	if err := envClient.Get(ctx, client.ObjectKeyFromObject(ar), ar); err != nil {
+		t.Fatal(err)
+	}
+	ar.Spec.Servers[0].Arguments[0].Max = "20"
+	if err := envClient.Update(ctx, ar); err != nil {
+		t.Fatal(err)
+	}
+	if d := pass(); d["rulesVersion"] != first["rulesVersion"] {
+		t.Fatalf("an argument limit changed the rules version (%s → %s): the test no longer shows the hash trigger", first["rulesVersion"], d["rulesVersion"])
+	}
+	if c.n() != 2 || !strings.Contains(c.recs[1].Body.GetStringValue(), `"max":"20"`) {
+		t.Errorf("argument limit change: %d records", c.n())
+	}
+	r.AccessMode = "audit"
+	pass()
+	if c.n() != 3 || attrsOf(c.recs[2])["ambit.snapshot.accessMode"] != "audit" {
+		t.Errorf("mode change: %d records", c.n())
 	}
 }

@@ -21,7 +21,6 @@ import (
 	fakediscovery "k8s.io/client-go/discovery/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	crfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/craftsman-apps/ambit/internal/cli/checks"
 	"github.com/craftsman-apps/ambit/internal/cli/helmx"
@@ -70,7 +69,7 @@ func newInstallRig(t *testing.T, objs ...runtime.Object) *installRig {
 		ready("ambit", map[string]string{"gateway.networking.k8s.io/gateway-name": "ambit"})}, objs...)...)
 	cs.Discovery().(*fakediscovery.FakeDiscovery).FakedServerVersion = &k8sversion.Info{Major: "1", Minor: "31", GitVersion: "v1.31.2"}
 	r := &installRig{t: t, helm: &fakeHelm{}, kube: cs, kc: kc, dir: dir,
-		ctrl:    crfake.NewClientBuilder().WithScheme(kube.Scheme).Build(),
+		ctrl:    fakeCtrl(nil),
 		results: map[string][]checks.Result{checks.GroupPre: {{ID: "R1", Status: checks.Pass}}, checks.GroupProduction: {{ID: "P1", Status: checks.Pass, Message: "gateway ok"}}}}
 	if err := os.WriteFile(r.path("values.yaml"), []byte("console: {url: https://console.example.com}\ndex:\n  envVars:\n    - name: SSO_SECRET\n      valueFrom: {secretKeyRef: {name: ambit-sso, key: clientSecret}}\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -230,8 +229,7 @@ func gatewayCRD(name, bundleVersion string) *apiextensionsv1.CustomResourceDefin
 // is listed and updated after the question.
 func TestInstallDependencyCRDRules(t *testing.T) {
 	r := newInstallRig(t)
-	r.ctrl = crfake.NewClientBuilder().WithScheme(kube.Scheme).WithObjects(
-		gatewayCRD("gateways.gateway.networking.k8s.io", "v1.9.0"), gatewayCRD("httproutes.gateway.networking.k8s.io", "v1.2.0")).Build()
+	r.ctrl = fakeCtrl(nil, gatewayCRD("gateways.gateway.networking.k8s.io", "v1.9.0"), gatewayCRD("httproutes.gateway.networking.k8s.io", "v1.2.0"))
 	r.tty, r.stdin = true, "y\nn\n"
 	code, s := r.run("install", "-f", r.path("values.yaml"))
 	if code != 1 || !strings.Contains(s, "left alone, newer on the cluster: gateways.gateway.networking.k8s.io (v1.9.0 on the cluster, v1.6.2 in ambit)") ||

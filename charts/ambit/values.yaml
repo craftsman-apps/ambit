@@ -246,6 +246,11 @@ protection:
   # How often each server's tools are read again; a changed definition is hidden at once, and calls to it
   # are refused from the next read.
   toolsRefresh: 10m
+  # Records of compressed tool results (Server spec.resultCompression; written only with evidence.enabled).
+  compressionAudit:
+    # Name the caller (email, key ID) on each record, so the Audit page shows it on the row of its call.
+    # false: records keep the caller's groups only, as before 0.5.0 (the Savings page works either way).
+    caller: true
   # Memory limit of ambit-guard, in MiB. The guard holds a tool result several times while it masks it: a 30 MiB
   # result used 323 MiB in a test. 512 fits the largest result it accepts (32 MiB). See Masking in docs/concepts.md.
   memoryLimitMiB: 512

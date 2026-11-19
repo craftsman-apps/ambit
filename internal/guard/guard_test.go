@@ -94,6 +94,21 @@ func TestToolResultsAreMasked(t *testing.T) {
 	}
 }
 
+// Issue 333: a tools/call result that is not a JSON object cannot be checked, so it is withheld instead of passed.
+func TestResultThatIsNotAnObjectIsWithheld(t *testing.T) {
+	g := &Guard{Pins: pins, Masker: Builtin{}}
+	for _, body := range []string{`["customer RRN 900101-1234567, kim@acme.example"]`, `"RRN 900101-1234567"`, `42`, `{"content":`} {
+		res, _ := g.CheckResponse(t.Context(), &extmcp.McpResponse{ServiceNames: []string{"crm"}, Method: "tools/call", McpResponse: []byte(body)})
+		if res.GetError() == nil || strings.Contains(res.GetError().Reason, "900101") {
+			t.Errorf("%s: want the result withheld, got %v", body, res)
+		}
+	}
+	// An empty result object still passes.
+	if res, _ := g.CheckResponse(t.Context(), &extmcp.McpResponse{ServiceNames: []string{"crm"}, Method: "tools/call", McpResponse: []byte(`{}`)}); res.GetPass() == nil {
+		t.Fatalf("empty result: %v", res)
+	}
+}
+
 type brokenMasker struct{}
 
 func (brokenMasker) Mask(context.Context, string) (string, int, error) {

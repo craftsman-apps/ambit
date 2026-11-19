@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/auditsql"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -121,6 +122,18 @@ func TestKeysLastUsedSQL(t *testing.T) {
 	}
 }
 
+// Records with ambit.kind set (the guard's compression records, the console's app records) are not gateway calls: every
+// query of gateway records must skip them, even when they name the person (#203).
+func TestGatewayQueriesSkipOtherRecordKinds(t *testing.T) {
+	for name, q := range map[string]string{"callsSQL": callsSQL, "subsSQL": subsSQL, "keysLastUsedSQL": keysLastUsedSQL,
+		"invalidKeySQL": invalidKeySQL, "wouldRefuseTotalsSQL": wouldRefuseTotalsSQL, "wouldRefuseGroupsSQL": wouldRefuseGroupsSQL,
+		"MarkMissingLast24h": auditsql.MarkMissingLast24h} {
+		if !strings.Contains(q, "LogAttributes['ambit.kind'] = ''") {
+			t.Errorf("%s has no record-kind filter:\n%s", name, q)
+		}
+	}
+}
+
 // Usage reads the LLM summary for the days it holds completely and the scan for older days (issue #215).
 func TestUsageSplit(t *testing.T) {
 	d := func(s string) time.Time { x, _ := time.Parse("2006-01-02 15:04", s); return x }
@@ -210,10 +223,24 @@ func TestCallsSelectPromptGuard(t *testing.T) {
 			t.Errorf("callsSQL lacks %s", want)
 		}
 	}
-	// One more column than the 22 Calls scanned before; Calls scans 23 fields.
+	// The prompt guard and the call ID (#203) are the last two of the 24 fields Calls scans.
 	sel := callsSQL[strings.Index(callsSQL, "SELECT Timestamp"):strings.Index(callsSQL, "FROM otel_logs")]
-	if n := topLevelCommas(sel) + 1; n != 23 {
-		t.Errorf("callsSQL selects %d columns, Calls scans 23:\n%s", n, sel)
+	if n := topLevelCommas(sel) + 1; n != 24 {
+		t.Errorf("callsSQL selects %d columns, Calls scans 24:\n%s", n, sel)
+	}
+}
+
+// #203: compression records are read for the shown calls only, for the same person, once per call and part.
+func TestCompressionSQL(t *testing.T) {
+	for _, want := range []string{"LogAttributes['ambit.kind'] = 'compression'", "LogAttributes['jwt.email'] = {email:String}",
+		"has({ids:Array(String)}, LogAttributes['ambit.call_id'])", "Timestamp >= {from:DateTime64(9)}", "GROUP BY id, part"} {
+		if !strings.Contains(compressionSQL, want) {
+			t.Errorf("compressionSQL lacks %s", want)
+		}
+	}
+	calls := []Call{{Tool: "list_runs"}, {Method: "tools/list"}}
+	if err := (&Audit{}).addCompression(context.Background(), "user01@example.com", time.Time{}, calls); err != nil || calls[0].Compression != nil {
+		t.Fatal(calls, err) // no call IDs (records from before 0.5.0), no query (DB is nil)
 	}
 }
 

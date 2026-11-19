@@ -12,7 +12,15 @@ type Call = { time: string; email: string; route: string; method: string; server
   // The request path (/v1/models is a model list), and for a request with an invalid key the address it came from.
   path?: string; identity?: string; clientAddress?: string; keyId?: string;
   // What the prompt guard did: reject, audit (would refuse), mask, allow, or empty.
-  promptGuard?: string };
+  promptGuard?: string;
+  // What the guard did to the tool result (#203); absent when it did not compress it or its record did not arrive.
+  compression?: Compression };
+type Compression = { mode: string; bytesIn: number; bytesOut: number; match: string;
+  parts: { part: number; type: string; bytesIn: number; bytesOut: number; omitted: number }[] };
+const kb = (n: number) => n < 1024 ? `${n} bytes` : `${(n / 1024).toFixed(1)} KB`;
+const modeHelp: Record<string, string> = { shorten: "shorten: parts were left out", lossless: "lossless: same information, fewer bytes" };
+// "Result shortened: 37.2 KB → 9.8 KB (shorten, logs, 14 parts left out)", one line per compressed text.
+const compressionLines = (z: Compression) => z.parts.map((p) => `${z.parts.length > 1 ? `Text ${p.part + 1}: r` : "R"}esult ${z.mode === "shorten" ? "shortened" : "compressed"}: ${kb(p.bytesIn)} → ${kb(p.bytesOut)} (${z.mode}, ${p.type}${z.mode === "shorten" ? `, ${p.omitted} ${p.omitted === 1 ? "part" : "parts"} left out` : ""})`);
 // A routed call shows the router and the model that answered, e.g. "auto → mock/echo (coding)".
 const target = (c: Call) => c.identity === "invalid key" ? `from ${c.clientAddress || "an unknown address"}` : c.router ? `${c.router} → ${c.model}${c.label || c.labelReason ? ` (${c.label || c.labelReason})` : ""}` : (c.server || c.model);
 // One step of an MCP app's request and approval (issue #112): who did what, on which server, and why it was refused.
@@ -57,8 +65,10 @@ const outcome = (c: Call) => {
 };
 
 function csv(calls: Call[]) {
-  const rows = calls.map((c) => csvRow([utc(c.time), c.email || "no person", what(c), target(c), outcome(c), c.status, c.error, c.inputTokens, c.outputTokens, c.mark ?? "", c.rulesVersion ?? ""]));
-  return ["time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version", ...rows].join("\n") + "\n";
+  // The compression columns are at the end, so existing spreadsheets keep their positions (#203).
+  const rows = calls.map((c) => csvRow([utc(c.time), c.email || "no person", what(c), target(c), outcome(c), c.status, c.error, c.inputTokens, c.outputTokens, c.mark ?? "", c.rulesVersion ?? "",
+    c.compression?.bytesIn ?? "", c.compression?.bytesOut ?? "", c.compression?.parts.map((p) => `${c.compression!.mode} ${p.type} ${p.omitted}`).join("; ") ?? ""]));
+  return ["time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version,result_bytes_in,result_bytes_out,compression", ...rows].join("\n") + "\n";
 }
 function download(name: string, text: string) {
   const a = document.createElement("a");
@@ -138,7 +148,11 @@ export function AuditPage() {
                     <tr key={i} className="border-b border-line-soft align-top">
                       <td className="whitespace-nowrap px-3 py-2 font-mono text-small">{utc(c.time)}</td>
                       <td className="px-3 py-2 font-mono">{what(c)}{c.identity === "service account" && (
-                        <span data-testid="sa-badge" className="ml-1.5 whitespace-nowrap rounded border border-line px-1 font-sans text-small text-muted" title={`Called with the service account key ${c.keyId ?? ""}`}>service account</span>)}</td>
+                        <span data-testid="sa-badge" className="ml-1.5 whitespace-nowrap rounded border border-line px-1 font-sans text-small text-muted" title={`Called with the service account key ${c.keyId ?? ""}`}>service account</span>)}
+                        {c.compression && <>
+                          <span data-testid="compression-tag" className="ml-1.5 whitespace-nowrap rounded border border-line px-1 font-sans text-small text-muted" title={modeHelp[c.compression.mode]}>{c.compression.mode === "shorten" ? "shortened" : "compressed"}</span>
+                          {compressionLines(c.compression).map((l, j) => <span key={j} className="block font-sans text-small text-muted">{l}</span>)}
+                        </>}</td>
                       <td className="px-3 py-2 font-mono text-small">{target(c)}</td>
                       <td className="px-3 py-2"><OutcomeCell c={c} />
                         {c.error && <span className="block text-small text-muted">{c.error}</span>}</td>
@@ -149,6 +163,7 @@ export function AuditPage() {
                 </tbody>
               </table>
             </div>
+            {shown.some((c) => c.method === "tools/call") && <p className="text-small text-muted">A tool call without a "shortened" or "compressed" tag has no compression record. Records are best effort: if the server compresses results, check <code>ambit_guard_record_dropped_total</code>. Ambit never stores the content of a result.</p>}
           </>
         )}
       </section>

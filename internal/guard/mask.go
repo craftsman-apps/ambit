@@ -22,31 +22,217 @@ type Builtin struct{}
 
 var builtinRules = []struct {
 	re    *regexp.Regexp
+	find  func(text string) [][]int // instead of re
 	label string
-	check func(string) bool
+	// pick returns the spans of a match to mask (none: leave it). Without pick the whole match is masked.
+	pick func(text string, loc []int) [][2]int
 }{
-	{regexp.MustCompile(`\b\d{6}-[1-4]\d{6}\b`), "<NATIONAL_ID>", nil},  // Korean resident registration number
-	{regexp.MustCompile(`\b\d{3}-\d{2}-\d{4}\b`), "<NATIONAL_ID>", nil}, // US SSN
-	{regexp.MustCompile(`\b(?:\d[ -]?){12,18}\d\b`), "<CARD_NUMBER>", luhn},
-	{regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`), "<EMAIL>", nil},
+	// Korean resident registration number (7th digit 5 to 8: foreign residents). With a dash it is masked as it is;
+	// with a space or no separator only when its date is valid and a label such as RRN stands just before it.
+	{re: regexp.MustCompile(`\b\d{6}[- ]?[1-8]\d{6}\b`), label: "<NATIONAL_ID>", pick: rrn},
+	// US SSN. With dashes as it is; with spaces or none only when it is a valid SSN and labelled.
+	{re: regexp.MustCompile(`\b\d{3}[- ]?\d{2}[- ]?\d{4}\b`), label: "<NATIONAL_ID>", pick: ssn},
+	// Card numbers: every run of digit groups, then the card numbers inside it (see cards).
+	{find: digitRuns, label: "<CARD_NUMBER>", pick: cards},
+	{re: regexp.MustCompile(`[A-Za-z0-9._%+\-]+(?:@|%40)[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`), label: "<EMAIL>"},
 }
 
-func luhn(s string) bool {
-	sum, alt, digits := 0, false, 0
-	for i := len(s) - 1; i >= 0; i-- {
-		c := s[i]
-		if c < '0' || c > '9' {
+// labelBefore is the number of bytes before a number that rrn and ssn search for a label.
+const labelBefore = 40
+
+// labelled reports whether one of labels (lower case, without spaces, dashes or underscores) is in the
+// labelBefore bytes before text[at:].
+func labelled(text string, at int, labels ...string) bool {
+	near := strings.ToLower(text[max(0, at-labelBefore):at])
+	near = strings.NewReplacer(" ", "", "-", "", "_", "").Replace(near)
+	return slices.ContainsFunc(labels, func(l string) bool { return strings.Contains(near, l) })
+}
+
+func whole(loc []int) [][2]int { return [][2]int{{loc[0], loc[1]}} }
+
+func rrn(text string, loc []int) [][2]int {
+	s := text[loc[0]:loc[1]]
+	if s[6] == '-' {
+		return whole(loc)
+	}
+	mm, dd := atoi(s[2:4]), atoi(s[4:6])
+	if mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31 && labelled(text, loc[0], "rrn", "resident", "registration", "주민", "외국인", "등록번호") {
+		return whole(loc)
+	}
+	return nil
+}
+
+func ssn(text string, loc []int) [][2]int {
+	s := text[loc[0]:loc[1]]
+	switch {
+	case len(s) == 10 || len(s) == 11 && s[3] != s[6]: // one kind of separator, between all three parts
+		return nil
+	case len(s) == 11 && s[3] == '-':
+		return whole(loc)
+	}
+	digits := strings.ReplaceAll(s, " ", "")
+	area, group, serial := atoi(digits[:3]), atoi(digits[3:5]), atoi(digits[5:])
+	// The SSA never issues area 000, 666 or 900-999, group 00 or serial 0000.
+	if area == 0 || area == 666 || area >= 900 || group == 0 || serial == 0 || !labelled(text, loc[0], "ssn", "socialsecurity") {
+		return nil
+	}
+	return whole(loc)
+}
+
+func atoi(s string) int {
+	n := 0
+	for _, c := range s {
+		n = n*10 + int(c-'0')
+	}
+	return n
+}
+
+// digit returns the value of the ASCII or full-width digit at text[i:] and its length in bytes (0 if none).
+func digit(text string, i int) (int, int) {
+	if i >= len(text) {
+		return -1, 0
+	}
+	if c := text[i]; c >= '0' && c <= '9' {
+		return int(c - '0'), 1
+	}
+	if i+2 < len(text) && text[i] == 0xEF && text[i+1] == 0xBC && text[i+2] >= 0x90 && text[i+2] <= 0x99 { // ０-９
+		return int(text[i+2] - 0x90), 3
+	}
+	return -1, 0
+}
+
+// digitRuns returns the runs of digit groups (ASCII or full-width digits; between groups a run of spaces, one "-"
+// or one ".") of at least 13 bytes: the places where a card number can be. A loop, not a regular expression: it
+// sees every number of a result, and a regular expression made masking a fifth slower.
+func digitRuns(text string) (locs [][]int) {
+	for i := 0; i < len(text); {
+		if _, n := digit(text, i); n == 0 {
+			i++
 			continue
 		}
-		d := int(c - '0')
-		if alt {
+		start, end := i, i
+		for {
+			for _, n := digit(text, i); n > 0; _, n = digit(text, i) {
+				i += n
+			}
+			end = i
+			j := i
+			for j < len(text) && text[j] == ' ' {
+				j++
+			}
+			if j == i && j < len(text) && (text[j] == '-' || text[j] == '.') {
+				j++
+			}
+			if _, n := digit(text, j); j == i || n == 0 {
+				break
+			}
+			i = j
+		}
+		if end-start >= 13 {
+			locs = append(locs, []int{start, end})
+		}
+		i = end
+	}
+	return locs
+}
+
+type digitGroup struct {
+	start, end int    // bytes
+	digits     []int  // values
+	sep        string // the separator before it: "" for the first group, " " for any run of spaces, "-" or "."
+}
+
+// cards returns the card numbers in a run of digit groups such as "2026-11-17 4111 1111 1111 1111": every part
+// of the run that starts and ends at a group, has 13 to 19 digits, passes the Luhn check, starts with 2 to 6 (the
+// banking and travel card ranges; Unix times in milliseconds start with 1), and is either one group or written like
+// a card (one kind of separator, a first group of 4 digits, then groups of 3 to 6 and a last one of 2 to 6).
+// Overlapping finds are joined, so a short number next to a card is masked with it rather than the card left.
+func cards(text string, loc []int) (spans [][2]int) {
+	if loc[1]-loc[0] < 13 {
+		return nil
+	}
+	var groups []digitGroup
+	for i, sep := loc[0], ""; i < loc[1]; {
+		g := digitGroup{start: i, sep: sep}
+		for i < loc[1] {
+			d, n := digit(text, i)
+			if n == 0 {
+				break
+			}
+			g.digits, i = append(g.digits, d), i+n
+		}
+		g.end = i
+		groups = append(groups, g)
+		for ; i < loc[1]; i++ {
+			if _, n := digit(text, i); n > 0 {
+				break
+			}
+			sep = text[i : i+1]
+		}
+	}
+	// Like \b: a group glued to a letter, such as "no4111", is not part of a card number.
+	if loc[0] > 0 && isWordByte(text[loc[0]-1]) {
+		groups = groups[1:]
+	}
+	if loc[1] < len(text) && isWordByte(text[loc[1]]) && len(groups) > 0 {
+		groups = groups[:len(groups)-1]
+	}
+	for i := range groups {
+		n := 0
+		for j := i; j < len(groups); j++ {
+			if j > i+1 && groups[j].sep != groups[i+1].sep {
+				break
+			}
+			if n += len(groups[j].digits); n > 19 {
+				break
+			}
+			if n < 13 || !isCard(groups[i:j+1]) {
+				continue
+			}
+			if k := len(spans) - 1; k >= 0 && groups[i].start < spans[k][1] {
+				spans[k][1] = max(spans[k][1], groups[j].end)
+			} else {
+				spans = append(spans, [2]int{groups[i].start, groups[j].end})
+			}
+		}
+	}
+	return spans
+}
+
+func isCard(groups []digitGroup) bool {
+	if len(groups) > 1 {
+		if len(groups[0].digits) != 4 {
+			return false
+		}
+		for k, g := range groups[1:] {
+			lo := 3
+			if k == len(groups)-2 { // the last group
+				lo = 2
+			}
+			if len(g.digits) < lo || len(g.digits) > 6 {
+				return false
+			}
+		}
+	}
+	var all []int
+	for _, g := range groups {
+		all = append(all, g.digits...)
+	}
+	return all[0] >= 2 && all[0] <= 6 && luhn(all)
+}
+
+func luhn(digits []int) bool {
+	sum := 0
+	for i := range digits {
+		d := digits[len(digits)-1-i]
+		if i%2 == 1 {
 			if d *= 2; d > 9 {
 				d -= 9
 			}
 		}
-		sum, alt, digits = sum+d, !alt, digits+1
+		sum += d
 	}
-	return digits >= 13 && sum%10 == 0
+	return sum%10 == 0
 }
 
 func (Builtin) Mask(_ context.Context, text string) (string, int, error) {
@@ -56,17 +242,24 @@ func (Builtin) Mask(_ context.Context, text string) (string, int, error) {
 		// copies it again), and none for a rule that finds nothing.
 		var b strings.Builder
 		last := 0
-		for _, loc := range r.re.FindAllStringIndex(text, -1) {
-			if r.check != nil && !r.check(text[loc[0]:loc[1]]) {
-				continue
+		find := r.find
+		if find == nil {
+			find = func(text string) [][]int { return r.re.FindAllStringIndex(text, -1) }
+		}
+		for _, loc := range find(text) {
+			spans := [][2]int{{loc[0], loc[1]}}
+			if r.pick != nil {
+				spans = r.pick(text, loc)
 			}
-			if b.Len() == 0 {
-				b.Grow(len(text))
+			for _, s := range spans {
+				if b.Len() == 0 {
+					b.Grow(len(text))
+				}
+				b.WriteString(text[last:s[0]])
+				b.WriteString(r.label)
+				last = s[1]
+				n++
 			}
-			b.WriteString(text[last:loc[0]])
-			b.WriteString(r.label)
-			last = loc[1]
-			n++
 		}
 		if last > 0 || b.Len() > 0 {
 			b.WriteString(text[last:])

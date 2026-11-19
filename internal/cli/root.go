@@ -86,11 +86,17 @@ func (a *app) exit(err error) int {
 		// cobra's own errors: unknown command, bad arguments.
 		e = out.Usage("usage", err.Error(), "ambit --help")
 	}
-	a.printer().Fail(e)
-	if e.Code == 0 {
-		return out.ExitFailed
+	n := e.Code
+	if n == 0 {
+		n = out.ExitFailed
 	}
-	return e.Code
+	p := a.printer()
+	p.Fail(e) // in JSON mode on standard error
+	if a.g.output == "json" {
+		// Every JSON command: standard output carries one JSON document, also for a failure (#107).
+		p.JSON(map[string]any{"error": map[string]any{"what": e.What, "why": e.Why, "next": e.Next, "code": n}})
+	}
+	return n
 }
 
 // run adapts a command function: errors that are not an *out.Error or exitCode become a failed step (exit 1).

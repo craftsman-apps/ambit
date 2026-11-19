@@ -21,7 +21,7 @@ type fakeHelm struct {
 	applied  []string
 }
 
-func (f *fakeHelm) Apply(_ context.Context, name, ref, version string, _ map[string]any) (helmx.Release, error) {
+func (f *fakeHelm) Apply(_ context.Context, name, ref, version string, _ map[string]any, _ helmx.ApplyOptions) (helmx.Release, error) {
 	f.applied = append(f.applied, name+" "+ref+" "+version)
 	return helmx.Release{Name: name, Revision: 1, Status: "deployed"}, f.err
 }

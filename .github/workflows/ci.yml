@@ -41,6 +41,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: The path rules in .github/scripts/changes.sh pass their tests
         run: .github/scripts/changes_test.sh
+      - name: The release workflow's highest-tag guard passes its tests
+        run: .github/scripts/highest-tag_test.sh
 
   build:
     needs: changes

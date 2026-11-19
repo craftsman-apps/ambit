@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -152,13 +153,26 @@ func (a *app) finishCheck(ctx context.Context, f checkFlags, groups map[string]b
 		}
 		docker := le.Docker()
 		var own local.Ownership
+		var ownErr error
 		if docker.Reachable { // kind's docker ps must not run against an unreachable daemon
-			if own, err = le.Owner(ctx, f.name); err != nil {
-				return err
-			}
+			own, ownErr = le.Owner(ctx, f.name)
 		}
 		results = append(results, local.Preflight(local.PreflightInput{Name: f.name, HTTPPort: f.httpPort, HTTPSPort: f.httpsPort,
 			Docker: docker, Ownership: own, PortFree: le.PortFree})...)
+		if ownErr != nil {
+			// The ownership check could not run: L5 cannot say anything, and the error becomes its result, so the
+			// JSON document is still printed (#107).
+			r := checks.Result{ID: "L5", Group: checks.GroupLocal, Status: checks.Unknown, Message: ownErr.Error(), Source: "docker"}
+			var oe *out.Error
+			if errors.As(ownErr, &oe) {
+				r.Message, r.Next = oe.What+": "+oe.Why, oe.Next
+			}
+			for i := range results {
+				if results[i].ID == "L5" {
+					results[i] = r
+				}
+			}
+		}
 		if !docker.Reachable {
 			results = append(results, checks.Result{ID: "L5", Group: checks.GroupLocal, Status: checks.Unknown,
 				Message: "Docker is not running, so the cluster cannot be looked at", Next: "start Docker, then run ambit check --pre --local again", Source: "docker"})

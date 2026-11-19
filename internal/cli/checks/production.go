@@ -273,7 +273,9 @@ func sentLogRecords(ctx context.Context, c *http.Client, url string) (float64, e
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)
 	for sc.Scan() {
 		line := sc.Text()
-		if !strings.HasPrefix(line, "otelcol_exporter_sent_log_records") || !strings.Contains(line, `exporter="clickhouse"`) {
+		// The metric name exactly, with or without _total: a _created series holds a start time, not a count.
+		name, _, _ := strings.Cut(line, "{")
+		if (name != "otelcol_exporter_sent_log_records" && name != "otelcol_exporter_sent_log_records_total") || !strings.Contains(line, `exporter="clickhouse"`) {
 			continue
 		}
 		f := strings.Fields(line)

@@ -111,6 +111,15 @@ func (e *Env) ReadyDocker() (DockerInfo, error) {
 func Up(ctx context.Context, p *out.Printer, e *Env, o UpOptions) error {
 	kctx := KubeContext(o.Name)
 	again := fmt.Sprintf("run ambit local up%s again (it repairs); add --verbose for details", nameFlag(o.Name))
+	unlock, err := e.Store.Lock(o.Name)
+	if err != nil {
+		var oe *out.Error
+		if !errors.As(err, &oe) {
+			err = &out.Error{What: "cannot take the lock of " + o.Name, Why: err.Error(), Next: "check that " + e.Store.Dir + " is writable, then " + again}
+		}
+		return err
+	}
+	defer unlock()
 	step := func(what string, f func() error) error {
 		start := time.Now()
 		err := f()

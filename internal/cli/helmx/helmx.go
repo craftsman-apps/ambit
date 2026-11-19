@@ -60,8 +60,14 @@ type Client interface {
 // ApplyOptions change how Apply treats the existing release.
 type ApplyOptions struct {
 	// RecoverPending marks a pending last revision as failed, then upgrades over it. Only for a release that no
-	// one else can be working on: `ambit local up` sets it after its ownership check (#107).
+	// one else can be working on: `ambit local up` sets it after its ownership check (#107), `ambit upgrade
+	// --recover-pending` after its age guard and question. RecoverNote is the description written on the
+	// revision that is marked failed (empty: a default).
 	RecoverPending bool
+	RecoverNote    string
+	// ResetThenReuseValues is Helm's --reset-then-reuse-values for an upgrade: the values stored in the release on
+	// top of the new chart's defaults. vals is then ignored.
+	ResetThenReuseValues bool
 }
 
 // PendingError is a release whose last revision is pending: an operation is running, or one was stopped before
@@ -166,12 +172,15 @@ func (h *sdk) Apply(ctx context.Context, name, ref, version string, vals map[str
 		if !o.RecoverPending {
 			return Release{}, h.pending(name)
 		}
-		if err := h.failPending(name); err != nil {
+		if err := h.failPending(name, o.RecoverNote); err != nil {
 			return Release{}, err
 		}
 	}
 	up := action.NewUpgrade(h.cfg)
 	up.Namespace, up.Version = h.ns, version
+	if o.ResetThenReuseValues {
+		up.ResetThenReuseValues, vals = true, nil
+	}
 	up.ServerSideApply = "false"
 	up.WaitStrategy = kube.HookOnlyStrategy
 	ch, err := h.load(ref, &up.ChartPathOptions)
@@ -203,7 +212,7 @@ func (h *sdk) pending(name string) error {
 // deleted or rolled back (a rollback needs an earlier revision, which a first install lacks), and the next upgrade
 // applies the chart over whatever the stopped operation left. It assumes no other operation on the release is
 // running, which holds for `ambit local up` on a cluster the CLI owns; only ApplyOptions.RecoverPending calls it.
-func (h *sdk) failPending(name string) error {
+func (h *sdk) failPending(name, note string) error {
 	last, err := h.cfg.Releases.Last(name)
 	if err != nil {
 		return err
@@ -214,6 +223,9 @@ func (h *sdk) failPending(name string) error {
 	}
 	r.Info.Status = relcommon.StatusFailed
 	r.Info.Description = "marked failed by ambit: an earlier operation was stopped before it finished"
+	if note != "" {
+		r.Info.Description = note
+	}
 	return h.cfg.Releases.Update(r)
 }
 

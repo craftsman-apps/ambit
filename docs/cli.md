@@ -258,6 +258,34 @@ Would create or update Secret ambit-sso key clientSecret, from ./sso-secret.txt
 
 `ambit install` needs what `helm install` needs: the permissions that R2 lists.
 
+## ambit upgrade
+
+Upgrades Ambit to the CLI's own version: the dependency CRDs, then the releases of the charts `ambit-crds` and `ambit`. The releases are found by chart name, so an install made with `helm install` and other release names is upgraded under its own names. `ambit upgrade` and `helm upgrade` are interchangeable: a team can use both on the same install.
+
+```sh
+ambit upgrade (-f values.yaml... | --reuse-values) [--secret-file ...] [--dry-run] [--timeout 10m] [--recover-pending] [--yes]
+```
+
+| Flag | Meaning |
+|---|---|
+| `-f`, `--values <file>` | values file; may repeat. One of `-f` and `--reuse-values` is required, so a forgotten `-f` never keeps old settings silently. |
+| `--reuse-values` | keep the values stored in the release, on top of the new chart's defaults (Helm's `--reset-then-reuse-values`) |
+| `--recover-pending` | mark a release left in `pending-install` or `pending-upgrade` as failed, then upgrade (see below). It asks first. |
+| `--secret-file`, `--dry-run`, `--timeout`, `--chart-repo`, `--registry-config` | as for `ambit install` |
+
+Steps: the target and the question (`Upgrade Ambit 0.4.0 → 0.5.0 in context prod-eu (https://1.2.3.4:6443), namespace ambit-system`, then `Upgrade? [y/N]`; the target is printed also with `--yes`), the preflight, the Secrets, the dependency CRDs (as for install: a newer Gateway API CRD is left alone, an existing CRD that differs is changed only after a question), `ambit-crds`, `ambit`, the wait and the production checks, with the exit codes of install. Before the question it lists the sections of [Upgrading](upgrading.md) for every release between the installed version and the new one. Upgrading to the installed version applies it again (a repair), and says so. It stops with exit 1 when Ambit is not installed in the namespace (`use ambit install`), when Argo CD or another tool manages it, and when the installed chart is newer than the CLI (`use an ambit CLI of version X, or helm rollback`).
+
+A release that a stopped run left in `pending-install` or `pending-upgrade` is refused, because another person or a CI job may be in the middle of an upgrade:
+
+```
+✗ the release ambit is pending-upgrade since 2026-12-01T10:02:11Z (revision 8) — another install or upgrade may be running
+  next: check that no helm or ambit command is working on it (helm history ambit -n ambit-system), then: ambit upgrade --recover-pending
+```
+
+`--recover-pending` refuses while the pending revision is younger than 15 minutes (longer than the default `--timeout`), and says when to try again; there is no flag to skip this. Then it shows the revision, Helm's note on it and its age, and asks `Mark revision 8 of ambit as failed and upgrade? [y/N]` (`--yes` without a terminal goes on). It writes `marked failed by ambit upgrade --recover-pending` on that revision. Helm keeps no lock of its own, so check first that no one else is upgrading.
+
+There is no `ambit rollback`: `helm rollback ambit <revision> -n ambit-system` works on releases the CLI wrote, with Helm 3 and Helm 4. Where a release needs extra steps for a rollback, [Upgrading](upgrading.md) lists them.
+
 ## ambit uninstall
 
 Uninstalls the release `ambit`, then `ambit-crds`, from the namespace. The releases are found by chart name, so an install made with `helm install` and other release names is found too; two releases of one chart stop the command (exit 1). It never deletes CRDs or the objects people wrote (the CRDs carry `helm.sh/resource-policy: keep`).

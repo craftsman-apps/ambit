@@ -17,6 +17,8 @@ GS=""
 fail() {
   echo "FAIL: $*" >&2
   kubectl -n argocd get applications -o wide >&2 2>/dev/null || true
+  # Why an Application is not Synced: its last operation and the resources that differ.
+  kubectl -n argocd get applications -o go-template='{{range .items}}{{.metadata.name}}: {{with .status.operationState}}{{.phase}} {{.message}}{{end}}{{"\n"}}{{range .status.resources}}{{if ne .status "Synced"}}  {{.kind}} {{.name}}: {{.status}} {{with .health}}{{.status}} {{.message}}{{end}}{{"\n"}}{{end}}{{end}}{{end}}' >&2 2>/dev/null || true
   kubectl -n ambit-system get pods >&2 2>/dev/null || true
   exit 1
 }
@@ -66,7 +68,11 @@ kubectl -n ambit-system rollout status deploy/ambit-console --timeout=10m >/dev/
 # The two CRD Applications are Synced; ambit and ambit-objects exist (controllers change some objects they own, so
 # their sync status is not compared here: the console Deployment from the chart is the proof).
 for a in ambit-dependency-crds ambit-crds; do
-  [[ $(kubectl -n argocd get application "$a" -o jsonpath='{.status.sync.status}') == Synced ]] || fail "3 Application $a is not Synced"
+  for _ in $(seq 1 60); do
+    [[ $(kubectl -n argocd get application "$a" -o jsonpath='{.status.sync.status}') == Synced ]] && break
+    sleep 5
+  done
+  [[ $(kubectl -n argocd get application "$a" -o jsonpath='{.status.sync.status}') == Synced ]] || fail "3 Application $a is not Synced after 5 minutes"
 done
 kubectl -n argocd get application ambit ambit-objects >/dev/null || fail "3 Applications ambit and ambit-objects"
 pass "3 the parent Application synced the four Applications; the console of Ambit $PREV is Ready"

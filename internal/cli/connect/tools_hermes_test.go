@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -154,7 +155,7 @@ func TestHermesWindows(t *testing.T) {
 		got != `C:\Users\a\AppData\Local\hermes\config.yaml` {
 		t.Fatalf("path %q", got)
 	}
-	if got := HermesConfigPath("linux", func(k string) string { return map[string]string{"HERMES_HOME": "/srv/h"}[k] }, "/home/a"); got != "/srv/h/config.yaml" {
+	if got := HermesConfigPath("linux", func(k string) string { return map[string]string{"HERMES_HOME": "/srv/h"}[k] }, "/home/a"); got != filepath.Join("/srv/h", "config.yaml") {
 		t.Fatalf("HERMES_HOME: %q", got)
 	}
 	in := hermesIn("", false, nil)

@@ -56,7 +56,7 @@ func TestConnectHermesFlow(t *testing.T) {
 	}
 	out := r.mustRun("connect", "hermes", "--url", g.URL, "--model", "m", "--mcp-url", mcpAddr, "--key-file", r.keyFile(), "--yes", "--force")
 	c := r.readFile(conf)
-	for _, want := range []string{`key_cmd: "'` + fakeAmbit + `' key print --url '` + g.URL + `'"`, `provider: "custom:ambit"`, "  together:", `"--header-file", "` + header + `"`} {
+	for _, want := range []string{`key_cmd: "'` + fakeAmbit + `' key print --url '` + g.URL + `'"`, `provider: "custom:ambit"`, "  together:", `"--header-file", ` + jsonString(header)} {
 		if !strings.Contains(c, want) {
 			t.Fatalf("config.yaml lacks %q:\n%s", want, c)
 		}
@@ -90,7 +90,7 @@ func TestConnectKiloCodeFlow(t *testing.T) {
 	kp := filepath.Join(r.home, ".config", "ambit", "kilo-key")
 	out := r.mustRun("connect", "kilocode", "--url", g.URL, "--model", "m", "--mcp-url", mcpAddr, "--key-file", r.keyFile(), "--yes")
 	c := r.readFile(conf)
-	for _, want := range []string{`"apiKey":"{file:` + kp + `}"`, `"Authorization":"Bearer {file:` + kp + `}"`, `"model": "ambit/m"`, "// mine", `"lmstudio"`} {
+	for _, want := range []string{`"apiKey":` + jsonString("{file:"+kp+"}"), `"Authorization":` + jsonString("Bearer {file:"+kp+"}"), `"model": "ambit/m"`, "// mine", `"lmstudio"`} {
 		if !strings.Contains(strings.ReplaceAll(c, `": "`, `":"`), strings.ReplaceAll(want, `": "`, `":"`)) {
 			t.Fatalf("kilo.jsonc lacks %q:\n%s", want, c)
 		}

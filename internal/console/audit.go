@@ -219,10 +219,11 @@ func (a *Audit) Calls(ctx context.Context, email string, from, to time.Time, lim
 // record delivered twice counts once. A record is written up to a few seconds after its call, so it is read from the
 // period's start without an end; the call IDs bound the scan. With protection.compressionAudit.caller false the
 // records have no email and are not shown.
+// Every field comes from the same (the first) copy of a record.
 const compressionSQL = `SELECT LogAttributes['ambit.call_id'] AS id, toInt64OrZero(LogAttributes['ambit.compress.part']) AS part,
-       any(LogAttributes['ambit.compress.mode']), any(LogAttributes['ambit.compress.type']),
-       any(toInt64OrZero(LogAttributes['ambit.compress.bytes_in'])), any(toInt64OrZero(LogAttributes['ambit.compress.bytes_out'])),
-       any(toInt64OrZero(LogAttributes['ambit.compress.omitted']))
+       argMin(LogAttributes['ambit.compress.mode'], Timestamp), argMin(LogAttributes['ambit.compress.type'], Timestamp),
+       argMin(toInt64OrZero(LogAttributes['ambit.compress.bytes_in']), Timestamp), argMin(toInt64OrZero(LogAttributes['ambit.compress.bytes_out']), Timestamp),
+       argMin(toInt64OrZero(LogAttributes['ambit.compress.omitted']), Timestamp)
 FROM otel_logs
 WHERE LogAttributes['ambit.kind'] = 'compression' AND LogAttributes['jwt.email'] = {email:String}
   AND Timestamp >= {from:DateTime64(9)} AND has({ids:Array(String)}, LogAttributes['ambit.call_id'])

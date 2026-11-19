@@ -128,7 +128,9 @@ rows = lambda f: [l.rstrip("\n").split("\t") for l in open(f) if l.strip()]
 def ns(t):  # RFC 3339 with up to 9 fraction digits, as Go writes time.Time
     base, _, frac = t.rstrip("Z").partition(".")
     return calendar.timegm(tuple(int(x) for x in base.replace("T", "-").replace(":", "-").split("-")) + (0, 0, 0)) * 10**9 + int((frac or "0").ljust(9, "0"))
-gw = {int(t): cid for t, cid in rows(sys.argv[2])}
+gwr = rows(sys.argv[2])
+gw = {int(t): cid for t, cid in gwr}
+assert len(gw) == len(gwr), "two gateway rows have the same time: a row cannot be told apart"
 rc = {r[0]: r for r in rows(sys.argv[3])}
 calls = json.load(open(sys.argv[1]))["calls"]
 assert all(c["status"] for c in calls), "a row without a status: a record that is not a gateway call"

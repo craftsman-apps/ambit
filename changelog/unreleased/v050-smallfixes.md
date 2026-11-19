@@ -2,3 +2,4 @@
 - The docs page "Install locally by hand" moved from `/docs/local-up` to `/docs/install-by-hand`, so it no longer reads as the page of `ambit local up`. The old address redirects to the new one (#320).
 - `ambit connect opencode` with opencode 1, after a connect for opencode 2, now replaces Ambit's opencode 2 entry and deletes the opencode 2 key file. Before, it stopped with "uses the opencode v2 config format" (#305).
 - A failed `ambit connect` no longer leaves an empty folder that it created for a new file (#305).
+- `ambit connect` stops when a config file is a link to a file that does not exist, and says so; before, it replaced the link with a plain file (#257).

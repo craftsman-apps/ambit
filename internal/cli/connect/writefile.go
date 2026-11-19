@@ -88,6 +88,9 @@ func writeOne(c FileChange) (FileResult, error) {
 	target := c.Path
 	if t, err := filepath.EvalSymlinks(c.Path); err == nil {
 		target = t
+	} else if to, lerr := os.Readlink(c.Path); lerr == nil { // a link to nothing: writing would replace the link (#257)
+		return r, &out.Error{What: "cannot write " + c.Path, Why: "it is a link to " + to + ", which does not exist",
+			Next: "create " + to + " or remove the link, then run the command again", Code: out.ExitFailed}
 	}
 	if !c.Exists {
 		dirs, err := makeDirs(filepath.Dir(target))

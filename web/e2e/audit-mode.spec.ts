@@ -208,7 +208,7 @@ test("CSV has the outcome, the mark and the rules version", async ({ page }) => 
   await search(page);
   const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Export CSV" }).click()]);
   const lines = readFileSync(await download.path(), "utf8").trim().split("\n");
-  expect(lines[0]).toBe("time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version");
+  expect(lines[0]).toBe("time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version,result_bytes_in,result_bytes_out,compression");
   expect(lines[1]).toContain('"Would be refused","200"');
   expect(lines[1]).toContain('"refuse:model","3f9a1c2b7d10"');
   expect(lines.find((l) => l.includes("authorization failed"))).toContain('"Refused","403"');
@@ -390,4 +390,41 @@ test("Add model with Bedrock keys and with a Vertex AI key file: the keys are se
   await form.getByRole("button", { name: "Create model" }).click();
   await expect.poll(() => sent.length).toBe(2);
   expect(sent[1]).toMatchObject({ provider: "VertexAI", credentials: "entered", googleKeyFile: file, vertexai: { projectId: "acme-ml" } });
+});
+
+// #203: the guard's record of a compressed tool result is shown on the row of its call, and exported.
+const compressed = [
+  call("2026-10-15T09:58:00Z", { method: "tools/call", server: "github", tool: "list_workflow_runs", model: "", route: "ambit/mcp", accessMode: "enforce", mark: "", outcome: "n/a", inputTokens: 0, outputTokens: 0,
+    compression: { mode: "shorten", bytesIn: 38093, bytesOut: 10035, match: "call-id", parts: [{ part: 0, type: "logs", bytesIn: 38093, bytesOut: 10035, omitted: 14 }] } }),
+  call("2026-10-15T09:57:00Z", { method: "tools/call", server: "github", tool: "list_workflow_runs", model: "", route: "ambit/mcp", accessMode: "enforce", mark: "", outcome: "n/a", inputTokens: 0, outputTokens: 0 }),
+  call("2026-10-15T09:56:00Z", { method: "tools/call", server: "github", tool: "create_issue", model: "", route: "ambit/mcp", accessMode: "enforce", mark: "", outcome: "n/a", inputTokens: 0, outputTokens: 0,
+    compression: { mode: "lossless", bytesIn: 3000, bytesOut: 1800, match: "call-id", parts: [{ part: 0, type: "json", bytesIn: 2000, bytesOut: 1200, omitted: 0 }, { part: 2, type: "yaml", bytesIn: 1000, bytesOut: 600, omitted: 0 }] } }),
+];
+
+test("a compressed tool result is tagged on its own row, with its sizes", async ({ page }) => {
+  await setup(page, { config: enforce, calls: compressed });
+  await search(page);
+  const rows = page.getByRole("row", { name: /tools\/call · list_workflow_runs/ });
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0).getByTestId("compression-tag")).toHaveText("shortened");
+  await expect(rows.nth(0).getByTestId("compression-tag")).toHaveAttribute("title", "shorten: parts were left out");
+  await expect(rows.nth(0)).toContainText("Result shortened: 37.2 KB → 9.8 KB (shorten, logs, 14 parts left out)");
+  await expect(rows.nth(1).getByTestId("compression-tag")).toHaveCount(0);
+  const both = page.getByRole("row", { name: /tools\/call · create_issue/ });
+  await expect(both.getByTestId("compression-tag")).toHaveText("compressed");
+  await expect(both).toContainText("Text 1: result compressed: 2.0 KB → 1.2 KB (lossless, json)");
+  await expect(both).toContainText("Text 3: result compressed: 1000 bytes → 600 bytes (lossless, yaml)");
+  await expect(page.getByText("has no compression record")).toBeVisible();
+  await snap(page, "audit-compression");
+});
+
+test("CSV has the compression columns at the end", async ({ page }) => {
+  await setup(page, { config: enforce, calls: compressed });
+  await search(page);
+  const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Export CSV" }).click()]);
+  const lines = readFileSync(await download.path(), "utf8").trim().split("\n");
+  expect(lines[0]).toBe("time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version,result_bytes_in,result_bytes_out,compression");
+  expect(lines[1]).toMatch(/"38093","10035","shorten logs 14"$/);
+  expect(lines[2]).toMatch(/"","",""$/);
+  expect(lines[3]).toMatch(/"3000","1800","lossless json 0; lossless yaml 0"$/);
 });

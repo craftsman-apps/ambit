@@ -56,3 +56,16 @@ Sources: [Google](https://developers.google.com/identity/protocols/oauth2/web-se
 [Microsoft revokeSignInSessions](https://learn.microsoft.com/en-us/graph/api/user-revokesigninsessions),
 [Microsoft oauth2PermissionGrant delete](https://learn.microsoft.com/en-us/graph/api/oauth2permissiongrant-delete),
 [Atlassian](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/).
+
+## Prove it to an auditor: the offboarding export
+
+**Settings → Evidence → Offboarding** exports the offboarding records of a period as one ZIP file (admins only; see [Evidence exports](compliance.md#evidence-exports)). `offboarding.csv` has one row per record, with three columns from the audit store:
+
+- `last_accepted_call_before`: the person's last accepted call before the offboarding.
+- `accepted_calls_after`: the person's calls from 5 seconds after the offboarding until the export that the gateway **accepted**, meaning any status except 401 and 403. **It should be 0.** The offboarding block is a gateway rule that answers 403, so any other status (a 404 for an unknown model, a 429 for a budget, a 502 when the provider is down) means the gateway accepted the person's credential and is an exception to look at. The 5 seconds cover calls already in flight; revocation takes about 350 ms (median). Counting this wide can only over-report, never hide a call.
+- `first_refused_call_after`: the first 401 or 403 after the offboarding. It shows the block worked when the person, or a tool with their key, tried again. It is empty when nobody tried.
+
+`calls-after.csv` lists each call counted in `accepted_calls_after`; an empty file is the good result. `grants-revoked.csv` has one row per app grant, with the vendor's answer, and `key-events.csv` the key history of the period (offboarding, revocations, and service account keys whose end date was lowered because the admin who issued them left).
+
+The three audit columns need `evidence.enabled` and are limited by the audit retention; the key history is kept 400 days. The manifest gives each source's available period.
+

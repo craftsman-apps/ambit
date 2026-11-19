@@ -56,11 +56,14 @@ func rrn(text string, loc []int) [][2]int {
 		return whole(loc)
 	}
 	mm, dd := atoi(s[2:4]), atoi(s[4:6])
-	if mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31 && labelled(text, loc[0], "rrn", "resident", "registration", "주민", "외국인", "등록번호") {
+	if mm >= 1 && mm <= 12 && dd >= 1 && dd <= daysIn[mm-1] && labelled(text, loc[0], "rrn", "resident", "registration", "주민", "외국인", "등록번호") {
 		return whole(loc)
 	}
 	return nil
 }
+
+// daysIn is the number of days of each month (February 29: the century is not checked).
+var daysIn = [12]int{31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 
 func ssn(text string, loc []int) [][2]int {
 	s := text[loc[0]:loc[1]]

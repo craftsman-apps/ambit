@@ -1,6 +1,7 @@
 package console
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -220,11 +221,13 @@ func changedTools(s v1.Server) []string {
 func (c *Catalog) approveTools(w http.ResponseWriter, r *http.Request, s Session) {
 	var srv v1.Server
 	if err := c.Client.Get(r.Context(), client.ObjectKey{Namespace: c.Namespace, Name: r.PathValue("name")}, &srv); err != nil {
+		c.refuseTools(r.Context(), s, r.PathValue("name"), "no such server")
 		writeErr(w, http.StatusNotFound, "no server named "+r.PathValue("name"))
 		return
 	}
 	changed := changedTools(srv)
 	if len(changed) == 0 {
+		c.recordApp(r.Context(), AppEvent{Action: AppToolsRefused, Actor: s.Email, Role: s.Role, Server: srv.Name, Reason: "no tool is waiting for approval"}, &srv)
 		writeErr(w, http.StatusConflict, "no tool of "+srv.Name+" is waiting for approval")
 		return
 	}
@@ -237,6 +240,7 @@ func (c *Catalog) approveTools(w http.ResponseWriter, r *http.Request, s Session
 		return
 	}
 	slog.Info("tool definitions approved", "server", srv.Name, "tools", changed, "by", s.Email)
+	c.recordApp(r.Context(), AppEvent{Action: AppToolsApproved, Actor: s.Email, Role: s.Role, Server: srv.Name, Tools: changed}, &srv)
 	writeJSON(w, http.StatusOK, map[string]any{"approved": changed})
 }
 
@@ -367,14 +371,17 @@ func (c *Catalog) createRequest(w http.ResponseWriter, r *http.Request, s Sessio
 		return
 	}
 	slog.Info("server requested", "request", q.Name, "server", in.ServerName, "image", in.Image, "url", in.URL, "connection", in.Connection, "by", s.Email)
+	c.recordApp(r.Context(), requestEvent(AppRequested, s, q, in.Reason), q)
 	writeJSON(w, http.StatusCreated, requestView(*q))
 }
 
 // pending loads a request that still waits for a decision by someone other than the requester.
-func (c *Catalog) pending(w http.ResponseWriter, r *http.Request, s Session) (*v1.ServerRequest, bool) {
+// A refused attempt is recorded as refused (approve-refused or deny-refused).
+func (c *Catalog) pending(w http.ResponseWriter, r *http.Request, s Session, refused string) (*v1.ServerRequest, bool) {
 	var q v1.ServerRequest
 	if err := c.Client.Get(r.Context(), client.ObjectKey{Namespace: c.Namespace, Name: r.PathValue("name")}, &q); err != nil {
 		if apierrors.IsNotFound(err) {
+			c.recordApp(r.Context(), AppEvent{Action: refused, Actor: s.Email, Role: s.Role, Request: r.PathValue("name"), Reason: "no such request"}, nil)
 			writeErr(w, http.StatusNotFound, "no server request named "+r.PathValue("name"))
 		} else {
 			serverErr(w, err)
@@ -383,19 +390,54 @@ func (c *Catalog) pending(w http.ResponseWriter, r *http.Request, s Session) (*v
 	}
 	state, _ := c.followPR(r.Context(), &q)
 	if state != "" {
+		c.recordApp(r.Context(), requestEvent(refused, s, &q, "the pull request is still open"), &q)
 		writeErr(w, http.StatusConflict, fmt.Sprintf("this request's pull request is still open (%s): approve or deny only after it is merged or closed", q.Status.PullRequest))
 		return nil, false
 	}
 	if q.Status.Decision != "" {
+		c.recordApp(r.Context(), requestEvent(refused, s, &q, "already "+lower(q.Status.Decision)), &q)
 		writeErr(w, http.StatusConflict, fmt.Sprintf("this request was already %s by %s", lower(q.Status.Decision), q.Status.DecidedBy))
 		return nil, false
 	}
 	// Separation of duties: nobody approves their own request, admins included.
 	if q.Spec.RequestedBy == s.Email {
+		c.recordApp(r.Context(), requestEvent(refused, s, &q, "own request"), &q)
 		writeErr(w, http.StatusForbidden, "you made this request, so another approver must decide on it")
 		return nil, false
 	}
 	return &q, true
+}
+
+// requestEvent is an event about request q. For a refused action, detail is the reason; otherwise it is the comment.
+func requestEvent(action string, s Session, q *v1.ServerRequest, detail string) AppEvent {
+	e := AppEvent{Action: action, Actor: s.Email, Role: s.Role, Server: q.Spec.ServerName, Request: q.Name, RequestedBy: q.Spec.RequestedBy,
+		Image: q.Spec.Server.Image, URL: q.Spec.Server.URL, PullRequest: q.Status.PullRequest}
+	if refusedAction(action) {
+		e.Reason = detail
+	} else {
+		e.Comment = detail
+	}
+	return e
+}
+
+// refuseRequest records a refused decision on the request named name, with what is known of it.
+func (c *Catalog) refuseRequest(ctx context.Context, s Session, action, name, reason string) {
+	var q v1.ServerRequest
+	if err := c.Client.Get(ctx, client.ObjectKey{Namespace: c.Namespace, Name: name}, &q); err != nil {
+		c.recordApp(ctx, AppEvent{Action: action, Actor: s.Email, Role: s.Role, Request: name, Reason: reason}, nil)
+		return
+	}
+	c.recordApp(ctx, requestEvent(action, s, &q, reason), &q)
+}
+
+// refuseTools records a refused tool approval on the server named name.
+func (c *Catalog) refuseTools(ctx context.Context, s Session, name, reason string) {
+	var srv v1.Server
+	var obj client.Object
+	if c.Client.Get(ctx, client.ObjectKey{Namespace: c.Namespace, Name: name}, &srv) == nil {
+		obj = &srv
+	}
+	c.recordApp(ctx, AppEvent{Action: AppToolsRefused, Actor: s.Email, Role: s.Role, Server: name, Reason: reason}, obj)
 }
 
 func lower(decision string) string {
@@ -412,6 +454,7 @@ func (c *Catalog) decide(w http.ResponseWriter, r *http.Request, s Session, q *v
 	q.Status = v1.ServerRequestStatus{Decision: decision, DecidedBy: s.Email, DecidedAt: &now, Comment: comment, PullRequest: q.Status.PullRequest}
 	if err := c.Client.Status().Update(r.Context(), q); err != nil {
 		if apierrors.IsConflict(err) {
+			c.recordApp(r.Context(), requestEvent(map[string]string{"Approved": AppApproveRefused, "Denied": AppDenyRefused}[decision], s, q, "someone else decided first"), q)
 			writeErr(w, http.StatusConflict, "someone else decided on this request first; reload")
 			return false
 		}
@@ -426,7 +469,7 @@ func (c *Catalog) approveRequest(w http.ResponseWriter, r *http.Request, s Sessi
 	if !decodeInto(w, r, &in) {
 		return
 	}
-	q, ok := c.pending(w, r, s)
+	q, ok := c.pending(w, r, s, AppApproveRefused)
 	if !ok {
 		return
 	}
@@ -452,6 +495,7 @@ func (c *Catalog) approveRequest(w http.ResponseWriter, r *http.Request, s Sessi
 		q.Status.PullRequest, q.Status.PullRequestBranch, q.Status.PullRequestBy, q.Status.Comment = pr.URL, pr.Branch, s.Email, in.Comment
 		if err := c.Client.Status().Update(r.Context(), q); err != nil {
 			if apierrors.IsConflict(err) {
+				c.recordApp(r.Context(), requestEvent(AppApproveRefused, s, q, "someone else decided first"), q)
 				writeErr(w, http.StatusConflict, "someone else decided on this request first; reload")
 				return
 			}
@@ -459,6 +503,7 @@ func (c *Catalog) approveRequest(w http.ResponseWriter, r *http.Request, s Sessi
 			return
 		}
 		slog.Info("server request approved; pull request opened, waiting for the merge", "request", q.Name, "server", srv.Name, "approvedBy", s.Email, "url", pr.URL)
+		c.recordApp(r.Context(), requestEvent(AppPullRequestOpened, s, q, in.Comment), q)
 		writeJSON(w, http.StatusAccepted, Proposed{PullRequest: pr})
 		return
 	}
@@ -470,6 +515,7 @@ func (c *Catalog) approveRequest(w http.ResponseWriter, r *http.Request, s Sessi
 		// A retry after the status update failed finds its own Server; anything else is a real clash.
 		var existing v1.Server
 		if err := c.Client.Get(r.Context(), client.ObjectKeyFromObject(srv), &existing); err != nil || existing.Annotations[requestKey] != q.Name {
+			c.recordApp(r.Context(), requestEvent(AppApproveRefused, s, q, "a server with this name already exists"), q)
 			writeErr(w, http.StatusConflict, fmt.Sprintf("a server named %q already exists; deny this request", q.Spec.ServerName))
 			return
 		}
@@ -479,6 +525,7 @@ func (c *Catalog) approveRequest(w http.ResponseWriter, r *http.Request, s Sessi
 	}
 	slog.Info("server request approved", "request", q.Name, "server", q.Spec.ServerName, "image", q.Spec.Server.Image,
 		"requestedBy", q.Spec.RequestedBy, "approvedBy", s.Email)
+	c.recordApp(r.Context(), requestEvent(AppApproved, s, q, in.Comment), q)
 	writeJSON(w, http.StatusOK, requestView(*q))
 }
 
@@ -487,7 +534,7 @@ func (c *Catalog) denyRequest(w http.ResponseWriter, r *http.Request, s Session)
 	if !decodeInto(w, r, &in) {
 		return
 	}
-	q, ok := c.pending(w, r, s)
+	q, ok := c.pending(w, r, s, AppDenyRefused)
 	if !ok {
 		return
 	}
@@ -495,6 +542,7 @@ func (c *Catalog) denyRequest(w http.ResponseWriter, r *http.Request, s Session)
 		return
 	}
 	slog.Info("server request denied", "request", q.Name, "server", q.Spec.ServerName, "by", s.Email)
+	c.recordApp(r.Context(), requestEvent(AppDenied, s, q, in.Comment), q)
 	writeJSON(w, http.StatusOK, requestView(*q))
 }
 

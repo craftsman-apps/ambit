@@ -17,3 +17,9 @@ func addDevFlags(up *cobra.Command, f *localFlags) {
 func addKeyringFlag(c *cobra.Command, service *string) {
 	c.Flags().StringVar(service, "dev-keyring-service", "", "development builds only: keychain service name to use instead of \"ambit\"")
 }
+
+// addChartDirFlag adds --chart-dir to install and upgrade: a development build has no chart version, so it
+// installs the charts of a checkout (spec D2 3.2). Release builds always install the charts of their own version.
+func addChartDirFlag(c *cobra.Command, dir *string) {
+	c.Flags().StringVar(dir, "chart-dir", "", "development builds only: install the charts from this directory (charts/ of a checkout)")
+}

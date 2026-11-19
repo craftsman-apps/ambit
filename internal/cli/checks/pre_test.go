@@ -21,7 +21,7 @@ func TestR1KubeVersion(t *testing.T) {
 
 func TestR2Permissions(t *testing.T) {
 	want(t, one(t, "R2", fx{allowed: true}), Pass, "you can create")
-	want(t, one(t, "R2", fx{allowed: false}), Fail, "you cannot create customresourcedefinitions, create namespaces, create clusterroles")
+	want(t, one(t, "R2", fx{allowed: false}), Fail, "you cannot create customresourcedefinitions, create namespaces, create clusterroles, create clusterrolebindings, create validatingadmissionpolicies, create validatingadmissionpolicybindings, create deployments in ambit-system, create secrets in ambit-system, create services in ambit-system, create serviceaccounts in ambit-system, create roles in ambit-system, create rolebindings in ambit-system")
 	want(t, one(t, "R2", fx{kubeDenied: true}), Unknown, "cannot create selfsubjectaccessreviews")
 }
 

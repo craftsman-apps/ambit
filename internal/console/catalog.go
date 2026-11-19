@@ -59,6 +59,8 @@ type Catalog struct {
 	SCIM *SCIM
 	// Audit searches the gateway's access logs; nil when evidence is off.
 	Audit *Audit
+	// AppAudit sends MCP app requests, decisions and refused attempts to the collector; nil when evidence is off.
+	AppAudit *AppRecorder
 	// Budgets shows today's use of each Budget; nil when limits are off.
 	Budgets *Budgets
 	// Dependencies reports what Ambit relies on and whether it answers; nil hides the page.
@@ -210,8 +212,16 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	write := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
 		return allow("only admins can change access rules", h, RoleAdmin)
 	}
-	decide := func(h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
-		return allow("only approvers and admins can decide on server requests", h, RoleApprover, RoleAdmin)
+	// decide lets approvers and admins decide; anyone else's attempt is refused and recorded (action is approve or deny).
+	decide := func(refused string, h func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc {
+		return allow("", func(w http.ResponseWriter, r *http.Request, s Session) {
+			if s.Role != RoleApprover && s.Role != RoleAdmin {
+				c.refuseRequest(r.Context(), s, refused, r.PathValue("name"), "role "+s.Role+" may not decide on server requests")
+				writeErr(w, http.StatusForbidden, "only approvers and admins can decide on server requests")
+				return
+			}
+			h(w, r, s)
+		})
 	}
 	mux.HandleFunc("GET /api/models", read(c.listModels))
 	mux.HandleFunc("GET /api/access-rules", read(c.listRules))
@@ -226,11 +236,18 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	mux.HandleFunc("PUT /api/budgets/{name}", budget(c.updateBudget))
 	mux.HandleFunc("DELETE /api/budgets/{name}", budget(c.deleteBudget))
 	mux.HandleFunc("GET /api/servers", read(c.listServers))
-	mux.HandleFunc("POST /api/servers/{name}/approve-tools", write(c.approveTools))
+	mux.HandleFunc("POST /api/servers/{name}/approve-tools", allow("", func(w http.ResponseWriter, r *http.Request, s Session) {
+		if s.Role != RoleAdmin {
+			c.refuseTools(r.Context(), s, r.PathValue("name"), "role "+s.Role+" may not approve tool definitions")
+			writeErr(w, http.StatusForbidden, "only admins can change access rules")
+			return
+		}
+		c.approveTools(w, r, s)
+	}))
 	mux.HandleFunc("GET /api/server-requests", read(c.listRequests))
 	mux.HandleFunc("POST /api/server-requests", allow("", c.createRequest))
-	mux.HandleFunc("POST /api/server-requests/{name}/approve", decide(c.approveRequest))
-	mux.HandleFunc("POST /api/server-requests/{name}/deny", decide(c.denyRequest))
+	mux.HandleFunc("POST /api/server-requests/{name}/approve", decide(AppApproveRefused, c.approveRequest))
+	mux.HandleFunc("POST /api/server-requests/{name}/deny", decide(AppDenyRefused, c.denyRequest))
 	mux.HandleFunc("GET /api/me/access", read(c.myAccess))
 	mux.HandleFunc("GET /api/config", read(c.config))
 	mux.HandleFunc("GET /api/changes", read(c.changes))

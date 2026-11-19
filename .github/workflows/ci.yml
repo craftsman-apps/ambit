@@ -374,6 +374,31 @@ jobs:
           kubectl --context kind-ambit get pods -A || true
           kubectl --context kind-ambit -n ambit-system logs deploy/ambit-console --tail=100 || true
 
+  # Spec D2 section 9, cluster test 1: ambit install and ambit uninstall on a new kind cluster, with the branch
+  # image and charts. Also runs on draft PRs (see cli-local).
+  cli-install:
+    needs: [changes, image]
+    if: needs.changes.outputs.cli_kind == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
+        with: { install_only: true }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: images, path: "${{ runner.temp }}" }
+      - name: The CLI (dev build), the branch images and the chart dependencies
+        run: |
+          go build -tags dev -o bin/ambit ./cmd/ambit
+          gunzip -c "$RUNNER_TEMP/images.tar.gz" > "$RUNNER_TEMP/images.tar"
+          mkdir -p charts/ambit/charts && cp "$RUNNER_TEMP"/thirdparty/charts/*.tgz charts/ambit/charts/
+      - name: ambit install, a second install refused, ambit uninstall
+        env:
+          CLI_ARCHIVES: "${{ runner.temp }}/images.tar ${{ runner.temp }}/thirdparty/agentgateway.tar"
+        run: test/cli-install.sh  # prints the cluster's pods itself on a failure
+
   # Spec 9.2a: an interrupted local up is repaired, and a cluster ambit did not create is refused.
   # Also runs on draft PRs (see cli-local).
   cli-partial:

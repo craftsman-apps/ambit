@@ -190,6 +190,27 @@ test("MCP servers: a server already running elsewhere is requested by URL", asyn
   await expect(card.getByText(/streamable-http/)).toBeVisible();
 });
 
+// Issue #112: a request and a refused self-approval are audit records, shown in the Audit page's third search.
+test("Audit lists MCP app requests and refused approvals", async ({ page }) => {
+  await signInAsBootstrapAdmin(page);
+  const name = `ui-audit-${Date.now().toString(36)}`;
+  const req = await page.request.post("/api/server-requests", { data: { serverName: name, url: "https://mcp.example.com/audit" } });
+  expect(req.status()).toBe(201);
+  const reqName = (await req.json()).name;
+  expect((await page.request.post(`/api/server-requests/${reqName}/approve`, { data: {} })).status()).toBe(403); // own request
+
+  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Audit" }).click();
+  await page.locator("#audit-mode").selectOption("approvals");
+  await expect(page.getByLabel("Email (optional)")).toHaveValue("");
+  const rows = page.getByTestId("app-events").getByRole("row").filter({ hasText: name });
+  await expect(async () => {
+    await page.getByRole("button", { name: "Search" }).click();
+    await expect(rows).toHaveCount(2, { timeout: 2000 });
+  }).toPass({ timeout: 90_000 });
+  await expect(rows.filter({ hasText: "Requested" })).toContainText("admin@ambit.local");
+  await expect(rows.filter({ hasText: "Approve refused" })).toContainText("own request");
+});
+
 test("rules form offers each server's tools", async ({ page }) => {
   await signInAsBootstrapAdmin(page);
   await page.goto("/access-rules?edit=new");

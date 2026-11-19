@@ -98,7 +98,7 @@ With `protection.enabled`, `ambit-guard` masks personal data in the results of M
 
   | Kind | Masked as it is | Masked only with a label just before it |
   |---|---|---|
-  | Korean resident registration number (also foreign residents, 7th digit 5 to 8) | `900101-1234567` | `9001011234567`, `900101 1234567`: the date must be valid, and a word such as `RRN`, `resident`, `registration`, `주민`, `외국인` or `등록번호` must stand in the 40 characters before it (a JSON key counts) |
+  | Korean resident registration number (7th digit 1 to 8, also foreign residents; not 9 or 0, people born before 1900) | `900101-1234567` | `9001011234567`, `900101 1234567`: the date must be valid, and a word such as `RRN`, `resident`, `registration`, `주민`, `외국인` or `등록번호` must stand in the 40 characters before it (a JSON key counts) |
   | US Social Security number | `078-05-1120` | `078051120`, `078 05 1120`: it must be a valid SSN (not area 000, 666 or 900 to 999, group 00 or serial 0000), and `SSN` or `social security` must stand in the 40 characters before it |
   | Card number | 13 to 19 digits that pass the Luhn check and start with 2 to 6, written without separators or in groups (first group of 4 digits) with spaces, `-` or `.`; ASCII or full-width digits. A date, time or other number next to it does not stop the mask. | |
   | Email address | `kim@acme.com`, and `kim%40acme.com` in a link | |

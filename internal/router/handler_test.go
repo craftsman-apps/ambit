@@ -400,3 +400,26 @@ func TestUsersMatchByEmail(t *testing.T) {
 		t.Fatalf("calls %d, want 1", llm.calls.Load())
 	}
 }
+
+// allSignedIn is every person, never a service account (decision SA-8 B); a service account in a listed group is
+// still served.
+func TestAllSignedInIsNotAServiceAccount(t *testing.T) {
+	open := auto
+	open.Groups, open.Users, open.AllSignedIn = []string{"eng-ci"}, nil, true
+	cfg := cfgOf(open)
+	h := handler(&fakeLLM{answer: "coding"}, cfg)
+	for _, c := range []struct {
+		email  string
+		groups []string
+		want   string
+	}{
+		{"user01@acme.com", nil, "classified"},
+		{"ci-deploy@svc.ambit.internal", nil, "denied"},
+		{" CI-Deploy@SVC.Ambit.Internal ", nil, "denied"},
+		{"ci-deploy@svc.ambit.internal", []string{"eng-ci"}, "classified"},
+	} {
+		if r := h.decide(t.Context(), time.Now(), h.Store.Snapshot(), Attrs{Email: c.email, Groups: c.groups, Config: cfg.Hash}, body("auto", "code")); r.Reason != c.want {
+			t.Errorf("%q %v: %+v, want %s", c.email, c.groups, r, c.want)
+		}
+	}
+}

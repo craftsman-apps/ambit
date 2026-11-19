@@ -1,7 +1,8 @@
 # Test identity provider for step 2. NOT part of the Ambit package; stands in for a customer's Okta.
 # The realm's user profile makes email optional, so user noemail can get a token without an email claim.
 # Test-only credentials: user10/user10-test-pass (ambit-admins), user11/user11-test-pass (ambit-approvers),
-# user01/user01-test-pass (eng), user09/user09-test-pass (ml-research), noemail/noemail-test-pass (eng, no email), keytest/keytest-test-pass (eng; the key tests' offboarding user). Keycloak admin: admin/admin.
+# user01/user01-test-pass (eng), user09/user09-test-pass (ml-research), noemail/noemail-test-pass (eng, no email), keytest/keytest-test-pass (eng; the key tests' offboarding user), svcfake/svcfake-test-pass (eng; an email in the
+# service account domain, which the gateways and the console must refuse). Keycloak admin: admin/admin.
 # Client ambit-cli-test: password grant for tests only; access tokens carry groups and aud=ambit-gateway.
 # Realm saas (step 5) stands in for a SaaS app such as Jira: its own accounts user01/user01-saas-pass and
 # user09/user09-saas-pass, and the confidential client ambit-connect that Ambit's Connection uses (password grant on, so a test can get a token with the whoami audience).
@@ -171,6 +172,24 @@ data:
             {
               "type": "password",
               "value": "user01-test-pass",
+              "temporary": false
+            }
+          ],
+          "groups": [
+            "/eng"
+          ]
+        },
+        {
+          "username": "svcfake",
+          "email": "svcfake@svc.ambit.internal",
+          "emailVerified": true,
+          "firstName": "Svc",
+          "lastName": "Fake",
+          "enabled": true,
+          "credentials": [
+            {
+              "type": "password",
+              "value": "svcfake-test-pass",
               "temporary": false
             }
           ],

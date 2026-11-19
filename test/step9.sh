@@ -56,6 +56,31 @@ done
 [[ $(restarts) == "$before" ]] || fail "1b ambit-guard restarted (memory?): $(kubectl -n "$NS" get pod -l app.kubernetes.io/name=ambit-guard -o jsonpath='{.items[0].status.containerStatuses[0].lastState}')"
 pass "1b ambit-guard did not restart"
 
+# 1c · issues 295 and 296: a card number next to a date and time in a log line, and other written forms of the same
+#      identifiers, reach the client masked; dates, times, IP addresses, versions and Unix times are left as they are.
+said=$(raw_call crm_say '{"text":"2026-11-17 10:00:01 4111 1111 1111 1111 declined | RRN 9001011234567 | 외국인 900101-5234567 | SSN 078051120 | card 4111.1111.1111.1111 | q=kim%40acme.com | at 192.168.100.207 v1.22.3 1763372401127"}')
+for raw in "4111 1111 1111 1111" 9001011234567 900101-5234567 078051120 4111.1111.1111.1111 kim%40acme.com; do
+  [[ "$said" != *"$raw"* ]] || fail "1c '$raw' reached the client unmasked: $said"
+done
+for kept in "2026-11-17 10:00:01 <CARD_NUMBER> declined" 192.168.100.207 v1.22.3 1763372401127; do
+  [[ "$said" == *"$kept"* ]] || fail "1c '$kept' is not in the result as it should be: $said"
+done
+pass "1c other written forms masked, ordinary numbers kept: $(uv run --no-project python -c 'import json,sys;print(json.loads(sys.argv[1])["result"]["content"][0]["text"])' "$said")"
+
+# 1d · issue 335: the text of a server's JSON-RPC error is not stored in the audit log; its code is. (The client still
+#      receives the error text unmasked: the gateway does not send errors to the guard, issue 333.)
+ch() { kubectl -n "$NS" exec ambit-clickhouse-0 -- sh -c 'clickhouse-client --user ambit --password "$CLICKHOUSE_PASSWORD" -q "$0"' "$1"; }
+since=$(date -u +"%Y-%m-%d %H:%M:%S"); sleep 1
+err=$(raw_call crm_lookup_fail '{"id":"42"}')
+[[ "$err" == *'"error"'* && "$err" == *-32000* ]] || fail "1d lookup_fail did not answer with a JSON-RPC error: $err"
+q="SELECT LogAttributes['mcp.error.code'], mapContains(LogAttributes, 'mcp.error.message'),
+  arrayExists(v -> position(v, '900101') > 0 OR position(v, 'minsu.kim') > 0, mapValues(LogAttributes)) OR position(Body, '900101') > 0
+  FROM otel.otel_logs WHERE Timestamp >= '$since' AND LogAttributes['gen_ai.tool.name'] LIKE '%lookup_fail' FORMAT TSV"
+wait_for 120 '[[ -n $(ch "$q") ]]' || fail "1d no audit record of the failed call within 120 s"
+rec=$(ch "$q")
+[[ "$rec" == $'-32000\t0\t0' ]] || fail "1d audit record (error code, has error text, holds personal data): $rec"
+pass "1d the failed call is recorded with mcp.error.code -32000 and without the error text"
+
 # 2 · U6 fail closed: with the guard down, the call fails and nothing unmasked comes back
 kubectl -n "$NS" scale deploy/ambit-guard --replicas=0 >/dev/null
 kubectl -n "$NS" wait pod -l app.kubernetes.io/name=ambit-guard --for=delete --timeout=120s >/dev/null 2>&1 || true

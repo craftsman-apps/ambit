@@ -83,21 +83,31 @@ func attr(t *testing.T, docs []doc, name string) string {
 
 // The chart's policies must decode to exactly the fragments the controller uses.
 func TestChartUsesTheSameFragments(t *testing.T) {
-	for _, re := range []bool{true, false} {
-		var docs []doc
-		if re {
-			docs = render(t)
-		} else {
-			docs = render(t, "--set", "llm.jwt.requireEmail=false", "--set", "mcp.jwt.requireEmail=false")
-		}
-		for _, n := range []string{"ambit-llm-auth", "ambit-mcp-auth"} {
-			p := find(t, docs, "AgentgatewayPolicy", n)
-			if !contains(get(t, p, "spec", "traffic", "authorization", "policy", "matchExpressions"), Gate(re)) {
-				t.Errorf("%s (requireEmail=%v): matchExpressions lack Gate: %v", n, re, get(t, p, "spec", "traffic", "authorization", "policy", "matchExpressions"))
+	// All four combinations of apiKeys.enabled and requireEmail, and serviceAccounts.enabled: the JWT branch always
+	// refuses the service account domain (guard 1); with keys on, the key branch refuses service account keys only
+	// when serviceAccounts.enabled is false.
+	for _, keys := range []bool{true, false} {
+		for _, re := range []bool{true, false} {
+			for _, svc := range []bool{true, false} {
+				docs := render(t, "--set", "apiKeys.enabled="+strconv.FormatBool(keys), "--set", "serviceAccounts.enabled="+strconv.FormatBool(svc),
+					"--set", "llm.jwt.requireEmail="+strconv.FormatBool(re), "--set", "mcp.jwt.requireEmail="+strconv.FormatBool(re))
+				want := JWTGate(re)
+				if keys {
+					want = Gate(re, svc)
+				}
+				for _, n := range []string{"ambit-llm-auth", "ambit-mcp-auth"} {
+					m := get(t, find(t, docs, "AgentgatewayPolicy", n), "spec", "traffic", "authorization", "policy", "matchExpressions")
+					if !contains(m, want) {
+						t.Errorf("%s (apiKeys=%v requireEmail=%v serviceAccounts=%v): matchExpressions lack %s: %v", n, keys, re, svc, want, m)
+					}
+				}
 			}
 		}
 	}
 	docs := render(t)
+	if got := attr(t, docs, "ambit.identity"); got != Kind {
+		t.Errorf("ambit.identity = %s, want Kind", got)
+	}
 	for _, n := range []string{"jwt.email", "jwt.groups", "jwt.sub", "ambit.key_id", "ambit.identity"} {
 		e := attr(t, docs, n)
 		if n == "jwt.email" || n == "jwt.sub" || n == "ambit.identity" {

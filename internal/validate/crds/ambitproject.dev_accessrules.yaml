@@ -62,7 +62,9 @@ spec:
             description: AccessRuleSpec says who may use which models and MCP tools. Rules only grant access; nothing is allowed by default.
             properties:
               allSignedIn:
-                description: AllSignedIn allows everyone with a valid token.
+                description: 'AllSignedIn allows every person with a valid token or personal key. It never grants a service account
+
+                  (<name>@svc.ambit.internal): name its group or identity in groups or users.'
                 type: boolean
               groups:
                 description: Groups from the identity provider's "groups" claim. A member of any listed group is allowed.

@@ -200,3 +200,38 @@ func TestAuditSearchModes(t *testing.T) {
 		}
 	}
 }
+
+// The Audit page tells a prompt-guard refusal from an access-rule refusal by ambit.promptGuard alone (the chart's
+// access-log field), and reads only the action of each guard.
+func TestCallsSelectPromptGuard(t *testing.T) {
+	for _, want := range []string{"JSONExtract(LogAttributes['ambit.promptGuard'], 'Array(String)')", "splitByChar(':', x)[-1]",
+		"'reject'), 'reject',\n               has(c_pg, 'audit'), 'audit', has(c_pg, 'mask'), 'mask'"} {
+		if !strings.Contains(callsSQL, want) {
+			t.Errorf("callsSQL lacks %s", want)
+		}
+	}
+	// One more column than the 22 Calls scanned before; Calls scans 23 fields.
+	sel := callsSQL[strings.Index(callsSQL, "SELECT Timestamp"):strings.Index(callsSQL, "FROM otel_logs")]
+	if n := topLevelCommas(sel) + 1; n != 23 {
+		t.Errorf("callsSQL selects %d columns, Calls scans 23:\n%s", n, sel)
+	}
+}
+
+// topLevelCommas counts the commas outside brackets and quotes.
+func topLevelCommas(s string) int {
+	n, depth, quoted := 0, 0, false
+	for _, r := range s {
+		switch {
+		case r == '\'':
+			quoted = !quoted
+		case quoted:
+		case r == '(' || r == '[':
+			depth++
+		case r == ')' || r == ']':
+			depth--
+		case r == ',' && depth == 0:
+			n++
+		}
+	}
+	return n
+}

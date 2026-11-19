@@ -173,6 +173,44 @@ assert not [x for x in r if {"pods/exec","pods/portforward"} & set(x["resources"
 audit_warn='access.mode is audit: every signed-in request to a model or MCP tool is allowed'
 ! grep -qF "$audit_warn" <<<"$(notes)" || { echo "FAIL chart: no audit warning in enforce mode"; exit 1; }
 grep -qF "$audit_warn" <<<"$(notes --set access.mode=audit)" || { echo "FAIL chart: NOTES must warn in audit mode"; exit 1; }
+# Prompt guard (llm.promptGuard): off renders nothing; each mode renders one AgentgatewayPolicy on the LLM route and the
+# access-log field; bad values are refused at render time (values.schema.json and the template).
+pg() { helm template ambit charts/ambit -n ambit-system -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml "$@"; }
+check 'assert not [x for x in docs if x["metadata"]["name"]=="ambit-llm-guard"]
+assert "ambit.promptGuard" not in one("ConfigMap","ambit-access-log-base")["data"]["spec.yaml"]' "prompt guard off by default: no policy, no access-log field"
+pgcheck() { local saved=$out; out=$(pg --set llm.promptGuard.enabled=true "${@:3}") || { echo "FAIL chart: render: $2"; exit 1; }; check "$1" "$2"; out=$saved; }
+guard='g=one("AgentgatewayPolicy","ambit-llm-guard")["spec"]; r=g["backend"]["ai"]["promptGuard"]["request"]
+assert g["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute","name":"ambit-llm"}], g
+assert "response" not in g["backend"]["ai"]["promptGuard"] and "streaming" not in g["backend"]["ai"]["promptGuard"], g
+log=yaml.safe_load(one("ConfigMap","ambit-access-log-base")["data"]["spec.yaml"])["frontend"]["accessLog"]["attributes"]["add"]
+assert {"name":"ambit.promptGuard","expression":"guardrails.map(g, g.phase + \":\" + g.guard + \":\" + g.action)"} in log, log'
+pgcheck "$guard"'
+assert r==[{"regex":{"action":"Audit","builtins":["CreditCard","Ssn","Email","PhoneNumber"]},"response":{"message":"The prompt was refused by the prompt guard of this gateway."}}], r' \
+  "prompt guard on: audit mode and the four built-ins by default, one policy on ambit-llm, the access-log field"
+pgcheck "$guard"'
+assert r==[{"regex":{"action":"Reject","builtins":["Email"],"matches":["(?i)ignore (all )?previous instructions","AKIA[0-9A-Z]{16}","\\d{3}-\\d{4}"]},"response":{"message":"No."}}], r' \
+  "prompt guard reject: built-ins, custom patterns (escapes kept) and the message" \
+  --set llm.promptGuard.mode=reject --set 'llm.promptGuard.builtins={Email}' --set llm.promptGuard.rejectMessage=No. \
+  --set-json 'llm.promptGuard.patterns=["(?i)ignore (all )?previous instructions","AKIA[0-9A-Z]{16}","\\d{3}-\\d{4}"]'
+pgcheck "$guard"'
+assert r[0]["regex"]["action"]=="Mask" and r[0]["regex"]["matches"]==["secret-[0-9]+"] and "builtins" not in r[0]["regex"], r' \
+  "prompt guard mask: patterns only" --set llm.promptGuard.mode=mask --set-json 'llm.promptGuard.builtins=[]' --set-json 'llm.promptGuard.patterns=["secret-[0-9]+"]'
+pgcheck "$guard"'
+assert r[1]=={"webhook":{"action":"Reject","backendRef":{"name":"guard-hook","namespace":"guards","port":9000},"failureMode":"FailOpen"}}, r' \
+  "prompt guard webhook after the patterns, Reject in mask mode, namespace, port and failure mode" \
+  --set llm.promptGuard.mode=mask --set llm.promptGuard.webhook.service=guard-hook --set llm.promptGuard.webhook.namespace=guards \
+  --set llm.promptGuard.webhook.port=9000 --set llm.promptGuard.webhook.failureMode=FailOpen
+pgcheck "$guard"'
+assert r==[{"webhook":{"action":"Audit","backendRef":{"name":"guard-hook","port":8000},"failureMode":"FailClosed"}}], r' \
+  "prompt guard webhook only, audit mode: action Audit, the release namespace" --set-json 'llm.promptGuard.builtins=[]' --set llm.promptGuard.webhook.service=guard-hook
+long=$(printf 'a%.0s' $(seq 1 1025))
+for bad in "--set llm.promptGuard.mode=block" "--set-json llm.promptGuard.builtins=[\"Iban\"]" "--set llm.promptGuard.patterns[0]=$long" \
+    "--set llm.promptGuard.pattern=x" "--set llm.promptGuard.webhook.failureMode=Open" "--set llm.promptGuard.webhook.port=0" \
+    "--set-json llm.promptGuard.builtins=[]" "--set llm.promptGuard.patterns[0]=(?=lookahead)" "--set llm.promptGuard.patterns[0]=a(b"; do
+  # shellcheck disable=SC2086
+  ! pg --set llm.promptGuard.enabled=true $bad >/dev/null 2>&1 || { echo "FAIL chart: prompt guard values must be refused: $bad"; exit 1; }
+done
+echo "PASS prompt guard: bad mode, built-in, long or invalid pattern, unknown key, failure mode, port, and nothing to check are refused"
 # helm upgrade --reuse-values from 0.1.0 (#81): the old release's values replace the chart's defaults, so every key
 # added since 0.1.0 is missing. Render every template with the chart's own values.yaml swapped for 0.1.0's.
 old=$(mktemp -d); trap 'rm -rf "$old"' EXIT

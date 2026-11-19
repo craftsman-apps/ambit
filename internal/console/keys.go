@@ -23,6 +23,9 @@ const (
 	keyMCPLabel      = "ambitproject.dev/key-mcp"
 	keyOwnerLabel    = "ambitproject.dev/key-owner"
 	ownerRecordLabel = "ambitproject.dev/key-owner-record"
+	// ownerKindLabel marks a service account's owner record, so the accounts can be listed without reading every
+	// person's record. Listings also require ownerRecordLabel, which admission protects.
+	ownerKindLabel = "ambitproject.dev/key-owner-kind"
 	annPrefix        = "ambitproject.dev/key-"
 )
 
@@ -46,15 +49,31 @@ type Key struct {
 	Created, Expires, SignedIn, Ceiling, Until time.Time
 	Hash                                       string
 	UID, ResourceVersion                       string
+	// IssuedBy is the admin who created a service account key (the only person who saw it); "" for personal keys.
+	IssuedBy string
+	// Exposed is when the exposure rule lowered the key's end date (its issuer was offboarded); zero when never.
+	Exposed time.Time
 }
 
+// KindServiceAccount is the owner record kind of a service account; a person's record has no kind.
+const KindServiceAccount = "service-account"
+
 type Owner struct {
-	Email                string    `json:"email"`
-	Groups               []string  `json:"groups"`
-	SignedIn             time.Time `json:"signedIn"`
-	Offboarded           bool      `json:"offboarded"`
+	Email      string    `json:"email"`
+	Groups     []string  `json:"groups"`
+	SignedIn   time.Time `json:"signedIn"`
+	Offboarded bool      `json:"offboarded"`
+	// Service accounts only. Kind never changes once written; Deleted marks a tombstone, which keeps the name taken.
+	Kind                 string    `json:"kind,omitempty"`
+	Description          string    `json:"description,omitempty"`
+	CreatedBy            string    `json:"createdBy,omitempty"`
+	Created              time.Time `json:"created,omitzero"`
+	Deleted              bool      `json:"deleted,omitempty"`
 	UID, ResourceVersion string    `json:"-"`
 }
+
+// service reports whether the record is a service account's.
+func (o Owner) service() bool { return o.Kind == KindServiceAccount }
 
 const base62 = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 
@@ -119,12 +138,19 @@ func (k Key) Secret(ns string) *corev1.Secret {
 		labels[keyMCPLabel] = "true"
 	}
 	ts := func(t time.Time) string { return t.UTC().Format(time.RFC3339) }
+	ann := map[string]string{
+		annPrefix + "name": k.Name, annPrefix + "prefix": k.Prefix, annPrefix + "owner-email": k.Email,
+		annPrefix + "created": ts(k.Created), annPrefix + "expires": ts(k.Expires), annPrefix + "signed-in": ts(k.SignedIn),
+		annPrefix + "ceiling": ts(k.Ceiling), annPrefix + "scope": string(k.Scope)}
+	if k.IssuedBy != "" {
+		ann[annPrefix+"issued-by"] = k.IssuedBy
+	}
+	if !k.Exposed.IsZero() {
+		ann[annPrefix+"exposed"] = ts(k.Exposed)
+	}
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "ambit-key-" + k.ID, Namespace: ns, Labels: labels, UID: typesUID(k.UID), ResourceVersion: k.ResourceVersion,
-			Annotations: map[string]string{
-				annPrefix + "name": k.Name, annPrefix + "prefix": k.Prefix, annPrefix + "owner-email": k.Email,
-				annPrefix + "created": ts(k.Created), annPrefix + "expires": ts(k.Expires), annPrefix + "signed-in": ts(k.SignedIn),
-				annPrefix + "ceiling": ts(k.Ceiling), annPrefix + "scope": string(k.Scope)}},
+			Annotations: ann},
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{"key": b},
 	}
@@ -142,7 +168,10 @@ func KeyFromSecret(s *corev1.Secret) (Key, error) {
 	p := func(name string) (time.Time, error) { return time.Parse(time.RFC3339, a[annPrefix+name]) }
 	k := Key{ID: e.Metadata.KeyID, Email: e.Metadata.Email, Groups: e.Metadata.Groups, Hash: e.KeyHash,
 		Name: a[annPrefix+"name"], Prefix: a[annPrefix+"prefix"], Scope: Scope(a[annPrefix+"scope"]),
-		UID: string(s.UID), ResourceVersion: s.ResourceVersion}
+		UID: string(s.UID), ResourceVersion: s.ResourceVersion, IssuedBy: a[annPrefix+"issued-by"]}
+	if v := a[annPrefix+"exposed"]; v != "" {
+		k.Exposed, _ = time.Parse(time.RFC3339, v) // unreadable: treated as never exposed; the ceiling holds the date
+	}
 	var errs []error
 	var err error
 	if k.Until, err = time.Parse(time.RFC3339, e.Metadata.Until); err != nil {
@@ -164,9 +193,13 @@ func KeyFromSecret(s *corev1.Secret) (Key, error) {
 
 func (o Owner) Secret(ns string) *corev1.Secret {
 	b, _ := json.Marshal(o)
+	labels := map[string]string{ownerRecordLabel: "true"}
+	if o.service() {
+		labels[ownerKindLabel] = KindServiceAccount
+	}
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "ambit-key-owner-" + ownerHash(o.Email), Namespace: ns,
-			Labels: map[string]string{ownerRecordLabel: "true"}, UID: typesUID(o.UID), ResourceVersion: o.ResourceVersion},
+			Labels: labels, UID: typesUID(o.UID), ResourceVersion: o.ResourceVersion},
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{"owner.json": b},
 	}

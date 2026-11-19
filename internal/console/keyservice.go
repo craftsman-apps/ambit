@@ -35,6 +35,11 @@ var (
 	ErrBadInput    = errors.New("invalid key request")
 	ErrNotFound    = errors.New("no such key")
 	ErrSignInAgain = errors.New("Sign in again to create keys") // the session predates sign-in times (before the upgrade)
+	// ErrReserved: a person path met an address of the service account domain (guard 3).
+	ErrReserved = fmt.Errorf("%w: this address is reserved for service accounts", ErrBadInput)
+	// errKindChanged: the owner record is of the other kind (a person's record claims to be a service account, or
+	// the reverse). Kind never changes once written, so nothing writes over it.
+	errKindChanged = fmt.Errorf("%w: the owner record is of another kind", ErrBadInput)
 )
 
 const (
@@ -54,6 +59,7 @@ type KeyService struct {
 	Client    client.Client
 	Namespace string
 	Settings  KeySettings
+	Services  ServiceSettings
 	Now       func() time.Time
 	PerHour   int // creations per person per hour; 0 means 10
 
@@ -105,7 +111,8 @@ func (s *KeyService) StartTerm(lead context.Context) error {
 // recordSettings records a settings-changed event when the settings differ from the last recorded ones.
 // Call it holding s.mu.
 func (s *KeyService) recordSettings(ctx context.Context) {
-	cur := fmt.Sprintf("enabled=%t inactivityDays=%d maxDays=%d", s.Settings.Enabled, s.Settings.InactivityDays, s.Settings.MaxDays)
+	cur := fmt.Sprintf("enabled=%t inactivityDays=%d maxDays=%d serviceAccounts.enabled=%t serviceAccounts.maxDays=%d serviceAccounts.exposureDays=%d",
+		s.Settings.Enabled, s.Settings.InactivityDays, s.Settings.MaxDays, s.Services.Enabled, s.Services.MaxDays, s.Services.ExposureDays)
 	newest := "" // the newest settings-changed event, found by annotation without reading any event's data
 	err := s.eachEventMeta(ctx, func(m *metav1.PartialObjectMetadata) {
 		if m.Annotations[keyEventActionAnn] == "settings-changed" && m.Name > newest {
@@ -356,11 +363,27 @@ var (
 // any, errOwnerUnlabelled for planted ones, nil for none) is handed to rule as a fresh record that overwrites it;
 // otherwise it is an error.
 func (s *KeyService) changeOwner(ctx context.Context, email string, replace error, rule func(o *Owner, exists bool) (bool, error)) (Owner, bool, error) {
+	return s.changeOwnerKind(ctx, "", email, replace, rule)
+}
+
+// changeOwnerKind is changeOwner for one kind of owner ("" a person, KindServiceAccount). It is the one check every
+// owner record write passes (guard 3): a person's email never in the service account domain and a service
+// account's always in it; a record of the other kind (live or tombstone) is refused before anything is written.
+func (s *KeyService) changeOwnerKind(ctx context.Context, kind, email string, replace error, rule func(o *Owner, exists bool) (bool, error)) (Owner, bool, error) {
+	if svc := identity.IsService(email); svc != (kind == KindServiceAccount) {
+		if svc {
+			return Owner{}, false, ErrReserved
+		}
+		return Owner{}, false, errKindChanged
+	}
 	var out Owner
 	var wrote bool
 	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
 		o, err := s.owner(ctx, email)
 		exists := err == nil
+		if exists && o.Kind != kind {
+			return errKindChanged
+		}
 		if apierrors.IsNotFound(err) {
 			o = Owner{Email: email}
 		} else if replace != nil && errors.Is(err, replace) {
@@ -508,8 +531,22 @@ func (s *KeyService) applyOwner(ctx context.Context, o Owner, keys []Key, refres
 
 func (s *KeyService) recompute(k *Key, o Owner, full bool) keyOp {
 	before := *k
-	if c := k.Created.AddDate(0, 0, s.Settings.MaxDays); c.Before(k.Ceiling) {
+	maxDays := s.Settings.MaxDays
+	if o.service() {
+		maxDays = s.Services.MaxDays
+	}
+	if c := k.Created.AddDate(0, 0, maxDays); c.Before(k.Ceiling) {
 		k.Ceiling = c // lowered for good: a later raise of maxDays never raises it back
+	}
+	if o.service() { // nobody signs in for a service account: until is the ceiling, never extended
+		k.Groups = o.Groups
+		if k.Ceiling.Before(k.Until) {
+			k.Until = k.Ceiling
+		}
+		if slices.Equal(before.Groups, k.Groups) && before.Ceiling.Equal(k.Ceiling) && before.Until.Equal(k.Until) {
+			return keyKeep
+		}
+		return keyUpdate
 	}
 	full = full || o.SignedIn.After(k.SignedIn)
 	if !o.SignedIn.Before(k.SignedIn) {
@@ -823,7 +860,9 @@ func (s *KeyService) repairLocked(ctx context.Context) (rep RepairReport, objErr
 			errs = append(errs, err)
 			continue
 		}
-		if err == nil && !o.Offboarded && !blocked[email] {
+		// A service account's record must be of its kind and live; the block list never holds its domain (SCIM refuses it).
+		live := err == nil && o.service() == identity.IsService(email) && !o.Offboarded && !o.Deleted && (o.service() || !blocked[email])
+		if live {
 			u, d, err := s.applyOwner(ctx, o, keys, false)
 			rep.Updated += u
 			rep.Deleted += d
@@ -832,7 +871,7 @@ func (s *KeyService) repairLocked(ctx context.Context) (rep RepairReport, objErr
 			}
 			continue
 		}
-		for _, k := range keys { // no readable owner record, or offboarded: fail closed
+		for _, k := range keys { // no readable owner record, offboarded, a deleted service account, another kind: fail closed
 			_, err := s.changeKey(ctx, k.ID, func(*Key) (keyOp, error) { return keyDelete, nil }, "repair-delete", consoleActor)
 			if err == nil {
 				rep.Deleted++

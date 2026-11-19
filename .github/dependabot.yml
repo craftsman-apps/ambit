@@ -14,3 +14,5 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
+    # init and analyze must run the same version, so they move in one PR.
+    groups: { codeql: { patterns: ["github/codeql-action*"] } }

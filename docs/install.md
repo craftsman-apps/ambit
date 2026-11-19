@@ -18,9 +18,11 @@ Ambit is installed with two Helm charts. The charts and the console image are pu
 
 ## Install with the ambit CLI
 
-Install the [ambit CLI](cli.md) of the Ambit version you want, write `values.yaml` (see the next section), and run:
+Install the [ambit CLI](cli.md) of the Ambit version you want, then:
 
 ```sh
+ambit init                      # asks questions and writes values.yaml; never asks for a secret value
+# create the Secrets it names, with the kubectl commands it prints
 ambit install -f values.yaml
 ```
 
@@ -167,6 +169,8 @@ The ClickHouse user needs `CREATE TABLE` in the database once, then `INSERT` and
 Valkey holds the budget counters (see [Budgets](budgets.md)). The Valkey that the chart installs has no persistence: a restart sets today's counters to zero. An external Valkey with persistence keeps them.
 
 ## Argo CD and GitOps
+
+`ambit init --gitops argocd` writes the values file, the dependency CRDs and four Argo CD Applications into your configuration repository, so Argo CD installs Ambit itself (see [ambit init](cli.md#--gitops-argocd)).
 
 In GitOps mode the console opens pull requests in your configuration repository instead of changing the cluster. Argo CD applies what is merged.
 

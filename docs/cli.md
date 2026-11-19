@@ -215,6 +215,49 @@ Without flags it runs the checks that apply: the pre-install group when Ambit is
 
 `ambit check` needs read access (`get`, `list`) to the Ambit objects (Models, Servers, AccessRules), Deployments, Pods, PodDisruptionBudgets and StorageClasses in the namespace, to CustomResourceDefinitions, and `get` on Secrets in the namespace: Helm keeps the release values in Secrets, P3 reads the TLS certificate, and P10 checks that each credentials Secret exists (without reading its values). The active checks need `create` on `pods/portforward`: the health probes, and P4 and P11 with `--deep`, which read the collector's metrics on port 8888 (one test call serves both). The mark-missing line under P11 needs `create` on `pods/exec` in the ClickHouse pod: it runs one `SELECT` there with the pod's own credentials, so the CLI never reads the ClickHouse password. With an external ClickHouse, or without that permission, the line is `?`; the Audit page shows the same count. R2 uses SelfSubjectAccessReviews, which every signed-in user may create. Without a permission, the check is `?` and names what is missing, for example `cannot get secrets in ambit-system`.
 
+## ambit init
+
+Writes a values file for `ambit install` by asking questions. It never asks for a secret value: it asks for the name of each Secret and prints the `kubectl create secret` command to run. It needs a terminal (without one it stops with exit 2); a team that scripts installs writes the values file itself.
+
+```sh
+ambit init [--out values.yaml] [--gitops argocd] [--force]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--out <file>` | `values.yaml` | file to write. An existing file is refused (exit 1) without `--force`. |
+| `--gitops argocd` | off | also write the Argo CD files of a configuration repository (below). Only `argocd` is accepted. |
+| `--force` | off | overwrite `--out` and the Argo CD files |
+
+The questions, in order (Enter takes the default in brackets): the console address; the LLM gateway host, whether the MCP gateway is on, and its host; the company sign-in (`oidc`, `github`, `saml`, `ldap` or `later`), with the name of the Secret for its secret (default `ambit-sso`); where the gateway tokens come from (your identity provider: issuer, audience and JWKS URL; or Ambit's Dex, for tests); the TLS Secret (default `ambit-tls`, or `none`, which `ambit check --production` fails); the audit log, its retention and an external ClickHouse; budgets, what happens when the budget store does not answer, and an external Valkey; tool protection; GitOps mode (repository, branch, directory, GitHub App ID and the Secret of its key); the number of gateway replicas.
+
+```
+Wrote values.yaml (24 settings).
+Create these Secrets before ambit install (values are never written to files by ambit init):
+  kubectl -n ambit-system create secret generic ambit-sso --from-literal=clientSecret=<client secret>
+  kubectl -n ambit-system create secret tls ambit-tls --cert=<file> --key=<file>
+Or let ambit install create them from files: ambit install -f values.yaml --secret-file ambit-sso/clientSecret=<file> --secret-file ambit-tls/tls.crt=<file> --secret-file ambit-tls/tls.key=<file>
+Next: ambit install -f values.yaml
+```
+
+The file starts with a comment: the CLI version, the date, and that `ambit init` does not read it back, so edit it freely. Every setting it writes exists in the chart's `values.yaml` of the same version. The sign-in connector uses `$ENV_NAME` placeholders, and `dex.envVars` takes their values from the Secret you named.
+
+### --gitops argocd
+
+Argo CD renders the charts itself and keeps no Helm release, so `ambit install` is not used. `ambit init --gitops argocd` writes everything Argo CD needs, with the current directory as the root of your configuration repository:
+
+```
+<GitOps directory>/values.yaml                 the values file (the directory you answered, default ambit)
+<GitOps directory>/crds/dependency-crds.yaml   the dependency CRDs (Gateway API, agentgateway, ToolHive) of this CLI
+argocd/ambit-dependency-crds.yaml              Application: <GitOps directory>/crds, sync wave -2, ServerSideApply=true
+argocd/ambit-crds.yaml                         Application: chart ambit-crds from ghcr.io/craftsman-apps/charts, sync wave -1
+argocd/ambit.yaml                              Application: chart ambit, sync wave 0, with the values file of the repository ($values)
+argocd/ambit-objects.yaml                      Application: the accessrules/, servers/ and models/ directories, sync wave 1
+argocd-parent.yaml                             only if you asked for one parent Application (app of apps)
+```
+
+With a parent, `kubectl apply -n argocd -f argocd-parent.yaml` starts all four, in the order of their sync waves. Without one, apply the four in the order above and wait until each is Healthy. The output prints the Argo CD health check of Ambit's objects (`deploy/argocd/health.lua`) as the `argocd-cm` keys to add. `--out` cannot be used with `--gitops argocd`. To upgrade, run `ambit init --gitops argocd --force` with the newer CLI: it rewrites the chart versions and the CRD bundle, and you review the diff in a pull request.
+
 ## ambit install
 
 Installs Ambit on any cluster: the dependency CRDs (Gateway API, agentgateway, ToolHive), then the Helm releases `ambit-crds` and `ambit`. The result is two ordinary Helm releases, so `helm list`, `helm history`, `helm upgrade` and `helm rollback` keep working. The chart version is always the CLI's own version: to install another version of Ambit, use that version of the CLI.

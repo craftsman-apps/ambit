@@ -3,7 +3,7 @@
 #   1 a compressed tool result writes one guard record to otel_logs: server, type, sizes, the caller's groups and
 #     email, no content; a result that is not compressed writes none
 #   1b #203: 20 parallel calls of user01 and 2 by user01's personal key: each record has the call ID of exactly one
-#     gateway row, with the same email, key ID and tool
+#     gateway row, with the same email, key ID and tool; /api/audit shows each record on the row of its own call
 #   1c protection.compressionAudit.caller false: the record keeps the call ID and has no email and no key ID
 #   2 the console created the summary tables with the retention from the chart; the record reaches the summary;
 #     GET /api/savings is admin only and shows the call, with no email in the answer
@@ -116,7 +116,39 @@ for cid, email, key, tool, typ, part in rc:
 print(f"{n} gateway rows, {short} records, paired one to one; {sum(r[2] == kid for r in rc)} by the key")
 PY
 api DELETE "/api/keys/$AKID" >/dev/null || true
-pass "1b 22 parallel calls (2 by a personal key): $SHORT compressed, each record pairs with exactly one gateway row by ambit.call_id, same email, key ID and tool"
+# The Audit answer: each of these calls is one row; a compressed call's row has its own record's sizes, the others none.
+ch "SELECT toUnixTimestamp64Nano(Timestamp), LogAttributes['ambit.call_id'] FROM otel.otel_logs WHERE $GW FORMAT TSV" >"$P/gwt.tsv"
+ch "SELECT LogAttributes['ambit.call_id'], LogAttributes['ambit.compress.type'], LogAttributes['ambit.compress.bytes_in'], LogAttributes['ambit.compress.bytes_out'], LogAttributes['ambit.compress.omitted'] FROM otel.otel_logs WHERE $RC FORMAT TSV" >"$P/rcs.tsv"
+sign_in keycloak user10 user10-test-pass || fail "1b user10 sign-in"
+c=$(api GET "/api/audit?email=user01@example.com&from=$(date -u +%Y-%m-%d)&to=$(date -u -d tomorrow +%Y-%m-%d 2>/dev/null || date -u -v+1d +%Y-%m-%d)")
+[[ "$c" == 200 ]] || fail "1b /api/audit: $c $(head -c 300 "$W/api")"
+uv run --no-project python - "$W/api" "$P/gwt.tsv" "$P/rcs.tsv" <<'PY' || fail "1b the Audit rows do not carry their own compression"
+import calendar, json, sys
+rows = lambda f: [l.rstrip("\n").split("\t") for l in open(f) if l.strip()]
+def ns(t):  # RFC 3339 with up to 9 fraction digits, as Go writes time.Time
+    base, _, frac = t.rstrip("Z").partition(".")
+    return calendar.timegm(tuple(int(x) for x in base.replace("T", "-").replace(":", "-").split("-")) + (0, 0, 0)) * 10**9 + int((frac or "0").ljust(9, "0"))
+gw = {int(t): cid for t, cid in rows(sys.argv[2])}
+rc = {r[0]: r for r in rows(sys.argv[3])}
+calls = json.load(open(sys.argv[1]))["calls"]
+assert all(c["status"] for c in calls), "a row without a status: a record that is not a gateway call"
+mine = [c for c in calls if ns(c["time"]) in gw and c["method"] == "tools/call"]
+assert len(mine) == len(gw), f"{len(mine)} Audit rows for {len(gw)} calls"
+tagged = 0
+for c in mine:
+    r = rc.get(gw[ns(c["time"])])
+    got = c.get("compression")
+    if r is None:
+        assert got is None, f"{c['time']}: compression {got} without a record"
+        continue
+    want = {"mode": "shorten", "match": "call-id", "bytesIn": int(r[2]), "bytesOut": int(r[3]),
+            "parts": [{"part": 0, "type": r[1], "bytesIn": int(r[2]), "bytesOut": int(r[3]), "omitted": int(r[4])}]}
+    assert got == want, f"{c['time']} {c['tool']}: {got} != {want}"
+    tagged += 1
+assert tagged == len(rc), f"{tagged} rows annotated for {len(rc)} records"
+print(f"{len(mine)} Audit rows, {tagged} with their own record")
+PY
+pass "1b 22 parallel calls (2 by a personal key): $SHORT compressed, each record pairs with exactly one gateway row by ambit.call_id (same email, key ID and tool), and /api/audit shows each on its own row"
 
 # 1c · caller false: the record keeps the call ID and drops the person
 helm upgrade ambit charts/ambit -n "$NS" "${VALUES[@]}" --set evidence.enabled=true --set protection.compressionAudit.caller=false --wait --timeout 8m >/dev/null ||
@@ -178,7 +210,10 @@ grep -q -- "--- PASS: TestSummariesOnClickHouse" <<<"$out" || fail "3 test did n
 scratch savings_since
 out=$(gotest savings_since '^TestSinceIsTheViewCreationDay$' 2>&1) || { echo "$out" | tail -30; fail "3 since / Usage on the creation day"; }
 grep -q -- "--- PASS: TestSinceIsTheViewCreationDay" <<<"$out" || fail "3 since test did not run: $(tail -5 <<<"$out")"
-pass "3 summary views: equal to the Usage query, one all-groups row, router rows, guard records leave Audit unchanged (ClickHouse $(ch 'SELECT version()'))"
+scratch audit_compress
+out=$(gotest audit_compress '^TestAuditCompressionOnClickHouse$' 2>&1) || { echo "$out" | tail -30; fail "3 Audit compression join on ClickHouse"; }
+grep -q -- "--- PASS: TestAuditCompressionOnClickHouse" <<<"$out" || fail "3 Audit compression test did not run: $(tail -5 <<<"$out")"
+pass "3 summary views: equal to the Usage query, one all-groups row, router rows, guard records leave Audit unchanged; compression records annotate their own Audit row (ClickHouse $(ch 'SELECT version()'))"
 
 # 4 · query cost (slow; a few GB of disk): SAVINGS_BENCH=1
 if [[ "${SAVINGS_BENCH:-}" == 1 ]]; then

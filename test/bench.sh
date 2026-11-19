@@ -276,4 +276,5 @@ print(f"\n{len(rows)} runs; each run {sys.argv[3]} with the first {sys.argv[2]} 
 for rate, p, v, limit in gate:
     print(f"GATE {'pass' if v < limit else 'FAIL'}: prompt guard at 100 KB, {rate} req/s, added {p} at most {v:.1f} ms (limit {limit:.0f} ms)")
 PY
+! grep -q '^GATE FAIL' "$OUT/summary.md" || fail "the prompt guard did not pass the gate at 100 KB (above)"
 done_step bench

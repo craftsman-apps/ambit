@@ -51,7 +51,7 @@ func newKeySvcWith(t *testing.T, f interceptor.Funcs, objs ...client.Object) (*K
 	clk := &syncClock{t: t0}
 	c := fake.NewClientBuilder().WithObjects(objs...).WithInterceptorFuncs(f).Build()
 	s := &KeyService{Client: c, Namespace: "ambit-system", Settings: KeySettings{Enabled: true, InactivityDays: 30, MaxDays: 365},
-		Now: clk.Now}
+		Services: ServiceSettings{Enabled: true, MaxDays: 90, ExposureDays: 7}, Now: clk.Now}
 	if err := s.StartTerm(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -870,7 +870,8 @@ func TestStartTermRecordsSettingsChanges(t *testing.T) {
 		ev, _ := s.Events(ctx)
 		return slices.DeleteFunc(ev, func(e KeyEvent) bool { return e.Action != "settings-changed" })
 	}
-	if ev := settings(); len(ev) != 1 || ev[0].Detail != "enabled=true inactivityDays=30 maxDays=365" {
+	const sa = " serviceAccounts.enabled=true serviceAccounts.maxDays=90 serviceAccounts.exposureDays=7"
+	if ev := settings(); len(ev) != 1 || ev[0].Detail != "enabled=true inactivityDays=30 maxDays=365"+sa {
 		t.Fatalf("%+v", ev)
 	}
 	if err := s.StartTerm(ctx); err != nil {
@@ -883,8 +884,15 @@ func TestStartTermRecordsSettingsChanges(t *testing.T) {
 	if err := s.StartTerm(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if ev := settings(); len(ev) != 2 || ev[0].Detail != "enabled=true inactivityDays=30 maxDays=90" {
+	if ev := settings(); len(ev) != 2 || ev[0].Detail != "enabled=true inactivityDays=30 maxDays=90"+sa {
 		t.Fatalf("%+v", ev)
+	}
+	s.Services.ExposureDays = 0
+	if err := s.StartTerm(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if ev := settings(); len(ev) != 3 || !strings.HasSuffix(ev[0].Detail, "serviceAccounts.exposureDays=0") {
+		t.Fatalf("a service account setting change is not recorded: %+v", ev)
 	}
 }
 

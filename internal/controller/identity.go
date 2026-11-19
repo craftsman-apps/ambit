@@ -8,6 +8,9 @@ var RequireEmail = true
 
 func principal() string { return identity.Principal(RequireEmail) }
 
+// person is what allSignedIn grants: any principal that is not a service account.
+func person() string { return identity.Person }
+
 // UsersRequireVerifiedEmail mirrors accessRules.usersRequireVerifiedEmail (flag --users-require-verified-email):
 // an AccessRule's users match a JWT's email only when the token says email_verified: true.
 var UsersRequireVerifiedEmail = true

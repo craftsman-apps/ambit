@@ -9,9 +9,12 @@ import { Shell } from "@/components/shell";
 
 export type KeyView = { id: string; name: string; prefix: string; scope: "llm" | "mcp" | "both"; created: string;
   expires: string; until: string; owner?: string; lastUsed: string | null;
-  status: "active" | "stops-soon" | "stopped"; stopsBecause: "inactivity" | "end-date" };
+  status: "active" | "stops-soon" | "stopped"; stopsBecause: "inactivity" | "end-date";
+  issuedBy?: string; exposed?: string }; // service account keys only
+// A key's owner is a service account when its identity is in this domain (only service account keys carry it).
+export const isServiceAccount = (owner?: string) => !!owner?.endsWith("@svc.ambit.internal");
 export type KeySettings = { enabled: boolean; inactivityDays: number; maxDays: number; lastUsedAvailable: boolean };
-type URLs = { llm: string; mcp: string };
+export type URLs = { llm: string; mcp: string };
 // urls: the gateway addresses for the setup steps. The list never holds a plain key.
 export type KeyList = { settings: KeySettings; keys: KeyView[]; urls?: URLs };
 type Created = { key: string; view: KeyView; urls: URLs };
@@ -27,16 +30,16 @@ async function get<T>(url: string): Promise<T> {
 export const useKeys = (lastUsed = true) => useQuery({ queryKey: ["keys", lastUsed],
   queryFn: () => get<KeyList>(lastUsed ? "/api/keys" : "/api/keys?lastUsed=false"), refetchInterval: 60_000 });
 
-const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-body outline-none focus:border-accent";
+export const field = "w-full rounded-md border border-line bg-surface px-2.5 py-1.5 text-body outline-none focus:border-accent";
 export const day = (iso: string) => iso.slice(0, 10);
 // "inactivity": the owner's last sign-in sets the stop, before the key's end date.
 export const statusText = (k: KeyView) => k.status === "stopped"
   ? (k.stopsBecause === "inactivity" ? "Stopped — owner inactive" : "Stopped — end date")
   : k.status === "stops-soon" ? "Stops soon" : "Active";
-const scopeName = { llm: "LLM", mcp: "MCP", both: "LLM and MCP" } as const;
+export const scopeName = { llm: "LLM", mcp: "MCP", both: "LLM and MCP" } as const;
 
 // Copy with the clipboard API; if it is blocked, select the text so the person can press Ctrl+C.
-function CopyBlock({ text, testId, label }: { text: string; testId: string; label: string }) {
+export function CopyBlock({ text, testId, label }: { text: string; testId: string; label: string }) {
   const [state, setState] = useState<"" | "copied" | "select">("");
   const copy = async (el: HTMLElement | null) => {
     try { await navigator.clipboard.writeText(text); setState("copied"); }
@@ -59,25 +62,29 @@ function CopyBlock({ text, testId, label }: { text: string; testId: string; labe
 
 // Shown under the snippets. The keys list already carries each key's last use (from the audit trail); poll it until
 // the first request appears. The poll asks for the list only: the plain key is never sent again.
-function FirstUse({ id }: { id: string }) {
+// admin: the key is a service account's, read from the admin list of every key.
+export function FirstUse({ id, admin = false }: { id: string; admin?: boolean }) {
   const [started] = useState(Date.now);
   const [timedOut, setTimedOut] = useState(false);
   useEffect(() => { const t = setTimeout(() => setTimedOut(true), FIRST_USE_TIMEOUT_MS); return () => clearTimeout(t); }, []);
   const q = useQuery({ queryKey: ["keys", "first-use", id], refetchInterval: (query) => (query.state.data?.lastUsed || query.state.data?.available === false || timedOut ? false : 30_000),
-    queryFn: async () => { const l = await get<KeyList>("/api/keys"); return { available: l.settings.lastUsedAvailable, lastUsed: l.keys.find((k) => k.id === id)?.lastUsed ?? null }; } });
+    queryFn: async () => { const l = await get<KeyList>(admin ? "/api/admin/keys" : "/api/keys"); return { available: l.settings.lastUsedAvailable, lastUsed: l.keys.find((k) => k.id === id)?.lastUsed ?? null }; } });
   const line = firstUseLine({ available: q.data?.available, lastUsed: q.data?.lastUsed ?? null, waitedMs: timedOut ? FIRST_USE_TIMEOUT_MS : Date.now() - started });
   if (!line) return null;
   return <p data-testid="first-use" role="status" className={line.kind === "seen" ? "text-ok" : line.kind === "timeout" ? "text-warn" : "text-muted"}>{line.text}</p>;
 }
 
 // The per-tool setup steps for a key: the plain key right after it is created, else KEY_PLACEHOLDER.
-function ConnectTool({ urls, keyText, scope }: { urls: URLs; keyText: string; scope: Scope }) {
+// tabsFor: the setup tabs (toolTabs for a person's tools, ciTabs for a service account).
+// pickModel false: no model picker (a service account's models are not the signed-in person's); the steps say <model-id>.
+export function ConnectTool({ urls, keyText, scope, tabsFor = toolTabs, title = "Connect a tool", pickModel = true }:
+  { urls: URLs; keyText: string; scope: Scope; tabsFor?: typeof toolTabs; title?: string; pickModel?: boolean }) {
   const models = useModels();
   const access = useMyAccess();
   const ids = usableModelIds(models.data, access.data);
   const [chosen, setChosen] = useState("");
-  const model = chosen || ids[0] || "";
-  const tabs = toolTabs({ ...urls, key: keyText, model }, scope);
+  const model = pickModel ? chosen || ids[0] || "" : "";
+  const tabs = tabsFor({ ...urls, key: keyText, model }, scope);
   const [active, setActive] = useState(tabs[0].id);
   const [shell, setShell] = useState<ShellName>("bash");
   const [variantId, setVariantId] = useState("");
@@ -92,8 +99,8 @@ function ConnectTool({ urls, keyText, scope }: { urls: URLs; keyText: string; sc
     <CopyBlock text={b.shells ? b.shells[shell] : b.text} testId={`snippet-${tab.id}-${i}`} label={b.label} /></div>;
   return (
     <>
-      <h3 className="pt-1 font-semibold">Connect a tool</h3>
-      {scope !== "mcp" && (
+      <h3 className="pt-1 font-semibold">{title}</h3>
+      {scope !== "mcp" && pickModel && (
         <label className="flex items-center gap-2"><span className="text-muted">Model name</span>
           {ids.length ? <select className={cn(field, "w-auto")} value={model} onChange={(e) => setChosen(e.target.value)}>
             {ids.map((m) => <option key={m}>{m}</option>)}</select>
@@ -230,6 +237,7 @@ export function KeysPage() {
           <div>
             <h1 className="text-h1 font-semibold tracking-tight">Keys</h1>
             <p className="text-muted">Personal keys for tools that call the gateway, such as Claude Code or Cursor. A key acts as you, and stops on its end date.</p>
+            <p className="text-muted">A key is not a service account: for a CI job or a background agent, ask an admin for a <a className="underline" href="https://ambitproject.dev/docs/service-accounts" target="_blank" rel="noreferrer">service account</a>.</p>
           </div>
           {enabled && !creating && <Button className="w-auto shrink-0" onClick={() => setCreating(true)}>Create key</Button>}
         </div>

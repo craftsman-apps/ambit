@@ -424,14 +424,28 @@ func period(r *http.Request) (time.Time, time.Time, error) {
 
 func (a *Audit) register(mux *http.ServeMux, admin func(func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc) {
 	mux.HandleFunc("GET /api/audit", admin(func(w http.ResponseWriter, r *http.Request, s Session) {
-		email, invalid := r.URL.Query().Get("email"), r.URL.Query().Get("invalidKey")
-		if (email == "") == (invalid == "") || (invalid != "" && invalid != "true") {
+		email, invalid, approvals := r.URL.Query().Get("email"), r.URL.Query().Get("invalidKey"), r.URL.Query().Get("approvals")
+		if approvals != "" {
+			if approvals != "true" || invalid != "" {
+				writeErr(w, http.StatusBadRequest, "give approvals=true, with an optional email")
+				return
+			}
+		} else if (email == "") == (invalid == "") || (invalid != "" && invalid != "true") {
 			writeErr(w, http.StatusBadRequest, "give either email or invalidKey=true")
 			return
 		}
 		from, to, err := period(r)
 		if err != nil {
 			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if approvals != "" { // MCP app requests, decisions and refused attempts; email narrows to one person's
+			events, err := a.AppEvents(r.Context(), email, from, to, 1000)
+			if err != nil {
+				storeErr(w, err)
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"approvals": true, "email": email, "from": from, "to": to, "events": events, "limited": len(events) == 1000})
 			return
 		}
 		if invalid != "" {

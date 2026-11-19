@@ -21,6 +21,7 @@ import (
 	"github.com/craftsman-apps/ambit/internal/pricing"
 	"github.com/craftsman-apps/ambit/web"
 	"github.com/dexidp/dex/api/v2"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -289,6 +290,20 @@ func run(ctx context.Context) error {
 		}
 		go audit.RunSummaries(ctx, days, 15*time.Second) // retries until the collector has created otel_logs
 	}
+	var appAudit *console.AppRecorder
+	if ep := os.Getenv("AMBIT_OTLP_ENDPOINT"); ep != "" {
+		if appAudit, err = console.NewAppRecorder(ep); err != nil {
+			return fmt.Errorf("AMBIT_OTLP_ENDPOINT: %w", err)
+		}
+		// ambit_console_audit_send_failures_total, for the AmbitConsoleAuditSendFailed alert.
+		msrv := &http.Server{Addr: ":8084", Handler: promhttp.Handler(), ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			if err := msrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("metrics listener stopped", "err", err)
+			}
+		}()
+		go func() { <-ctx.Done(); msrv.Close() }()
+	}
 	var budgets *console.Budgets
 	if addr := os.Getenv("AMBIT_VALKEY_ADDR"); addr != "" {
 		tlsc, err := console.TLSConfig(os.Getenv("AMBIT_VALKEY_TLS") == "true", os.Getenv("AMBIT_VALKEY_CA"))
@@ -324,7 +339,7 @@ func run(ctx context.Context) error {
 		loginOpts.Namespace = ns
 	}
 	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), loginOpts,
-		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, Budgets: budgets, Dependencies: deps, AccessMode: os.Getenv("AMBIT_ACCESS_MODE"), Prices: prices, Tools: reader, Presets: catalogPresets,
+		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, AppAudit: appAudit, Budgets: budgets, Dependencies: deps, AccessMode: os.Getenv("AMBIT_ACCESS_MODE"), Prices: prices, Tools: reader, Presets: catalogPresets,
 			Groups: groupStore, Keys: keySvc, LLMURL: os.Getenv("AMBIT_LLM_URL"), MCPURL: os.Getenv("AMBIT_MCP_URL")}), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()

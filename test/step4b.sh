@@ -85,4 +85,30 @@ code=$(api GET /api/me/access)
 got=$(field '" ".join(s["server"]+":"+",".join(s["tools"])+"@"+",".join(s["rules"]) for s in d["servers"])')
 [[ "$got" == "time:get_current_time@eng-time time-b:convert_time@eng-time" ]] || fail "7 my access: $got"
 pass "7 user01's own access page: $got"
+
+# 8 · issue #112: requests, decisions and refused attempts are audit records (Audit page API and otel_logs) and Events
+ch() { kubectl -n "$NS" exec ambit-clickhouse-0 -- sh -c 'clickhouse-client --user ambit --password "$CLICKHOUSE_PASSWORD" -q "$0"' "$1"; }
+sign_in keycloak user10 user10-test-pass
+code=$(api POST "/api/server-requests/$OWN/deny" '{"comment":"duplicate of time-b"}')
+[[ "$code" == 200 ]] || fail "8 deny: $code $(cat "$W/api")"
+day=$(date -u +%Y-%m-%d); next=$(date -u -v+1d +%Y-%m-%d 2>/dev/null || date -u -d tomorrow +%Y-%m-%d)
+seen() { field '" ".join(sorted("%s:%s:%s:%s" % (e["action"], e["server"], e["actor"].split("@")[0], e["role"]) for e in d["events"] if e["request"] in ("'"$REQ"'", "'"$OWN"'")))'; }
+want="approve-refused:time-b:user01:viewer approve-refused:time-c:user11:approver approved:time-b:user11:approver denied:time-c:user10:admin deny-refused:time-b:user11:approver requested:time-b:user01:viewer requested:time-c:user11:approver"
+for _ in $(seq 1 30); do
+  [[ $(api GET "/api/audit?approvals=true&from=$day&to=$next") == 200 && $(seen) == "$want" ]] && break; sleep 2
+done
+[[ $(seen) == "$want" ]] || fail "8 audit records: $(seen) (want $want) $(head -c 600 "$W/api")"
+row=$(field '[(e["requestedBy"], e["image"], e["comment"]) for e in d["events"] if e["action"] == "approved" and e["request"] == "'"$REQ"'"][0]')
+[[ "$row" == "('user01@example.com', '$IMAGE', 'digest matches the catalog')" ]] || fail "8 approved record: $row"
+reason=$(field '[e["reason"] for e in d["events"] if e["action"] == "approve-refused" and e["request"] == "'"$OWN"'"][0]')
+[[ "$reason" == "own request" ]] || fail "8 self-approval reason: $reason"
+[[ $(api GET "/api/audit?approvals=true&email=user01@example.com&from=$day&to=$next") == 200 && $(field 'sorted({e["server"] for e in d["events"] if e["request"] in ("'"$REQ"'", "'"$OWN"'")})') == "['time-b']" ]] ||
+  fail "8 email filter: $(head -c 400 "$W/api")"
+n=$(ch "SELECT count() FROM otel.otel_logs WHERE LogAttributes['ambit.kind'] = 'app-approval' AND LogAttributes['ambit.app.request'] = '$REQ' AND LogAttributes['jwt.email'] = ''")
+[[ "$n" == 4 ]] || fail "8 otel_logs rows for $REQ: $n (want requested, approve-refused, approved, deny-refused)"
+ev=$(kubectl -n "$NS" get events --field-selector "involvedObject.name=$REQ" -o jsonpath='{range .items[*]}{.reason}{" "}{end}' | tr ' ' '\n' | sort | xargs)
+[[ "$ev" == "ServerRequestApproveRefused ServerRequestApproved ServerRequestDenyRefused ServerRequested" ]] || fail "8 Kubernetes Events on $REQ: $ev"
+sign_in keycloak user01 user01-test-pass
+[[ $(api GET "/api/audit?approvals=true") == 403 ]] || fail "8 a viewer could read the approval records"
+pass "8 Audit (approvals): $want; $n otel_logs rows for $REQ, none with jwt.email; Events: $ev; viewer gets 403"
 done_step 4b

@@ -23,7 +23,7 @@ spec:
         - name: console
           image: "{{ .Values.console.image.repository }}:{{ .Values.console.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.console.image.pullPolicy }}
-          ports: [{ name: http, containerPort: 8080 }, { name: broker, containerPort: 8082 }, { name: tools, containerPort: 8083 }]
+          ports: [{ name: http, containerPort: 8080 }, { name: broker, containerPort: 8082 }, { name: tools, containerPort: 8083 }{{ if .Values.evidence.enabled }}, { name: metrics, containerPort: 8084 }{{ end }}]
           env:
             - { name: AMBIT_PUBLIC_URL, value: {{ .Values.console.url | quote }} }
             - { name: AMBIT_DEX_GRPC, value: "ambit-dex:5557" }
@@ -71,6 +71,8 @@ spec:
             - { name: AMBIT_MODEL_ROUTING, value: "true" }
             {{- end }}
             {{- if .Values.evidence.enabled }}
+            # MCP app requests and decisions go to otel_logs through the collector, like the gateway's records.
+            - { name: AMBIT_OTLP_ENDPOINT, value: "ambit-otel-collector:4317" }
             - { name: AMBIT_CLICKHOUSE_ADDR, value: {{ include "ambit.clickhouse.http" . | quote }} }
             - { name: AMBIT_SUMMARY_RETENTION, value: {{ .Values.evidence.summaryRetention | default "26280h" | quote }} }
             {{- with (.Values.console.savings | default dict).referenceInputPricePerMillion }}

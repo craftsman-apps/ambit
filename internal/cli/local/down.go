@@ -12,6 +12,11 @@ import (
 
 // Down runs `ambit local down` (spec 4.2): it deletes the kind cluster only with both ownership proofs.
 func Down(ctx context.Context, p *out.Printer, e *Env, name string, in io.Reader, interactive, yes bool) error {
+	unlock, err := e.Store.Lock(name)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	if _, err := e.ReadyDocker(); err != nil {
 		return err
 	}

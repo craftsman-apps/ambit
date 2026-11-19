@@ -294,3 +294,18 @@ func TestP4DeepTriesNextModel(t *testing.T) {
 		t.Errorf("%s %q asked %v", r.Status, r.Message, asked)
 	}
 }
+
+// #108 C3: the _created series (a start time, which grows when the collector restarts) is not a count of records.
+func TestSentLogRecordsIgnoresCreatedSeries(t *testing.T) {
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `otelcol_exporter_sent_log_records_total{exporter="clickhouse"} 2
+otelcol_exporter_sent_log_records_created{exporter="clickhouse"} 1.7633e+09
+otelcol_exporter_sent_log_records_total_created{exporter="clickhouse"} 1.7633e+09
+otelcol_exporter_sent_log_records_totalx{exporter="clickhouse"} 9
+`)
+	}))
+	t.Cleanup(s.Close)
+	if n, err := sentLogRecords(context.Background(), http.DefaultClient, s.URL); err != nil || n != 2 {
+		t.Fatalf("sentLogRecords = %v, %v; want 2", n, err)
+	}
+}

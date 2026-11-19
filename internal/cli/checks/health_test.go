@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -241,5 +242,14 @@ func TestNextStepsCarryContext(t *testing.T) {
 	}
 	if r := runOne(context.Background(), env, h1); r.Next != "helm --kube-context kind-try -n ambit-system history ambit" {
 		t.Errorf("H1 next = %q", r.Next)
+	}
+}
+
+// #108 C2: the 120-byte body excerpt never ends in half a UTF-8 character.
+func TestDeepFailureExcerptIsValidUTF8(t *testing.T) {
+	body := strings.Repeat("a", 119) + "日本語のエラー"
+	got := deepFailure(&Env{Token: "tok"}, 500, body, nil)
+	if !utf8.ValidString(got) || !strings.HasSuffix(got, strings.Repeat("a", 119)) {
+		t.Fatalf("deepFailure = %q", got)
 	}
 }

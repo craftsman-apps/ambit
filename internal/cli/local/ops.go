@@ -92,11 +92,15 @@ func (o *clusterOps) ApplyCRDs(ctx context.Context, bundle []byte) error {
 	return kube.WaitEstablished(ctx, o.c.Ctrl, names, 2*time.Minute)
 }
 
+// recoverOwned: local up installs only into a kind cluster that it created and owns (both ownership proofs), so no
+// one else can be working on its releases, and a pending revision is from an earlier run that was stopped (#107).
+var recoverOwned = helmx.ApplyOptions{RecoverPending: true}
+
 func (o *clusterOps) InstallCharts(ctx context.Context, charts Charts, vals map[string]any, timeout time.Duration, progress func(string)) error {
-	if _, err := o.h.Apply(ctx, "ambit-crds", charts.Ref("ambit-crds"), charts.Version, nil); err != nil {
+	if _, err := o.h.Apply(ctx, "ambit-crds", charts.Ref("ambit-crds"), charts.Version, nil, recoverOwned); err != nil {
 		return fmt.Errorf("ambit-crds: %w", err)
 	}
-	if _, err := o.h.Apply(ctx, "ambit", charts.Ref("ambit"), charts.Version, vals); err != nil {
+	if _, err := o.h.Apply(ctx, "ambit", charts.Ref("ambit"), charts.Version, vals, recoverOwned); err != nil {
 		return fmt.Errorf("ambit: %w", err)
 	}
 	return kube.WaitWorkloads(ctx, o.c.Kube, Namespace, []string{kube.GatewaySelector}, 10*time.Second, timeout, progress)

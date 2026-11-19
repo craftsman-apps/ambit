@@ -1,7 +1,9 @@
 package checks
 
 import (
+	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	storagev1 "k8s.io/api/storage/v1"
@@ -83,4 +85,14 @@ func TestR6ThirdPartyCRDs(t *testing.T) {
 	old := crd("mcpservers.toolhive.stacklok.dev", "toolhive.stacklok.dev", true, nil, "v1alpha1")
 	want(t, one(t, "R6", fx{bundle: gwBundle, ctrlObjs: []runtime.Object{old}}), Fail, "does not serve v1beta1")
 	want(t, one(t, "R6", fx{bundle: gwBundle, ctrlDenied: true}), Unknown, "cannot get customresourcedefinitions")
+}
+
+// #108 C1: install runs the checks right after a fresh install; R3 without a Helm client must not panic.
+func TestR3WithoutHelmClient(t *testing.T) {
+	e := fx{}.env(t)
+	e.Helm = nil
+	r := r3Installed(context.Background(), e)
+	if r.Status != Unknown || !strings.Contains(r.Message, "Helm") || strings.Contains(r.Message, "internal error") {
+		t.Fatalf("R3 = %+v", r)
+	}
 }

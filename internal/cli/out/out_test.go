@@ -246,3 +246,100 @@ func TestRedactAmbitKeyPattern(t *testing.T) {
 		t.Fatalf("Redact changed ordinary text: %q", got)
 	}
 }
+
+// pemKey is a fake RSA key in PEM form: 64-character base64 lines, as a GitHub App private key has.
+func pemKey() string {
+	var b strings.Builder
+	b.WriteString("-----BEGIN RSA PRIVATE KEY-----\n")
+	for i := 0; i < 5; i++ {
+		b.WriteString(strings.Repeat(string(rune('A'+i)), 60) + "q1w2\n")
+	}
+	b.WriteString("-----END RSA PRIVATE KEY-----\n")
+	return b.String()
+}
+
+func waitFor(t *testing.T, b *lockedBuffer, s string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(b.String(), s) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// #108 R1: a library that logs a registered multi-line secret line by line must not show any line of it.
+func TestVerboseRedactsEveryLineOfAMultiLineSecret(t *testing.T) {
+	for name, secret := range map[string]string{
+		"pem":     pemKey(),
+		"3 lines": "first-line-of-the-secret\r\nsecond-line-of-secret!\nthird-line-of-the-secret\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var errb lockedBuffer
+			p, _ := newTest(Options{Verbose: true, Err: &errb})
+			p.Redactor().Add(secret)
+			w := p.Verbose()
+			io.WriteString(w, "debug: read key\n"+strings.ReplaceAll(secret, "\r\n", "\n")+"done\n")
+			w.(io.Closer).Close()
+			waitFor(t, &errb, "done")
+			got := errb.String()
+			for _, l := range strings.Split(strings.ReplaceAll(secret, "\r\n", "\n"), "\n") {
+				if len(l) >= 16 && !strings.HasPrefix(l, "-----") && strings.Contains(got, l) {
+					t.Errorf("line %q of the secret is in the output:\n%s", l, got)
+				}
+			}
+			if !strings.Contains(got, "done") {
+				t.Fatalf("output lost: %q", got)
+			}
+		})
+	}
+}
+
+// #108 R1: a PEM private key that was never registered (inside a library error, for example) is redacted whole.
+func TestRedactUnregisteredPEMBlock(t *testing.T) {
+	r := &Redactor{}
+	got := r.Redact("error: bad key " + pemKey() + " in file")
+	if strings.Contains(got, "AAAAAAAA") || strings.Contains(got, "EEEEEEEE") || !strings.Contains(got, "error: bad key [redacted]") || !strings.HasSuffix(got, " in file") {
+		t.Fatalf("Redact = %q", got)
+	}
+}
+
+// #108 R2: a secret placed across the 64 KiB seam of the verbose reader is redacted, and the line stays whole.
+func TestVerboseRedactsASecretAcrossThePieceSeam(t *testing.T) {
+	const secret = "ghs_0123456789abcdefSECRETVALUE0123456789"
+	for _, offset := range []int{1, 10, len(secret) - 1} {
+		var errb lockedBuffer
+		p, _ := newTest(Options{Verbose: true, Err: &errb})
+		p.Redactor().Add(secret)
+		w := p.Verbose()
+		line := strings.Repeat("x", 64*1024-offset) + secret + strings.Repeat("y", 100) + "\n"
+		go func() { io.WriteString(w, line+"end\n"); w.(io.Closer).Close() }()
+		waitFor(t, &errb, "end")
+		got := errb.String()
+		if strings.Contains(got, "SECRETVALUE") || strings.Contains(got, "0123456789abcdef") {
+			t.Fatalf("offset %d: the secret across the seam was printed", offset)
+		}
+		if want := strings.Repeat("x", 64*1024-offset) + "[redacted]" + strings.Repeat("y", 100) + "\nend\n"; got != want {
+			t.Fatalf("offset %d: the line was changed: %d bytes, want %d", offset, len(got), len(want))
+		}
+	}
+}
+
+// #108 comment 1 (O3): when Err is another console than Out, both must accept colour codes, or colour is off.
+func TestNoColourWhenTheErrorConsoleCannotProcessEscapes(t *testing.T) {
+	if _, set := lookupNoColor(); set {
+		t.Skip("NO_COLOR is set in this environment")
+	}
+	var out, errw bytes.Buffer
+	var asked []io.Writer
+	old := enableVT
+	enableVT = func(w io.Writer) bool { asked = append(asked, w); return w == io.Writer(&out) }
+	p := New(Options{Out: &out, Err: &errw, TTY: true}, &Redactor{})
+	enableVT = old
+	if len(asked) != 2 {
+		t.Fatalf("enableVT asked %d writers, want Out and Err", len(asked))
+	}
+	p.Step(true, "x", 0)
+	p.Fail(&Error{What: "y", Why: "z"})
+	if strings.Contains(out.String()+errw.String(), "\x1b[") {
+		t.Fatalf("colour codes although the error console cannot process them: %q", out.String())
+	}
+}

@@ -242,3 +242,59 @@ func (k *countingKind) Exists(string) (bool, error) {
 	k.calls++
 	return false, errors.New("docker ps hangs")
 }
+
+// #107: Docker is running but the ownership check fails (kind's docker ps errors). With --output json, standard
+// output is still one JSON document, and the error is the L5 result.
+func TestCheckPreLocalOwnerErrorIsJSON(t *testing.T) {
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing"))
+	var o, e bytes.Buffer
+	a := &app{in: strings.NewReader(""), out: &o, errw: &e,
+		newHelm: func(helmx.Options) (helmx.Client, error) { return nil, errors.New("helm must not be used") },
+		testLocalEnv: &local.Env{Store: local.Store{Dir: t.TempDir()}, Kind: &countingKind{},
+			Docker: func() local.DockerInfo {
+				return local.ParseDockerInfo([]byte(`{"ServerVersion":"29.1.0","OperatingSystem":"Docker Desktop","MemTotal":8217030656}`))
+			},
+			PortFree: func(int) bool { return true }}}
+	root := a.root()
+	root.SetArgs([]string{"check", "--pre", "--local", "--output", "json"})
+	root.SetOut(&o)
+	root.SetErr(&e)
+	code := a.exit(root.Execute())
+	var rs []checks.Result
+	if err := json.Unmarshal(o.Bytes(), &rs); err != nil {
+		t.Fatalf("exit %d; stdout is not one JSON document: %v\n%s\nstderr\n%s", code, err, o.String(), e.String())
+	}
+	var l5 *checks.Result
+	for i := range rs {
+		if rs[i].ID == "L5" {
+			l5 = &rs[i]
+		}
+	}
+	if l5 == nil || l5.Status != checks.Unknown || !strings.Contains(l5.Message, "docker ps hangs") {
+		t.Fatalf("L5 = %+v", l5)
+	}
+}
+
+// #107 rule for every JSON command: a failure prints {"error": {"what","why","next","code"}} on standard output.
+func TestJSONErrorOnStdout(t *testing.T) {
+	var o, e bytes.Buffer
+	a := &app{in: strings.NewReader(""), out: &o, errw: &e,
+		newHelm: func(helmx.Options) (helmx.Client, error) { return &fakeHelm{}, nil }}
+	root := a.root()
+	root.SetArgs([]string{"check", "--production", "--no-production", "--kubeconfig", unreachable(t), "--output", "json"})
+	root.SetOut(&o)
+	root.SetErr(&e)
+	code := a.exit(root.Execute())
+	var doc struct {
+		Error struct {
+			What, Why, Next string
+			Code            int
+		}
+	}
+	if err := json.Unmarshal(o.Bytes(), &doc); err != nil || code != 2 || doc.Error.Code != 2 || !strings.Contains(doc.Error.What, "--production and --no-production") || doc.Error.Next == "" {
+		t.Fatalf("exit %d, stdout %q (%v)", code, o.String(), err)
+	}
+	if !strings.Contains(e.String(), "--production and --no-production") {
+		t.Fatalf("stderr = %q", e.String())
+	}
+}

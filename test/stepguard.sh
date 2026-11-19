@@ -197,16 +197,26 @@ pass "6 router, audit: the classifier gets the prompt unchanged, as the model do
 
 # 7 · the Audit page (records reach ClickHouse within about a minute)
 sign_in keycloak user10 user10-test-pass || fail "7 sign in as user10"
-# counts: reject, audit, mask, allow among user09's records since the step started; and whether any holds a test marker
+# counts: reject, audit, mask, allow among user09's records since the step started; and whether any holds a test marker.
+# The leak check reads every text field except time (a record's time can hold the digits 4111 by chance, issue 350)
+# and looks for the marker and the whole card number the steps above send, in any spacing, also across fields. With "leaks" it prints the
+# records that hold one.
 counts() {
   [[ $(api GET "/api/audit?email=user09@example.com&from=$since") == 200 ]] || return 1
   uv run --no-project python -c 'import json,sys
 calls=json.load(open(sys.argv[1]))["calls"]
 n=lambda g, st=None: sum(1 for c in calls if c.get("promptGuard")==g and (st is None or c["status"]==st))
-leak=any("GUARD-TEST" in json.dumps(c) or "4111" in json.dumps(c) for c in calls)
-print(n("reject","403"), n("audit","200"), n("mask","200"), n("allow","200"), "leak" if leak else "clean")' "$W/api"
+def texts(v, key=None):
+  if isinstance(v, dict): return [t for k, x in v.items() if k != "time" for t in texts(x, k)]
+  if isinstance(v, list): return [t for x in v for t in texts(x)]
+  return [v] if isinstance(v, str) else []
+flat=lambda c: "".join("".join(texts(c)).split()).replace("-", "") # all text fields joined, so a number split across two is found
+leak=lambda c: "GUARD-TEST" in "".join(texts(c)) or "4111111111111111" in flat(c)
+if sys.argv[2:] == ["leaks"]: print(json.dumps([c for c in calls if leak(c)]))
+else: print(n("reject","403"), n("audit","200"), n("mask","200"), n("allow","200"), "leak" if any(map(leak, calls)) else "clean")' "$W/api" "$@"
 }
-wait_for 150 '[[ "$(counts)" =~ ^([1-9][0-9]*\ ){4}clean$ ]]' || fail "7 audit records (reject audit mask allow): $(counts) $(head -c 600 "$W/api")"
+wait_for 150 '[[ "$(counts)" =~ ^([1-9][0-9]*\ ){4}clean$ ]]' ||
+  fail "7 audit records (reject audit mask allow): $(counts); records that hold a test marker: $(counts leaks); $(head -c 600 "$W/api")"
 pass "7 Audit API: refused by prompt guard, would refuse, masked and allowed are told apart ($(counts)); no record holds the matched text"
 
 # 8 · off again: helm removes the policy

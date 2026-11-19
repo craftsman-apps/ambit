@@ -13,6 +13,16 @@ type Call = { time: string; email: string; route: string; method: string; server
   path?: string; identity?: string; clientAddress?: string };
 // A routed call shows the router and the model that answered, e.g. "auto → mock/echo (coding)".
 const target = (c: Call) => c.identity === "invalid key" ? `from ${c.clientAddress || "an unknown address"}` : c.router ? `${c.router} → ${c.model}${c.label || c.labelReason ? ` (${c.label || c.labelReason})` : ""}` : (c.server || c.model);
+// One step of an MCP app's request and approval (issue #112): who did what, on which server, and why it was refused.
+type AppEvent = { time: string; action: string; actor: string; role: string; server: string; request: string; requestedBy: string;
+  image: string; url: string; comment: string; pullRequest: string; tools: string[]; reason: string };
+const actionLabel: Record<string, string> = { requested: "Requested", approved: "Approved", denied: "Denied", "pull-request-opened": "Approved; pull request opened",
+  "tools-approved": "Changed tools approved", "approve-refused": "Approve refused", "deny-refused": "Deny refused", "tools-approve-refused": "Tool approval refused" };
+const appWhat = (e: AppEvent) => e.image || e.url || (e.tools.length ? e.tools.join(", ") : "");
+function appCsv(events: AppEvent[]) {
+  const rows = events.map((e) => csvRow([utc(e.time), e.action, e.actor, e.role, e.server, e.request, e.requestedBy, appWhat(e), e.comment, e.reason, e.pullRequest]));
+  return ["time_utc,action,by,role,server,request,requested_by,image_url_or_tools,comment,refused_reason,pull_request", ...rows].join("\n") + "\n";
+}
 type Usage = { day: string; group: string; requests: number; inputTokens: number; outputTokens: number; cost?: number; unpricedModels?: string[] };
 
 async function get<T>(url: string): Promise<T> {
@@ -59,15 +69,19 @@ function download(name: string, text: string) {
 // Audit (journey A5): every gateway call one person made in a period, refused ones included; or every request made
 // with an invalid key (wrong, revoked or expired), which has no person (issue #117).
 export function AuditPage() {
-  const [form, setForm] = useState({ invalidKey: false, email: "", from: monthAgo(), to: today() });
+  const [form, setForm] = useState({ invalidKey: false, approvals: false, email: "", from: monthAgo(), to: today() });
   const [q, setQ] = useState<typeof form | null>(null);
   const [protocol, setProtocol] = useState(false);
   const [onlyWouldRefuse, setOnlyWouldRefuse] = useState(false);
   const audit = useConfig().data?.accessMode === "audit";
   const res = useQuery({
-    queryKey: ["audit", q], enabled: !!q, retry: false,
+    queryKey: ["audit", q], enabled: !!q && !q.approvals, retry: false,
     queryFn: () => get<{ calls: Call[]; limited: boolean }>(`/api/audit?${new URLSearchParams({
       ...(q!.invalidKey ? { invalidKey: "true" } : { email: q!.email }), from: q!.from, to: nextDay(q!.to) })}`),
+  });
+  const apps = useQuery({
+    queryKey: ["audit-approvals", q], enabled: !!q?.approvals, retry: false,
+    queryFn: () => get<{ events: AppEvent[]; limited: boolean }>(`/api/audit?${new URLSearchParams({ approvals: "true", email: q!.email, from: q!.from, to: nextDay(q!.to) })}`),
   });
   const all = res.data?.calls ?? [];
   const hasVerdicts = all.some((c) => c.outcome === "would-refuse" || c.outcome === "other-model" || c.outcome === "mark-missing");
@@ -76,26 +90,29 @@ export function AuditPage() {
   const search = (e: React.FormEvent) => {
     e.preventDefault();
     // The same search again must ask again (after an error, or for new calls), not reuse the answer.
-    if (JSON.stringify(form) === JSON.stringify(q)) res.refetch(); else setQ({ ...form });
+    if (JSON.stringify(form) === JSON.stringify(q)) (q?.approvals ? apps : res).refetch(); else setQ({ ...form });
   };
   return (
     <Shell crumb="Evidence / Audit">
       <section className="space-y-4 p-5">
         <div>
           <h1 className="text-h1 font-semibold tracking-tight">Audit</h1>
-          <p className="text-muted">Every call a person made through the gateway, including the ones it refused. Kept for a year. Dates and times are UTC.</p>
+          <p className="text-muted">Every call a person made through the gateway, including the ones it refused, and every request for an MCP app and its decision. Kept for a year. Dates and times are UTC.</p>
         </div>
         <form className="flex flex-wrap items-end gap-2" onSubmit={search}>
           <label><span className="mb-1 block text-muted">Search</span>
-            <select id="audit-mode" className={field} value={form.invalidKey ? "invalid" : "email"} onChange={(e) => setForm({ ...form, invalidKey: e.target.value === "invalid" })}>
-              <option value="email">One person</option><option value="invalid">Requests with an invalid key</option>
+            <select id="audit-mode" className={field} value={form.approvals ? "approvals" : form.invalidKey ? "invalid" : "email"} onChange={(e) => setForm({ ...form, invalidKey: e.target.value === "invalid", approvals: e.target.value === "approvals" })}>
+              <option value="email">One person</option><option value="invalid">Requests with an invalid key</option><option value="approvals">MCP app requests and approvals</option>
             </select></label>
-          {!form.invalidKey && <label><span className="mb-1 block text-muted">Email</span><input id="audit-email" className={field} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="user01@acme.com" required /></label>}
+          {!form.invalidKey && <label><span className="mb-1 block text-muted">{form.approvals ? "Email (optional)" : "Email"}</span><input id="audit-email" className={field} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="user01@acme.com" required={!form.approvals} /></label>}
           <label><span className="mb-1 block text-muted">From (UTC)</span><input id="audit-from" type="date" className={field} value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} /></label>
           <label><span className="mb-1 block text-muted">To (UTC, inclusive)</span><input id="audit-to" type="date" className={field} value={form.to} onChange={(e) => setForm({ ...form, to: e.target.value })} /></label>
-          <Button type="submit" className="w-auto" disabled={res.isFetching}>{res.isFetching ? "Searching…" : "Search"}</Button>
+          <Button type="submit" className="w-auto" disabled={res.isFetching || apps.isFetching}>{res.isFetching || apps.isFetching ? "Searching…" : "Search"}</Button>
         </form>
         <WouldRefuseSummary />
+        {q?.approvals && apps.isError && !apps.isFetching && <p className="text-bad" role="alert">{apps.error.message}</p>}
+        {q?.approvals && apps.data && !apps.isError && <AppEvents events={apps.data.events} limited={apps.data.limited}
+          onExport={() => download(`audit-app-approvals-${q.email || "all"}-${q.from}-${q.to}.csv`, appCsv(apps.data.events))} />}
         {res.isError && !res.isFetching && <p className="text-bad" role="alert">{res.error.message}</p>}
         {res.data && !res.isError && (
           <>
@@ -134,6 +151,36 @@ export function AuditPage() {
       </section>
     </Shell>
   );
+}
+
+// MCP app requests, decisions and refused attempts (the console's records in otel_logs).
+function AppEvents({ events, limited, onExport }: { events: AppEvent[]; limited: boolean; onExport: () => void }) {
+  return <>
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-small text-muted">
+      <span>{events.length} events: {events.filter((e) => e.action.endsWith("-refused")).length} refused attempts{limited && " — showing the newest 1,000; narrow the period"}.</span>
+      <Button variant="outline" className="ml-auto w-auto" disabled={events.length === 0} onClick={onExport}>Export CSV</Button>
+    </div>
+    <div className="overflow-x-auto">
+      <table className="w-full border-collapse text-body" data-testid="app-events">
+        <thead><tr className="border-b border-line"><th className={th}>Time (UTC)</th><th className={th}>Action</th><th className={th}>By</th><th className={th}>Server</th><th className={th}>Requested by</th><th className={th}>Image, URL or tools</th><th className={th}>Comment or reason</th></tr></thead>
+        <tbody>
+          {events.map((e, i) => (
+            <tr key={i} className="border-b border-line-soft align-top">
+              <td className="whitespace-nowrap px-3 py-2 font-mono text-small">{utc(e.time)}</td>
+              <td className="px-3 py-2">{e.action.endsWith("-refused") ? <Status ready="False" text={actionLabel[e.action] ?? e.action} /> : (actionLabel[e.action] ?? e.action)}
+                {e.pullRequest && <a className="block text-small text-accent underline" href={e.pullRequest} target="_blank" rel="noreferrer">pull request</a>}</td>
+              <td className="px-3 py-2 font-mono text-small">{e.actor}{e.role && <span className="block text-muted">{e.role}</span>}</td>
+              <td className="px-3 py-2 font-mono text-small">{e.server}{e.request && <span className="block text-muted">{e.request}</span>}</td>
+              <td className="px-3 py-2 font-mono text-small">{e.requestedBy}</td>
+              <td className="break-all px-3 py-2 font-mono text-small">{appWhat(e)}</td>
+              <td className="px-3 py-2 text-small">{e.reason || e.comment}</td>
+            </tr>
+          ))}
+          {events.length === 0 && <tr><td colSpan={7} className="px-3 py-6 text-muted">No MCP app requests or decisions in this period.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  </>;
 }
 
 // The Outcome cell. An audit-only verdict (would be refused, mark missing) is shown with the status the person got.

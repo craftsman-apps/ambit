@@ -4,6 +4,21 @@ For what each release changes, read the [release notes](https://ambitproject.dev
 
 ## To the release with service accounts (0.5.0)
 
+- **Compression records name the caller.** With `evidence.enabled` and a Server with `resultCompression`, the guard's
+  record of each compressed text now also holds the caller's email and key ID, the tool and a call ID
+  (`ambit.call_id`, also on the gateway's record of the call). New Helm value `protection.compressionAudit.caller`
+  (default `true`); `false` keeps the person out of these records. Records written before the upgrade have none of
+  these fields.
+- **After a downgrade below 0.5.0, remove the email from the compression records.** The older Audit page lists every
+  record that has the person's email, so it shows each compression record written by 0.5.0 as an empty extra row until
+  the record ages out (`evidence.retention`). The older guard writes no email, so only the records written before the
+  downgrade need this statement, once (the Savings summaries do not change):
+
+  ```sql
+  ALTER TABLE otel.otel_logs UPDATE LogAttributes = mapFilter((k, v) -> k NOT IN ('jwt.email', 'ambit.key_id'), LogAttributes)
+  WHERE LogAttributes['ambit.kind'] = 'compression'
+  ```
+
 - **`allSignedIn: true` no longer grants service accounts.** It means every person with a valid token or personal key.
   No service account exists before this release, so nothing changes at the upgrade. When you add a service account,
   name its group or its identity in a rule: a rule that relies on `allSignedIn` will not give it access.

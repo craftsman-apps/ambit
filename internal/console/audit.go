@@ -98,6 +98,28 @@ type Call struct {
 	// PromptGuard is what the prompt guard (llm.promptGuard) did: reject, audit (it would have refused; audit mode),
 	// mask, allow, or empty (no guard ran). From the ambit.promptGuard field: never the matched text.
 	PromptGuard string `json:"promptGuard"`
+	// Compression is what the guard did to the tool result (#203); nil when it did not compress it, or when no record
+	// of it arrived. CallID (ambit.call_id) links the guard's records to this call; it is not in the answer.
+	Compression *Compression `json:"compression,omitempty"`
+	CallID      string       `json:"-"`
+}
+
+// Compression is the guard's records of one call's result: one part per compressed text, and the sums.
+type Compression struct {
+	Mode     string            `json:"mode"` // lossless or shorten
+	Parts    []CompressionPart `json:"parts"`
+	BytesIn  int64             `json:"bytesIn"`
+	BytesOut int64             `json:"bytesOut"`
+	Match    string            `json:"match"` // call-id: joined by the call ID
+}
+
+// CompressionPart is one compressed text of the result (its index in content[]).
+type CompressionPart struct {
+	Part     int    `json:"part"`
+	Type     string `json:"type"`
+	BytesIn  int64  `json:"bytesIn"`
+	BytesOut int64  `json:"bytesOut"`
+	Omitted  int64  `json:"omitted"`
 }
 
 // promptGuardSQL reads ambit.promptGuard (["request:regex:reject", ...], one "phase:guard:action" per guard) as the
@@ -126,9 +148,10 @@ SELECT Timestamp,
        LogAttributes['ambit.router'], LogAttributes['ambit.route'], LogAttributes['ambit.routeReason'],
        LogAttributes['ambit.key_id'], LogAttributes['ambit.identity'], LogAttributes['jwt.sub'],
        LogAttributes['ambit.accessMode'], c_mark, LogAttributes['ambit.rulesVersion'], c_outcome, LogAttributes['url.path'],
-       ` + promptGuardSQL + `
+       ` + promptGuardSQL + `, LogAttributes['ambit.call_id']
 FROM otel_logs
-WHERE (LogAttributes['jwt.email'] = {email:String}
+WHERE LogAttributes['ambit.kind'] = '' -- gateway records only: guard and console records (ambit.kind set) are not calls
+  AND (LogAttributes['jwt.email'] = {email:String}
        -- Some refusals (e.g. a model the user may not use) are logged with the token's subject but
        -- without the email attribute; match them through the subjects seen with this email.
        OR (LogAttributes['jwt.email'] = '' AND has({subs:Array(String)}, LogAttributes['jwt.sub'])))
@@ -141,13 +164,13 @@ LIMIT {limit:UInt32}`)
 var invalidKeySQL = `SELECT Timestamp, LogAttributes['route'], LogAttributes['url.path'], ` + status + `,
        LogAttributes['error'], LogAttributes['client.address']
 FROM otel_logs
-WHERE LogAttributes['ambit.identity'] = 'invalid key'
+WHERE LogAttributes['ambit.identity'] = 'invalid key' AND LogAttributes['ambit.kind'] = ''
   AND Timestamp >= {from:DateTime64(9)} AND Timestamp < {to:DateTime64(9)}
 ORDER BY Timestamp DESC
 LIMIT {limit:UInt32}`
 
 const subsSQL = `SELECT DISTINCT LogAttributes['jwt.sub'] FROM otel_logs
-WHERE LogAttributes['jwt.email'] = {email:String} AND LogAttributes['jwt.sub'] != '' LIMIT 100`
+WHERE LogAttributes['ambit.kind'] = '' AND LogAttributes['jwt.email'] = {email:String} AND LogAttributes['jwt.sub'] != '' LIMIT 100`
 
 // Calls lists one user's gateway calls in [from, to), newest first.
 func (a *Audit) Calls(ctx context.Context, email string, from, to time.Time, limit int) ([]Call, error) {
@@ -180,13 +203,70 @@ func (a *Audit) Calls(ctx context.Context, email string, from, to time.Time, lim
 		var c Call
 		var requested string
 		if err := rows.Scan(&c.Time, &c.Email, &c.Route, &c.Method, &c.Server, &c.Tool, &c.Model, &c.Status, &c.Error, &c.InputTokens, &c.OutputTokens,
-			&requested, &c.Label, &c.LabelReason, &c.KeyID, &c.Identity, &c.Subject, &c.AccessMode, &c.Mark, &c.RulesVersion, &c.Outcome, &c.Path, &c.PromptGuard); err != nil {
+			&requested, &c.Label, &c.LabelReason, &c.KeyID, &c.Identity, &c.Subject, &c.AccessMode, &c.Mark, &c.RulesVersion, &c.Outcome, &c.Path, &c.PromptGuard, &c.CallID); err != nil {
 			return nil, err
 		}
 		c.Router = routerOf(requested, c.Model)
 		out = append(out, c)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, a.addCompression(ctx, email, from, out)
+}
+
+// compressionSQL reads the guard's records of the given calls by the same person: one row per call and part, so a
+// record delivered twice counts once. A record is written up to a few seconds after its call, so it is read from the
+// period's start without an end; the call IDs bound the scan. With protection.compressionAudit.caller false the
+// records have no email and are not shown.
+// Every field comes from the same (the first) copy of a record.
+const compressionSQL = `SELECT LogAttributes['ambit.call_id'] AS id, toInt64OrZero(LogAttributes['ambit.compress.part']) AS part,
+       argMin(LogAttributes['ambit.compress.mode'], Timestamp), argMin(LogAttributes['ambit.compress.type'], Timestamp),
+       argMin(toInt64OrZero(LogAttributes['ambit.compress.bytes_in']), Timestamp), argMin(toInt64OrZero(LogAttributes['ambit.compress.bytes_out']), Timestamp),
+       argMin(toInt64OrZero(LogAttributes['ambit.compress.omitted']), Timestamp)
+FROM otel_logs
+WHERE LogAttributes['ambit.kind'] = 'compression' AND LogAttributes['jwt.email'] = {email:String}
+  AND Timestamp >= {from:DateTime64(9)} AND has({ids:Array(String)}, LogAttributes['ambit.call_id'])
+GROUP BY id, part
+ORDER BY id, part`
+
+// addCompression sets Compression on the calls that have records. Calls from before 0.5.0 have no call ID.
+func (a *Audit) addCompression(ctx context.Context, email string, from time.Time, calls []Call) error {
+	byID := map[string]*Call{}
+	var ids []string
+	for i := range calls {
+		if id := calls[i].CallID; id != "" && byID[id] == nil {
+			byID[id] = &calls[i]
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := a.DB.QueryContext(clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{"email": email, "ids": arrayLiteral(ids),
+		"from": from.UTC().Format("2006-01-02 15:04:05.000000000")})), compressionSQL)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, mode string
+		var p CompressionPart
+		if err := rows.Scan(&id, &p.Part, &mode, &p.Type, &p.BytesIn, &p.BytesOut, &p.Omitted); err != nil {
+			return err
+		}
+		c := byID[id]
+		if c == nil {
+			continue
+		}
+		if c.Compression == nil {
+			c.Compression = &Compression{Mode: mode, Parts: []CompressionPart{}, Match: "call-id"}
+		}
+		c.Compression.Parts = append(c.Compression.Parts, p)
+		c.Compression.BytesIn += p.BytesIn
+		c.Compression.BytesOut += p.BytesOut
+	}
+	return rows.Err()
 }
 
 // InvalidKeyCalls lists the requests in [from, to) made with an invalid key, newest first. Identity is "invalid
@@ -212,7 +292,7 @@ func (a *Audit) InvalidKeyCalls(ctx context.Context, from, to time.Time, limit i
 }
 
 const keysLastUsedSQL = `SELECT LogAttributes['ambit.key_id'], max(Timestamp) FROM otel_logs
-WHERE Timestamp >= {from:DateTime64(9)}
+WHERE Timestamp >= {from:DateTime64(9)} AND LogAttributes['ambit.kind'] = ''
   AND LogAttributes['ambit.key_id'] != '' AND has({ids:Array(String)}, LogAttributes['ambit.key_id'])
 GROUP BY LogAttributes['ambit.key_id']`
 

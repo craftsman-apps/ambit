@@ -84,7 +84,9 @@ spec:
 - **Large requests**: a request body over 4,000,000 bytes is not sent to the classifier and gets no label
   (keyword and length lines can still match, otherwise the default answers).
 - **Where the text goes**: to the classifier Model's provider. Use a model in your cluster for sensitive prompts,
-  and in air-gapped clusters.
+  and in air-gapped clusters. With the [prompt guard](concepts.md#prompt-guard) (`llm.promptGuard`) in mode
+  `reject` or `mask`, ambit-router applies the guard's rules first: a prompt the guard refuses is not sent, and a
+  masked prompt is sent masked.
 - **Cost**: the classifier's tokens are not charged to budgets. They are counted in the metric
   `ambit_router_classifier_tokens_total{router,model}`; spending is bounded by the router's access rules and
   `ratePerMinute`.
@@ -110,8 +112,14 @@ Every request gets one reason, in the access log and on the Audit page as `auto 
 | `error` | the call failed, or the message is not plain text |
 | `busy` | 16 classifications were already running on that replica |
 | `rate-limited` | the router's `ratePerMinute` is used up on that replica |
-| `denied` | the user may not use the router (no call is made; the gateway answers 400) |
+| `denied` | the user may not use the router (no call is made; the gateway answers 400). In audit-only mode the person is served by the default model instead; see below |
+| `guard` | the prompt guard refuses the prompt (mode `reject`), or its webhook failed with `failureMode: FailClosed`: no call is made, and the gateway refuses the request |
 | `stale` | ambit-router has not loaded the configuration the gateway names yet (usually for about a second after a change) |
+
+**Audit-only mode** (`access.mode: audit`): a person that the router's `groups`, `users` and `allSignedIn` do not
+grant is **not classified**. The person gets the default model (or a route without a category), and the record
+says `refuse:router`. This is deliberate: classifying that person would send their prompt to the classifier model,
+a data flow that the router's access rule does not allow. After a grant, the person gets the routed model.
 
 **A failure never fails the request**: with no label, keyword and length routes still apply, and otherwise the
 default answers. If no ambit-router pod is reachable, the gateway skips it (no label). Two cases can fail a

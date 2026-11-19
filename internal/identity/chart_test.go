@@ -137,6 +137,33 @@ func TestChartUsesTheSameFragments(t *testing.T) {
 	}
 }
 
+// #203: the guard's compression records name the caller with the access log's own expressions, and carry the call
+// ID the access log writes, so the two records of one call agree. compressionAudit.caller false drops the caller only.
+func TestGuardRecordsUseTheAccessLogExpressions(t *testing.T) {
+	meta := func(d []doc) map[string]any {
+		g := find(t, d, "AgentgatewayPolicy", "ambit-mcp-guard")
+		ps := get(t, g, "spec", "backend", "mcp", "guardrails", "processors").([]any)
+		if len(ps) != 1 {
+			t.Fatalf("%d guard processors", len(ps))
+		}
+		return get(t, ps[0], "remote", "metadata").(map[string]any)
+	}
+	d := render(t, "--set", "protection.enabled=true")
+	m := meta(d)
+	for key, attribute := range map[string]string{"recordEmail": "jwt.email", "keyId": "ambit.key_id", "callId": "ambit.call_id"} {
+		if want := attr(t, d, attribute); m[key] != want {
+			t.Errorf("guard %s = %v, want the access log's %s: %s", key, m[key], attribute, want)
+		}
+	}
+	if m["tool"] != `has(mcpGuardrails.tool) ? mcpGuardrails.tool : ""` {
+		t.Errorf("guard tool = %v", m["tool"])
+	}
+	m = meta(render(t, "--set", "protection.enabled=true", "--set", "protection.compressionAudit.caller=false"))
+	if _, ok := m["recordEmail"]; ok || m["keyId"] != nil || m["callId"] == nil || m["email"] == nil {
+		t.Errorf("caller false: %v", m)
+	}
+}
+
 // A model route and the MCP backend belong to their own route only.
 func TestRoutesAreExclusive(t *testing.T) {
 	for _, d := range render(t) {

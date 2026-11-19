@@ -25,7 +25,7 @@ func TestEvidenceOnClickHouse(t *testing.T) {
 		}
 		return m
 	}
-	insertLog(t, a, day, gw("ana@example.com", "sub-ana", nil))
+	insertLog(t, a, day, gw("ana@example.com", "sub-ana", map[string]string{"ambit.call_id": "c-1"}))
 	insertLog(t, a, day.Add(time.Hour), gw("ana@example.com", "sub-ana", map[string]string{"ambit.accessMode": "audit", "ambit.rulesVersion": ""}))
 	insertLog(t, a, day.Add(25*time.Hour), gw("ana@example.com", "sub-ana", map[string]string{"error": "=HYPERLINK(\"x\")", "http.status": "502"}))
 	insertLog(t, a, day.Add(26*time.Hour), gw("", "sub-ana", map[string]string{"http.status": "403"})) // a refusal with the subject only
@@ -33,7 +33,9 @@ func TestEvidenceOnClickHouse(t *testing.T) {
 	insertLog(t, a, day.Add(50*time.Hour), gw("bob@example.com", "sub-bob", nil))
 	insertLog(t, a, day.AddDate(0, 0, -2), gw("ana@example.com", "sub-ana", nil)) // before the period
 	// Other record kinds in the period: never in calls.csv.
-	insertLog(t, a, day.Add(2*time.Hour), map[string]string{"ambit.kind": "compression", "mcp.target": "github", "jwt.groups": `["eng"]`})
+	insertLog(t, a, day.Add(2*time.Second), map[string]string{"ambit.kind": "compression", "mcp.target": "github", "jwt.groups": `["eng"]`, "ambit.call_id": "c-1",
+		"jwt.email": "ana@example.com", "ambit.compress.mode": "shorten", "ambit.compress.bytes_in": "48000", "ambit.compress.bytes_out": "9000", "ambit.compress.part": "0"})
+	insertLog(t, a, day.Add(2*time.Hour), map[string]string{"ambit.kind": "compression", "mcp.target": "github", "jwt.groups": `["eng"]`}) // caller: false
 	insertLog(t, a, day.Add(3*time.Hour), map[string]string{"ambit.kind": "access-snapshot", "ambit.rulesVersion": "3f9a1c0e2b7d", "ambit.snapshot.accessMode": "enforce"})
 	insertLog(t, a, day.Add(4*time.Hour), map[string]string{"ambit.kind": "app-approval", "ambit.app.action": "approved", "ambit.actor": "admin@example.com",
 		"ambit.app.requested_by": "ana@example.com", "mcp.target": "github"})
@@ -84,6 +86,12 @@ func TestEvidenceOnClickHouse(t *testing.T) {
 	if sum != int(want) || len(files["daily-counts.csv"]) != 4 {
 		t.Errorf("daily counts %v", files["daily-counts.csv"])
 	}
+	if c := files["compression.csv"]; len(c) != 3 || c[1][1] != "c-1" || c[1][2] != "ana@example.com" || c[1][9] != "48000" || c[1][10] != "9000" || c[2][2] != "" {
+		t.Errorf("compression %v", c)
+	}
+	if r := files["calls.csv"][1]; r[len(r)-1] != "c-1" {
+		t.Errorf("the first call's call_id: %v", r)
+	}
 	if len(files["app-requests.csv"]) != 2 || files["app-requests.csv"][1][1] != "approved" {
 		t.Errorf("app requests %v", files["app-requests.csv"])
 	}
@@ -95,6 +103,9 @@ func TestEvidenceOnClickHouse(t *testing.T) {
 	files, _ = export("from=2026-10-01&to=2026-10-03&email=ana%40example.com")
 	if got := len(files["calls.csv"]) - 1; got != 4 {
 		t.Errorf("ana's calls: %d rows, want 4 (3 with the email, 1 refusal with the subject only): %v", got, files["calls.csv"])
+	}
+	if c := files["compression.csv"]; len(c) != 2 || c[1][1] != "c-1" {
+		t.Errorf("ana's compression records: %v", c)
 	}
 	if len(files["app-requests.csv"]) != 2 {
 		t.Errorf("ana's app requests: %v", files["app-requests.csv"])

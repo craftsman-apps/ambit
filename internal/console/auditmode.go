@@ -16,7 +16,7 @@ func withClassify(q string) string { return auditsql.With(q) }
 
 // In the summary, every record of audit mode in the window counts toward newest; rules narrows to one rules version.
 const auditWindow = `WHERE Timestamp >= {from:DateTime64(9)} AND Timestamp < {to:DateTime64(9)}
-  AND LogAttributes['ambit.accessMode'] = 'audit'
+  AND LogAttributes['ambit.accessMode'] = 'audit' AND LogAttributes['ambit.kind'] = ''
   AND ({all:UInt8} = 1 OR LogAttributes['ambit.rulesVersion'] = {rules:String})`
 
 var wouldRefuseTotalsSQL = withClassify(`{classify}

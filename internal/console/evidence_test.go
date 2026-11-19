@@ -42,6 +42,7 @@ type fakeCH struct {
 	blocked   chan struct{} // closed when it starts waiting
 	canceled  chan struct{} // closed when a query saw its context end
 	app       [][]driver.Value
+	compress  [][]driver.Value // rows of evidenceCompressionSQL: the first (day's) query gets them all
 	subjects  []string
 	queries   []string
 	snapshots [][]driver.Value   // access snapshots: time, rules version, hash, mode, body (oldest first)
@@ -111,6 +112,12 @@ func (c fakeConn) QueryContext(ctx context.Context, q string, _ []driver.NamedVa
 		f.after = f.after[1:]
 		f.mu.Unlock()
 		return &fakeRows{ctx: ctx, f: f, cols: len(callsHeader), n: len(rows), row: func(i int) []driver.Value { return rows[i] }}, nil
+	case q == evidenceCompressionSQL:
+		f.mu.Lock()
+		rows := f.compress
+		f.compress = nil
+		f.mu.Unlock()
+		return &fakeRows{ctx: ctx, f: f, cols: len(compressionHeader), n: len(rows), row: func(i int) []driver.Value { return rows[i] }}, nil
 	case q == evidenceAppSQL:
 		return &fakeRows{ctx: ctx, f: f, cols: 13, n: len(f.app), row: func(i int) []driver.Value { return f.app[i] }}, nil
 	}
@@ -177,7 +184,7 @@ func seededCall(i int) []driver.Value {
 		method, tool, status, errText = "tools/call", "@SUM(A1),\"x\"\nnext", "400", "Unknown tool"
 	}
 	return []driver.Value{evT0.Add(time.Duration(i) * 3 * time.Hour), email, "ambit-system/ambit-llm", method, "", tool, "gpt-5", status, errText,
-		int64(12), int64(3), "", "", "", "k1", identity, "sub-ana", mode, "", rules, "n/a", "/v1/chat/completions", "", client}
+		int64(12), int64(3), "", "", "", "k1", identity, "sub-ana", mode, "", rules, "n/a", "/v1/chat/completions", "", client, fmt.Sprintf("call-%d", i)}
 }
 
 type evidenceFixture struct {
@@ -389,6 +396,8 @@ func readZip(t *testing.T, body []byte) map[string][]byte {
 // period has a count and the counts add up to the rows, values stay data, and the history has the ZIP's hash.
 func TestAuditExportZipAndManifest(t *testing.T) {
 	ch := goodCH(40)
+	ch.compress = [][]driver.Value{{evT0.Add(time.Hour), "call-0", "ana@example.com", "k1", "github", "list_issues", "json", "shorten", int64(0),
+		int64(48000), int64(9000), int64(14), `["eng"]`}}
 	ch.app = [][]driver.Value{{evT0.Add(time.Hour), "approved", "=cmd@example.com", "admin", "github", "req-1", "ana@example.com", "ghcr.io/x/y@sha256:1", "", "ok", "", `["a","b"]`, ""}}
 	e := newEvidenceFixture(t, ch)
 	resp, body, err := e.get(t, t.Context(), "/api/evidence/audit.zip?from=2026-10-01&to=2026-10-07", e.admin)
@@ -423,7 +432,7 @@ func TestAuditExportZipAndManifest(t *testing.T) {
 			t.Errorf("%s: manifest %d rows %s; file %d rows %x (%v)", f.Name, f.Rows, f.SHA256, len(recs)-1, sum, err)
 		}
 	}
-	if strings.Join(names, " ") != "calls.csv daily-counts.csv app-requests.csv" {
+	if strings.Join(names, " ") != "calls.csv daily-counts.csv app-requests.csv compression.csv" {
 		t.Errorf("files %v", names)
 	}
 	calls, _ := csv.NewReader(bytes.NewReader(files["calls.csv"])).ReadAll()
@@ -470,6 +479,14 @@ func TestAuditExportZipAndManifest(t *testing.T) {
 	if len(days) != 8 || days[1][0] != "2026-10-01" || days[7][0] != "2026-10-07" || sum != 40 {
 		t.Errorf("daily counts %v (sum %d)", days, sum)
 	}
+	if calls[1][col["call_id"]] != "call-0" {
+		t.Errorf("call_id %v", calls[1])
+	}
+	comp, _ := csv.NewReader(bytes.NewReader(files["compression.csv"])).ReadAll()
+	if len(comp) != 2 || strings.Join(comp[0], ",") != strings.Join(compressionHeader, ",") ||
+		strings.Join(comp[1], ",") != `2026-10-01T09:00:00Z,call-0,ana@example.com,k1,github,list_issues,json,shorten,0,48000,9000,14,["eng"]` {
+		t.Errorf("compression %v", comp)
+	}
 	app, _ := csv.NewReader(bytes.NewReader(files["app-requests.csv"])).ReadAll()
 	if len(app) != 2 || app[1][2] != "'=cmd@example.com" || app[1][9] != "a, b" {
 		t.Errorf("app requests %v", app)
@@ -482,7 +499,7 @@ func TestAuditExportZipAndManifest(t *testing.T) {
 	}
 	h := e.history(t)
 	zipSum := sha256.Sum256(body)
-	if len(h) != 2 || h[0].Result != "started" || h[1].Result != "complete" || h[1].Rows != 41 || h[1].ZipSHA256 != hex.EncodeToString(zipSum[:]) {
+	if len(h) != 2 || h[0].Result != "started" || h[1].Result != "complete" || h[1].Rows != 42 || h[1].ZipSHA256 != hex.EncodeToString(zipSum[:]) {
 		t.Errorf("history %+v", h)
 	}
 	for _, ev := range h {

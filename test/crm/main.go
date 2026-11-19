@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -30,6 +31,10 @@ type rowsArgs struct {
 
 type logArgs struct {
 	KiB int `json:"kib"`
+}
+
+type sayArgs struct {
+	Text string `json:"text"`
 }
 
 func main() {
@@ -85,6 +90,16 @@ func main() {
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 			page := "<!doctype html>\n<html>\n  <body>\n" + strings.Repeat("    <p class=\"row\">Quarterly figures</p>\n", 600) + "  </body>\n</html>\n"
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: page}}}, nil, nil
+		})
+	// say returns the given text, so a test can send any written form of personal data through the guard (step 9,
+	// check 1c). lookup_fail answers with a JSON-RPC error that holds personal data (step 9, check 1d).
+	mcp.AddTool(s, &mcp.Tool{Name: "say", Description: "Return the given text."},
+		func(_ context.Context, _ *mcp.CallToolRequest, a sayArgs) (*mcp.CallToolResult, any, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: a.Text}}}, nil, nil
+		})
+	mcp.AddTool(s, &mcp.Tool{Name: "lookup_fail", Description: "Fail with an error that names the customer."},
+		func(_ context.Context, _ *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
+			return nil, nil, &jsonrpc.Error{Code: -32000, Message: "lookup " + a.ID + " failed for customer RRN 900101-1234567, email minsu.kim@example.com"}
 		})
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, &mcp.StreamableHTTPOptions{Stateless: true})
 	mux := http.NewServeMux()

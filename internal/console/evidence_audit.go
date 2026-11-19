@@ -16,8 +16,8 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 )
 
-// The audit export: every gateway record of a period (calls.csv), their number per UTC day (daily-counts.csv), and
-// the MCP app requests and decisions (app-requests.csv).
+// The audit export: every gateway record of a period (calls.csv), their number per UTC day (daily-counts.csv), the
+// MCP app requests and decisions (app-requests.csv), and the guard's compression records (compression.csv).
 
 // evidenceCallsWhere selects the gateway's records (no ambit.kind: compression records, app events, access snapshots
 // and any later kind are other records) of [from, to), of everyone or of one person. A person's records are those
@@ -38,7 +38,7 @@ const evidenceCallsColumns = `Timestamp, LogAttributes['jwt.email'], LogAttribut
        LogAttributes['ambit.key_id'], LogAttributes['ambit.identity'], LogAttributes['jwt.sub'],
        LogAttributes['ambit.accessMode'], c_mark, LogAttributes['ambit.rulesVersion'], c_outcome, LogAttributes['url.path'],
        ` + promptGuardSQL + `,
-       if(LogAttributes['ambit.identity'] = 'invalid key', LogAttributes['client.address'], '')`
+       if(LogAttributes['ambit.identity'] = 'invalid key', LogAttributes['client.address'], ''), LogAttributes['ambit.call_id']`
 
 var evidenceCallsSQL = withClassify(`{classify}
 SELECT ` + evidenceCallsColumns + `
@@ -52,9 +52,23 @@ WHERE ` + evidenceCallsWhere
 const evidenceAppSQL = appEventsSelect + `
 ORDER BY Timestamp`
 
+// evidenceCompressionSQL reads the guard's compression records (#203) of [from, to), of everyone or of one person, as
+// stored: a record delivered twice is two rows. With protection.compressionAudit.caller false they have no email.
+const evidenceCompressionSQL = `SELECT Timestamp, LogAttributes['ambit.call_id'], LogAttributes['jwt.email'], LogAttributes['ambit.key_id'],
+       LogAttributes['mcp.target'], LogAttributes['gen_ai.tool.name'], LogAttributes['ambit.compress.type'], LogAttributes['ambit.compress.mode'],
+       toInt64OrZero(LogAttributes['ambit.compress.part']), toInt64OrZero(LogAttributes['ambit.compress.bytes_in']),
+       toInt64OrZero(LogAttributes['ambit.compress.bytes_out']), toInt64OrZero(LogAttributes['ambit.compress.omitted']), LogAttributes['jwt.groups']
+FROM otel_logs
+WHERE LogAttributes['ambit.kind'] = 'compression' AND Timestamp >= {from:DateTime64(9)} AND Timestamp < {to:DateTime64(9)}
+  AND ({email:String} = '' OR LogAttributes['jwt.email'] = {email:String})
+ORDER BY Timestamp`
+
+var compressionHeader = []string{"time", "call_id", "email", "key_id", "server", "tool", "type", "mode", "part", "bytes_in", "bytes_out",
+	"omitted", "groups"}
+
 var callsHeader = []string{"time", "email", "what", "target", "outcome", "status", "error", "input_tokens", "output_tokens", "mark",
 	"rules_version", "identity", "key_id", "subject", "route", "method", "server", "tool", "model", "router", "path", "access_mode",
-	"client_address", "prompt_guard"}
+	"client_address", "prompt_guard", "call_id"}
 
 var appHeader = []string{"time", "action", "actor", "role", "server", "request", "requested_by", "image", "url", "tools", "comment",
 	"refused_reason", "pull_request"}
@@ -161,7 +175,8 @@ func (c *Catalog) prepareAuditExport(ctx context.Context, q url.Values) (*export
 		parameters: map[string]string{"from": from.Format(time.RFC3339Nano), "to": to.Format(time.RFC3339Nano), "email": email, "subjects": string(sj)},
 		sources: map[string]any{"auditRetention": src.Retention, "auditRetentionFrom": src.RetentionFrom, "oldestRecordKept": src.Oldest,
 			"periodStartsInsideRetention": inside, "accessMode": c.publishedMode(ctx)},
-		queries:  map[string]string{"calls.csv": evidenceCallsSQL, "daily-counts.csv": "calls.csv rows per UTC day", "app-requests.csv": evidenceAppSQL},
+		queries: map[string]string{"calls.csv": evidenceCallsSQL, "daily-counts.csv": "calls.csv rows per UTC day", "app-requests.csv": evidenceAppSQL,
+			"compression.csv": evidenceCompressionSQL},
 		notes:    []string{noteUTC, noteSigned, notePersonal, noteHashes},
 		filename: fmt.Sprintf("ambit-audit-%s-%s.zip", first, last),
 		period:   first + " to " + last,
@@ -170,9 +185,10 @@ func (c *Catalog) prepareAuditExport(ctx context.Context, q url.Values) (*export
 		"calls.csv holds every gateway record of the period (LogAttributes['ambit.kind'] = ''), refused calls and requests with an invalid key (empty email) included. Other record kinds (compression, MCP app events, access snapshots) are not in it.",
 		"rules_version 'unknown': the gateway wrote no rules version on that record (records from before audit-only mode existed, or written while no access-log policy existed).",
 		"daily-counts.csv counts the rows of calls.csv per UTC day. A day with 0 records, or with far fewer than the days around it, may be a gap (the collector was down or records were dropped): the export cannot tell a gap from a quiet day.",
-		"app-requests.csv holds the MCP app requests, approvals, denials, approvals of changed tools and refused attempts of the period (LogAttributes['ambit.kind'] = 'app-approval').")
+		"app-requests.csv holds the MCP app requests, approvals, denials, approvals of changed tools and refused attempts of the period (LogAttributes['ambit.kind'] = 'app-approval').",
+		"compression.csv holds the guard's records of the tool results it compressed (LogAttributes['ambit.kind'] = 'compression'): sizes and names, never content, one row per stored record (a record delivered twice is two rows; the same call_id and part). Its call_id is the call_id of the call's row in calls.csv. Calls from before 0.5.0, and records from an older gateway policy, have no call_id. With protection.compressionAudit.caller false the records have no email or key ID.")
 	if email != "" {
-		job.notes = append(job.notes, "Limited to "+email+": calls with that jwt.email, and calls without an email whose JWT subject (parameters.subjects) was seen with that email. app-requests.csv: the events this person did or that concern their request.")
+		job.notes = append(job.notes, "Limited to "+email+": calls with that jwt.email, and calls without an email whose JWT subject (parameters.subjects) was seen with that email. app-requests.csv: the events this person did or that concern their request. compression.csv: the records with that email (records without an email are not in it).")
 	}
 	if !inside {
 		oldest := "none (the table is empty)"
@@ -225,6 +241,13 @@ func (c *Catalog) prepareAuditExport(ctx context.Context, q url.Values) (*export
 			}
 			return rows.Err()
 		}},
+		{name: "compression.csv", header: compressionHeader, rows: func(ctx context.Context, w *csvWriter) error {
+			return eachDay(from, to, func(dayFrom, dayTo time.Time) error {
+				p := maps.Clone(params)
+				p["from"], p["to"] = chTime(dayFrom), chTime(dayTo)
+				return c.writeCompression(ctx, w, p)
+			})
+		}},
 	}
 	job.notes = append(job.notes, "calls.csv is read one UTC day at a time with the query in queries (from and to set to each day's bounds inside the period), so ClickHouse sorts one day of records at a time; the rows are the same as one query over the whole period.")
 	job.finish = func(j *exportJob) {
@@ -266,14 +289,35 @@ func (c *Catalog) writeCalls(ctx context.Context, w *csvWriter, query string, pa
 		var requested string
 		if err := rows.Scan(&k.Time, &k.Email, &k.Route, &k.Method, &k.Server, &k.Tool, &k.Model, &k.Status, &k.Error, &k.InputTokens, &k.OutputTokens,
 			&requested, &k.Label, &k.LabelReason, &k.KeyID, &k.Identity, &k.Subject, &k.AccessMode, &k.Mark, &k.RulesVersion, &k.Outcome, &k.Path,
-			&k.PromptGuard, &k.ClientAddress); err != nil {
+			&k.PromptGuard, &k.ClientAddress, &k.CallID); err != nil {
 			return err
 		}
 		k.Router = routerOf(requested, k.Model)
 		seen(k)
 		if err := w.Row(append(prefix, csvTime(k.Time), k.Email, callWhat(k), callTarget(k), callOutcome(k), k.Status, k.Error, k.InputTokens, k.OutputTokens,
 			k.Mark, cmp.Or(k.RulesVersion, "unknown"), k.Identity, k.KeyID, k.Subject, k.Route, k.Method, k.Server, k.Tool, k.Model, k.Router,
-			k.Path, k.AccessMode, k.ClientAddress, k.PromptGuard)...); err != nil {
+			k.Path, k.AccessMode, k.ClientAddress, k.PromptGuard, k.CallID)...); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
+
+// writeCompression writes the compression records that evidenceCompressionSQL selects with params.
+func (c *Catalog) writeCompression(ctx context.Context, w *csvWriter, params clickhouse.Parameters) error {
+	rows, err := c.Audit.DB.QueryContext(exportContext(ctx, params), evidenceCompressionSQL)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var t time.Time
+		var callID, email, keyID, server, tool, typ, mode, groups string
+		var part, in, out, omitted int64
+		if err := rows.Scan(&t, &callID, &email, &keyID, &server, &tool, &typ, &mode, &part, &in, &out, &omitted, &groups); err != nil {
+			return err
+		}
+		if err := w.Row(csvTime(t), callID, email, keyID, server, tool, typ, mode, part, in, out, omitted, groups); err != nil {
 			return err
 		}
 	}

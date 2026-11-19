@@ -1,12 +1,12 @@
 ---
 title: Connect your coding agents
 sidebar_label: Connect your coding agents
-description: Point Claude Code, Cursor, Codex, opencode, Hermes Agent and any agent that speaks the OpenAI or Anthropic API at Ambit with a personal API key, so every call is checked, counted and recorded under that person.
+description: Point Claude Code, Cursor, Codex, opencode, Hermes Agent, Kilo Code, pi and any agent that speaks the OpenAI or Anthropic API at Ambit with a personal API key, so every call is checked, counted and recorded under that person.
 ---
 
 # Connect your coding agents
 
-Works with Claude Code, Cursor, Codex, opencode, Hermes and any agent that speaks the OpenAI or Anthropic API.
+Works with Claude Code, Cursor, Codex, opencode, Hermes Agent, Kilo Code, pi and any agent that speaks the OpenAI or Anthropic API.
 
 Each person uses a personal API key. Ambit checks the person's access, counts the use and records every call. The provider's own key stays inside the cluster.
 
@@ -16,7 +16,9 @@ Each person uses a personal API key. Ambit checks the person's access, counts th
 | Codex | yes | [Codex](#codex) |
 | opencode | yes | [opencode](#opencode) |
 | Cursor | yes, but it only prints the steps and writes nothing | [Cursor](#cursor) |
-| Hermes Agent | no | [Hermes Agent](#hermes-agent) |
+| Hermes Agent | yes | [Hermes Agent](#hermes-agent) |
+| Kilo Code (CLI and VS Code extension) | yes | [Kilo Code](#kilo-code) |
+| pi | yes | [pi](#pi) |
 | Any other agent | no | [Other agents](#other-agents) |
 
 ## Before you start
@@ -27,9 +29,9 @@ You need the cluster from the [Quick start](../quick-start.md), with a model and
 - Model name: the provider's model name, not the name of the `Model` object. The console page **Models** shows it. The examples use `nvidia/nemotron-3-super-120b-a12b:free`.
 - A key: in the console, open **Keys**, choose **Create key**, choose the scope **LLM** (**MCP** or **LLM and MCP** for MCP) and an end date. The key starts with `ambit_`. The console shows it once. Treat it like a password. The next section shows the steps.
 
-`ambit connect <tool> --url <llm> --model <model>` needs the `ambit` CLI 0.2.0 or later ([install it](../quick-start.md#1-install-the-cli)). It asks for the key (hidden), shows a diff, and asks `Write these changes? [y/N]`. Then it stores the key in your system keychain, saves `<file>.ambit.bak`, writes the change, and makes one test call. It never changes a project file, and it writes the key to a file only for opencode 2, which cannot read it from the keychain (see [opencode](#opencode)). Options: `--dry-run` shows the diff and changes nothing; `--yes` with `--key-file <path>` or `AMBIT_API_KEY` is for scripts. If the file has an entry that defeats Ambit's, the command stops and lists it; `--force` replaces it. See [Where the Ambit CLI keeps the key](../api-keys.md#where-the-ambit-cli-keeps-the-key).
+`ambit connect <tool> --url <llm> --model <model>` needs the `ambit` CLI 0.2.0 or later ([install it](../quick-start.md#1-install-the-cli)). It asks for the key (hidden), shows a diff, and asks `Write these changes? [y/N]`. Then it stores the key in your system keychain, saves `<file>.ambit.bak`, writes the change, and makes one test call. It never changes a project file, and it writes the key to a file only for the tools that cannot read it from the keychain: opencode 2 and Kilo Code, and the MCP server of Hermes Agent (see their sections). Options: `--dry-run` shows the diff and changes nothing; `--yes` with `--key-file <path>` or `AMBIT_API_KEY` is for scripts. If the file has an entry that defeats Ambit's, the command stops and lists it; `--force` replaces it. See [Where the Ambit CLI keeps the key](../api-keys.md#where-the-ambit-cli-keeps-the-key).
 
-Tested on 2026-10-14 with Nemotron at OpenRouter: Claude Code 2.1.299, Codex 0.159.3, opencode 1.18.34, Hermes Agent v0.13.0. opencode 2.2.5 was tested on 2026-11-17 with a mock model: `ambit connect opencode`, calls through the opencode service, a key change, and `ambit disconnect opencode`.
+Tested on 2026-10-14 with Nemotron at OpenRouter: Claude Code 2.1.299, Codex 0.159.3, opencode 1.18.34, Hermes Agent v0.13.0. opencode 2.2.5 was tested on 2026-11-17 with a mock model: `ambit connect opencode`, calls through the opencode service, a key change, and `ambit disconnect opencode`. For Hermes Agent, Kilo Code and pi, only the config files that `ambit connect` writes and removes were tested (2026-11-19), not the tools themselves. Their formats come from the documentation and source code of Hermes Agent v0.23.2, Kilo Code 7.8.30 and pi 1.5.2, read on 2026-11-19.
 
 ## Create a key and connect from the console
 
@@ -38,7 +40,7 @@ Tested on 2026-10-14 with Nemotron at OpenRouter: Claude Code 2.1.299, Codex 0.1
 3. In the form **New key**, fill in **Name** (for example `my laptop`), **Scope** (**LLM**, **MCP** or **LLM and MCP**) and **End date** (**30 days from now**, **90 days from now** or **365 days from now**).
 4. Choose **Create**.
 5. The console shows **Key ‘<name>’ created**. It says: "This is the only time the key is shown. Store it now." Choose **Copy** under **Key** and save the key.
-6. Under **Connect a tool**, if the scope includes LLM, pick the **Model name**. Then choose the tab of your tool. The **opencode** tab shows opencode 2 first; choose **opencode 1** under **Version** for the older version.
+6. Under **Connect a tool**, if the scope includes LLM, pick the **Model name**. Then choose the tab of your tool: **Claude Code**, **Codex**, **opencode**, **Hermes Agent**, **Kilo Code**, **pi**, **Cursor**, **SDK** or **MCP**. The **opencode** tab shows opencode 2 first; choose **opencode 1** under **Version** for the older version. For a key with the scope **LLM and MCP**, the command of Hermes Agent, Kilo Code and pi also has `--mcp-url`, which adds the MCP gateway.
 7. Choose **Copy** next to the command, and run it in a terminal.
 8. Choose **Done**.
 
@@ -179,23 +181,144 @@ Override OpenAI Base URL: http://llm.localtest.me:8080/v1
 
 ## Hermes Agent
 
-The console has no Hermes tab. Use the config below.
+The **Hermes Agent** tab under **Connect a tool** gives the same command and the steps by hand.
 
-- Hermes (Nous Research) uses the Chat Completions format. There is no `ambit connect` for it.
-- Put the config below in `~/.hermes/config.yaml` and run `export AMBIT_API_KEY=ambit_...`.
-- `key_env` works inside `custom_providers`, not in the `model:` block. Our first config used the `model:` block, sent no key and got 403. Putting `api_key:` in the `model:` block writes the key into the file; we did not test it.
-- MCP was not tested. Hermes reads `mcp_servers` with `url` and `headers`; see the [Hermes MCP guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp).
+Hermes (Nous Research) runs a command to get a key: `key_cmd`. So `ambit connect hermes` keeps the key in the keychain, and no file holds it.
+
+- `ambit connect hermes --url <llm> --model <model>` changes `~/.hermes/config.yaml` (`$HERMES_HOME/config.yaml` when that variable is set; on Windows without WSL, `%LOCALAPPDATA%\hermes\config.yaml`). It adds:
+  - the provider `ambit` under `providers:`, with `api_mode: chat_completions` and `key_cmd: "<path of ambit> key print --url <llm>"`. Hermes runs the command when it needs the key, and again 15 minutes later. A new key is used within 15 minutes, without a restart.
+  - the `model:` block with `provider: "custom:ambit"` and `default: "<model>"`. Your own `model:` block is a conflict: `--force` replaces it. The old lines stay in the file as `# ambit-replaced:` comments, and `ambit disconnect hermes` puts them back. While Ambit's block is in place, Hermes does not use the other settings of your old block (for example `context_length`).
+- Ambit's lines are between the marker lines `# >>> ambit` and `# <<< ambit <<<`, as in Codex. Your other providers and settings stay.
+- The Hermes gateway service (`hermes gateway install`) runs `key_cmd` too. The command holds the full path of `ambit`, so the service does not need `ambit` on its `PATH`. After a change, run `hermes gateway restart`.
+- `--mcp-url <mcp>` also adds the MCP server `ambit` under `mcp_servers:`. Hermes reads MCP headers only from `config.yaml` or from environment variables (`${VAR}`), and cannot run a command for them. So the entry starts the bridge `mcp-remote@0.14.3` with `npx` and a header file, as for [Claude Desktop](claude-desktop-mcp.md). Connect writes the key to `~/.ambit/hermes-mcp-headers.txt` (mode `0600`; on Windows an access list for your user only). Node.js is needed. The key must have the scope **LLM and MCP**.
+- To change the key, run `ambit key set --url <llm>` or `ambit connect hermes --replace-key`. Both write the new key into the header file. Then run `/reload-mcp` in Hermes, or restart it.
+- `ambit disconnect hermes` removes Ambit's lines, puts back the lines that `--force` replaced, and deletes the header file.
+- A named profile (`hermes -p <name>`) has its own folder. Set `HERMES_HOME` to that folder when you run `ambit connect hermes`.
+
+By hand, store the key with `ambit key set --url <llm>` (it asks for the key), and merge this into `~/.hermes/config.yaml`:
 
 ```yaml
 model:
-  default: nvidia/nemotron-3-super-120b-a12b:free
   provider: custom:ambit
-custom_providers:
-  - name: ambit
+  default: nvidia/nemotron-3-super-120b-a12b:free
+
+providers:
+  ambit:
     base_url: http://llm.localtest.me:8080/v1
-    key_env: AMBIT_API_KEY
     api_mode: chat_completions
+    key_cmd: ambit key print --url http://llm.localtest.me:8080
 ```
+
+Without the `ambit` CLI, use `key_env: AMBIT_API_KEY` in place of `key_cmd`, and put the line `AMBIT_API_KEY=ambit_...` in `~/.hermes/.env`, the file in which Hermes keeps keys. The gateway service reads that file too. The key is then in that file as plain text.
+
+MCP by hand: write the header file, then merge the block. Hermes replaces `${userHome}` and `${/}` with your home folder and the path separator. Leave out `"--allow-http"` for an `https` address.
+
+```sh
+mkdir -p ~/.ambit && touch ~/.ambit/hermes-mcp-headers.txt && chmod 600 ~/.ambit/hermes-mcp-headers.txt && printf 'Authorization: Bearer %s\n' 'ambit_...' > ~/.ambit/hermes-mcp-headers.txt
+```
+
+```yaml
+mcp_servers:
+  ambit:
+    command: npx
+    args: ["-y", "mcp-remote@0.14.3", "http://mcp.localtest.me:8080/mcp", "--allow-http", "--header-file", "${userHome}${/}.ambit${/}hermes-mcp-headers.txt"]
+```
+
+Known limits:
+
+- `key_cmd` and the `providers:` section are in Hermes releases since September 2026. An older Hermes reads only the `custom_providers:` list (with `key_env`), which Ambit tested with v0.13.0 on 2026-10-14; `hermes update` moves that list into `providers:`.
+- On Windows, Hermes runs `key_cmd` with `cmd.exe`. This was not tested.
+- If the person's own `providers:` or `mcp_servers:` section is a list or a value on one line, connect stops and asks you to add the entries by hand.
+
+## Kilo Code
+
+The **Kilo Code** tab under **Connect a tool** gives the same command and the steps by hand.
+
+The Kilo CLI (`kilo`, a fork of opencode) and the Kilo Code extension for VS Code read the same global file. The extension starts Kilo as a background process (`kilo serve`). That process does not see the environment variables of your terminal, and Kilo cannot run a command to read a key. So, as for opencode 2, the key is in a file that only you can read.
+
+- `ambit connect kilocode --url <llm> --model <model>` writes the key to `~/.config/ambit/kilo-key` (`$XDG_CONFIG_HOME/ambit/kilo-key` when that variable is set). Only your user can read the file: mode `0600`, and on Windows an access list for your user only.
+- It changes the global Kilo file in `~/.config/kilo/` (`$XDG_CONFIG_HOME/kilo/` when set; on Windows `%USERPROFILE%\.config\kilo\`): the first that exists of `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` and `config.json`, which is the order Kilo itself writes in, else a new `kilo.jsonc`. It adds:
+  - the provider `ambit` under `provider` (`"npm": "@ai-sdk/openai-compatible"`, the format of opencode 1, which Kilo reads), with `"apiKey": "{file:<the key file>}"`.
+  - `"model": "ambit/<model>"`. Another model is a conflict: `--force` replaces it, and `ambit disconnect kilocode` puts it back.
+  - with `--mcp-url <mcp>`, the MCP server `ambit` under `mcp` (`"type": "remote"`, `"oauth": false`, and the header `"Authorization": "Bearer {file:<the key file>}"`). The key must have the scope **LLM and MCP**.
+- After `connect`, restart Kilo so that it reads the settings and the key: in VS Code, run **Developer: Reload Window**; start the CLI again.
+- To change the key, run `ambit key set --url <llm>` or `ambit connect kilocode --replace-key`. Both write the new key into the key file. Restart Kilo after the change.
+- `ambit disconnect kilocode` removes the entries and deletes the key file.
+- Kilo reads `{file:...}` and `{env:...}` only in the global file, not in a project's `kilo.json`. Keep the provider in the global file.
+
+By hand: write the key to the file, merge the provider into `~/.config/kilo/kilo.jsonc`, and restart Kilo. On Windows, use the **PowerShell** command of the **Kilo Code** tab: it also limits the file to your user.
+
+```sh
+mkdir -p ~/.config/ambit && touch ~/.config/ambit/kilo-key && chmod 600 ~/.config/ambit/kilo-key && printf '%s' 'ambit_...' > ~/.config/ambit/kilo-key
+```
+
+```json
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "model": "ambit/nvidia/nemotron-3-super-120b-a12b:free",
+  "provider": {
+    "ambit": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Ambit",
+      "options": { "baseURL": "http://llm.localtest.me:8080/v1", "apiKey": "{file:~/.config/ambit/kilo-key}" },
+      "models": { "nvidia/nemotron-3-super-120b-a12b:free": { "name": "nvidia/nemotron-3-super-120b-a12b:free" } }
+    }
+  },
+  "mcp": {
+    "ambit": {
+      "type": "remote",
+      "url": "http://mcp.localtest.me:8080/mcp",
+      "oauth": false,
+      "headers": { "Authorization": "Bearer {file:~/.config/ambit/kilo-key}" }
+    }
+  }
+}
+```
+
+Known limits: the Kilo Code extensions for JetBrains and for the browser were not checked. A Kilo setting in the VS Code settings (not in `kilo.jsonc`) is not changed by `ambit connect`.
+
+## pi
+
+The **pi** tab under **Connect a tool** gives the same command and the steps by hand.
+
+pi (the npm package `@earendil-works/pi-coding-agent`, before that `@mariozechner/pi-coding-agent`; the command is `pi`) runs a command to get a key when the `apiKey` value starts with `!`. So `ambit connect pi` keeps the key in the keychain, and no file holds it. pi has no background service.
+
+- `ambit connect pi --url <llm> --model <model>` changes files in `~/.pi/agent/` (`$PI_CODING_AGENT_DIR` when that variable is set; on Windows `%USERPROFILE%\.pi\agent\`):
+  - `models.json`: the provider `ambit` with `"api": "openai-completions"`, `"baseUrl": "<llm>/v1"`, the model, and `"apiKey": "!<path of ambit> key print --url <llm>"`. pi runs the command for each request, so a new key is used without a restart.
+  - `settings.json`: `"defaultProvider": "ambit"` and `"defaultModel": "<model>"`. Other values are a conflict: `--force` replaces them, and `ambit disconnect pi` puts them back.
+  - with `--mcp-url <mcp>`, `mcp.json`: the server `ambit` with `"auth": { "provider": "ambit" }`. pi then sends the key of the provider `ambit` (the output of the command) as `Authorization: Bearer`. pi does this only over `https`, or over `http` to `localhost`, `127.0.0.1` or `[::1]`; for another `http` address, connect stops. The quick-start address `http://mcp.localtest.me:8080/mcp` is such an address. pi allows `auth` only in the user file, not in a project's `.pi/mcp.json`. The key must have the scope **LLM and MCP**.
+- `ambit disconnect pi` removes the entries, and deletes a file that connect made.
+
+By hand, store the key with `ambit key set --url <llm>` (it asks for the key), and merge these into the files:
+
+```json
+{
+  "providers": {
+    "ambit": {
+      "baseUrl": "http://llm.localtest.me:8080/v1",
+      "api": "openai-completions",
+      "apiKey": "!ambit key print --url http://llm.localtest.me:8080",
+      "models": [{ "id": "nvidia/nemotron-3-super-120b-a12b:free" }]
+    }
+  }
+}
+```
+
+```json
+{ "defaultProvider": "ambit", "defaultModel": "nvidia/nemotron-3-super-120b-a12b:free" }
+```
+
+`~/.pi/agent/mcp.json` (an `https` MCP address):
+
+```json
+{ "mcpServers": { "ambit": { "url": "https://mcp.example.com/mcp", "auth": { "provider": "ambit" } } } }
+```
+
+Known limits:
+
+- `auth` with a provider is in pi's source code (`mcp-servers.ts`) and is named in its MCP documentation, but the documentation has no section for it.
+- On Windows, pi runs a `!` command with Git Bash when it is installed, else with `cmd.exe`. This was not tested.
+- An older report for pi (issue 3168 of the earlier `pi-mono` repository) says custom providers can stop responding. It was not checked with pi 1.5.2.
 
 ## Other agents
 
@@ -216,7 +339,7 @@ export ANTHROPIC_API_KEY=ambit_...
 Settings from vendor documentation, read on 2026-10-14. Nobody has run these against Ambit. Settings change, so check the vendor page first. `<llm>` is your LLM address.
 
 - **GitHub Copilot CLI**: `COPILOT_PROVIDER_BASE_URL=<llm>/v1`, `COPILOT_PROVIDER_API_KEY`, `COPILOT_MODEL`. The model must support tool calls and streaming. [Vendor page](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/use-byok-models).
-- **Cline**, **Roo Code**, **Kilo Code**: provider "OpenAI Compatible", base URL `<llm>/v1`, key, model ID. Roo Code needs a model with native tool calling. [Cline](https://docs.cline.bot/provider-config/openai-compatible), [Roo Code](https://roocodeinc.github.io/Roo-Code/providers/openai-compatible), [Kilo Code](https://kilo.ai/docs/ai-providers/openai-compatible).
+- **Cline**, **Roo Code**: provider "OpenAI Compatible", base URL `<llm>/v1`, key, model ID. Roo Code needs a model with native tool calling. [Cline](https://docs.cline.bot/provider-config/openai-compatible), [Roo Code](https://roocodeinc.github.io/Roo-Code/providers/openai-compatible).
 - **Continue**: in `config.yaml`, `provider: openai`, `apiBase: <llm>/v1`, `apiKey`, `model`. Set `useResponsesApi: false` for o-series and gpt-5 names. Tab autocomplete uses `/v1/completions`, which Ambit does not serve. [Vendor page](https://docs.continue.dev/customize/model-providers/top-level/openai).
 - **Aider**: `OPENAI_API_BASE=<llm>/v1`, `OPENAI_API_KEY`, and `--model openai/<model>`. [Vendor page](https://aider.chat/docs/llms/openai-compat.html).
 - **Goose**: `OPENAI_HOST=<llm host>`, `OPENAI_BASE_PATH=v1/chat/completions`, `OPENAI_API_KEY`. [Vendor page](https://goose-docs.ai/docs/getting-started/providers).
@@ -224,7 +347,6 @@ Settings from vendor documentation, read on 2026-10-14. Nobody has run these aga
 - **Factory Droid**: a `customModels` entry in `~/.factory/settings.json`, with `baseUrl: "<llm>/v1"` and `provider: "generic-chat-completion-api"`. [Vendor page](https://docs.factory.com/cli/configuration/byok).
 - **Qwen Code**: an entry in `modelProviders.openai` in `~/.qwen/settings.json`, with `envKey` and `baseUrl: "<llm>/v1"`. The schema differs between versions. [Vendor page](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/model-providers/).
 - **Crush**: a provider with `type: "openai-compat"` and `base_url: "<llm>/v1"`. The file format is being replaced. [Project page](https://github.com/charmbracelet/crush).
-- **pi**: a provider with `baseUrl: "<llm>/v1"` and `api: "openai-completions"`. An open report (issue 3168) says custom providers can stop responding. [Vendor page](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/models.md).
 - **Warp**: a custom inference endpoint with the URL `<llm>/v1` and the key. Local agent runs only. [Vendor page](https://docs.warp.dev/agents/inference/custom-inference-endpoint/).
 
 Agents that should not work, or that we cannot say:
@@ -236,7 +358,7 @@ MCP gateway: some of these agents take a URL and a header. Use `<mcp>/mcp` with 
 
 ## Disconnect, check, revoke
 
-- `ambit disconnect claude-code` (or `codex`, `opencode`, `cursor`, or `--all`) removes exactly what `connect` added. An entry you changed after `connect` stays, and the command says so. **It does not revoke the key.** Revoke it in the console under **Keys** ([Personal API keys](../api-keys.md#revoke-a-key)).
+- `ambit disconnect claude-code` (or `codex`, `opencode`, `cursor`, `hermes`, `kilocode`, `pi`, or `--all`) removes exactly what `connect` added. An entry you changed after `connect` stays, and the command says so. **It does not revoke the key.** Revoke it in the console under **Keys** ([Personal API keys](../api-keys.md#revoke-a-key)).
 - Check: read the key without showing it, then call the gateway. The answer ends with `HTTP 200`. A wrong key gives `HTTP 403`. For Claude Code, call `/v1/messages` with `x-api-key: $KEY` and `anthropic-version: 2023-06-01`.
 
 ```sh

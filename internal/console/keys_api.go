@@ -38,6 +38,9 @@ type KeyView struct {
 	// inactivity (until comes from the owner's last sign-in, before the end date) or end-date.
 	Status       string `json:"status"`
 	StopsBecause string `json:"stopsBecause"`
+	// Service account keys only: the admin who issued the key, and when the exposure rule lowered its end date.
+	IssuedBy string     `json:"issuedBy,omitempty"`
+	Exposed  *time.Time `json:"exposed,omitempty"`
 }
 
 const stopsSoon = 7 * 24 * time.Hour
@@ -82,6 +85,7 @@ func (c *Catalog) registerKeys(mux *http.ServeMux, read func(func(http.ResponseW
 	mux.HandleFunc("GET /api/admin/keys", adminRead(c.allKeys))
 	mux.HandleFunc("DELETE /api/admin/keys/{id}", allow("only admins can revoke other people's keys",
 		func(w http.ResponseWriter, r *http.Request, s Session) { c.revokeKey(w, r, s, true) }, RoleAdmin))
+	c.registerServiceAccounts(mux, adminRead, allow)
 	mux.HandleFunc("GET /api/admin/key-events", adminRead(func(w http.ResponseWriter, r *http.Request, _ Session) {
 		ev, err := c.Keys.Events(r.Context())
 		if err != nil {
@@ -94,6 +98,13 @@ func (c *Catalog) registerKeys(mux *http.ServeMux, read func(func(http.ResponseW
 		mux.HandleFunc("POST /api/test/keys/{id}/expire", allow("only admins can use test hooks", c.expireKey, RoleAdmin))
 		mux.HandleFunc("POST /api/test/keys/reset-limits", allow("only admins can use test hooks", func(w http.ResponseWriter, _ *http.Request, _ Session) {
 			c.Keys.ResetLimitsForTest()
+			w.WriteHeader(http.StatusNoContent)
+		}, RoleAdmin))
+		mux.HandleFunc("POST /api/test/keys/repair", allow("only admins can use test hooks", func(w http.ResponseWriter, r *http.Request, _ Session) {
+			if _, err := c.Keys.Repair(r.Context()); err != nil {
+				keyErr(w, err)
+				return
+			}
 			w.WriteHeader(http.StatusNoContent)
 		}, RoleAdmin))
 	}
@@ -111,8 +122,15 @@ func keyErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrSignInAgain):
 		writeErr(w, http.StatusUnauthorized, err.Error())
-	case errors.Is(err, ErrKeysOff):
+	case errors.Is(err, ErrKeysOff), errors.Is(err, ErrServicesOff), errors.Is(err, ErrNameTaken):
 		writeErr(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrNoAccount):
+		writeErr(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, ErrTooManyAccounts), errors.Is(err, ErrTooManyAccountKeys):
+		writeErr(w, http.StatusTooManyRequests, err.Error())
+	case errors.Is(err, ErrDeleteIncomplete):
+		w.Header().Set("Retry-After", "15")
+		writeErr(w, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, ErrOffboarded):
 		writeErr(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, ErrTooMany), errors.Is(err, ErrTooFast):
@@ -148,7 +166,10 @@ func (c *Catalog) views(ctx context.Context, keys []Key, withOwner, lastUsed boo
 	out := make([]KeyView, 0, len(keys))
 	now := c.Keys.now()
 	for _, k := range keys {
-		v := KeyView{ID: k.ID, Name: k.Name, Prefix: k.Prefix, Scope: k.Scope, Created: k.Created, Expires: k.Expires, Until: k.Until}
+		v := KeyView{ID: k.ID, Name: k.Name, Prefix: k.Prefix, Scope: k.Scope, Created: k.Created, Expires: k.Expires, Until: k.Until, IssuedBy: k.IssuedBy}
+		if !k.Exposed.IsZero() {
+			v.Exposed = &k.Exposed
+		}
 		v.Status, v.StopsBecause = keyStatus(k, now)
 		if withOwner {
 			v.Owner = k.Email

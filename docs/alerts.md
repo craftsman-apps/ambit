@@ -21,6 +21,7 @@ alerts:
 | AmbitBudgetStoreDown | critical | the ratelimit service or Valkey had no ready pod for 1 minute (only with `limits.enabled`) | with `FailClosed` the gateway refuses LLM and MCP requests; with `FailOpen` requests pass uncounted |
 | AmbitAuditLogsDropped | critical | audit records failed to reach ClickHouse, or the collector refused them, in the last 10 minutes (only with `evidence.enabled`) | check ClickHouse first |
 | AmbitConsoleAuditSendFailed | warning | the console could not send records of MCP app requests, approvals, denials or refused attempts to the collector in the last 30 minutes (only with `evidence.enabled`). The requests and decisions happened; the Audit page and `otel_logs` miss these records | the `ServerRequest` objects still hold the requests and decisions: `kubectl -n <ns> get serverrequests`. Read why: `kubectl -n <ns> logs deploy/ambit-console`, then check the collector |
+| AmbitControllerRecordsDropped | warning | the controller dropped access snapshot records in the last 30 minutes (only with `evidence.enabled`). The rules were applied; an access review export for this time has a gap until the next change or the daily record at 00:05 UTC | `send_failed`: the collector was not reachable, read `kubectl -n <ns> logs deploy/ambit-otel-collector`. `queue_full`: more records than the controller can send. `too_large`: the AccessRules together are larger than 1 MiB, read `kubectl -n <ns> logs deploy/ambit-controller` |
 
 ## Finding what grew
 

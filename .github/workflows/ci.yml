@@ -387,6 +387,14 @@ jobs:
         with: { go-version-file: go.mod }
       - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with: { install_only: true }
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with: { version: v3.22.0 }   # Helm 3 for the first rollback; Helm 4 below for the second
+      - name: Helm 4 (checked against its published SHA-256)
+        run: |
+          v=v4.3.0; d="$RUNNER_TEMP/helm4"; mkdir -p "$d"; cd "$d"
+          curl -fsSLO "https://get.helm.sh/helm-$v-linux-amd64.tar.gz"
+          curl -fsSL "https://get.helm.sh/helm-$v-linux-amd64.tar.gz.sha256sum" | sha256sum --check --strict
+          tar xzf "helm-$v-linux-amd64.tar.gz" && mv linux-amd64/helm helm && ./helm version --short
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { name: images, path: "${{ runner.temp }}" }
       - name: The CLI (dev build), the branch images and the chart dependencies
@@ -394,9 +402,12 @@ jobs:
           go build -tags dev -o bin/ambit ./cmd/ambit
           gunzip -c "$RUNNER_TEMP/images.tar.gz" > "$RUNNER_TEMP/images.tar"
           mkdir -p charts/ambit/charts && cp "$RUNNER_TEMP"/thirdparty/charts/*.tgz charts/ambit/charts/
-      - name: ambit install, a second install refused, ambit uninstall
+      - name: ambit install --dry-run, install, a model call, upgrade, Helm 3 and 4 rollback, uninstall, then 0.4.0 by Helm and ambit upgrade
         env:
           CLI_ARCHIVES: "${{ runner.temp }}/images.tar ${{ runner.temp }}/thirdparty/agentgateway.tar"
+          HELM3: helm
+          HELM4: "${{ runner.temp }}/helm4/helm"
+          CLI_PREVIOUS: "0.4.0"
         run: test/cli-install.sh  # prints the cluster's pods itself on a failure
 
   # Spec 9.2a: an interrupted local up is repaired, and a cluster ambit did not create is refused.

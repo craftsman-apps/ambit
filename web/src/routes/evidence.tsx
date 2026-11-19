@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Shell } from "@/components/shell";
+import { sha256 } from "@/lib/sha256";
 
 type ExportInfo = { name: "access" | "offboarding" | "audit"; available: boolean; reason?: string };
 type HistoryRow = { at: string; admin: string; export: string; period: string; email?: string; rows: number; zipSha256: string; result: string; reason?: string };
@@ -33,11 +34,6 @@ const what: Record<ExportInfo["name"], { title: string; proves: string }> = {
   offboarding: { title: "Offboarding", proves: "Whether people who left lost access, and when: each offboarding record, the calls the gateway accepted after it (should be none), the app grants revoked and the key history." },
   audit: { title: "Audit log", proves: "Every call through the gateway in a period, by whom, with what result, refused calls and wrong keys included, with the records per day and the MCP app requests and decisions." },
 };
-
-async function sha256(b: Blob): Promise<string> {
-  const d = await crypto.subtle.digest("SHA-256", await b.arrayBuffer());
-  return [...new Uint8Array(d)].map((x) => x.toString(16).padStart(2, "0")).join("");
-}
 
 // Settings → Evidence (issue #89): one ZIP per export (CSV files and manifest.json with the SHA-256 of each file),
 // for an auditor. Admins only.

@@ -92,7 +92,9 @@ Approval does not give anyone access. An admin writes an access rule that names 
 | The `ServerRequest` object in the namespace `ambit-system` | Spec: the server name, the full server settings (the image digest or URL, the transport, the connection), the reason, and `requestedBy`. The creation time is the time of the request. Status: `decision` (`Approved` or `Denied`), `decidedBy`, `decidedAt`, `comment`, and in GitOps mode `pullRequest`, `pullRequestBranch` and `pullRequestBy` (the decision is set when the pull request is merged). Kubernetes refuses a change of the spec and a change of a decision. The object is kept after the decision. |
 | The `Server` object | The annotations `ambitproject.dev/requested-by`, `ambitproject.dev/approved-by` and `ambitproject.dev/server-request` (the name of the request). The console shows them as **Approved by** and "asked for by". |
 | The console | The **Decisions** list under the servers: who asked, who decided, the comment, and the pull request link. |
-| The log of the console pod | One line for each request, approval and denial, with the request, the server, the image or URL, and the emails. |
+| The log of the console pod | One line for each request, approval and denial, with the request, the server, the image or URL, and the emails. One warning line for each refused attempt. |
+| The **Audit** page and the ClickHouse table `otel_logs` (with `evidence.enabled: true`) | One record for each step: `requested`, `approved`, `denied`, `pull-request-opened` (GitOps mode) and `tools-approved`, and one for each refused attempt (`approve-refused`, `deny-refused`, `tools-approve-refused`) with the reason. Each record has the time, the person, their console role, the server, the request, who asked, the image or URL, and the comment. Kept for `evidence.retention` (default one year), also after the `ServerRequest` is deleted. See [MCP app requests and approvals](../compliance.md#mcp-app-requests-and-approvals). |
+| Kubernetes Events on the `ServerRequest` (or the `Server`, for tool approvals) | One Event for each step and each refused attempt, for example `ServerRequestApproved` or `ServerRequestApproveRefused`. Kubernetes keeps Events for one hour by default. |
 
 Read the records with `kubectl`:
 
@@ -107,11 +109,17 @@ NAME              SERVER   REQUESTED BY      DECISION   DECIDED BY
 jira-x7k2p        jira     user08@example.com   Approved   user10@example.com
 ```
 
-The **Audit** page does not list requests and decisions. It lists the calls that pass the gateway. After approval, calls to the new server's tools appear there. To answer "who approved this server and which image?", use the `ServerRequest`, the `Server` annotations or the **Decisions** list.
+To answer "who approved this server and which image?", open **Audit**, choose the search **MCP app requests and approvals**, and choose the dates. The email field is optional: with an email, the page lists the steps that person did and the steps on their requests. **Export CSV** saves the list. After approval, calls to the new server's tools appear in the search for one person, as for any other server.
+
+```sh
+kubectl -n ambit-system get events --field-selector involvedObject.name=jira-x7k2p
+```
+
+**Removing a server is not recorded on the Audit page.** The console has no action that removes an approved server. In GitOps mode you remove it with a pull request, and the Git history records it. Without GitOps you remove it with `kubectl`, and the Kubernetes audit log of your cluster records it (if your cluster has audit logging on).
 
 ## What was checked
 
-The screenshots were made with a mocked console API and made-up data. The request, approval and denial flow was read from the code and the unit tests. It was not run on a cluster, and the `kubectl` output above is an example.
+The screenshots were made with a mocked console API and made-up data. The `kubectl` output above is an example. The audit records were checked on a kind cluster (test step 4b, part 8): a request, a refused approval by a viewer, a refused self-approval, an approval, a refused second decision and a denial each became one record in `otel_logs` and on the Audit page, and one Kubernetes Event.
 
 ## Related
 

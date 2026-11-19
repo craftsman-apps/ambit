@@ -12,6 +12,7 @@ import (
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/controller"
+	"github.com/craftsman-apps/ambit/internal/otlplog"
 	"github.com/craftsman-apps/ambit/internal/xdscert"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -81,6 +82,21 @@ func main() {
 		log.Error(err, "create manager")
 		os.Exit(1)
 	}
+	// Access snapshots (evidence exports) go to the collector, like the gateway's records; no endpoint: off.
+	var snapshots *controller.Snapshots
+	if ep := os.Getenv("AMBIT_OTLP_ENDPOINT"); ep != "" {
+		exp, err := otlplog.New(ep, "ambit-controller", controller.RecordDropped)
+		if err != nil {
+			log.Error(err, "AMBIT_OTLP_ENDPOINT")
+			os.Exit(1)
+		}
+		defer exp.Close()
+		snapshots = &controller.Snapshots{Send: exp.Send}
+		if err := mgr.Add(snapshots); err != nil { // the daily record, on the leader
+			log.Error(err, "add access snapshots")
+			os.Exit(1)
+		}
+	}
 	listTools := controller.ListTools
 	if *consoleTools != "" {
 		listTools = controller.WithConsoleTools(controller.ListTools, controller.ConsoleTools{URL: *consoleTools})
@@ -88,7 +104,7 @@ func main() {
 	if err := (&controller.Reconciler{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), ListTools: listTools, Namespace: ns, Route: controller.RouteRef{Name: *route},
 		RateLimit: controller.RateLimit{Service: *rlService, Port: *rlPort, FailureMode: *rlFailure}, ToolsRefresh: *toolsRefresh, ArgumentLimits: *argLimits,
 		Classifier: controller.Classifier{Deployment: *routerDep, Replicas: int32(*routerReplicas)}, AccessMode: *accessMode,
-		Activation: activation}).SetupWithManager(mgr); err != nil {
+		Activation: activation, Snapshots: snapshots}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "set up controller")
 		os.Exit(1)
 	}

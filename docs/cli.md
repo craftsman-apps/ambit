@@ -26,6 +26,7 @@ description: Every command, flag and exit code of the ambit CLI, the checks of a
 | 0 | The command did what it says. For `ambit check`: no check failed (warnings and unknown results are allowed). |
 | 1 | A step failed, or (for `ambit check`) at least one check failed. |
 | 2 | Usage error: a bad flag, a missing file, a `--context` or `--kubeconfig` that you named and that does not exist (also for `ambit check`), or no `--yes` where the command must ask but there is no terminal. |
+| 3 | `ambit install` and `ambit upgrade` only: Ambit is installed and its workloads are ready, but a production check failed. |
 
 Every failure of `ambit local up` and the other commands prints a line `✗ <what> — <why>` and, on the next line, `next:` with the command to run or a page to read. If Docker is not running, `ambit local up` stops before it changes anything: the line reads `✗ Docker is not running — <why>`, and `next:` says `start Docker Desktop` (macOS and Windows) or `start Docker: sudo systemctl start docker` (Linux).
 
@@ -179,7 +180,7 @@ Without flags it runs the checks that apply: the pre-install group when Ambit is
 | ID | Group | Check | Source |
 |---|---|---|---|
 | R1 | pre | Kubernetes 1.30 or later | live objects |
-| R2 | pre | you can create CRDs, namespaces and ClusterRoles | live objects |
+| R2 | pre | you can create what an install creates: CRDs, namespaces, ClusterRoles, ClusterRoleBindings, ValidatingAdmissionPolicies and their bindings, and Deployments, Secrets, Services, ServiceAccounts, Roles and RoleBindings in the namespace | live objects |
 | R3 | pre | which of the releases `ambit-crds` and `ambit` are installed, and their versions | live objects |
 | R4 | pre | a default StorageClass when the chart's own ClickHouse is on | values (`-f`), live objects |
 | R5 | pre | the TLS Secret named in `gateway.tls.certificateSecret` exists | values (`-f`), live objects |
@@ -213,6 +214,52 @@ Without flags it runs the checks that apply: the pre-install group when Ambit is
 ### Permissions
 
 `ambit check` needs read access (`get`, `list`) to the Ambit objects (Models, Servers, AccessRules), Deployments, Pods, PodDisruptionBudgets and StorageClasses in the namespace, to CustomResourceDefinitions, and `get` on Secrets in the namespace: Helm keeps the release values in Secrets, P3 reads the TLS certificate, and P10 checks that each credentials Secret exists (without reading its values). The active checks need `create` on `pods/portforward`: the health probes, and P4 and P11 with `--deep`, which read the collector's metrics on port 8888 (one test call serves both). The mark-missing line under P11 needs `create` on `pods/exec` in the ClickHouse pod: it runs one `SELECT` there with the pod's own credentials, so the CLI never reads the ClickHouse password. With an external ClickHouse, or without that permission, the line is `?`; the Audit page shows the same count. R2 uses SelfSubjectAccessReviews, which every signed-in user may create. Without a permission, the check is `?` and names what is missing, for example `cannot get secrets in ambit-system`.
+
+## ambit install
+
+Installs Ambit on any cluster: the dependency CRDs (Gateway API, agentgateway, ToolHive), then the Helm releases `ambit-crds` and `ambit`. The result is two ordinary Helm releases, so `helm list`, `helm history`, `helm upgrade` and `helm rollback` keep working. The chart version is always the CLI's own version: to install another version of Ambit, use that version of the CLI.
+
+```sh
+ambit install -f values.yaml [--secret-file <secret>/<key>=<path>]... [--timeout 10m] [--chart-repo oci://...] [--registry-config <file>] [--yes]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `-f`, `--values <file>` | required | values file; may repeat (later files win, as in Helm) |
+| `--secret-file <secret>/<key>=<path>` | | create or update the Secret `<secret>` with the key `<key>` from the file's bytes before the install. May repeat. Only Secrets that the values name are accepted (see below). |
+| `--timeout <duration>` | `10m` | how long to wait for the workloads |
+| `--chart-repo <repository>` | `oci://ghcr.io/craftsman-apps/charts` | a mirror of the chart registry |
+| `--registry-config <file>` | Helm's | Helm registry login file, for a private mirror |
+
+Steps, each printed as one line with its duration:
+
+1. **Target.** It prints `Installing Ambit <version> into context <context> (<API server>), namespace <namespace>` and asks `Install? [y/N]`. Without a terminal, `--yes` is required (exit 2). If the context or its API server cannot be found in the kubeconfig, it stops with exit 1 before it asks.
+2. **Preflight.** The checks R1, R2, R4 and R5 of `ambit check --pre` (R5 is skipped when `--secret-file` writes the TLS Secret), and both charts render with your values. It stops (exit 1) when a Helm release of chart `ambit` or `ambit-crds` exists in any namespace (`use ambit upgrade`), also one left in `pending-install` or `pending-upgrade`. Without `list` on Secrets in all namespaces it checks the target namespace only, and says so. It also stops when the Deployment `ambit-console` exists without a Helm release: Ambit was installed by Argo CD or another tool, so change it there.
+3. **Secrets** from `--secret-file`.
+4. **Dependency CRDs**, by server-side apply with the field manager `ambit-cli`. A CRD that does not exist is created. A Gateway API CRD with a newer `gateway.networking.k8s.io/bundle-version` on the cluster is left alone, with a warning (another product, such as a service mesh, may own it). A Gateway API CRD with an older version, and an agentgateway or ToolHive CRD that differs from the one this CLI needs (found by a server-side dry run), is listed, and the CLI asks `Update these <n> CRDs? [y/N]`; `--yes` updates them. The answer `n` stops the install before anything is written.
+5. **Charts** `ambit-crds`, then `ambit`, exactly as `helm install` would install them (client-side apply, Helm's Secret storage), so Helm 3 and Helm 4 can read, upgrade and roll them back. A release left pending is never changed on its own.
+6. **Wait** for the workloads, with progress every 10 seconds.
+7. **Production checks**, the production group of `ambit check`. All pass: exit 0. Any fails: the failures are printed and the exit code is 3 (Ambit is installed and working; the setup is not production-ready yet).
+
+`--secret-file` reads the file, and the CLI redacts its content from every output line before it does anything else with it, also every line of a multi-line value such as a PEM key. It accepts only the Secret names that the values use: the `secretKeyRef` names in `dex.envVars`, `gateway.tls.certificateSecret`, `evidence.clickhouse.external.passwordSecret`, `limits.valkey.external.passwordSecret`, and `gitops.github.privateKeySecret` when `gitops.enabled` is true. A typo is a usage error (exit 2), so it never creates a stray Secret. The Secret is written with the Kubernetes API, not through Helm: the bytes are in no Helm release, `helm get values` cannot show them, and `helm uninstall` and `ambit uninstall` leave the Secret. An existing Secret gets only the given keys (a merge patch; the CLI never reads the Secret back, and its other keys and labels stay); a new one gets the label `ambitproject.dev/created-by=ambit-cli` (type `kubernetes.io/tls` for the TLS Secret, which needs `tls.crt` and `tls.key` in the same command). The namespace is created when it does not exist.
+
+`ambit install` needs what `helm install` needs: the permissions that R2 lists.
+
+## ambit uninstall
+
+Uninstalls the release `ambit`, then `ambit-crds`, from the namespace. The releases are found by chart name, so an install made with `helm install` and other release names is found too; two releases of one chart stop the command (exit 1). It never deletes CRDs or the objects people wrote (the CRDs carry `helm.sh/resource-policy: keep`).
+
+On a terminal you confirm by typing the context name: a `y` is too easy for a command that stops every gateway. Without a terminal, `--yes` is required (exit 2). Afterwards it prints what stays and how to remove it:
+
+```
+✓ Uninstalled ambit (revision 7) and ambit-crds (revision 3) from context prod-eu, namespace ambit-system
+Left in the cluster (by design):
+  CRDs and your objects: kubectl get crd -o name | grep ambitproject.dev
+  ConfigMap ambit-access-mode: kubectl delete configmap -n ambit-system ambit-access-mode
+  ClickHouse volumes (audit records): kubectl get pvc -n ambit-system
+  Secrets that ambit install --secret-file wrote: kubectl get secret -n ambit-system -l ambitproject.dev/created-by=ambit-cli
+  Dependency CRDs (Gateway API, agentgateway, ToolHive): other products may use them; delete only if none does
+```
 
 ## ambit validate
 

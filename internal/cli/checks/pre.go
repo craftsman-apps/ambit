@@ -39,13 +39,23 @@ func r1KubeVersion(_ context.Context, e *Env) Result {
 	return res(Pass, "live objects", "Kubernetes %s.%s (%s or later is required)", v.Major, strings.TrimSuffix(v.Minor, "+"), MinKubernetes)
 }
 
-// R2: the user can create CRDs, namespaces and ClusterRoles (SelfSubjectAccessReview).
+// R2: the user can create what `helm install` of both charts creates (SelfSubjectAccessReview): CRDs, the
+// namespace, cluster-wide RBAC and admission policies, and the namespaced objects (spec D2 5.1).
 func r2Permissions(ctx context.Context, e *Env) Result {
 	var missing []string
 	for _, a := range []authv1.ResourceAttributes{
 		{Verb: "create", Group: "apiextensions.k8s.io", Resource: "customresourcedefinitions"},
 		{Verb: "create", Resource: "namespaces"},
 		{Verb: "create", Group: "rbac.authorization.k8s.io", Resource: "clusterroles"},
+		{Verb: "create", Group: "rbac.authorization.k8s.io", Resource: "clusterrolebindings"},
+		{Verb: "create", Group: "admissionregistration.k8s.io", Resource: "validatingadmissionpolicies"},
+		{Verb: "create", Group: "admissionregistration.k8s.io", Resource: "validatingadmissionpolicybindings"},
+		{Verb: "create", Group: "apps", Resource: "deployments", Namespace: e.Namespace},
+		{Verb: "create", Resource: "secrets", Namespace: e.Namespace},
+		{Verb: "create", Resource: "services", Namespace: e.Namespace},
+		{Verb: "create", Resource: "serviceaccounts", Namespace: e.Namespace},
+		{Verb: "create", Group: "rbac.authorization.k8s.io", Resource: "roles", Namespace: e.Namespace},
+		{Verb: "create", Group: "rbac.authorization.k8s.io", Resource: "rolebindings", Namespace: e.Namespace},
 	} {
 		a := a
 		r, err := e.Kube.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx,
@@ -54,14 +64,18 @@ func r2Permissions(ctx context.Context, e *Env) Result {
 			return unknownFor(err, "create", "selfsubjectaccessreviews", "", "live objects")
 		}
 		if !r.Status.Allowed {
-			missing = append(missing, a.Verb+" "+a.Resource)
+			m := a.Verb + " " + a.Resource
+			if a.Namespace != "" {
+				m += " in " + a.Namespace
+			}
+			missing = append(missing, m)
 		}
 	}
 	if len(missing) > 0 {
 		return res(Fail, "live objects", "you cannot %s", strings.Join(missing, ", ")).
 			next("installing Ambit needs cluster-admin or an equal role")
 	}
-	return res(Pass, "live objects", "you can create CRDs, namespaces and ClusterRoles")
+	return res(Pass, "live objects", "you can create CRDs, the namespace, cluster RBAC, admission policies and the objects in %s", e.Namespace)
 }
 
 // R3: which releases are installed.

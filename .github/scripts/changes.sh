@@ -38,7 +38,7 @@ while IFS= read -r f; do
     # internal/cli/checks tests read the charts.
     charts/*) add $IMAGE cli_unit ;;
     Dockerfile | .dockerignore | Makefile | hack/*) add $IMAGE ;;
-    test/cli-local.sh | test/cli-partial.sh) add build cli_kind ;;
+    test/cli-local.sh | test/cli-partial.sh | test/cli-install.sh) add build cli_kind ;;
     test/quickstart.sh) add build quickstart ;;
     test/lib.sh) add build quickstart e2e ;;
     test/chart.sh | test/alerts.sh | test/alerts/*) add build ;;

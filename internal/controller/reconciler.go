@@ -76,6 +76,8 @@ type Reconciler struct {
 	AccessMode string
 	// Activation is the gate each step of a mode switch or rules change waits on; nil: no gate.
 	Activation *Activation
+	// Snapshots records the AccessRules in force in otel_logs for evidence exports; nil: off (no evidence store).
+	Snapshots *Snapshots
 
 	stalled   *stalledStep                // the step a change stopped at (single worker, no lock)
 	gateRetry time.Duration               // the last wait before trying a stopped change again
@@ -384,6 +386,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		if err := r.publishMode(ctx, mode, version); err != nil {
 			return reconcile.Result{}, err
 		}
+		r.Snapshots.Observe(ctx, mode, version, rules.Items) // the rules that now decide requests
 	} else {
 		reason := "RulesNotActive"
 		if published.Data["mode"] != "" && published.Data["mode"] != mode {

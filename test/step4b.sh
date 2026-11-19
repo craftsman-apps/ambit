@@ -106,7 +106,7 @@ reason=$(field '[e["reason"] for e in d["events"] if e["action"] == "approve-ref
   fail "8 email filter: $(head -c 400 "$W/api")"
 n=$(ch "SELECT count() FROM otel.otel_logs WHERE LogAttributes['ambit.kind'] = 'app-approval' AND LogAttributes['ambit.app.request'] = '$REQ' AND LogAttributes['jwt.email'] = ''")
 [[ "$n" == 4 ]] || fail "8 otel_logs rows for $REQ: $n (want requested, approve-refused, approved, deny-refused)"
-ev=$(kubectl -n "$NS" get events --field-selector "involvedObject.name=$REQ" -o jsonpath='{range .items[*]}{.reason}{" "}{end}' | tr ' ' '\n' | sort | xargs)
+ev=$(kubectl -n "$NS" get events --field-selector "involvedObject.name=$REQ" -o jsonpath='{range .items[*]}{.reason}{" "}{end}' | tr ' ' '\n' | LC_ALL=C sort | xargs)
 [[ "$ev" == "ServerRequestApproveRefused ServerRequestApproved ServerRequestDenyRefused ServerRequested" ]] || fail "8 Kubernetes Events on $REQ: $ev"
 sign_in keycloak user01 user01-test-pass
 [[ $(api GET "/api/audit?approvals=true") == 403 ]] || fail "8 a viewer could read the approval records"

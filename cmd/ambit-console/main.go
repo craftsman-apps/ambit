@@ -355,8 +355,20 @@ func run(ctx context.Context) error {
 	if bootstrapAdmin {
 		loginOpts.Namespace = ns
 	}
+	var evidence *console.EvidenceExports
+	if os.Getenv("AMBIT_EVIDENCE_EXPORTS") == "true" {
+		maxRows, err := strconv.ParseInt(env("AMBIT_EVIDENCE_MAX_ROWS", "5000000"), 10, 64)
+		if err != nil || maxRows < 1 {
+			return fmt.Errorf("AMBIT_EVIDENCE_MAX_ROWS %q is not a positive number", os.Getenv("AMBIT_EVIDENCE_MAX_ROWS"))
+		}
+		maxDays, err := strconv.Atoi(env("AMBIT_EVIDENCE_MAX_DAYS", "366"))
+		if err != nil || maxDays < 1 {
+			return fmt.Errorf("AMBIT_EVIDENCE_MAX_DAYS %q is not a positive number", os.Getenv("AMBIT_EVIDENCE_MAX_DAYS"))
+		}
+		evidence = &console.EvidenceExports{MaxRows: maxRows, MaxDays: maxDays, Retention: env("AMBIT_EVIDENCE_RETENTION", "8760h"), Version: os.Getenv("AMBIT_VERSION")}
+	}
 	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), loginOpts,
-		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, AppAudit: appAudit, Budgets: budgets, Dependencies: deps, AccessMode: os.Getenv("AMBIT_ACCESS_MODE"), Prices: prices, Tools: reader, Presets: catalogPresets,
+		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, AppAudit: appAudit, Evidence: evidence, Budgets: budgets, Dependencies: deps, AccessMode: os.Getenv("AMBIT_ACCESS_MODE"), Prices: prices, Tools: reader, Presets: catalogPresets,
 			Groups: groupStore, Keys: keySvc, LLMURL: os.Getenv("AMBIT_LLM_URL"), MCPURL: os.Getenv("AMBIT_MCP_URL")}), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()

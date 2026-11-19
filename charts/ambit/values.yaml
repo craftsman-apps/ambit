@@ -201,6 +201,12 @@ evidence:
   # How long the daily summaries behind the Savings page are kept (counts only: no email, no content; group names are
   # the only identifying text). Rounded up to whole days, at least 24h. A change applies at the next console start.
   summaryRetention: 26280h  # three years
+  # Settings → Evidence: ZIP files for an auditor (CSV files and a manifest with SHA-256), admins only. The audit
+  # export and the audit columns of the other exports need evidence.enabled.
+  exports:
+    enabled: true
+    maxRows: 5000000  # an export with more rows is refused (413): split the period
+    maxDays: 366      # the longest period of one export
   clickhouse:
     image: clickhouse/clickhouse-server:26.3.36.6@sha256:5b10577fc3382ee6b26c4916a1d915d90543ade66e85fc29e3a78c4ce08daeb3
     storage: 10Gi

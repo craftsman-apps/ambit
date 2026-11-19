@@ -35,7 +35,7 @@ The CLI never prints the OpenRouter key, the admin password or tokens: one outpu
 
 ## ambit local up
 
-Creates a local Ambit on a kind cluster, or repairs one that `ambit local up` created. Press Ctrl+C once to stop (the command says how to remove a cluster it created); press it a second time to end the process at once. Steps: preflight (the `L` checks below), cluster, the third-party CRDs, the charts `ambit-crds` and `ambit` (with progress every 10 seconds), a model, the access rule `everyone-local`, a test call, and a summary. See [Install locally by hand](local-up.md) for each object.
+Creates a local Ambit on a kind cluster, or repairs one that `ambit local up` created. Press Ctrl+C once to stop (the command says how to remove a cluster it created); press it a second time to end the process at once. Steps: preflight (the `L` checks below), cluster, the third-party CRDs, the charts `ambit-crds` and `ambit` (with progress every 10 seconds), a model, the access rule `everyone-local`, a test call, and a summary. See [Install locally by hand](install-by-hand.md) for each object.
 
 | Flag | Default | Meaning |
 |---|---|---|
@@ -62,7 +62,7 @@ Deletes the kind cluster that `ambit local up` created, after it asks (`--yes` s
 
 Prints the password of `admin@ambit.local` of the local cluster. Flag: `--name`.
 
-`local up` repair, `local down` and `local password` act only on a cluster with both marks of `ambit local up`, a state file and a node label; see [A cluster that ambit did not create](local-up.md#a-cluster-that-ambit-did-not-create).
+`local up` repair, `local down` and `local password` act only on a cluster with both marks of `ambit local up`, a state file and a node label; see [A cluster that ambit did not create](install-by-hand.md#a-cluster-that-ambit-did-not-create).
 
 ## ambit connect
 

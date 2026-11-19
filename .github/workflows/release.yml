@@ -130,12 +130,12 @@ jobs:
         if: ${{ !contains(github.ref_name, '-') }}
         run: node scripts/homebrew/formula.mjs --checksums dist/checksums.txt --version "${GITHUB_REF_NAME#v}" --out "$RUNNER_TEMP/ambit.rb"
 
-  # Homebrew (a formula) and npm. Runs in the Environment release-channels, so a maintainer approves each release first. A
+  # Homebrew (a formula), npm, Scoop and winget. Runs in the Environment release-channels, so a maintainer approves each release first. A
   # failure here does not undo the GitHub release; both steps are safe to re-run (the job can be re-run alone).
   cli-channels:
     needs: cli
     # Prerelease tags (a '-' in the tag) and stable tags below the highest one (a re-run of an old release) are not
-    # published to Homebrew or npm; the cli job logs that.
+    # published to Homebrew, npm, Scoop or winget; the cli job logs that.
     if: ${{ !contains(github.ref_name, '-') && needs.cli.outputs.highest == 'true' }}
     runs-on: ubuntu-latest
     environment: release-channels
@@ -147,6 +147,13 @@ jobs:
       - name: The release's archives and checksums.txt, as published
         env: { GH_TOKEN: "${{ github.token }}" }
         run: gh release download "$GITHUB_REF_NAME" -p 'ambit_*' -p checksums.txt -D rel
+      # A SHA-256 is only as good as the checksums.txt it is read from (spec D2 5.4). The cli job attested checksums.txt;
+      # this proves that the file was made by this repository's release workflow, before any channel is written from it.
+      - name: checksums.txt was made by this repository's release workflow (build provenance)
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh attestation verify rel/checksums.txt --repo craftsman-apps/ambit \
+            --signer-workflow craftsman-apps/ambit/.github/workflows/release.yml
       # Every downloaded archive must match the release's checksums.txt before anything is published from it,
       # and all six archives must be there (the formula pins four, npm uses six).
       - name: The downloaded archives match checksums.txt
@@ -191,3 +198,91 @@ jobs:
         # has published through trusted publishing; then delete it (docs/maintainers/release-checklist.md).
         env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
         run: node scripts/npm/publish.mjs --dir rel --version "${GITHUB_REF_NAME#v}" --out npm-out --publish
+      # Scoop (spec D2 8.2): the manifest from the verified checksums.txt, pushed to the bucket craftsman-apps/scoop-ambit.
+      # Skipped, with a notice, until the bucket and its token exist (owner actions O1 and O2).
+      - name: Scoop bucket (craftsman-apps/scoop-ambit)
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
+        env: { BUCKET_TOKEN: "${{ secrets.SCOOP_BUCKET_TOKEN }}" }  # fine-grained, contents:write on that repository only
+        run: |
+          node scripts/scoop/manifest.mjs --checksums rel/checksums.txt --version "${GITHUB_REF_NAME#v}" --out scoop/ambit.json
+          if [ -z "$BUCKET_TOKEN" ]; then echo "::notice::SCOOP_BUCKET_TOKEN is not set: Scoop skipped (owner actions O1, O2)"; exit 0; fi
+          echo "::add-mask::$(printf 'x-access-token:%s' "$BUCKET_TOKEN" | base64 -w0)"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+          GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$BUCKET_TOKEN" | base64 -w0)"
+          export GIT_CONFIG_VALUE_0
+          git clone --depth 1 https://github.com/craftsman-apps/scoop-ambit.git bucket
+          mkdir -p bucket/bucket && cp scoop/ambit.json bucket/bucket/ambit.json
+          cd bucket
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bucket/ambit.json
+          git diff --cached --quiet || { git commit -m "ambit ${GITHUB_REF_NAME}" && git push; }
+      # winget (spec D2 8.3): Komac, pinned by version and SHA-256, opens a pull request in microsoft/winget-pkgs from
+      # the fork of WINGET_TOKEN's bot account (owner action O4). Skipped, with a notice, until the token exists and
+      # the first version is merged (owner action O3, .github/workflows/winget-first.yml). The release does not wait
+      # for Microsoft's review.
+      - name: winget pull request (Komac)
+        if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
+        env: { GITHUB_TOKEN: "${{ secrets.WINGET_TOKEN }}" }  # classic public_repo token of the bot account; read by Komac
+        run: |
+          if [ -z "$GITHUB_TOKEN" ]; then echo "::notice::WINGET_TOKEN is not set: winget skipped (owner action O4)"; exit 0; fi
+          if [ "$(curl -s -o /dev/null -w '%{http_code}' https://api.github.com/repos/microsoft/winget-pkgs/contents/manifests/c/CraftsmanApps/Ambit)" != 200 ]; then
+            echo "::notice::CraftsmanApps.Ambit is not in microsoft/winget-pkgs yet: run the winget-first workflow (owner action O3)"; exit 0
+          fi
+          v=2.17.2; d="$RUNNER_TEMP/komac"; mkdir -p "$d"
+          curl -fsSL "https://github.com/russellbanks/Komac/releases/download/v$v/komac-$v-x86_64-unknown-linux-gnu.tar.gz" -o "$d/komac.tgz"
+          echo "b03b020eec98acfb0b53e284a6e21815b884be33de6785b97e7a120f0e748966  $d/komac.tgz" | sha256sum --check --strict
+          tar xzf "$d/komac.tgz" -C "$d"
+          R="https://github.com/craftsman-apps/ambit/releases/download/$GITHUB_REF_NAME"
+          "$(find "$d" -type f -name komac | head -1)" update CraftsmanApps.Ambit --version "${GITHUB_REF_NAME#v}" \
+            --urls "$R/ambit_windows_amd64.zip" "$R/ambit_windows_arm64.zip" --submit
+
+  # The Windows channels on a Windows machine (in place of a hand test; the owner has no Windows machine): the
+  # release zip, install.ps1, scoop install from the bucket, and winget validate of the manifests.
+  cli-windows:
+    needs: cli-channels
+    if: ${{ !cancelled() && needs.cli-channels.result == 'success' }}
+    runs-on: windows-latest
+    permissions: { contents: read }
+    defaults: { run: { shell: pwsh } }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: 26 }
+      - name: The zip from the release, checked against checksums.txt and its attestation, runs
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          $ErrorActionPreference = 'Stop'
+          gh release download $env:GITHUB_REF_NAME -p ambit_windows_amd64.zip -p checksums.txt -D rel
+          gh attestation verify rel/ambit_windows_amd64.zip --repo craftsman-apps/ambit --signer-workflow craftsman-apps/ambit/.github/workflows/release.yml
+          $want = (Select-String -Path rel/checksums.txt -Pattern ' ambit_windows_amd64.zip$').Line.Split(' ')[0]
+          $got = (Get-FileHash rel/ambit_windows_amd64.zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $want) { throw "SHA-256 $got, checksums.txt says $want" }
+          Expand-Archive rel/ambit_windows_amd64.zip -DestinationPath zip
+          $v = & zip/ambit.exe version --kubeconfig NUL
+          if (-not ($v -match [regex]::Escape("ambit $($env:GITHUB_REF_NAME.TrimStart('v'))"))) { throw "zip: $v" }
+      - name: install.ps1 installs the release
+        run: |
+          $ErrorActionPreference = 'Stop'
+          irm https://ambitproject.dev/install.ps1 | iex
+          $exe = (Get-Command ambit -ErrorAction SilentlyContinue).Source
+          if (-not $exe) { $exe = Join-Path $env:LOCALAPPDATA 'ambit\bin\ambit.exe' }
+          $v = & $exe version --kubeconfig NUL
+          if (-not ($v -match [regex]::Escape("ambit $($env:GITHUB_REF_NAME.TrimStart('v'))"))) { throw "install.ps1: $v" }
+      - name: scoop install ambit/ambit (skipped until the bucket exists, owner action O1)
+        run: |
+          $ErrorActionPreference = 'Stop'
+          try { Invoke-WebRequest -Method Head https://github.com/craftsman-apps/scoop-ambit | Out-Null } catch { Write-Output "::notice::the bucket craftsman-apps/scoop-ambit does not exist yet: Scoop skipped"; exit 0 }
+          irm get.scoop.sh -OutFile scoop-install.ps1
+          ./scoop-install.ps1 -RunAsAdmin
+          $env:PATH = "$env:USERPROFILE\scoop\shims;$env:PATH"
+          scoop bucket add ambit https://github.com/craftsman-apps/scoop-ambit
+          scoop install ambit/ambit
+          $v = ambit version --kubeconfig NUL
+          if (-not ($v -match [regex]::Escape("ambit $($env:GITHUB_REF_NAME.TrimStart('v'))"))) { throw "scoop: $v" }
+      - name: winget validate of the manifests (when winget is on the runner image)
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/winget/manifest.mjs --checksums rel/checksums.txt --version $env:GITHUB_REF_NAME.TrimStart('v') --out winget
+          if (Get-Command winget -ErrorAction SilentlyContinue) { winget validate --manifest winget } else { Write-Output "::notice::winget is not on this runner image: validate skipped" }

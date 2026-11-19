@@ -28,7 +28,13 @@ deploys nothing.
 2. Push the tag on that commit: `git tag v0.2.0 <commit>` then `git push origin v0.2.0`. The `release` workflow
    publishes the image, the charts and the CLI; the `site` workflow deploys ambitproject.dev from the same commit.
    A prerelease tag (`v0.2.0-rc.1`) publishes to GitHub only and does not deploy the site.
-3. Approve the `cli-channels` job (Homebrew and npm) after the checksum check passes.
+3. Approve the `cli-channels` job (Homebrew, npm, Scoop and winget) after the checksum check passes. Before it
+   writes any channel, the job proves with `gh attestation verify` that `checksums.txt` was made by this repository's
+   release workflow. Only the highest stable tag reaches the channels: a re-run of an older tag's workflow is not
+   marked latest and skips `cli-channels` (#108 W2).
+   Then the `cli-windows` job checks the Windows channels on a Windows runner: the release zip, `install.ps1`,
+   `scoop install ambit/ambit` and `winget validate` of the manifests.
+   Record here: "winget PR merged (link)". The release does not wait for Microsoft's review.
 
 4. After the release: `cosign verify` from `docs/compliance.md` (Supply chain) passes for the new image tag.
 
@@ -70,3 +76,20 @@ Do these once, before the tag `v0.2.0` is pushed. `v0.1.0` had no CLI, so none o
    - Create the npm organization `craftsman-apps` and a granular token with read and write on `@craftsman-apps`; store it as the secret `NPM_TOKEN` in `release-channels` (the npm step passes it as `NODE_AUTH_TOKEN`). Trusted publishing can replace it after the first release.
    - Make `cli-unit`, `cli-local` and `cli-partial` required checks of `main`.
 3. At the first tag, confirm in the `cli` job log that `attest-build-provenance` attested every archive (its `subject-path` is a comma-separated list, which runs for the first time there): `gh attestation verify <archive> --repo craftsman-apps/ambit` passes for one archive of each system.
+
+## Scoop and winget (spec D2 8.4)
+
+The owner has no Windows machine, so the Windows checks run on GitHub's `windows-latest` runners. Owner actions,
+once:
+
+| # | Action | Exact steps |
+|---|---|---|
+| O1 | Scoop bucket repository | GitHub, new repository `craftsman-apps/scoop-ambit`, public, with a README and an empty `bucket/` folder. |
+| O2 | Scoop token | GitHub, Settings, Developer settings, Fine-grained tokens, new token: resource owner `craftsman-apps`, only the repository `scoop-ambit`, permission Contents read and write, expiry 1 year. Save it as the secret `SCOOP_BUCKET_TOKEN` in Settings, Environments, `release-channels`. |
+| O4 | winget token | Create a bot GitHub account that the owner controls (two-factor sign-in) and that owns nothing else; fork `microsoft/winget-pkgs` with it. Create a classic token on it with only `public_repo`, expiry 1 year (fine-grained tokens cannot open pull requests in another owner's repository). Save it as `WINGET_TOKEN` in `release-channels`. Never the owner's own account: `public_repo` can write to every public repository the account can write to. |
+| O3 | First winget submission | After a stable release is published and O4 is done: Actions, `winget-first`, Run workflow, version `0.5.0`. It runs on `windows-latest`, checks the attestation of `checksums.txt`, writes the manifests (`scripts/winget/manifest.mjs`), runs `winget validate`, and opens the pull request with `wingetcreate submit`. Microsoft reviews it; expect days. |
+| O5 | Windows check | Each release: the `cli-windows` job of the release workflow (it replaces the hand test). Read its log. |
+
+Until O1 and O2 are done, the Scoop step and the Scoop part of `cli-windows` are skipped with a notice. Until O3
+is merged and O4 is done, the winget step is skipped with a notice. Later releases open their winget pull request
+with Komac from the `cli-channels` job, without a code change.

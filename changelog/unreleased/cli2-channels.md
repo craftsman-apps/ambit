@@ -1,0 +1,2 @@
+- CLI on Windows: `winget install CraftsmanApps.Ambit` and `scoop install ambit/ambit` (bucket `craftsman-apps/scoop-ambit`) install the same binary as the GitHub release, checked by SHA-256 (#78).
+- Release workflow: before any channel is written, `gh attestation verify` proves that `checksums.txt` was made by this repository's release workflow; a Windows job checks the zip, `install.ps1`, Scoop and the winget manifests (#78).

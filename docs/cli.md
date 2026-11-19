@@ -5,7 +5,7 @@ description: Every command, flag and exit code of the ambit CLI, the checks of a
 
 # CLI reference
 
-`ambit` starts a local Ambit on kind, checks an install, validates Ambit objects in files, and connects coding tools to Ambit. To install it, see [Quick start](quick-start.md). This page describes release 0.2.0.
+`ambit` starts a local Ambit on kind, installs, upgrades and uninstalls Ambit on any cluster, checks an install, validates Ambit objects in files, and connects coding tools to Ambit. To install it, see [Quick start](quick-start.md); on Windows, `winget install CraftsmanApps.Ambit` or `scoop bucket add ambit https://github.com/craftsman-apps/scoop-ambit` and `scoop install ambit/ambit`. This page describes release 0.2.0.
 
 ## Global flags
 

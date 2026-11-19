@@ -76,7 +76,7 @@ jobs:
       - name: Front end type-check and build
         run: cd web && npm ci --no-fund --no-audit && npm run build
       - name: npm packaging and Homebrew formula scripts (node:test)
-        run: node --test scripts/npm/ scripts/homebrew/
+        run: node --test scripts/npm/ scripts/homebrew/ scripts/scoop/ scripts/winget/
       - name: Go vet, unit and integration tests (envtest API server)
         run: go vet ./... && KUBEBUILDER_ASSETS="$(make -s envtest-assets)" go test -count=1 ./...
       - name: Result compression saves tokens (offline tokenizer)

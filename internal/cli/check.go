@@ -12,7 +12,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/yaml"
 
-	"github.com/craftsman-apps/ambit/internal/cli/assets"
 	"github.com/craftsman-apps/ambit/internal/cli/checks"
 	"github.com/craftsman-apps/ambit/internal/cli/helmx"
 	"github.com/craftsman-apps/ambit/internal/cli/kube"
@@ -110,15 +109,8 @@ func (a *app) check(ctx context.Context, f checkFlags) error {
 	}
 	token := os.Getenv("AMBIT_TOKEN")
 	p.Redactor().Add(token)
-	e := &checks.Env{Kube: c.Kube, Ctrl: c.Ctrl, Helm: h, Namespace: a.g.namespace, Context: c.Context, ValuesFile: valuesFile,
-		CRDBundle: assets.CRDBundle(), Deep: f.deep, Token: token, HTTP: &http.Client{Timeout: 30 * time.Second},
-		Now: time.Now,
-		Forward: func(ctx context.Context, sel string, port int) (int, func(), error) {
-			return kube.Forward(ctx, c, a.g.namespace, sel, port)
-		},
-		Exec: func(ctx context.Context, sel string, cmd []string) (string, error) {
-			return kube.Exec(ctx, c, a.g.namespace, sel, cmd)
-		}}
+	e := a.checksEnv(c, h, valuesFile)
+	e.Deep, e.Token = f.deep, token
 
 	installed, consoleURL := false, ""
 	if r, err := h.Get("ambit"); err == nil && r != nil {
@@ -195,6 +187,9 @@ func (a *app) finishCheck(ctx context.Context, f checkFlags, groups map[string]b
 	}
 	return nil
 }
+
+// newCheckHTTP is the HTTP client of the checks' probes and --deep calls.
+func newCheckHTTP() *http.Client { return &http.Client{Timeout: 30 * time.Second} }
 
 // explicitTargetError is the usage error for a --kubeconfig or --context that cannot be used.
 func explicitTargetError(kubeconfig, kctx string, connErr error) error {

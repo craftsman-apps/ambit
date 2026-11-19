@@ -10,7 +10,9 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"github.com/craftsman-apps/ambit/internal/cli/checks"
 	"github.com/craftsman-apps/ambit/internal/cli/helmx"
+	"github.com/craftsman-apps/ambit/internal/cli/kube"
 	"github.com/craftsman-apps/ambit/internal/cli/local"
 	"github.com/craftsman-apps/ambit/internal/cli/out"
 )
@@ -40,6 +42,11 @@ type app struct {
 	testConnect *connectDeps
 	// cmd is the path of the command that runs, e.g. "ambit key print". Known from before its flags are checked.
 	cmd string
+	// testKube replaces the Kubernetes clients of install, upgrade and uninstall in tests (the kubeconfig still
+	// names the target). testChecks replaces the check catalogue there. testTTY makes standard input a terminal.
+	testKube   *kube.Clients
+	testChecks func(groups map[string]bool) []checks.Result
+	testTTY    bool
 }
 
 // exitCode ends a command with a code after it printed its own result (e.g. check with a failed check).
@@ -147,6 +154,7 @@ func (a *app) root() *cobra.Command {
 	f.StringVar(&a.g.output, "output", "text", "output format: text or json (check and version only)")
 	f.BoolVar(&a.g.noColor, "no-color", false, "no colour in the output")
 	f.BoolVar(&a.g.verbose, "verbose", false, "print library logs (secrets are redacted)")
-	root.AddCommand(a.validateCmd(), a.lintCmd(), a.versionCmd(), a.localCmd(), a.checkCmd(), a.keyCmd(), a.connectCmd(), a.disconnectCmd())
+	root.AddCommand(a.validateCmd(), a.lintCmd(), a.versionCmd(), a.localCmd(), a.checkCmd(), a.keyCmd(), a.connectCmd(), a.disconnectCmd(),
+		a.installCmd(), a.uninstallCmd())
 	return root
 }

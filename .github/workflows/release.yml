@@ -199,13 +199,14 @@ jobs:
         env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
         run: node scripts/npm/publish.mjs --dir rel --version "${GITHUB_REF_NAME#v}" --out npm-out --publish
       # Scoop (spec D2 8.2): the manifest from the verified checksums.txt, pushed to the bucket craftsman-apps/scoop-ambit.
-      # Skipped, with a notice, until the bucket and its token exist (owner actions O1 and O2).
+      # Skipped, with a notice and before anything else, until the bucket and its token exist (owner actions O1 and O2);
+      # .github/scripts/release-skip_test.sh runs the skip paths.
       - name: Scoop bucket (craftsman-apps/scoop-ambit)
         if: ${{ !cancelled() && steps.verify.outcome == 'success' }}
         env: { BUCKET_TOKEN: "${{ secrets.SCOOP_BUCKET_TOKEN }}" }  # fine-grained, contents:write on that repository only
         run: |
-          node scripts/scoop/manifest.mjs --checksums rel/checksums.txt --version "${GITHUB_REF_NAME#v}" --out scoop/ambit.json
           if [ -z "$BUCKET_TOKEN" ]; then echo "::notice::SCOOP_BUCKET_TOKEN is not set: Scoop skipped (owner actions O1, O2)"; exit 0; fi
+          node scripts/scoop/manifest.mjs --checksums rel/checksums.txt --version "${GITHUB_REF_NAME#v}" --out scoop/ambit.json
           echo "::add-mask::$(printf 'x-access-token:%s' "$BUCKET_TOKEN" | base64 -w0)"
           export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
           GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$BUCKET_TOKEN" | base64 -w0)"
@@ -269,10 +270,21 @@ jobs:
           if (-not $exe) { $exe = Join-Path $env:LOCALAPPDATA 'ambit\bin\ambit.exe' }
           $v = & $exe version --kubeconfig NUL
           if (-not ($v -match [regex]::Escape("ambit $($env:GITHUB_REF_NAME.TrimStart('v'))"))) { throw "install.ps1: $v" }
-      - name: scoop install ambit/ambit (skipped until the bucket exists, owner action O1)
+      # Skipped, with a notice, until the bucket holds the manifest of this version (owner actions O1 and O2; the
+      # Scoop step of cli-channels writes it). .github/scripts/release-skip_test.sh runs the skip path.
+      - name: scoop install ambit/ambit (skipped until the bucket has this version, owner actions O1, O2)
+        env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           $ErrorActionPreference = 'Stop'
-          try { Invoke-WebRequest -Method Head https://github.com/craftsman-apps/scoop-ambit | Out-Null } catch { Write-Output "::notice::the bucket craftsman-apps/scoop-ambit does not exist yet: Scoop skipped"; exit 0 }
+          $want = $env:GITHUB_REF_NAME.TrimStart('v')
+          try {
+            $f = Invoke-RestMethod -Headers @{ Authorization = "Bearer $env:GH_TOKEN" } https://api.github.com/repos/craftsman-apps/scoop-ambit/contents/bucket/ambit.json
+            $have = ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($f.content)) | ConvertFrom-Json).version
+          } catch { $have = $null }
+          if ($have -ne $want) {
+            Write-Output "::notice::craftsman-apps/scoop-ambit has no bucket/ambit.json of version $want (found: $(if ($have) { $have } else { 'none' })): scoop install skipped (owner actions O1, O2)"
+            exit 0
+          }
           irm get.scoop.sh -OutFile scoop-install.ps1
           ./scoop-install.ps1 -RunAsAdmin
           $env:PATH = "$env:USERPROFILE\scoop\shims;$env:PATH"

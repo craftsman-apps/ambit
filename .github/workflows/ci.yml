@@ -43,6 +43,8 @@ jobs:
         run: .github/scripts/changes_test.sh
       - name: The release workflow's highest-tag guard passes its tests
         run: .github/scripts/highest-tag_test.sh
+      - name: The Scoop and winget steps of the release skip, with exit 0, without their secrets
+        run: .github/scripts/release-skip_test.sh
 
   build:
     needs: changes

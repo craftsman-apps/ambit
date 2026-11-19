@@ -90,6 +90,15 @@ once:
 | O3 | First winget submission | After a stable release is published and O4 is done: Actions, `winget-first`, Run workflow, version `0.5.0`. It runs on `windows-latest`, checks the attestation of `checksums.txt`, writes the manifests (`scripts/winget/manifest.mjs`), runs `winget validate`, and opens the pull request with `wingetcreate submit`. Microsoft reviews it; expect days. |
 | O5 | Windows check | Each release: the `cli-windows` job of the release workflow (it replaces the hand test). Read its log. |
 
-Until O1 and O2 are done, the Scoop step and the Scoop part of `cli-windows` are skipped with a notice. Until O3
-is merged and O4 is done, the winget step is skipped with a notice. Later releases open their winget pull request
-with Komac from the `cli-channels` job, without a code change.
+Until these actions are done, the release skips the channel with a notice and does not fail (the test
+`.github/scripts/release-skip_test.sh` runs these paths in CI). The notices in the release log:
+
+| Missing | Job, step | Notice |
+|---|---|---|
+| O1 or O2 | `cli-channels`, Scoop bucket | `SCOOP_BUCKET_TOKEN is not set: Scoop skipped (owner actions O1, O2)` |
+| O1 or O2 | `cli-windows`, scoop install | `craftsman-apps/scoop-ambit has no bucket/ambit.json of version <version> (found: none): scoop install skipped (owner actions O1, O2)` |
+| O4 | `cli-channels`, winget pull request | `WINGET_TOKEN is not set: winget skipped (owner action O4)` |
+| O3 | `cli-channels`, winget pull request | `CraftsmanApps.Ambit is not in microsoft/winget-pkgs yet: run the winget-first workflow (owner action O3)` |
+
+After Microsoft merges the first pull request (O3), later releases open their winget pull request with Komac from
+the `cli-channels` job, without a code change.

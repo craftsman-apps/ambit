@@ -1,7 +1,7 @@
 // The per-tool setup text on the "key created" screen. Pure functions, so they run without a browser.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { toolTabs, isPublicHttps, nextTabId, usableModelIds, firstUseLine, keySetCommand, FIRST_USE_TIMEOUT_MS } from "../src/lib/tool-setup.ts";
+import { toolTabs, isPublicHttps, nextTabId, usableModelIds, firstUseLine, keySetCommand, plainHttpRemote, FIRST_USE_TIMEOUT_MS } from "../src/lib/tool-setup.ts";
 
 const setup = { llm: "https://llm.example.com", mcp: "https://mcp.example.com/mcp", key: "ambit_TESTKEY", model: "acme/model-1" };
 const tab = (id, scope = "both") => toolTabs(setup, scope).find((t) => t.id === id);
@@ -24,14 +24,14 @@ test("Claude Code: names the file, merges into env, sets the model variables, sa
   assert.match(prose, /\/status/);
 });
 
-test("tabs are Claude Code, Codex, opencode, Cursor, SDK, MCP in that order", () => {
-  assert.deepEqual(toolTabs(setup, "both").map((t) => t.id), ["claudeCode", "codex", "opencode", "cursor", "sdk", "mcp"]);
+test("tabs are Claude Code, Codex, opencode, Hermes Agent, Kilo Code, pi, Cursor, SDK, MCP in that order", () => {
+  assert.deepEqual(toolTabs(setup, "both").map((t) => t.id), ["claudeCode", "codex", "opencode", "hermes", "kilocode", "pi", "cursor", "sdk", "mcp"]);
   assert.deepEqual(toolTabs(setup, "both").map((t) => t.title),
-    ["Claude Code", "Codex", "opencode", "Cursor", "SDK", "MCP"]);
+    ["Claude Code", "Codex", "opencode", "Hermes Agent", "Kilo Code", "pi", "Cursor", "SDK", "MCP"]);
 });
 
 test("scope: llm keys get no MCP tab, mcp keys get only the MCP tab", () => {
-  assert.deepEqual(toolTabs(setup, "llm").map((t) => t.id), ["claudeCode", "codex", "opencode", "cursor", "sdk"]);
+  assert.deepEqual(toolTabs(setup, "llm").map((t) => t.id), ["claudeCode", "codex", "opencode", "hermes", "kilocode", "pi", "cursor", "sdk"]);
   assert.deepEqual(toolTabs(setup, "mcp").map((t) => t.id), ["mcp"]);
 });
 
@@ -201,6 +201,69 @@ test("first-use line: hidden, waiting, seen, timeout", () => {
   assert.equal(firstUseLine({ available: undefined, lastUsed: null, waitedMs: 0 }).kind, "waiting");
 });
 
+test("Hermes Agent: key_cmd runs ambit key print, the key is stored with ambit key set, no file holds it", () => {
+  const t = tab("hermes");
+  assert.equal(t.blocks[0].text, "ambit key set --url https://llm.example.com");
+  const yaml = t.blocks[1].text;
+  assert.match(t.blocks[1].label, /~\/\.hermes\/config\.yaml/);
+  assert.match(yaml, /^model:\n {2}provider: custom:ambit\n {2}default: acme\/model-1\n/);
+  assert.match(yaml, /\nproviders:\n {2}ambit:\n {4}base_url: https:\/\/llm\.example\.com\/v1\n {4}api_mode: chat_completions\n {4}key_cmd: ambit key print --url https:\/\/llm\.example\.com$/);
+  assert.ok(!text(t).includes(setup.key), "no Hermes block holds the key");
+  const prose = t.steps.join("\n");
+  assert.match(prose, /%LOCALAPPDATA%\\hermes\\config\.yaml/);
+  assert.match(prose, /hermes gateway restart/);
+  assert.match(prose, /PATH/);
+});
+
+test("Kilo Code: the key in a user-only file that kilo.jsonc refers to, and the restart", () => {
+  const t = tab("kilocode");
+  assert.equal(t.blocks[0].shells.bash, "mkdir -p ~/.config/ambit && touch ~/.config/ambit/kilo-key && chmod 600 ~/.config/ambit/kilo-key && printf '%s' 'ambit_TESTKEY' > ~/.config/ambit/kilo-key");
+  assert.match(t.blocks[0].shells.powershell, /icacls "\$HOME\\\.config\\ambit\\kilo-key" \/inheritance:r .*if \(\$LASTEXITCODE -eq 0\) \{ Set-Content -NoNewline -Path "\$HOME\\\.config\\ambit\\kilo-key" -Value 'ambit_TESTKEY' \}$/);
+  const conf = JSON.parse(t.blocks[1].text);
+  assert.equal(conf.model, "ambit/acme/model-1");
+  assert.deepEqual(conf.provider.ambit.options, { baseURL: "https://llm.example.com/v1", apiKey: "{file:~/.config/ambit/kilo-key}" });
+  assert.equal(conf.provider.ambit.npm, "@ai-sdk/openai-compatible");
+  assert.ok(!t.blocks[1].text.includes(setup.key));
+  assert.match(t.steps.join("\n"), /Reload Window/);
+  assert.match(t.cli.note, /kilo-key, readable only by you/);
+});
+
+test("pi: apiKey runs ambit key print, settings.json sets the default", () => {
+  const t = tab("pi");
+  assert.equal(t.blocks[0].text, "ambit key set --url https://llm.example.com");
+  const p = JSON.parse(t.blocks[1].text).providers.ambit;
+  assert.deepEqual(p, { baseUrl: "https://llm.example.com/v1", api: "openai-completions", apiKey: "!ambit key print --url https://llm.example.com", models: [{ id: "acme/model-1" }] });
+  assert.deepEqual(JSON.parse(t.blocks[2].text), { defaultProvider: "ambit", defaultModel: "acme/model-1" });
+  assert.ok(!text(t).includes(setup.key));
+});
+
+test("MCP tab: Hermes (mcp-remote and a header file), Kilo Code (key file) and pi (the provider's key)", () => {
+  const t = tab("mcp");
+  const by = (re) => t.blocks.find((b) => re.test(b.label));
+  const h = by(/^Hermes Agent/).text;
+  assert.equal(h, 'mcp_servers:\n  ambit:\n    command: npx\n    args: ["-y", "mcp-remote@0.14.3", "https://mcp.example.com/mcp", "--header-file", "${userHome}${/}.ambit${/}hermes-mcp-headers.txt"]');
+  assert.equal(by(/Header file for Hermes/).shells.bash,
+    "mkdir -p ~/.ambit && touch ~/.ambit/hermes-mcp-headers.txt && chmod 600 ~/.ambit/hermes-mcp-headers.txt && printf 'Authorization: Bearer %s\\n' 'ambit_TESTKEY' > ~/.ambit/hermes-mcp-headers.txt");
+  assert.match(by(/Header file for Hermes/).shells.powershell, /-Value 'Authorization: Bearer ambit_TESTKEY' \}$/);
+  const k = JSON.parse(by(/^Kilo Code/).text).mcp.ambit;
+  assert.deepEqual(k, { type: "remote", url: setup.mcp, oauth: false, headers: { Authorization: "Bearer {file:~/.config/ambit/kilo-key}" } });
+  assert.deepEqual(JSON.parse(by(/^pi:/).text), { mcpServers: { ambit: { url: setup.mcp, auth: { provider: "ambit" } } } });
+  // a local install: plain http to a host that is not localhost
+  const local = toolTabs({ ...setup, mcp: "http://mcp.localtest.me:8080/mcp" }, "both");
+  assert.match(local.find((x) => x.id === "mcp").blocks.find((b) => /^Hermes/.test(b.label)).text, /"http:\/\/mcp\.localtest\.me:8080\/mcp", "--allow-http"/);
+  assert.doesNotMatch(local.find((x) => x.id === "pi").cli.command, /--mcp-url/); // pi refuses it
+  assert.match(local.find((x) => x.id === "kilocode").cli.command, /--mcp-url http:\/\/mcp\.localtest\.me:8080\/mcp$/);
+  assert.equal(plainHttpRemote("http://localhost:8080/mcp"), false);
+  assert.equal(plainHttpRemote("https://mcp.example.com/mcp"), false);
+});
+
+test("ambit connect: hermes, kilocode and pi add --mcp-url when the key's scope has MCP", () => {
+  for (const name of ["hermes", "kilocode", "pi"]) {
+    assert.equal(tab(name, "both").cli.command, `ambit connect ${name} --url https://llm.example.com --model acme/model-1 --mcp-url https://mcp.example.com/mcp`);
+    assert.equal(tab(name, "llm").cli.command, `ambit connect ${name} --url https://llm.example.com --model acme/model-1`);
+  }
+});
+
 test("ambit connect: shown for Claude Code, Codex, opencode and Cursor with the real command shape; not for SDK or MCP", () => {
   const tools = { claudeCode: "claude-code", codex: "codex", opencode: "opencode", cursor: "cursor" };
   for (const [id, name] of Object.entries(tools)) {
@@ -211,7 +274,7 @@ test("ambit connect: shown for Claude Code, Codex, opencode and Cursor with the 
 });
 
 test("ambit connect: the key is never in the command, and the manual steps stay at 3 or fewer for the CLI tools", () => {
-  for (const id of ["claudeCode", "codex", "opencode", "cursor"]) {
+  for (const id of ["claudeCode", "codex", "opencode", "hermes", "kilocode", "pi", "cursor"]) {
     assert.ok(!tab(id).cli.command.includes(setup.key), id);
     assert.ok(tab(id).steps.length <= 3, `${id}: ${tab(id).steps.length} steps`);
   }
@@ -232,6 +295,7 @@ test("a key that is no longer shown: every tab uses the placeholder and never a 
     }
   }
   assert.match(text(toolTabs(placeholder, "both").find((t) => t.id === "opencode")), /ambit_\.\.\./);
+  assert.match(text(toolTabs(placeholder, "both").find((t) => t.id === "kilocode")), /'ambit_\.\.\.' > ~\/\.config\/ambit\/kilo-key/);
 });
 
 test("ambit key set: the address of the key's scope", () => {

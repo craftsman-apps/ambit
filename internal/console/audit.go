@@ -142,7 +142,7 @@ LIMIT {limit:UInt32}`)
 var invalidKeySQL = `SELECT Timestamp, LogAttributes['route'], LogAttributes['url.path'], ` + status + `,
        LogAttributes['error'], LogAttributes['client.address']
 FROM otel_logs
-WHERE LogAttributes['ambit.identity'] = 'invalid key'
+WHERE LogAttributes['ambit.identity'] = 'invalid key' AND LogAttributes['ambit.kind'] = ''
   AND Timestamp >= {from:DateTime64(9)} AND Timestamp < {to:DateTime64(9)}
 ORDER BY Timestamp DESC
 LIMIT {limit:UInt32}`

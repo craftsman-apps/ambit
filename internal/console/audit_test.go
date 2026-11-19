@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/auditsql"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -121,10 +122,12 @@ func TestKeysLastUsedSQL(t *testing.T) {
 	}
 }
 
-// Records with ambit.kind set (the guard's compression records, the console's app records) are not gateway calls: a
-// query of calls, subjects or key use must skip them even when they name the person (#203).
+// Records with ambit.kind set (the guard's compression records, the console's app records) are not gateway calls: every
+// query of gateway records must skip them, even when they name the person (#203).
 func TestGatewayQueriesSkipOtherRecordKinds(t *testing.T) {
-	for name, q := range map[string]string{"callsSQL": callsSQL, "subsSQL": subsSQL, "keysLastUsedSQL": keysLastUsedSQL} {
+	for name, q := range map[string]string{"callsSQL": callsSQL, "subsSQL": subsSQL, "keysLastUsedSQL": keysLastUsedSQL,
+		"invalidKeySQL": invalidKeySQL, "wouldRefuseTotalsSQL": wouldRefuseTotalsSQL, "wouldRefuseGroupsSQL": wouldRefuseGroupsSQL,
+		"MarkMissingLast24h": auditsql.MarkMissingLast24h} {
 		if !strings.Contains(q, "LogAttributes['ambit.kind'] = ''") {
 			t.Errorf("%s has no record-kind filter:\n%s", name, q)
 		}

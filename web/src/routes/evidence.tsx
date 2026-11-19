@@ -82,16 +82,10 @@ export function EvidencePage() {
       <section className="max-w-5xl space-y-5 p-5">
         <div>
           <h1 className="text-h1 font-semibold tracking-tight">Evidence</h1>
-          <p className="text-muted">Download one ZIP file per export for your auditor. Each holds CSV files and a manifest.json with the number of rows and the SHA-256 of each file, so the auditor can check that the file is complete and unchanged. Dates are whole UTC days, both included.</p>
+          <p className="text-muted">Download one ZIP file per export for your auditor. Each holds CSV files and a manifest.json with the number of rows and the SHA-256 of each file, so the auditor can check each file against it. A file the console could not finish has no manifest and does not open. Dates are whole UTC days, both included.</p>
           <p className="mt-2 text-small text-warn" data-testid="personal-data">This file contains personal data. Store and share it under your company's data rules. Ambit's retention does not apply to downloaded files.</p>
         </div>
         {q.isError && <p className="text-bad">{q.error.message}</p>}
-        {e && (
-          <p className={`text-small ${beforeRetention ? "text-bad" : "text-muted"}`} data-testid="retention">
-            Audit records are kept for {e.retention} ({e.retentionFrom === "table" ? "from the table" : "the Helm value"}); {oldest ? `the oldest is from ${oldest}.` : "there are no records yet."}
-            {beforeRetention && " The audit log period starts before it: records before that date are not in the export, and their absence does not mean there was no activity."}
-          </p>
-        )}
         <div className="grid gap-4 lg:grid-cols-3">
           {e?.exports.map((x) => {
             const pk = x.name === "access" ? "audit" : x.name; // the period inputs' key (access has a date instead)
@@ -111,6 +105,12 @@ export function EvidencePage() {
                     <label className="flex min-w-0 flex-col gap-1 text-small">To
                       <input type="date" className={`${field} w-full min-w-0`} value={form[pk].to} onChange={(v) => setForm({ ...form, [pk]: { ...form[pk], to: v.target.value } })} aria-label={`${what[x.name].title} to`} /></label>
                   </div>
+                )}
+                {x.name === "audit" && (
+                  <p className={`text-small ${beforeRetention ? "text-bad" : "text-muted"}`} data-testid="retention">
+                    Audit records are kept for {e.retention} ({e.retentionFrom === "table" ? "from the table" : "the Helm value"}); {oldest ? `the oldest is from ${oldest}.` : "there are no records yet."}
+                    {beforeRetention && " The audit log period starts before it: records before that date are not in the export, and their absence does not mean there was no activity."}
+                  </p>
                 )}
                 {x.name === "audit" && (
                   <label className="flex flex-col gap-1 text-small">One person only (optional)

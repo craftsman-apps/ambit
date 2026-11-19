@@ -131,7 +131,7 @@ Ambit keeps a record of each offboarding. As an admin, open **Settings** and **O
 
 ## 4. Prove it to an auditor
 
-In the console, open **Settings → Evidence**. In **Offboarding**, set both dates to today and select **Download**. In `offboarding.csv` of the ZIP file, the row for `user04@example.com` has `gateway_blocked` `true` and `accepted_calls_after` `0`: the gateway accepted no call of User04 after the offboarding. `first_refused_call_after` has the time of the first refused request from the [Check it works](#check-it-works) step. These three columns come from the audit store: without `evidence.enabled: true` they are empty, and the manifest says why. The page shows the ZIP's SHA-256; send it to the auditor with the file. What each column means is in [Offboarding](../offboarding.md#prove-it-to-an-auditor-the-offboarding-export).
+In the console, open **Settings → Evidence**. In **Offboarding**, set both dates to today and select **Download**. In `offboarding.csv` of the ZIP file, the row for `user04@example.com` has `gateway_blocked` `true` and `accepted_calls_after` `0`: from 5 seconds after the offboarding (calls already in flight) until the export, the gateway accepted no call of User04 that the audit store kept. `first_refused_call_after` has the time of the first refused request from the [Check it works](#check-it-works) step. These three columns come from the audit store: without `evidence.enabled: true` they are empty, and the manifest says why. The page shows the ZIP's SHA-256; send it to the auditor with the file. What each column means is in [Offboarding](../offboarding.md#prove-it-to-an-auditor-the-offboarding-export).
 
 ## If the person comes back
 

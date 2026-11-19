@@ -69,6 +69,9 @@ data:
     frontend:
       accessLog:
         attributes:
+          # The text of an MCP server's JSON-RPC error can hold personal data the guard never sees (issue 335):
+          # never stored or logged. mcp.error.code stays.
+          remove: [mcp.error.message]
           add:
             {{- $v := include "ambit.identity.validKey" . }}{{ $p := include "ambit.identity.presented" . }}
             - { name: jwt.email, expression: {{ printf "(%s) ? apiKey.email : ((%s) ? \"\" : (has(jwt.email) ? jwt.email.trim().lowerAscii() : \"\"))" $v $p | quote }} }

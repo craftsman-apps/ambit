@@ -287,35 +287,8 @@ func PlanCodex(in Input) (*Plan, error) {
 		ops = append(ops, tomlOp{at: topAt, rank: 0, body: top, pad: true})
 	}
 	ops = append(ops, tomlOp{at: len(lines), rank: 3, body: codexProviderLines(in), pad: true})
-	sort.SliceStable(ops, func(i, j int) bool {
-		if ops[i].at != ops[j].at {
-			return ops[i].at < ops[j].at
-		}
-		return ops[i].rank < ops[j].rank
-	})
 
-	t := ParseText(orig)
-	n0 := len(t.lines)
-	var recs []BlockRecord
-	var wrote []string
-	for _, op := range ops {
-		at := op.at + len(t.lines) - n0
-		var rec BlockRecord
-		var body []string
-		if op.del > 0 {
-			for _, l := range t.lines[at : at+op.del] {
-				body = append(body, commented(l))
-				rec.ReplacedEOL = append(rec.ReplacedEOL, l.eol)
-			}
-			t.lines = append(t.lines[:at:at], t.lines[at+op.del:]...)
-		}
-		body = append(body, op.body...)
-		ins := t.insert(at, codexBegin, body, op.pad)
-		rec.AddedFinalNewline, rec.Padded = ins.AddedFinalNewline, ins.Padded
-		recs = append(recs, rec)
-		wrote = append(wrote, strings.Join(body, "\n"))
-	}
-	after := t.Bytes()
+	after, recs, wrote := applyOps(orig, codexBegin, ops)
 
 	// The safety net: the decoded result is the decoded original with Ambit's keys, and nothing else.
 	got, err := decodeTOML(in.Path, after)
@@ -347,6 +320,37 @@ func PlanCodex(in Input) (*Plan, error) {
 		}
 	}
 	return p, nil
+}
+
+// applyOps writes each op as a marked block into orig: the lines it replaces become "# ambit-replaced: " comments
+// in the block, before its new lines. ops are sorted by line; their line numbers are those of orig.
+func applyOps(orig []byte, begin string, ops []tomlOp) (after []byte, recs []BlockRecord, wrote []string) {
+	sort.SliceStable(ops, func(i, j int) bool {
+		if ops[i].at != ops[j].at {
+			return ops[i].at < ops[j].at
+		}
+		return ops[i].rank < ops[j].rank
+	})
+	t := ParseText(orig)
+	n0 := len(t.lines)
+	for _, op := range ops {
+		at := op.at + len(t.lines) - n0
+		var rec BlockRecord
+		var body []string
+		if op.del > 0 {
+			for _, l := range t.lines[at : at+op.del] {
+				body = append(body, commented(l))
+				rec.ReplacedEOL = append(rec.ReplacedEOL, l.eol)
+			}
+			t.lines = append(t.lines[:at:at], t.lines[at+op.del:]...)
+		}
+		body = append(body, op.body...)
+		ins := t.insert(at, begin, body, op.pad)
+		rec.AddedFinalNewline, rec.Padded = ins.AddedFinalNewline, ins.Padded
+		recs = append(recs, rec)
+		wrote = append(wrote, strings.Join(body, "\n"))
+	}
+	return t.Bytes(), recs, wrote
 }
 
 // ambitTableRanges are the line ranges of the tables model_providers.ambit and its sub-tables: from the header to

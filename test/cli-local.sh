@@ -107,7 +107,7 @@ PY
 pass "6 check with view only: every line ends in a valid status; unknown lines name the permission"
 
 # 6a · ambit connect and ambit disconnect (spec 14 item 15): a personal key made through the console API (the only
-# way keys are made), the three tools connected in an isolated home with seeded config files, the test calls
+# way keys are made), six tools connected in an isolated home with seeded config files, the test calls
 # passing through the gateway in each tool's own format (the test model implements only Completions; the gateway
 # converts /v1/messages and /v1/responses), ambit key print, no key in any file but the key store and the opencode 2
 # key file, ambit disconnect --all giving every file back byte for byte, and the gateway refusing the key once it is
@@ -152,19 +152,23 @@ AM() { env HOME="$H" XDG_CONFIG_HOME="$H/.config" CODEX_HOME="$H/.codex" CLAUDE_
 [[ $(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
   -d '{"model":"local/echo","messages":[{"role":"user","content":"hi"}]}' "$LLM/v1/chat/completions") == 200 ]] || fail "6a the new key does not work at the gateway"
 AM_KEY=$KEY AM connect claude-code --url "$LLM" --model local/echo --console-url "http://console.localtest.me:$PORT" --yes > "$O/connect-claude.log" 2>&1 || { cat "$O/connect-claude.log"; fail "6a connect claude-code"; }
-for tool in codex opencode; do
+for tool in codex opencode hermes kilocode pi; do
   AM connect "$tool" --url "$LLM" --model local/echo --yes > "$O/connect-$tool.log" 2>&1 || { cat "$O/connect-$tool.log"; fail "6a connect $tool"; }
 done
-for tool in claude codex opencode; do grep -q '^✓ test call:' "$O/connect-$tool.log" || fail "6a no test call line for $tool"; done
+for tool in claude codex opencode hermes kilocode pi; do grep -q '^✓ test call:' "$O/connect-$tool.log" || fail "6a no test call line for $tool"; done
 # opencode is not installed here, so connect sets up opencode 2: the key in a user-only file, no shell function.
 OCKEY=$H/.config/ambit/opencode-key
 grep -q 'key print --url' "$H/.claude/settings.json" && grep -q 'model_provider = "ambit"' "$H/.codex/config.toml" \
   && grep -qF "\"apiKey\": \"{file:$OCKEY}\"" "$H/.config/opencode/opencode.json" && cmp -s "$W/seed/bashrc" "$H/.bashrc" \
   && grep -q 'opencode service restart' "$O/connect-opencode.log" || fail "6a the tool files lack Ambit's entries"
+# Hermes and pi run ambit key print; Kilo Code reads its own user-only key file.
+KKEY=$H/.config/ambit/kilo-key
+grep -q 'key_cmd: ".*key print --url' "$H/.hermes/config.yaml" && grep -q '"apiKey": "!.*key print --url' "$H/.pi/agent/models.json" \
+  && grep -qF "{file:$KKEY}" "$H/.config/kilo/kilo.jsonc" || fail "6a the hermes, kilocode or pi files lack Ambit's entries"
 [[ $(AM key print --url "$LLM") == "$KEY" ]] || fail "6a ambit key print did not print the stored key"
 holders=$(grep -rlF -- "$KEY" "$H" | sort || true)
-[[ $(wc -l <<<"$holders" | tr -d ' ') == 2 && $(head -1 <<<"$holders") == "$H/.config/ambit/keys/"* && $(tail -1 <<<"$holders") == "$OCKEY" ]] \
-  || fail "6a the key is in files other than the key store and the opencode key file: $holders"
+[[ $(wc -l <<<"$holders" | tr -d ' ') == 3 && $(head -1 <<<"$holders") == "$H/.config/ambit/keys/"* && $(sed -n 2p <<<"$holders") == "$KKEY" \
+  && $(tail -1 <<<"$holders") == "$OCKEY" ]] || fail "6a the key is in files other than the key store and the opencode and kilo key files: $holders"
 for f in $holders; do [[ $(stat -c %a "$f") == 600 ]] || fail "6a $f is not mode 600"; done
 # A dry run with another model plans a real change, and must write nothing: every file stays as it is, byte for byte.
 mkdir -p "$O/before-dry"
@@ -177,7 +181,8 @@ cmp "$O/before-dry/settings.json" "$H/.claude/settings.json" && cmp "$O/before-d
 AM disconnect --all --yes > "$O/disconnect.log" 2>&1 || { cat "$O/disconnect.log"; fail "6a disconnect --all"; }
 cmp "$W/seed/claude" "$H/.claude/settings.json" && cmp "$W/seed/codex" "$H/.codex/config.toml" \
   && cmp "$W/seed/opencode" "$H/.config/opencode/opencode.json" && cmp "$W/seed/bashrc" "$H/.bashrc" || fail "6a disconnect did not give the files back"
-[[ -z $(ls "$H/.config/ambit/keys" 2>/dev/null) && ! -e $OCKEY ]] || fail "6a the stored key or the opencode key file was not deleted"
+[[ -z $(ls "$H/.config/ambit/keys" 2>/dev/null) && ! -e $OCKEY && ! -e $KKEY ]] || fail "6a the stored key or a key file was not deleted"
+[[ ! -e $H/.hermes/config.yaml && ! -e $H/.config/kilo/kilo.jsonc && ! -e $H/.pi/agent/models.json ]] || fail "6a disconnect left a config file it made"
 grep -q 'next: revoke the key in the console: http://console.localtest.me:' "$O/disconnect.log" || fail "6a no revoke line"
 # Deleting the stored key does not revoke it: the key still works until the console revokes it.
 [[ $(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
@@ -190,7 +195,7 @@ for _ in $(seq 1 45); do
   [[ $c == 401 || $c == 403 ]] && { refused=1; break; }; sleep 2
 done
 [[ -n $refused ]] || fail "6a the gateway still accepts the revoked key (HTTP $c)"
-pass "6a connect and disconnect: three tools, test calls, the key only in the key store and the opencode key file, files restored, revoked key refused"
+pass "6a connect and disconnect: six tools, test calls, the key only in the key store and the opencode and kilo key files, files restored, revoked key refused"
 
 # 7 · local down deletes the cluster (its output is captured in $O too, so step 8 scans it)
 "$AMBIT" local down --name "$NAME" --yes > "$O/down.log" 2>&1 || { cat "$O/down.log"; fail "7 local down"; }

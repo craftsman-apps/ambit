@@ -125,7 +125,7 @@ func (a *app) keyCmd() *cobra.Command {
 		Use:   "print --url <llm address>",
 		Short: "Print the stored key (the tools run this to read it)",
 		Long: `Prints the stored key for the gateway address to standard output, followed by a newline, and nothing else.
-Claude Code, Codex and the opencode 1 wrapper run this command each time they start.
+Claude Code, Codex, Hermes Agent, pi and the opencode 1 wrapper run this command to read the key.
 
 It reads the keychain or the key file only: no network, no Kubernetes. On a terminal it refuses unless you pass
 --reveal, so the key does not end up in the scrollback by accident. Every program that runs as your user can run
@@ -183,7 +183,8 @@ func (a *app) keySetCmd() *cobra.Command {
 		Long: `Stores the key in the operating system keychain (or the key file where there is no Secret Service), so that
 "ambit key print --url <address>" prints it. Use it for a helper that runs ambit key print, for example the
 headersHelper of a managed Claude Desktop. A key already stored for the address is replaced, and so is the key in
-the files that ambit connect wrote for that address (the opencode 2 key file, the claude-desktop-mcp header file).
+the files that ambit connect wrote for that address (the opencode 2 and Kilo Code key files, the claude-desktop-mcp
+and hermes header files).
 
 The key comes from --key-file, else AMBIT_API_KEY, else a hidden prompt. It is never printed.
 ambit disconnect --all deletes a stored key that no tool uses.`,
@@ -261,8 +262,8 @@ func (a *app) runKeySet(ctx context.Context, f connectFlags) error {
 	return a.renewKeyFiles(d, st, url, key)
 }
 
-// renewKeyFiles writes the new key into the files that hold the key and that connect wrote for url (the opencode 2 key
-// file, the claude-desktop-mcp header file). A file changed after connect keeps its content, with a warning.
+// renewKeyFiles writes the new key into the files that hold the key and that connect wrote for url (the opencode 2 and
+// Kilo Code key files, the claude-desktop-mcp and hermes header files). A file changed after connect keeps its content, with a warning.
 func (a *app) renewKeyFiles(d *connectDeps, st *connect.State, url, key string) error {
 	p := a.printer()
 	var tools []string
@@ -295,8 +296,13 @@ func (a *app) renewKeyFiles(d *connectDeps, st *connect.State, url, key string) 
 				return err
 			}
 			p.Line("%s wrote the new key to %s", p.Mark("ok"), rec.Path)
-			if name == connect.OpenCode {
+			switch name {
+			case connect.OpenCode:
 				p.Line("If opencode is running, restart its service so that it reads the new key: opencode service restart")
+			case connect.KiloCode:
+				p.Line("If Kilo Code is running, restart it so that it reads the new key (in VS Code: Developer: Reload Window)")
+			case connect.Hermes:
+				p.Line("If Hermes is running, restart it (or run /reload-mcp) so that its MCP server reads the new key")
 			}
 		}
 	}
@@ -306,15 +312,24 @@ func (a *app) renewKeyFiles(d *connectDeps, st *connect.State, url, key string) 
 func (a *app) connectCmd() *cobra.Command {
 	var f connectFlags
 	c := &cobra.Command{
-		Use:   "connect <claude-code|codex|opencode|cursor|claude-desktop-mcp> --url <address> [--model <model id>]",
+		Use:   "connect <claude-code|codex|opencode|cursor|claude-desktop-mcp|hermes|kilocode|pi> --url <address> [--model <model id>]",
 		Short: "Point a coding tool at Ambit and store the key in your keychain",
 		Long: `Adds Ambit's entries to the tool's user config file, stores the key in the operating system keychain, and ends
 with one test call in the tool's own request format. The key is never written to a config file: the tool runs
 "ambit key print" to read it.
 
 Only user-level files are changed: ~/.claude/settings.json, ~/.codex/config.toml, ~/.config/opencode/opencode.json
-and, for opencode, a function in your shell profile. Each file is copied to <file>.ambit.bak first. Cursor has no
-config file for this: connect prints the steps and writes nothing.
+and, for opencode 1, a function in your shell profile; ~/.hermes/config.yaml, ~/.config/kilo/kilo.jsonc, and
+~/.pi/agent/models.json and settings.json. Each file is copied to <file>.ambit.bak first. Cursor has no config file
+for this: connect prints the steps and writes nothing.
+
+opencode 2 and Kilo Code cannot run a command to read the key, and they call the model from a background process
+that does not see your terminal: connect writes the key to a file only you can read (~/.config/ambit/opencode-key,
+~/.config/ambit/kilo-key) and the config refers to that file. Hermes Agent and pi run ambit key print.
+
+--mcp-url (hermes, kilocode, pi) also adds the Ambit MCP gateway as the MCP server "ambit", with the same key: the
+key needs the scope "LLM and MCP". Hermes reads MCP headers only from its config or the environment, so its entry is
+mcp-remote with the header file ~/.ambit/hermes-mcp-headers.txt (mode 0600; Node.js is needed).
 
 claude-desktop-mcp takes the MCP address as --url and no --model. It adds the entry "ambit" (mcp-remote) to
 claude_desktop_config.json and writes the key to ~/.ambit/mcp-headers.txt (mode 0600), because mcp-remote reads the
@@ -335,6 +350,7 @@ hidden prompt. ambit disconnect removes exactly what connect added.`,
 	fl.BoolVar(&f.replaceKey, "replace-key", false, "ask for a new key even if one is stored for this address")
 	fl.StringVar(&f.keyStore, "key-store", "", "keychain or file (default: keychain; the file only where there is no Secret Service)")
 	fl.StringVar(&f.shell, "shell", "", "opencode 1: bash, zsh, fish, powershell or none (default: detected)")
+	fl.StringVar(&f.mcpURL, "mcp-url", "", "hermes, kilocode, pi: also add the MCP gateway at this address, for example https://mcp.example.com/mcp")
 	fl.BoolVar(&f.dryRun, "dry-run", false, "print what would change; write, store and call nothing")
 	fl.BoolVar(&f.force, "force", false, "replace a conflicting entry that ambit did not write")
 	fl.BoolVar(&f.noTest, "no-test", false, "skip the test call")
@@ -345,7 +361,7 @@ hidden prompt. ambit disconnect removes exactly what connect added.`,
 func (a *app) disconnectCmd() *cobra.Command {
 	var f disconnectFlags
 	c := &cobra.Command{
-		Use:   "disconnect <claude-code|codex|opencode|cursor|claude-desktop-mcp> | --all",
+		Use:   "disconnect <claude-code|codex|opencode|cursor|claude-desktop-mcp|hermes|kilocode|pi> | --all",
 		Short: "Remove what ambit connect added to a tool's config",
 		Long: `Removes exactly the entries and blocks that ambit connect added, and keeps everything else in the file. An entry
 you changed after connect stays, with a warning. When no other tool uses the key, the stored key is deleted. That

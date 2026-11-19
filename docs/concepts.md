@@ -72,8 +72,9 @@ Clients call `https://<llm host>/v1/chat/completions` (and the other OpenAI-comp
 2. **Model access.** An `AccessRule` must allow the requested model for this person. Otherwise the answer is 403. (In audit-only mode the request goes on, and the record says whether it would have been refused.)
 3. **Budget.** The ratelimit service and Valkey count the request against the `Budget` of the person's group and against the person's own limit. Over the limit, the answer is 429.
 4. **Router (optional).** If the requested name is a `ModelRouter`, Ambit picks one `Model` the person may use.
-5. **Provider.** The gateway adds the provider credentials from the Secret and forwards the request.
-6. **Audit.** The call is recorded, denied calls included.
+5. **Prompt guard (optional).** With `llm.promptGuard`, the gateway checks the prompt and records, refuses or masks what matches. See [Prompt guard](#prompt-guard).
+6. **Provider.** The gateway adds the provider credentials from the Secret and forwards the request.
+7. **Audit.** The call is recorded, denied calls included.
 
 ### Request to an MCP server (`/mcp`)
 
@@ -97,6 +98,39 @@ With `protection.enabled`, `ambit-guard` masks personal data in the results of M
 - **Presidio is not part of Ambit.** Ambit does not install it. You run the Presidio analyzer service yourself and give its address in the `protection.presidio` values (see `charts/ambit/values.yaml`). `anonymizerURL` is no longer used. The guard sends the text of one result to the analyzer in pieces of at most 100,000 characters, up to 4 at the same time, and `protection.presidio.timeout` (default 10 s) limits all of those calls together.
 - **Fail closed.** If masking fails (Presidio is down, too slow, or returns an error), the guard withholds the whole result and the call fails. The client never receives unmasked text. If the guard itself is down, the call also fails.
 - **Size limit.** The guard accepts a tool result up to 32 MiB by message size. It holds a result several times while it masks it. In a test with the default memory limit (`protection.memoryLimitMiB`, 512 MiB), results of 16 MiB and 30 MiB were masked and returned, and the guard used at most 323 MiB and did not restart. If you set a lower limit, plan for about 10 times the size of the largest result plus 50 MiB. A result that is too large for the guard makes the call fail with an error; unmasked text is never returned. While the guard restarts, every MCP tool call fails.
+
+## Prompt guard
+
+The prompt guard checks the prompt of a model request before the model receives it. Think of it as a scanner at the door of the model: it looks for text you describe (a card number, a secret key, an internal code name) and records, refuses or blanks it out. It is off by default. Turn it on with the Helm value `llm.promptGuard`:
+
+```yaml
+llm:
+  promptGuard:
+    enabled: true
+    mode: audit            # audit (default), reject or mask
+    builtins: [CreditCard, Ssn, Email, PhoneNumber]   # the default; also CaSin
+    patterns:              # your own regular expressions, at most 1,024 characters each
+      - '(?i)ignore (all )?previous instructions'
+      - 'AKIA[0-9A-Z]{16}'
+    rejectMessage: "The prompt was refused by the prompt guard of this gateway."
+    webhook:               # optional: your own guard, a Service in the cluster
+      service: ""
+      namespace: ""        # empty: the release namespace
+      port: 8000
+      failureMode: FailClosed
+```
+
+- **Modes.** `audit` lets every prompt through unchanged and records which ones the guard would refuse; start here and read the Audit page for a week. `reject` refuses a matching prompt with HTTP 403 and `rejectMessage` (plain text); the model is not called. `mask` replaces each match with a placeholder and sends the rest of the prompt to the model: `<CREDIT_CARD>`, `<EMAIL_ADDRESS>` and the like for the built-in patterns, `<masked>` for your own.
+- **What is checked.** Requests to `/v1/chat/completions`, `/v1/messages` and `/v1/responses`, streaming requests included. The patterns read the system prompt, the messages and the tool results in the prompt; the webhook receives the system prompt and the messages. Neither reads the arguments of the tool calls in earlier turns. **Answers are not checked**: a check of a streamed answer would delay every answer. **Embeddings (`/v1/embeddings`) are not checked.**
+- **Built-in patterns** come from agentgateway: `CreditCard`, `Ssn` (US Social Security number), `Email`, `PhoneNumber`, `CaSin` (Canadian Social Insurance Number). There is no built-in pattern for Korean resident registration numbers; add your own pattern.
+- **Your own patterns** use the syntax of the Rust `regex` crate, the same as Go's: no look-around and no back-references. The chart refuses to install a pattern that Go cannot read, or one longer than 1,024 characters.
+- **Webhook.** With `webhook.service`, the gateway also sends each prompt to `POST /request` on that Service, after the patterns ([agentgateway's guardrail webhook protocol](https://agentgateway.dev/docs/kubernetes/latest/documentation/llm/guardrails/webhook/guardrails/)). The webhook answers pass, mask or reject itself. In `audit` mode the gateway only records its answer. `failureMode: FailClosed` refuses the prompt when the webhook does not answer (also in `audit` mode); `FailOpen` lets it through. The webhook's own reason text is not recorded by Ambit.
+- **The text stays in the cluster.** Patterns run in the gateway. The webhook must be a Service in your cluster. Guards that send the prompt to a vendor (OpenAI Moderation, Amazon Bedrock Guardrails, Google Model Armor) are not supported yet: each adds a call over the internet before every model request (more time, and one more service that must be up), and each sends the prompt text to that vendor, which is a new data processor for your company even when the model itself runs in your cluster.
+- **A pattern filter, not a prompt-injection detector.** It finds the text its patterns describe and nothing else. A pattern such as "ignore previous instructions" stops that exact phrase, not the many other ways to say it.
+- **Audit records.** Each guarded request's record says what the guard did, as `phase:guard:action` (for example `request:regex:reject`), never the matched text. The Audit page shows **Refused by prompt guard**, **Prompt guard would refuse** (audit mode) and **Masked by prompt guard**, apart from a refusal by an access rule (also a 403).
+- **One guard for every model.** The guard is one `AgentgatewayPolicy` (`ambit-llm-guard`) on the LLM route, so it covers every `Model`, `ModelRouter` and fallback. Ambit sets no guard on a single model: agentgateway would use a model's own guard instead of the route's, not both.
+- **Order of the checks** (tested on kind). The access rule runs first: a person who may not use a model gets the access rule's 403, and the guard does not read the prompt. A prompt the guard refuses is **not charged** to the daily request and dollar limits of a `Budget` (they are charged after the answer, and there is none), but it **is counted** by the per-minute limits (`userRequestsPerMinute`, `groupRequestsPerMinute`), which count a request when it arrives.
+- **A `ModelRouter` of type `LLM` sends the prompt to its classifier model before the guard runs.** `ambit-router` labels the prompt before the gateway picks the model, and the guard runs when the gateway calls the model. With `reject` or `mask`, the classifier model can still receive a prompt that the guard then refuses or masks. This follows from the order of agentgateway's policies; it is not tested. Use a classifier model in your cluster, or a router of type `Rules`, if that matters.
 
 ## Compressing tool results
 

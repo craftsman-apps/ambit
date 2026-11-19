@@ -85,6 +85,7 @@ sakey "$NAME" first; K1=$KEY; K1ID=$KID
 # 1 · the key calls a model and an MCP tool as the account; Audit shows the identity, the type and the key ID
 wait_for 90 '[[ $(chat mock/echo -H "Authorization: Bearer $K1") == 200 ]]' || fail "1 model call with the account's key: $(cat "$W/llm")"
 wait_for 60 'try_tools "$K1"; [[ " $TOOLS " == *" time_get_current_time "* ]]' || fail "1 the account (group eng) does not see eng's tool: $TOOLS"
+tools "$K1" # try_tools opens its session in a subshell; call needs one here
 r=$(call time_get_current_time '{"timezone":"UTC"}'); [[ "$r" == ok* ]] || fail "1 MCP tool call: $r"
 day=$(date -u +%Y-%m-%d); next=$(date -u -v+1d +%Y-%m-%d 2>/dev/null || date -u -d tomorrow +%Y-%m-%d)
 sarecs() {

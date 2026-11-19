@@ -66,7 +66,8 @@ test("service accounts: create, key shown once, rotate, delete", async ({ page }
 
     // Settings → Keys lists it with the service account badge
     await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Keys", exact: true }).last().click();
-    await expect(page.getByRole("row", { name: new RegExp(identity) })).toContainText("service account");
+    // the All keys row (the key name is only there; History rows name the account too)
+    await expect(page.getByRole("row", { name: new RegExp(identity) }).filter({ hasText: "gha-2" })).toContainText("service account");
     await page.goBack();
 
     // delete: the confirmation names the identity and the live keys; the name is then taken for good

@@ -47,7 +47,7 @@ authorization:
       {{- range .extra }}
       - {{ . | quote }}
       {{- end }}
-      - {{ include (ternary "ambit.identity.gate" "ambit.identity.jwtGate" $keys) (dict "requireEmail" .jwt.requireEmail "services" .root.Values.serviceAccounts.enabled) | quote }}
+      - {{ include (ternary "ambit.identity.gate" "ambit.identity.jwtGate" $keys) (dict "requireEmail" .jwt.requireEmail "services" (ne (toString (.root.Values.serviceAccounts | default dict).enabled) "false")) | quote }}
 jwtAuthentication:
   mode: {{ ternary "Permissive" "Strict" $keys }}
   providers:

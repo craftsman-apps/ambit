@@ -100,6 +100,14 @@ func TestEvidenceOnClickHouse(t *testing.T) {
 	}
 	t.Logf("retention %v from %v", m.Sources["auditRetention"], m.Sources["auditRetentionFrom"])
 
+	// maxRows counts the compression records too: 6 calls and 2 compression records are more than 7.
+	e.cat.Evidence.MaxRows = int64(want) + 1
+	if resp, body, err := e.get(t, t.Context(), "/api/evidence/audit.zip?from=2026-10-01&to=2026-10-03", e.admin); err != nil || resp.StatusCode != 413 ||
+		!strings.Contains(string(body), "has 8 records") {
+		t.Errorf("maxRows %d: %v %v %s", want+1, resp.StatusCode, err, body)
+	}
+	e.cat.Evidence.MaxRows = 1000
+
 	files, _ = export("from=2026-10-01&to=2026-10-03&email=ana%40example.com")
 	if got := len(files["calls.csv"]) - 1; got != 4 {
 		t.Errorf("ana's calls: %d rows, want 4 (3 with the email, 1 refusal with the subject only): %v", got, files["calls.csv"])

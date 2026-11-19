@@ -75,7 +75,7 @@ func (c fakeConn) QueryContext(ctx context.Context, q string, _ []driver.NamedVa
 		return one(2, f.total, f.oldest), nil
 	case q == subsSQL:
 		return &fakeRows{ctx: ctx, f: f, cols: 1, n: len(f.subjects), row: func(i int) []driver.Value { return []driver.Value{f.subjects[i]} }}, nil
-	case q == evidenceCallsCountSQL:
+	case q == evidenceCountSQL:
 		if f.countErr != nil {
 			return nil, f.countErr
 		}

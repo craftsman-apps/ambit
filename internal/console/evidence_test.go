@@ -513,7 +513,8 @@ func failedExport(t *testing.T, e *evidenceFixture, body []byte, reason string) 
 	}
 	var h []exportEvent
 	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
-		if h = e.history(t); len(h) == 2 {
+		// The history is written before the handler returns and frees the export slot.
+		if h = e.history(t); len(h) == 2 && !e.cat.Evidence.running.Load() {
 			break
 		}
 	}

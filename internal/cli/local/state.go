@@ -283,7 +283,7 @@ func (o Ownership) Refusal(name string) *out.Error {
 	return &out.Error{
 		What: fmt.Sprintf("a kind cluster named %q exists and was not created by ambit local up", name),
 		Why:  o.Reason,
-		Next: "ambit local up --name " + other + " (or see https://ambitproject.dev/docs/local-up#a-cluster-that-ambit-did-not-create)",
+		Next: "ambit local up --name " + other + " (or see https://ambitproject.dev/docs/install-by-hand#a-cluster-that-ambit-did-not-create)",
 		Code: out.ExitFailed,
 	}
 }

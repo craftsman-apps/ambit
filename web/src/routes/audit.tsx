@@ -4,13 +4,15 @@ import { Button } from "@/components/ui/button";
 import { Shell, Status } from "@/components/shell";
 import { useConfig } from "@/api";
 import { csvRow } from "@/lib/csv";
-import { isStale, outcomeLabel, switchCheck, utcMinute, type Outcome, type WouldRefuse } from "@/lib/audit-mode";
+import { guardLabel, isStale, outcomeLabel, switchCheck, utcMinute, type Outcome, type WouldRefuse } from "@/lib/audit-mode";
 
 type Call = { time: string; email: string; route: string; method: string; server: string; tool: string; model: string; status: string; error: string; inputTokens: number; outputTokens: number; router: string; label: string; labelReason: string;
   // Audit-only mode: the verdict written when the request was served, the rules it was judged by, and its class.
   accessMode?: string; mark?: string; rulesVersion?: string; outcome?: Outcome;
   // The request path (/v1/models is a model list), and for a request with an invalid key the address it came from.
-  path?: string; identity?: string; clientAddress?: string };
+  path?: string; identity?: string; clientAddress?: string;
+  // What the prompt guard did: reject, audit (would refuse), mask, allow, or empty.
+  promptGuard?: string };
 // A routed call shows the router and the model that answered, e.g. "auto → mock/echo (coding)".
 const target = (c: Call) => c.identity === "invalid key" ? `from ${c.clientAddress || "an unknown address"}` : c.router ? `${c.router} → ${c.model}${c.label || c.labelReason ? ` (${c.label || c.labelReason})` : ""}` : (c.server || c.model);
 type Usage = { day: string; group: string; requests: number; inputTokens: number; outputTokens: number; cost?: number; unpricedModels?: string[] };
@@ -39,7 +41,7 @@ const what = (c: Call) => c.method ? `${c.method}${c.tool ? ` · ${c.tool}` : ""
   : c.identity === "invalid key" ? c.path || c.route : c.model || /llm$/.test(c.route) ? "LLM request" : c.route;
 // In audit-only mode the server classifies a record (outcome); the page's own reading applies to every other record.
 const outcome = (c: Call) => {
-  const o = outcomeLabel(c.outcome, c.status);
+  const o = guardLabel(c.promptGuard, c.status) ?? outcomeLabel(c.outcome, c.status);
   if (o) return o.text.replace(/ \(\d+\)$/, "");
   return refused(c) ? "Refused by policy" : failed(c) ? "Failed" : "OK";
 };
@@ -138,6 +140,8 @@ export function AuditPage() {
 
 // The Outcome cell. An audit-only verdict (would be refused, mark missing) is shown with the status the person got.
 function OutcomeCell({ c }: { c: Call }) {
+  const g = guardLabel(c.promptGuard, c.status);
+  if (g) return <Status ready={g.tone === "bad" ? "False" : "Unknown"} text={g.text} />;
   const o = outcomeLabel(c.outcome, c.status);
   if (o) return <>
     <Status ready={o.tone === "bad" ? "False" : "Unknown"} text={o.text} />

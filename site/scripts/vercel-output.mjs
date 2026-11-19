@@ -37,6 +37,9 @@ export function writeVercelOutput(buildDir, outDir) {
     routes: [
       ...Object.entries(MOVED).map(([from, to]) => ({src: `^/docs/guides/${from}/?$`, status: 308, headers: {Location: `/docs/guides/${to}`}})),
       {src: '^/docs/changelog/?$', status: 308, headers: {Location: '/releases'}},
+      // The by-hand install page was docs/local-up, which read as the page of `ambit local up` (#320). The CLI of
+      // 0.4.0 prints the old address with an anchor; the browser keeps the anchor across the redirect.
+      {src: '^/docs/local-up/?$', status: 308, headers: {Location: '/docs/install-by-hand'}},
       {src: '^/(.+)/$', status: 308, headers: {Location: '/$1'}},
       {src: '/(.*)', headers: HEADERS, continue: true},
       {handle: 'filesystem'},

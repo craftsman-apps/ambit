@@ -85,6 +85,11 @@ data:
             # The classifier call's tokens (ambit-router, when it answered in time): the Savings page subtracts their cost.
             - { name: ambit.classifier.input_tokens, expression: 'request.headers["x-ambit-classifier-input-tokens"]' }
             - { name: ambit.classifier.output_tokens, expression: 'request.headers["x-ambit-classifier-output-tokens"]' }
+            {{- if and .Values.llm.enabled (.Values.llm.promptGuard | default dict).enabled }}
+            # What the prompt guard did, one "phase:guard:action" per guard, e.g. ["request:regex:reject"]. Only these
+            # three fields: never the matched text, and never a webhook's own reason text.
+            - { name: ambit.promptGuard, expression: 'guardrails.map(g, g.phase + ":" + g.guard + ":" + g.action)' }
+            {{- end }}
         otlp:
           protocol: GRPC
           backendRef: { name: ambit-otel-collector, port: 4317 }

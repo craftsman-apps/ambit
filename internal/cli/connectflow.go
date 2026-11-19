@@ -38,7 +38,7 @@ type connectFlags struct {
 
 type disconnectFlags struct {
 	all, keepKey, dryRun, revoke bool
-	consoleURL, service  string
+	consoleURL, service          string
 }
 
 // job is one config file of a tool: what it holds now and what the plan makes of it.
@@ -327,9 +327,15 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	if tool == connect.ClaudeDesktopMCP && f.model != "" {
 		notes = append(notes, "--model is not used by claude-desktop-mcp")
 	}
-	var drops []*job // opencode 2: the opencode function of an earlier connect comes out of the shell profiles
+	// The files of an earlier connect for the other opencode version: for opencode 2 the opencode function comes out
+	// of the shell profiles; for opencode 1 the opencode 2 key file is deleted (#305).
+	var drops []*job
 	if oc2 {
 		if drops, err = a.openCodeFunctions(d, st); err != nil {
+			return err
+		}
+	} else if tool == connect.OpenCode {
+		if drops, err = openCodeKeyFiles(st); err != nil {
 			return err
 		}
 	}
@@ -407,7 +413,9 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 			}
 		}
 		for _, j := range drops {
-			if _, changes := j.change(); changes {
+			if _, changes := j.change(); changes && j.secret {
+				p.Line("%s: opencode 1 does not read the key file; ambit deletes it", j.path)
+			} else if changes {
 				p.Line("%s: opencode 2 does not use the opencode function; ambit removes it", j.path)
 				p.Line("%s", diffText(j.path, j.before, true, j.undo.After, j.undo.Delete))
 			}
@@ -542,7 +550,11 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 		p.Line("%s wrote %s", p.Mark("ok"), j.path)
 	}
 	for _, j := range removed {
-		p.Line("%s removed the opencode function from %s", p.Mark("ok"), j.path)
+		if j.secret {
+			p.Line("%s deleted the opencode 2 key file %s", p.Mark("ok"), j.path)
+		} else {
+			p.Line("%s removed the opencode function from %s", p.Mark("ok"), j.path)
+		}
 	}
 	st.Tools[tool] = toolRecord(st, tool, url, jobs, drops, false)
 	if err := d.save(st); err != nil {
@@ -613,6 +625,25 @@ func (a *app) openCodeFunctions(d *connectDeps, st *connect.State) ([]*job, erro
 		if !containsPath(jobs, j.path) {
 			jobs = append(jobs, j)
 		}
+	}
+	return jobs, nil
+}
+
+// openCodeKeyFiles plans the deletion of the opencode 2 key files of an earlier connect: opencode 1 does not read
+// them. A file changed after connect stays, with a note.
+func openCodeKeyFiles(st *connect.State) ([]*job, error) {
+	var jobs []*job
+	for _, rec := range st.Tools[connect.OpenCode].Files {
+		if !rec.Secret {
+			continue
+		}
+		j := &job{path: rec.Path, rec: rec, secret: true}
+		var err error
+		if j.before, j.exists, err = readConfig(j.path); err != nil {
+			return nil, err
+		}
+		j.undo = connect.UnplanSecretFile(rec, j.before, j.exists)
+		jobs = append(jobs, j)
 	}
 	return jobs, nil
 }

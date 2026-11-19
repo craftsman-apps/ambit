@@ -95,7 +95,15 @@ type Call struct {
 	// for requests with an invalid key (InvalidKeyCalls).
 	Path          string `json:"path"`
 	ClientAddress string `json:"clientAddress,omitempty"`
+	// PromptGuard is what the prompt guard (llm.promptGuard) did: reject, audit (it would have refused; audit mode),
+	// mask, allow, or empty (no guard ran). From the ambit.promptGuard field: never the matched text.
+	PromptGuard string `json:"promptGuard"`
 }
+
+// promptGuardSQL reads ambit.promptGuard (["request:regex:reject", ...], one "phase:guard:action" per guard) as the
+// strongest action of any guard. One column: the alias c_pg is defined inside the expression.
+const promptGuardSQL = `multiIf(has((arrayMap(x -> splitByChar(':', x)[-1], JSONExtract(LogAttributes['ambit.promptGuard'], 'Array(String)')) AS c_pg), 'reject'), 'reject',
+               has(c_pg, 'audit'), 'audit', has(c_pg, 'mask'), 'mask', has(c_pg, 'allow'), 'allow', '')`
 
 // routerOf is the router a call went through: the requested name when it differs from the answering model.
 func routerOf(requested, model string) string {
@@ -117,7 +125,8 @@ SELECT Timestamp,
        toInt64OrZero(LogAttributes['gen_ai.usage.input_tokens']), toInt64OrZero(LogAttributes['gen_ai.usage.output_tokens']),
        LogAttributes['ambit.router'], LogAttributes['ambit.route'], LogAttributes['ambit.routeReason'],
        LogAttributes['ambit.key_id'], LogAttributes['ambit.identity'], LogAttributes['jwt.sub'],
-       LogAttributes['ambit.accessMode'], c_mark, LogAttributes['ambit.rulesVersion'], c_outcome, LogAttributes['url.path']
+       LogAttributes['ambit.accessMode'], c_mark, LogAttributes['ambit.rulesVersion'], c_outcome, LogAttributes['url.path'],
+       ` + promptGuardSQL + `
 FROM otel_logs
 WHERE (LogAttributes['jwt.email'] = {email:String}
        -- Some refusals (e.g. a model the user may not use) are logged with the token's subject but
@@ -171,7 +180,7 @@ func (a *Audit) Calls(ctx context.Context, email string, from, to time.Time, lim
 		var c Call
 		var requested string
 		if err := rows.Scan(&c.Time, &c.Email, &c.Route, &c.Method, &c.Server, &c.Tool, &c.Model, &c.Status, &c.Error, &c.InputTokens, &c.OutputTokens,
-			&requested, &c.Label, &c.LabelReason, &c.KeyID, &c.Identity, &c.Subject, &c.AccessMode, &c.Mark, &c.RulesVersion, &c.Outcome, &c.Path); err != nil {
+			&requested, &c.Label, &c.LabelReason, &c.KeyID, &c.Identity, &c.Subject, &c.AccessMode, &c.Mark, &c.RulesVersion, &c.Outcome, &c.Path, &c.PromptGuard); err != nil {
 			return nil, err
 		}
 		c.Router = routerOf(requested, c.Model)

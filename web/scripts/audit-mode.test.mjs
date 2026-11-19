@@ -1,7 +1,7 @@
 // Audit-only wording and thresholds. Pure functions, so they run without a browser.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { daysSince, dayCount, modeBanner, pendingBanner, pendingPage, outcomeLabel, isStale, switchCheck } from "../src/lib/audit-mode.ts";
+import { daysSince, dayCount, modeBanner, pendingBanner, pendingPage, outcomeLabel, guardLabel, isStale, switchCheck } from "../src/lib/audit-mode.ts";
 
 const now = new Date("2026-10-15T10:00:00Z");
 
@@ -72,4 +72,11 @@ test("the pages say who is let through, by mode", async () => {
     assert.match(audit[k], /let through|would be refused/, k);
   }
   assert.doesNotMatch(audit.count(1), /closed to everyone/);
+});
+
+test("prompt guard labels: a guard refusal is not an access-rule refusal", () => {
+  assert.deepEqual(guardLabel("reject", "403"), { text: "Refused by prompt guard (403)", tone: "bad" });
+  assert.deepEqual(guardLabel("audit", "200"), { text: "Prompt guard would refuse (200)", tone: "warn" });
+  assert.equal(guardLabel("mask", "200")?.text, "Masked by prompt guard (200)");
+  for (const g of ["allow", "", undefined]) assert.equal(guardLabel(g, "200"), undefined);
 });

@@ -219,7 +219,7 @@ jobs:
           - { name: b, steps: "8 fallback", ui: false }
           - { name: c, steps: "10 keys 9 compress", ui: false }
           - { name: d, steps: "12 ext savings", ui: false }
-          - { name: e, steps: "4a 4b 4c 4d 5 6 7", ui: false }
+          - { name: e, steps: "4a 4b 4c 4d 5 6 7 guard", ui: false }
     steps:
       # The runner's disk held the kind images, the build cache and Go's caches until "no space left on device"
       # (2026-10-08). Preinstalled tools this job never uses are removed in the background.
@@ -236,8 +236,17 @@ jobs:
         with: { node-version: 26, cache: npm, cache-dependency-path: web/package-lock.json }
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      # Docker Hub images come through Google's mirror (mirror.gcr.io), then Docker Hub itself if the mirror fails.
+      # On 2026-11-16 the runner could not pull ClickHouse and python from Docker Hub for 10 minutes, and the install
+      # timed out (#293). The images are pinned by digest, so the mirror cannot change them. CI only: kind/cluster.yaml
+      # is the file users get, and it stays as it is.
+      - name: kind config with a Docker Hub mirror
+        run: |
+          cp kind/cluster.yaml "$RUNNER_TEMP/kind-cluster.yaml"
+          printf '%s\n' 'containerdConfigPatches:' '  - |' '    [plugins."io.containerd.grpc.v1.cri".registry]' \
+            '      config_path = "/etc/containerd/certs.d"' >> "$RUNNER_TEMP/kind-cluster.yaml"
       - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
-        with: { config: kind/cluster.yaml, cluster_name: ambit, wait: 120s }
+        with: { config: "${{ runner.temp }}/kind-cluster.yaml", cluster_name: ambit, wait: 120s }
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { name: images, path: "${{ runner.temp }}" }
       # Keycloak needs about 100 s to start, and third-party images take time to pull: start both now, while the
@@ -245,6 +254,9 @@ jobs:
       - name: Start slow test services early
         run: |
           mkdir -p charts/ambit/charts && cp "$RUNNER_TEMP"/thirdparty/charts/*.tgz charts/ambit/charts/
+          docker exec ambit-control-plane sh -c 'mkdir -p /etc/containerd/certs.d/docker.io && printf "%s\n" \
+            "server = \"https://registry-1.docker.io\"" "[host.\"https://mirror.gcr.io\"]" "  capabilities = [\"pull\", \"resolve\"]" \
+            > /etc/containerd/certs.d/docker.io/hosts.toml'
           make install-crds
           kubectl create namespace ambit-system
           kubectl -n ambit-system apply -f test/keycloak/keycloak.yaml >/dev/null

@@ -95,12 +95,16 @@ TOK=$(token user01)
 # First prove a valid JWT works (after a Keycloak restart the gateway holds the old keys until the controller
 # refreshes them, every 5 minutes), so the JWT refusals below cannot pass merely because every JWT is rejected.
 wait_for 400 '[[ $(code -H "Authorization: Bearer $TOK") == 200 ]]' || fail "2 user01's JWT alone must work: $(cat "$W/llm")"
-[[ $(code) =~ ^40[13]$ ]] || fail "2 no credential: $(cat "$W/llm")"
-[[ $(code -H "Authorization: Bearer ambit_wrongwrongwrongwrongwrongwrongwrongwrongwro") == 403 ]] || fail "2 wrong key: $(cat "$W/llm")"
-[[ $(code -H "Authorization: Bearer eyJhbGciOiJSUzI1NiJ9.e30.x") == 403 ]] || fail "2 broken JWT: $(cat "$W/llm")"
+# #321: no credential (or an empty one, as opencode 2's service sent) is told so; a wrong key or token is not
+NOKEY='no Ambit key or token was sent'
+[[ $(code) == 403 ]] && grep -q "$NOKEY" "$W/llm" || fail "2 no credential: $(cat "$W/llm")"
+[[ $(code -H "Authorization: Bearer ") == 403 ]] && grep -q "$NOKEY" "$W/llm" || fail "2 an empty Bearer: $(cat "$W/llm")"
+[[ $(at /v1/messages) == 403 ]] && grep -q '"authentication_error"' "$W/llm" && grep -q "$NOKEY" "$W/llm" || fail "2 no credential on /v1/messages: $(cat "$W/llm")"
+[[ $(code -H "Authorization: Bearer ambit_wrongwrongwrongwrongwrongwrongwrongwrongwro") == 403 ]] && ! grep -q "$NOKEY" "$W/llm" || fail "2 wrong key: $(cat "$W/llm")"
+[[ $(code -H "Authorization: Bearer eyJhbGciOiJSUzI1NiJ9.e30.x") == 403 ]] && ! grep -q "$NOKEY" "$W/llm" || fail "2 broken JWT: $(cat "$W/llm")"
 [[ $(code -H "x-api-key: $M") == 403 ]] || fail "2 an MCP-scoped key reached the LLM gateway: $(cat "$W/llm")"
 [[ $(code -H "Authorization: Bearer $TOK" -H "x-api-key: ambit_wrong") == 403 ]] || fail "2 JWT + wrong key: $(cat "$W/llm")"
-pass "2 no credential, wrong key, broken JWT, wrong-scope key, JWT + wrong key: refused; JWT alone: allowed"
+pass "2 no credential, wrong key, broken JWT, wrong-scope key, JWT + wrong key: refused (only no credential is told the key is missing); JWT alone: allowed"
 
 # 3 · expiry is checked by the gateway on every request (the test hook sets until to the past, through the console)
 [[ $(api POST "/api/test/keys/$KID_K/expire" "{\"until\":\"$(past)\"}") == 204 ]] || fail "3 expire hook: $(cat "$W/api")"

@@ -22,14 +22,18 @@ import (
 	"github.com/craftsman-apps/ambit/internal/cli/out"
 )
 
-var connectTools = []string{connect.ClaudeCode, connect.Codex, connect.OpenCode, connect.Cursor, connect.ClaudeDesktopMCP}
+var connectTools = []string{connect.ClaudeCode, connect.Codex, connect.OpenCode, connect.Cursor, connect.ClaudeDesktopMCP,
+	connect.Hermes, connect.KiloCode, connect.Pi}
+
+// toolChoice is the list of tools for usage errors.
+const toolChoice = "choose claude-code, codex, opencode, cursor, claude-desktop-mcp, hermes, kilocode or pi"
 
 // ambitKeyFormat is what NewSecretKey produces.
 var ambitKeyFormat = regexp.MustCompile(`^ambit_[0-9A-Za-z]{43}$`)
 
 type connectFlags struct {
-	url, model, consoleURL, keyFile, keyStore, shell, service string
-	replaceKey, dryRun, force, noTest                         bool
+	url, model, consoleURL, keyFile, keyStore, shell, service, mcpURL string
+	replaceKey, dryRun, force, noTest                                 bool
 }
 
 type disconnectFlags struct {
@@ -47,6 +51,8 @@ type job struct {
 	undo   *connect.Disconnected // disconnect
 	rec    connect.FileRecord    // disconnect: what connect recorded
 	secret bool                  // the file holds the key: never print its content
+	// planner plans the file (hermes, kilocode, pi); nil: the switch in runConnect does
+	planner func(connect.Input) (*connect.Plan, error)
 }
 
 func (j *job) change() (connect.FileChange, bool) {
@@ -164,6 +170,25 @@ func (a *app) toolFiles(d *connectDeps, tool string, f connectFlags, oc2 bool) (
 		jobs = append(jobs, &job{path: connect.CodexConfigPath(d.Getenv, d.Home)})
 	case connect.ClaudeDesktopMCP:
 		jobs = append(jobs, &job{path: connect.ClaudeDesktopConfigPath(d.GOOS, d.Getenv, d.Home)}, &job{path: connect.MCPHeaderPath(d.Home), secret: true})
+	case connect.Hermes:
+		header := connect.HermesHeaderPath(d.Home)
+		jobs = append(jobs, &job{path: connect.HermesConfigPath(d.GOOS, d.Getenv, d.Home),
+			planner: func(in connect.Input) (*connect.Plan, error) { return connect.PlanHermes(in, header) }})
+		if f.mcpURL != "" {
+			jobs = append(jobs, &job{path: header, secret: true})
+		}
+	case connect.KiloCode:
+		key := connect.KiloKeyPath(d.Getenv, d.Home)
+		jobs = append(jobs, &job{path: connect.KiloPath(d.Getenv, d.Home, pathExists),
+			planner: func(in connect.Input) (*connect.Plan, error) { in.KeyFile = key; return connect.PlanKilo(in) }},
+			&job{path: key, secret: true})
+	case connect.Pi:
+		dir := connect.PiDir(d.Getenv, d.Home)
+		jobs = append(jobs, &job{path: filepath.Join(dir, "models.json"), planner: connect.PlanPiModels},
+			&job{path: filepath.Join(dir, "settings.json"), planner: connect.PlanPiSettings})
+		if f.mcpURL != "" {
+			jobs = append(jobs, &job{path: filepath.Join(dir, "mcp.json"), planner: connect.PlanPiMCP})
+		}
 	case connect.OpenCode:
 		path, err := connect.OpenCodePath(d.Getenv, d.Home, func(p string) bool { _, err := os.Stat(p); return err == nil })
 		if err != nil {
@@ -200,7 +225,7 @@ func (a *app) toolFiles(d *connectDeps, tool string, f connectFlags, oc2 bool) (
 func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error {
 	p := a.printer()
 	if !validTool(tool) {
-		return out.Usage("unknown tool "+tool, "choose claude-code, codex, opencode, cursor or claude-desktop-mcp", "ambit connect --help")
+		return out.Usage("unknown tool "+tool, toolChoice, "ambit connect --help")
 	}
 	if f.url == "" {
 		return out.Usage("--url", "is required", "ambit connect "+tool+" --url https://llm.example.com --model <model id>")
@@ -214,6 +239,14 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 	}
 	if f.keyStore != "" && f.keyStore != connect.StoreKeychain && f.keyStore != connect.StoreFile {
 		return out.Usage("--key-store "+f.keyStore, "must be keychain or file", "ambit connect "+tool+" --help")
+	}
+	if f.mcpURL != "" {
+		if tool != connect.Hermes && tool != connect.KiloCode && tool != connect.Pi {
+			return out.Usage("--mcp-url", "is used only by hermes, kilocode and pi", "ambit connect "+tool+" --help")
+		}
+		if f.mcpURL, err = connect.NormalizeURL(f.mcpURL); err != nil {
+			return out.Usage("--mcp-url", err.Error(), "ambit connect "+tool+" --url "+url+" --model <model id> --mcp-url https://mcp.example.com/mcp")
+		}
 	}
 	d, err := a.connectEnv(f.service)
 	if err != nil {
@@ -255,10 +288,12 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 		}
 		j.prev = prevRecord(st, tool, j.path)
 		in := connect.Input{Path: j.path, File: j.before, Exists: j.exists, URL: url, Model: f.model, AmbitPath: ambitPath, GOOS: d.GOOS,
-			Force: f.force, Getenv: d.Getenv, Prev: j.prev}
+			Force: f.force, Getenv: d.Getenv, Prev: j.prev, MCPURL: f.mcpURL}
 		switch {
 		case j.secret:
 			j.plan = planSecretFile(j)
+		case j.planner != nil:
+			j.plan, err = j.planner(in)
 		case tool == connect.ClaudeDesktopMCP:
 			j.plan, err = connect.PlanClaudeDesktopMCP(in, jobs[1].path)
 		case tool == connect.ClaudeCode:
@@ -302,6 +337,9 @@ func (a *app) runConnect(ctx context.Context, tool string, f connectFlags) error
 		args := "ambit connect " + tool + " --url " + url + " --model " + f.model + " --force"
 		if tool == connect.ClaudeDesktopMCP {
 			args = "ambit connect " + tool + " --url " + url + " --force"
+		}
+		if f.mcpURL != "" {
+			args += " --mcp-url " + f.mcpURL
 		}
 		err := a.failLines(conflicts, args)
 		p.Line("  --force replaces these entries. The old value is kept so that ambit disconnect puts it back; a secret is kept in the backup file only.")
@@ -671,7 +709,8 @@ func (a *app) printWrapper(d *connectDeps, url, ambitPath string) {
 	}
 }
 
-var testFormats = map[string]local.Format{connect.ClaudeCode: local.FormatMessages, connect.Codex: local.FormatResponses, connect.OpenCode: local.FormatChat}
+var testFormats = map[string]local.Format{connect.ClaudeCode: local.FormatMessages, connect.Codex: local.FormatResponses, connect.OpenCode: local.FormatChat,
+	connect.Hermes: local.FormatChat, connect.KiloCode: local.FormatChat, connect.Pi: local.FormatChat}
 
 func (a *app) testCall(ctx context.Context, d *connectDeps, tool, url, model, key string) error {
 	p := a.printer()
@@ -718,6 +757,12 @@ func (a *app) nextSteps(tool, url string, shell connect.Shell) {
 		p.Line("Start codex and send one prompt.")
 	case connect.ClaudeDesktopMCP:
 		p.Line("Quit Claude Desktop completely and start it again, then check Connectors for \"ambit\". Node.js (npx) must be installed.")
+	case connect.Hermes:
+		p.Line("Start hermes and send one prompt. If the Hermes gateway service runs, restart it: hermes gateway restart. Hermes runs ambit key print to read the key.")
+	case connect.KiloCode:
+		p.Line("Restart Kilo Code (in VS Code: Developer: Reload Window; the CLI: start kilo again), so that it reads the settings and the key file.")
+	case connect.Pi:
+		p.Line("Start pi and send one prompt. pi runs ambit key print to read the key.")
 	case connect.OpenCode:
 		if shell != connect.NoShell {
 			p.Line("Open a new terminal before you start opencode. The function works only when opencode is started from that shell; an editor that starts opencode by itself does not see it.")
@@ -760,7 +805,7 @@ func (a *app) runDisconnect(ctx context.Context, args []string, f disconnectFlag
 	case !f.all && len(args) == 0:
 		return out.Usage("disconnect", "name a tool, or use --all", "ambit disconnect claude-code, or ambit disconnect --all")
 	case len(args) > 0 && !validTool(args[0]):
-		return out.Usage("unknown tool "+args[0], "choose claude-code, codex, opencode, cursor or claude-desktop-mcp", "ambit disconnect --help")
+		return out.Usage("unknown tool "+args[0], toolChoice, "ambit disconnect --help")
 	case f.revoke && f.keepKey:
 		return out.Usage("--revoke and --keep-key", "cannot be used together: a revoked key is of no use", "ambit disconnect --help")
 	}
@@ -1053,6 +1098,8 @@ func (a *app) unrecordedBlocks(d *connectDeps, tool string) ([]*job, error) {
 	switch tool {
 	case connect.Codex:
 		paths = append(paths, connect.CodexConfigPath(d.Getenv, d.Home))
+	case connect.Hermes:
+		paths = append(paths, connect.HermesConfigPath(d.GOOS, d.Getenv, d.Home))
 	case connect.OpenCode: // every shell's profile, not only $SHELL's: the person may have changed shells since
 		for _, sh := range []connect.Shell{connect.Bash, connect.Zsh, connect.Fish, connect.PowerShell} {
 			if sh == connect.PowerShell && d.GOOS != "windows" {

@@ -115,9 +115,10 @@ func PlanClaudeDesktopMCP(in Input, headerPath string) (*Plan, error) {
 	return p, nil
 }
 
-// SecretFile is what a file that holds the key contains: the header line for mcp-remote, the key alone for opencode.
+// SecretFile is what a file that holds the key contains: the header line for mcp-remote (claude-desktop-mcp,
+// hermes), the key alone for opencode and Kilo Code.
 func SecretFile(tool, key string) []byte {
-	if tool == OpenCode {
+	if tool == OpenCode || tool == KiloCode {
 		return OpenCodeKey(key)
 	}
 	return MCPHeader(key)

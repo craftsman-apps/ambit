@@ -296,3 +296,69 @@ func TestSinceIsTheViewCreationDay(t *testing.T) {
 		t.Fatalf("Usage %+v %v: want both records, the one before the views too", u, err)
 	}
 }
+
+// #203 on a real ClickHouse: compression records annotate the Audit row of their call, by call ID and person, and are
+// never rows themselves. Two parallel calls of one tool get their own records; a duplicate is shown once; a record
+// written after the period's end still annotates its call; records without an email (compressionAudit.caller false),
+// of another person, or for a call not shown, annotate nothing; calls from before 0.5.0 (no call ID) get nothing.
+func TestAuditCompressionOnClickHouse(t *testing.T) {
+	a := clickhouseTestDB(t, "audit_compress")
+	ctx := context.Background()
+	t0 := time.Date(2026, 11, 19, 9, 0, 0, 0, time.UTC)
+	call := func(id string) map[string]string {
+		m := map[string]string{"mcp.method.name": "tools/call", "mcp.target": "crm", "gen_ai.tool.name": "get_log", "jwt.email": "user1@example.com",
+			"http.response.status_code": "200", "jwt.groups": `["eng"]`}
+		if id != "" {
+			m["ambit.call_id"] = id
+		}
+		return m
+	}
+	rec := func(id, email, part, typ string, in, out, omitted int) map[string]string {
+		m := guardRecord("crm", typ, `["eng"]`, in, out)
+		m["ambit.compress.mode"], m["ambit.compress.part"], m["ambit.compress.omitted"], m["ambit.call_id"], m["gen_ai.tool.name"] = "shorten", part, fmt.Sprint(omitted), id, "get_log"
+		if email != "" {
+			m["jwt.email"] = email
+		}
+		return m
+	}
+	insertLog(t, a, t0, call("c_a"))
+	insertLog(t, a, t0, call("c_b")) // the same tool at the same moment
+	insertLog(t, a, t0.Add(time.Second), call("c_c"))
+	insertLog(t, a, t0.Add(2*time.Second), call(""))
+	insertLog(t, a, t0.Add(3*time.Second), call("c_e"))
+	insertLog(t, a, t0.Add(59*time.Second), call("c_late"))
+	insertLog(t, a, t0.Add(time.Second), rec("c_a", "user1@example.com", "0", "logs", 38093, 10035, 14))
+	insertLog(t, a, t0.Add(time.Second), rec("c_a", "user1@example.com", "1", "json", 500, 400, 0))
+	insertLog(t, a, t0.Add(2*time.Second), rec("c_a", "user1@example.com", "0", "logs", 38093, 10035, 14)) // delivered twice
+	insertLog(t, a, t0.Add(time.Second), rec("c_b", "user1@example.com", "0", "logs", 20000, 5000, 3))
+	insertLog(t, a, t0.Add(4*time.Second), rec("c_e", "", "0", "logs", 20000, 5000, 3))                  // caller false
+	insertLog(t, a, t0.Add(4*time.Second), rec("c_c", "user2@example.com", "0", "logs", 20000, 5000, 3)) // another person
+	insertLog(t, a, t0.Add(4*time.Second), rec("c_none", "user1@example.com", "0", "logs", 1, 1, 0))     // gateway record lost
+	insertLog(t, a, t0.Add(61*time.Second), rec("c_late", "user1@example.com", "0", "json", 900, 300, 0))
+
+	calls, err := a.Calls(ctx, "user1@example.com", t0.Add(-time.Hour), t0.Add(time.Minute), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 6 {
+		t.Fatalf("%d rows, want the 6 gateway calls: %+v", len(calls), calls)
+	}
+	got := map[string]*Compression{}
+	for _, c := range calls {
+		got[c.CallID] = c.Compression
+	}
+	want := map[string]*Compression{
+		"c_a": {Mode: "shorten", BytesIn: 38593, BytesOut: 10435, Match: "call-id", Parts: []CompressionPart{
+			{Part: 0, Type: "logs", BytesIn: 38093, BytesOut: 10035, Omitted: 14}, {Part: 1, Type: "json", BytesIn: 500, BytesOut: 400}}},
+		"c_b":    {Mode: "shorten", BytesIn: 20000, BytesOut: 5000, Match: "call-id", Parts: []CompressionPart{{Part: 0, Type: "logs", BytesIn: 20000, BytesOut: 5000, Omitted: 3}}},
+		"c_c":    nil,
+		"":       nil,
+		"c_e":    nil,
+		"c_late": {Mode: "shorten", BytesIn: 900, BytesOut: 300, Match: "call-id", Parts: []CompressionPart{{Part: 0, Type: "json", BytesIn: 900, BytesOut: 300}}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		for id := range want {
+			t.Errorf("%s: got %+v, want %+v", id, got[id], want[id])
+		}
+	}
+}

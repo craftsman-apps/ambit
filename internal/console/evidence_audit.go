@@ -28,8 +28,8 @@ const evidenceCallsWhere = `LogAttributes['ambit.kind'] = ''
   AND ({email:String} = '' OR LogAttributes['jwt.email'] = {email:String}
        OR (LogAttributes['jwt.email'] = '' AND has({subjects:Array(String)}, LogAttributes['jwt.sub'])))`
 
-var evidenceCallsSQL = withClassify(`{classify}
-SELECT Timestamp, LogAttributes['jwt.email'], LogAttributes['route'], LogAttributes['mcp.method.name'], LogAttributes['mcp.target'],
+// evidenceCallsColumns are the columns writeCalls reads, after {classify}.
+const evidenceCallsColumns = `Timestamp, LogAttributes['jwt.email'], LogAttributes['route'], LogAttributes['mcp.method.name'], LogAttributes['mcp.target'],
        LogAttributes['gen_ai.tool.name'],
        if(LogAttributes['gen_ai.request.model'] != '', LogAttributes['gen_ai.request.model'], LogAttributes['agw.ai.original_model']),
        {status}, LogAttributes['error'],
@@ -38,7 +38,10 @@ SELECT Timestamp, LogAttributes['jwt.email'], LogAttributes['route'], LogAttribu
        LogAttributes['ambit.key_id'], LogAttributes['ambit.identity'], LogAttributes['jwt.sub'],
        LogAttributes['ambit.accessMode'], c_mark, LogAttributes['ambit.rulesVersion'], c_outcome, LogAttributes['url.path'],
        ` + promptGuardSQL + `,
-       if(LogAttributes['ambit.identity'] = 'invalid key', LogAttributes['client.address'], '')
+       if(LogAttributes['ambit.identity'] = 'invalid key', LogAttributes['client.address'], '')`
+
+var evidenceCallsSQL = withClassify(`{classify}
+SELECT ` + evidenceCallsColumns + `
 FROM otel_logs
 WHERE ` + evidenceCallsWhere + `
 ORDER BY Timestamp`)
@@ -134,24 +137,9 @@ func (c *Catalog) prepareAuditExport(ctx context.Context, q url.Values) (*export
 		return nil, err
 	}
 	email := strings.TrimSpace(q.Get("email"))
-	subjects := []string{}
-	if email != "" {
-		rows, err := c.Audit.DB.QueryContext(exportContext(ctx, clickhouse.Parameters{"email": email}), subsSQL)
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var s string
-			if err := rows.Scan(&s); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			subjects = append(subjects, s)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
+	subjects, err := c.subjectsOf(ctx, email)
+	if err != nil {
+		return nil, err
 	}
 	params := clickhouse.Parameters{"from": chTime(from), "to": chTime(to), "email": email, "subjects": arrayLiteral(subjects)}
 	var n uint64
@@ -201,7 +189,7 @@ func (c *Catalog) prepareAuditExport(ctx context.Context, q url.Values) (*export
 			return eachDay(from, to, func(dayFrom, dayTo time.Time) error {
 				p := maps.Clone(params)
 				p["from"], p["to"] = chTime(dayFrom), chTime(dayTo)
-				return c.writeCalls(ctx, w, p, func(k Call) {
+				return c.writeCalls(ctx, w, evidenceCallsSQL, p, func(k Call) {
 					perDay[k.Time.UTC().Format("2006-01-02")]++
 					if k.AccessMode == "audit" {
 						if auditFrom.IsZero() {
@@ -265,9 +253,10 @@ func eachDay(from, to time.Time, fn func(dayFrom, dayTo time.Time) error) error 
 	return nil
 }
 
-// writeCalls writes the gateway records that params select, in time order, and calls seen with each.
-func (c *Catalog) writeCalls(ctx context.Context, w *csvWriter, params clickhouse.Parameters, seen func(Call)) error {
-	rows, err := c.Audit.DB.QueryContext(exportContext(ctx, params), evidenceCallsSQL)
+// writeCalls writes the gateway records that query (evidenceCallsColumns) selects with params, in time order, and calls
+// seen with each; prefix cells come first in each row.
+func (c *Catalog) writeCalls(ctx context.Context, w *csvWriter, query string, params clickhouse.Parameters, seen func(Call), prefix ...any) error {
+	rows, err := c.Audit.DB.QueryContext(exportContext(ctx, params), query)
 	if err != nil {
 		return err
 	}
@@ -282,11 +271,32 @@ func (c *Catalog) writeCalls(ctx context.Context, w *csvWriter, params clickhous
 		}
 		k.Router = routerOf(requested, k.Model)
 		seen(k)
-		if err := w.Row(csvTime(k.Time), k.Email, callWhat(k), callTarget(k), callOutcome(k), k.Status, k.Error, k.InputTokens, k.OutputTokens,
+		if err := w.Row(append(prefix, csvTime(k.Time), k.Email, callWhat(k), callTarget(k), callOutcome(k), k.Status, k.Error, k.InputTokens, k.OutputTokens,
 			k.Mark, cmp.Or(k.RulesVersion, "unknown"), k.Identity, k.KeyID, k.Subject, k.Route, k.Method, k.Server, k.Tool, k.Model, k.Router,
-			k.Path, k.AccessMode, k.ClientAddress, k.PromptGuard); err != nil {
+			k.Path, k.AccessMode, k.ClientAddress, k.PromptGuard)...); err != nil {
 			return err
 		}
 	}
 	return rows.Err()
+}
+
+// subjectsOf is the JWT subjects seen with email in the audit store (none for ""), as the Audit page's search uses them.
+func (c *Catalog) subjectsOf(ctx context.Context, email string) ([]string, error) {
+	subjects := []string{}
+	if email == "" {
+		return subjects, nil
+	}
+	rows, err := c.Audit.DB.QueryContext(exportContext(ctx, clickhouse.Parameters{"email": email}), subsSQL)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			return nil, err
+		}
+		subjects = append(subjects, s)
+	}
+	return subjects, rows.Err()
 }

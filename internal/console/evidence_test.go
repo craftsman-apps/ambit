@@ -44,6 +44,8 @@ type fakeCH struct {
 	app       [][]driver.Value
 	subjects  []string
 	queries   []string
+	stats     [][]driver.Value   // answers of offboardStatsSQL, in call order
+	after     [][][]driver.Value // rows of offboardCallsAfterSQL, in call order
 }
 
 func (f *fakeCH) Connect(context.Context) (driver.Conn, error) { return fakeConn{f}, nil }
@@ -81,6 +83,18 @@ func (c fakeConn) QueryContext(ctx context.Context, q string, _ []driver.NamedVa
 		f.calls = 0
 		f.mu.Unlock()
 		return &fakeRows{ctx: ctx, f: f, cols: len(callsHeader), n: n, row: f.callRow, failAfter: f.failAfter, blockAt: f.blockAt}, nil
+	case q == offboardStatsSQL:
+		f.mu.Lock()
+		v := f.stats[0]
+		f.stats = f.stats[1:]
+		f.mu.Unlock()
+		return one(3, v...), nil
+	case q == offboardCallsAfterSQL:
+		f.mu.Lock()
+		rows := f.after[0]
+		f.after = f.after[1:]
+		f.mu.Unlock()
+		return &fakeRows{ctx: ctx, f: f, cols: len(callsHeader), n: len(rows), row: func(i int) []driver.Value { return rows[i] }}, nil
 	case q == evidenceAppSQL:
 		return &fakeRows{ctx: ctx, f: f, cols: 13, n: len(f.app), row: func(i int) []driver.Value { return f.app[i] }}, nil
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -97,5 +98,44 @@ func TestEvidenceOnClickHouse(t *testing.T) {
 	}
 	if len(files["app-requests.csv"]) != 2 {
 		t.Errorf("ana's app requests: %v", files["app-requests.csv"])
+	}
+}
+
+// The offboarding columns on a real ClickHouse: the grace time (a call 2 s after is not counted, one at 6 s is), every
+// status except 401 and 403 counts as accepted (404, 429, 502 are counted and listed), and the first refusal after.
+func TestOffboardingEvidenceOnClickHouse(t *testing.T) {
+	a := clickhouseTestDB(t, "evidence_test")
+	at := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	call := func(ts time.Time, email, status string) {
+		insertLog(t, a, ts, map[string]string{"jwt.email": email, "jwt.sub": "sub-" + email, "route": "ambit-system/ambit-llm", "gen_ai.request.model": "gpt-5",
+			"http.status": status, "ambit.identity": "key", "ambit.key_id": "k1"})
+	}
+	call(at.Add(-time.Hour), "ana@example.com", "200")
+	call(at.Add(2*time.Second), "ana@example.com", "200") // in flight: inside the grace time
+	call(at.Add(6*time.Second), "ana@example.com", "404")
+	call(at.Add(7*time.Second), "ana@example.com", "429")
+	call(at.Add(8*time.Second), "ana@example.com", "502")
+	call(at.Add(9*time.Second), "ana@example.com", "403") // the block
+	call(at.Add(10*time.Second), "bob@example.com", "200")
+	insertLog(t, a, at.Add(11*time.Second), map[string]string{"jwt.sub": "sub-ana@example.com", "http.status": "401"}) // refusal without an email
+
+	e := newEvidenceFixture(t, nil)
+	e.cat.Audit = a
+	withSCIM(t, e, OffboardingRecord{Email: "ana@example.com", At: at, Trigger: "scim DELETE", GatewayBlocked: true, Grants: []GrantResult{}})
+	resp, body, err := e.get(t, t.Context(), "/api/evidence/offboarding.zip?from=2026-10-01&to=2026-10-31", e.admin)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("%v %v %s", resp.StatusCode, err, body)
+	}
+	files, _ := csvFiles(t, body)
+	row := files["offboarding.csv"][1]
+	if row[9] != "2026-10-02T08:00:00Z" || row[10] != "3" || row[11] != "2026-10-02T09:00:09Z" {
+		t.Errorf("offboarding.csv %v: want last before 08:00, 3 accepted after, first refusal 09:00:09", row)
+	}
+	var statuses []string
+	for _, r := range files["calls-after.csv"][1:] {
+		statuses = append(statuses, r[7])
+	}
+	if strings.Join(statuses, " ") != "404 429 502" {
+		t.Errorf("calls-after.csv statuses %v", statuses)
 	}
 }

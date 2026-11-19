@@ -7,6 +7,8 @@
 #     records of SELECT count() for the same period and kinds, the wrong-key row has its client address, daily-counts
 #     adds up; the export history has the ZIP's SHA-256
 #   3 a viewer gets 403 on both endpoints, with no ZIP
+#   4 the offboarding export: keytest calls a model, is deactivated through SCIM and calls again (refused); the export's
+#     row for keytest has a last accepted call before, 0 accepted calls after and a first refused call after
 # Run as one locked unit (CLAUDE.md): lockf /tmp/ambit-kind.lock sh -c 'make image install && test/stepevidence.sh'
 set -euo pipefail
 NS=${1:-ambit-system}
@@ -14,8 +16,22 @@ cd "$(dirname "$0")/.."
 source test/lib.sh
 LLM=http://llm.localtest.me:8080/v1/chat/completions
 CH_POD=ambit-clickhouse-0
+G=ambitproject.dev
+SCIM_ID=""; DEACTIVATED=""
+PATCH_ON='{"Operations":[{"op":"replace","path":"active","value":true}]}'
+PATCH_OFF='{"schemas":["urn:ietf:params:scim:api:messages:2.0:PatchOp"],"Operations":[{"op":"Replace","path":"active","value":"False"}]}'
+scim() { # scim METHOD PATH [JSON]: as the identity provider; body in $W/api
+  local -a a=(-s -o "$W/api" -w '%{http_code}' -X "$1" -H "Authorization: Bearer $SCIM_TOKEN" -H 'Content-Type: application/scim+json')
+  [[ $# -ge 3 ]] && a+=(-d "$3")
+  command curl "${a[@]}" "$BASE/scim/v2$2"
+}
+field() { uv run --no-project python -c "import json;d=json.load(open('$W/api'));print($1)"; }
+mock() { command curl -s -o "$W/llm" -w '%{http_code}' -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
+  -d '{"model":"mock/echo","messages":[{"role":"user","content":"ping"}]}' "$LLM"; }
 ch() { kubectl -n "$NS" exec "$CH_POD" -- sh -c 'clickhouse-client --user ambit --password "$CLICKHOUSE_PASSWORD" -q "$0"' "$1"; }
 cleanup() {
+  [[ -n "$DEACTIVATED" ]] && { wait_for 60 '[[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_ON") == 200 ]]'; } >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete "accessrules.$G" evidence-everyone-mock --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" exec "$CH_POD" -- rm -f /tmp/console.test /tmp/otel_logs.sql >/dev/null 2>&1 || true
   ch "DROP DATABASE IF EXISTS evidence_test SYNC" >/dev/null 2>&1 || true
 }
@@ -33,10 +49,10 @@ ch "SHOW CREATE TABLE otel.otel_logs FORMAT TSVRaw" > "$W/otel_logs.sql"
 kubectl -n "$NS" exec -i "$CH_POD" -- sh -c 'cat > /tmp/console.test && chmod +x /tmp/console.test' < "$W/console.test"
 kubectl -n "$NS" exec -i "$CH_POD" -- sh -c 'cat > /tmp/otel_logs.sql' < "$W/otel_logs.sql"
 ch "DROP DATABASE IF EXISTS evidence_test SYNC" >/dev/null; ch "CREATE DATABASE evidence_test" >/dev/null
-out=$(kubectl -n "$NS" exec "$CH_POD" -- sh -c "cd /tmp && env AMBIT_TEST_CLICKHOUSE_ADDR=127.0.0.1:8123 AMBIT_TEST_CLICKHOUSE_USER=ambit AMBIT_TEST_CLICKHOUSE_PASSWORD=\"\$CLICKHOUSE_PASSWORD\" AMBIT_TEST_OTEL_LOGS_DDL=/tmp/otel_logs.sql ./console.test -test.run '^TestEvidenceOnClickHouse\$' -test.v" 2>&1) ||
+out=$(kubectl -n "$NS" exec "$CH_POD" -- sh -c "cd /tmp && env AMBIT_TEST_CLICKHOUSE_ADDR=127.0.0.1:8123 AMBIT_TEST_CLICKHOUSE_USER=ambit AMBIT_TEST_CLICKHOUSE_PASSWORD=\"\$CLICKHOUSE_PASSWORD\" AMBIT_TEST_OTEL_LOGS_DDL=/tmp/otel_logs.sql ./console.test -test.run '^(TestEvidenceOnClickHouse|TestOffboardingEvidenceOnClickHouse)\$' -test.v" 2>&1) ||
   { echo "$out" | tail -30; fail "1 the export queries on ClickHouse"; }
-grep -q -- "--- PASS: TestEvidenceOnClickHouse" <<<"$out" || fail "1 test did not run: $(tail -5 <<<"$out")"
-pass "1 export queries on ClickHouse $(ch 'SELECT version()'): only gateway records, count matches, one-person filter, $(grep -o 'retention [^ ]* from [a-z]*' <<<"$out" || true)"
+grep -q -- "--- PASS: TestEvidenceOnClickHouse" <<<"$out" && grep -q -- "--- PASS: TestOffboardingEvidenceOnClickHouse" <<<"$out" || fail "1 tests did not run: $(tail -5 <<<"$out")"
+pass "1 export queries on ClickHouse $(ch 'SELECT version()'): only gateway records, count matches, one-person filter, offboarding grace and accepted statuses, $(grep -o 'retention [^ ]* from [a-z]*' <<<"$out" || true)"
 
 # 2 · a closed period [from, to) around two requests: user09's model call and a wrong key
 from=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -96,4 +112,54 @@ sign_in keycloak user01 user01-test-pass
 code=$(command curl -s -b "$W/jar" -o "$W/viewer.zip" -w '%{http_code}' "$BASE/api/evidence/audit.zip?from=$from&to=$to")
 [[ "$code" == 403 && $(head -c 2 "$W/viewer.zip") != PK ]] || fail "3 a viewer's export answered $code"
 pass "3 a viewer gets 403 on both endpoints"
+
+# 4 · offboarding: a call before, the SCIM deactivation, a refused call after
+kubectl -n "$NS" apply -f - >/dev/null <<EOF
+apiVersion: $G/v1alpha1
+kind: AccessRule
+metadata: { name: evidence-everyone-mock }
+spec: { allSignedIn: true, models: [mock-echo] }
+EOF
+SCIM_TOKEN=$(kubectl -n "$NS" get secret ambit-console-keys -o jsonpath='{.data.scim-token}' | base64 -d)
+c=$(scim POST /Users '{"schemas":["urn:ietf:params:scim:schemas:core:2.0:User"],"userName":"keytest@example.com","active":true,"emails":[{"value":"keytest@example.com","primary":true}]}')
+if [[ "$c" == 409 ]]; then  # the SCIM user stays after stepkeys or a rerun; make sure it is active
+  [[ $(scim GET '/Users?filter=userName%20eq%20%22keytest@example.com%22') == 200 ]] || fail "4 scim lookup"
+  SCIM_ID=$(field 'd["Resources"][0]["id"]')
+  { wait_for 60 '[[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_OFF") == 200 ]]' && wait_for 60 '[[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_ON") == 200 ]]'; } || fail "4 reset keytest"
+else
+  [[ "$c" == 201 ]] || fail "4 scim create: $c $(cat "$W/api")"
+  SCIM_ID=$(field 'd["id"]')
+fi
+wait_for 60 '[[ $(mock "$(token keytest)") == 200 ]]' || fail "4 keytest's model call before offboarding: $(head -c 200 "$W/llm")"
+sleep 1
+DEACTIVATED=1
+[[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_OFF") == 200 ]] || fail "4 deactivate: $(cat "$W/api")"
+wait_for 10 '[[ $(mock "$(token keytest)") == 403 ]]' || fail "4 the offboarded person's call was not refused"
+sleep 6  # past the 5 s grace time
+[[ $(mock "$(token keytest)") == 403 ]] || fail "4 the offboarded person's later call was not refused"
+for _ in $(seq 1 60); do
+  n=$(ch "SELECT count() FROM otel.otel_logs WHERE LogAttributes['jwt.email'] = 'keytest@example.com' AND Timestamp >= now() - INTERVAL 2 MINUTE AND (LogAttributes['http.status'] = '403' OR LogAttributes['http.response.status_code'] = '403')")
+  [[ "$n" -ge 2 ]] && break; sleep 2
+done
+[[ "$n" -ge 2 ]] || fail "4 the refused calls did not reach otel_logs ($n)"
+sign_in keycloak user10 user10-test-pass
+day=$(date -u +%Y-%m-%d)
+code=$(command curl -s -b "$W/jar" -o "$W/off.zip" -w '%{http_code}' "$BASE/api/evidence/offboarding.zip?from=$day&to=$day")
+[[ "$code" == 200 ]] || fail "4 offboarding export answered $code: $(head -c 300 "$W/off.zip")"
+row=$(uv run --no-project python - "$W/off.zip" <<'PY'
+import csv, hashlib, io, json, sys, zipfile
+z = zipfile.ZipFile(sys.argv[1])
+assert z.namelist()[-1] == "manifest.json"
+m = json.loads(z.read("manifest.json"))
+for f in m["files"]:
+    assert hashlib.sha256(z.read(f["name"])).hexdigest() == f["sha256"], f["name"]
+rows = [r for r in csv.DictReader(io.StringIO(z.read("offboarding.csv").decode("utf-8"), newline="")) if r["email"] == "keytest@example.com"]
+r = rows[-1]
+print(r["gateway_blocked"], "last-before" if r["last_accepted_call_before"] else "no-last-before", r["accepted_calls_after"], "refused-after" if r["first_refused_call_after"] else "no-refused-after")
+PY
+) || fail "4 the offboarding ZIP"
+[[ "$row" == "true last-before 0 refused-after" ]] || fail "4 keytest's offboarding row: '$row'"
+[[ $(scim PATCH "/Users/$SCIM_ID" "$PATCH_ON") == 200 ]] || fail "4 reactivate: $(cat "$W/api")"
+DEACTIVATED=""
+pass "4 offboarding export: keytest's row is blocked, with a call before, 0 accepted calls after and a refused call after"
 done_step evidence

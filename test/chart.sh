@@ -182,31 +182,40 @@ grep -qF "$audit_warn" <<<"$(notes --set access.mode=audit)" || { echo "FAIL cha
 # access-log field; bad values are refused at render time (values.schema.json and the template).
 pg() { helm template ambit charts/ambit -n ambit-system -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml "$@"; }
 check 'assert not [x for x in docs if x["metadata"]["name"]=="ambit-llm-guard"]
+assert not [e for e in one("Deployment","ambit-router")["spec"]["template"]["spec"]["containers"][0]["env"] if e["name"]=="AMBIT_PROMPT_GUARD"]
 assert "ambit.promptGuard" not in one("ConfigMap","ambit-access-log-base")["data"]["spec.yaml"]' "prompt guard off by default: no policy, no access-log field"
 pgcheck() { local saved=$out; out=$(pg --set llm.promptGuard.enabled=true "${@:3}") || { echo "FAIL chart: render: $2"; exit 1; }; check "$1" "$2"; out=$saved; }
 guard='g=one("AgentgatewayPolicy","ambit-llm-guard")["spec"]; r=g["backend"]["ai"]["promptGuard"]["request"]
 assert g["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute","name":"ambit-llm"}], g
 assert "response" not in g["backend"]["ai"]["promptGuard"] and "streaming" not in g["backend"]["ai"]["promptGuard"], g
 log=yaml.safe_load(one("ConfigMap","ambit-access-log-base")["data"]["spec.yaml"])["frontend"]["accessLog"]["attributes"]["add"]
-assert {"name":"ambit.promptGuard","expression":"guardrails.map(g, g.phase + \":\" + g.guard + \":\" + g.action)"} in log, log'
+assert {"name":"ambit.promptGuard","expression":"guardrails.map(g, g.phase + \":\" + g.guard + \":\" + g.action)"} in log, log
+import json
+def refusal(m): return {"message":json.dumps({"error":{"code":"prompt_guard","message":m,"type":"permission_error"},"type":"error"},separators=(",",":")),"headers":[{"name":"content-type","value":"application/json"}]}
+env=one("Deployment","ambit-router")["spec"]["template"]["spec"]["containers"][0]["env"]
+rg=[json.loads(e["value"]) for e in env if e["name"]=="AMBIT_PROMPT_GUARD"]'
 pgcheck "$guard"'
-assert r==[{"regex":{"action":"Audit","builtins":["CreditCard","Ssn","Email","PhoneNumber"]},"response":{"message":"The prompt was refused by the prompt guard of this gateway."}}], r' \
-  "prompt guard on: audit mode and the four built-ins by default, one policy on ambit-llm, the access-log field"
+assert r==[{"regex":{"action":"Audit","builtins":["CreditCard","Ssn","Email","PhoneNumber"]},"response":refusal("The prompt was refused by the prompt guard of this gateway.")}], r
+assert rg==[{"mode":"audit","builtins":["CreditCard","Ssn","Email","PhoneNumber"],"patterns":[],"webhook":{}}], rg' \
+  "prompt guard on: audit mode and the four built-ins by default, one policy on ambit-llm, the access-log field, a JSON refusal body, the rules on ambit-router"
 pgcheck "$guard"'
-assert r==[{"regex":{"action":"Reject","builtins":["Email"],"matches":["(?i)ignore (all )?previous instructions","AKIA[0-9A-Z]{16}","\\d{3}-\\d{4}"]},"response":{"message":"No."}}], r' \
-  "prompt guard reject: built-ins, custom patterns (escapes kept) and the message" \
+assert r==[{"regex":{"action":"Reject","builtins":["Email"],"matches":["(?i)ignore (all )?previous instructions","AKIA[0-9A-Z]{16}","\\d{3}-\\d{4}"]},"response":refusal("No.")}], r
+assert rg==[{"mode":"reject","builtins":["Email"],"patterns":["(?i)ignore (all )?previous instructions","AKIA[0-9A-Z]{16}","\\d{3}-\\d{4}"],"webhook":{}}], rg' \
+  "prompt guard reject: built-ins, custom patterns (escapes kept) and the message; ambit-router gets the same rules" \
   --set llm.promptGuard.mode=reject --set 'llm.promptGuard.builtins={Email}' --set llm.promptGuard.rejectMessage=No. \
   --set-json 'llm.promptGuard.patterns=["(?i)ignore (all )?previous instructions","AKIA[0-9A-Z]{16}","\\d{3}-\\d{4}"]'
 pgcheck "$guard"'
 assert r[0]["regex"]["action"]=="Mask" and r[0]["regex"]["matches"]==["secret-[0-9]+"] and "builtins" not in r[0]["regex"], r' \
   "prompt guard mask: patterns only" --set llm.promptGuard.mode=mask --set-json 'llm.promptGuard.builtins=[]' --set-json 'llm.promptGuard.patterns=["secret-[0-9]+"]'
 pgcheck "$guard"'
-assert r[1]=={"webhook":{"action":"Reject","backendRef":{"name":"guard-hook","namespace":"guards","port":9000},"failureMode":"FailOpen"}}, r' \
-  "prompt guard webhook after the patterns, Reject in mask mode, namespace, port and failure mode" \
+assert r[1]=={"webhook":{"action":"Reject","backendRef":{"name":"guard-hook","namespace":"guards","port":9000},"failureMode":"FailOpen"}}, r
+assert rg[0]["webhook"]=={"url":"http://guard-hook.guards.svc:9000/request","failureMode":"FailOpen"}, rg' \
+  "prompt guard webhook after the patterns, Reject in mask mode, namespace, port and failure mode; ambit-router calls the same webhook" \
   --set llm.promptGuard.mode=mask --set llm.promptGuard.webhook.service=guard-hook --set llm.promptGuard.webhook.namespace=guards \
   --set llm.promptGuard.webhook.port=9000 --set llm.promptGuard.webhook.failureMode=FailOpen
 pgcheck "$guard"'
-assert r==[{"webhook":{"action":"Audit","backendRef":{"name":"guard-hook","port":8000},"failureMode":"FailClosed"}}], r' \
+assert r==[{"webhook":{"action":"Audit","backendRef":{"name":"guard-hook","port":8000},"failureMode":"FailClosed"}}], r
+assert rg[0]["webhook"]["url"]=="http://guard-hook.ambit-system.svc:8000/request", rg' \
   "prompt guard webhook only, audit mode: action Audit, the release namespace" --set-json 'llm.promptGuard.builtins=[]' --set llm.promptGuard.webhook.service=guard-hook
 long=$(printf 'a%.0s' $(seq 1 1025))
 for bad in "--set llm.promptGuard.mode=block" "--set-json llm.promptGuard.builtins=[\"Iban\"]" "--set llm.promptGuard.patterns[0]=$long" \

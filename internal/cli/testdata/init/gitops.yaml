@@ -1,0 +1,34 @@
+console:
+  host: console.example.com
+  url: https://console.example.com
+evidence:
+  enabled: true
+  retention: 8760h
+gateway:
+  replicas: 2
+  tls:
+    certificateSecret: ambit-tls
+    enabled: true
+gitops:
+  branch: main
+  enabled: true
+  github:
+    appID: "123456"
+    privateKeySecret: ambit-github-app
+  path: ambit
+  repository: acme/platform-config
+limits:
+  enabled: true
+  failureMode: FailOpen
+llm:
+  enabled: true
+  host: llm.example.com
+  jwt:
+    dex: true
+mcp:
+  enabled: true
+  host: mcp.example.com
+  jwt:
+    dex: true
+protection:
+  enabled: true

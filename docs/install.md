@@ -18,9 +18,11 @@ Ambit is installed with two Helm charts. The charts and the console image are pu
 
 ## Install with the ambit CLI
 
-Install the [ambit CLI](cli.md) of the Ambit version you want, write `values.yaml` (see the next section), and run:
+Install the [ambit CLI](cli.md) of the Ambit version you want, then:
 
 ```sh
+ambit init                      # asks questions and writes values.yaml; never asks for a secret value
+# create the Secrets it names, with the kubectl commands it prints
 ambit install -f values.yaml
 ```
 
@@ -168,6 +170,8 @@ Valkey holds the budget counters (see [Budgets](budgets.md)). The Valkey that th
 
 ## Argo CD and GitOps
 
+`ambit init --gitops argocd` writes the values file, the dependency CRDs and four Argo CD Applications into your configuration repository, so Argo CD installs Ambit itself (see [ambit init](cli.md#--gitops-argocd)).
+
 In GitOps mode the console opens pull requests in your configuration repository instead of changing the cluster. Argo CD applies what is merged.
 
 ```yaml
@@ -200,8 +204,15 @@ The gateway then serves HTTPS on `gateway.tls.port` (default 8443), and plain HT
 
 ## Upgrade and uninstall
 
-Read [Upgrading](upgrading.md) before each upgrade. Apply the new release's dependency CRDs and upgrade the CRD chart
-first, then Ambit:
+Read [Upgrading](upgrading.md) before each upgrade. With the CLI of the new version:
+
+```sh
+ambit upgrade -f values.yaml
+```
+
+It finds the releases (also ones you installed with Helm), applies the dependency CRDs, upgrades `ambit-crds`, then
+`ambit`, waits and runs the production checklist. With Helm only, apply the new release's dependency CRDs and upgrade
+the CRD chart first, then Ambit:
 
 ```sh
 R=https://github.com/craftsman-apps/ambit/releases/download/v<new version>

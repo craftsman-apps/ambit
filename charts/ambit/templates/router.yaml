@@ -54,6 +54,16 @@ spec:
           env:
             - name: AMBIT_NAMESPACE
               valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+            {{- with .Values.llm.promptGuard }}{{ if .enabled }}
+            # The prompt guard's rules: the gateway runs its guard only when it calls the chosen model, after
+            # ambit-router has sent the prompt to the classifier, so ambit-router applies the same rules first.
+            {{- $hook := dict }}
+            {{- if .webhook.service }}
+            {{- $hook = dict "url" (printf "http://%s.%s.svc:%v/request" .webhook.service (.webhook.namespace | default $.Release.Namespace) .webhook.port) "failureMode" .webhook.failureMode }}
+            {{- end }}
+            - name: AMBIT_PROMPT_GUARD
+              value: {{ dict "mode" .mode "builtins" .builtins "patterns" .patterns "webhook" $hook | toJson | quote }}
+            {{- end }}{{ end }}
           ports: [{ name: grpc, containerPort: 9000 }, { name: health, containerPort: 8081 }]
           readinessProbe: { httpGet: { path: /healthz, port: health }, periodSeconds: 2 }
           # Removed from the Service at deletion; this wait lets the gateways see that before SIGTERM.

@@ -1,0 +1,46 @@
+console:
+  host: console.example.com
+  url: https://console.example.com
+dex:
+  envVars:
+  - name: SSO_SAML_CA
+    valueFrom:
+      secretKeyRef:
+        key: caData
+        name: ambit-sso
+evidence:
+  enabled: true
+  retention: 8760h
+gateway:
+  replicas: 2
+  tls:
+    certificateSecret: ambit-tls
+    enabled: true
+limits:
+  enabled: true
+  failureMode: FailOpen
+llm:
+  enabled: true
+  host: llm.example.com
+  jwt:
+    dex: true
+mcp:
+  enabled: true
+  host: mcp.example.com
+  jwt:
+    dex: true
+protection:
+  enabled: true
+sso:
+  connectors:
+  - config:
+      caData: $SSO_SAML_CA
+      emailAttr: email
+      entityIssuer: https://console.example.com/dex/callback
+      groupsAttr: groups
+      redirectURI: https://console.example.com/dex/callback
+      ssoURL: https://idp.acme.example/sso
+      usernameAttr: name
+    id: company
+    name: Company sign-in
+    type: saml

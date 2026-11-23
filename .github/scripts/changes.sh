@@ -27,18 +27,18 @@ while IFS= read -r f; do
     # Unrelated to every job here.
     docs/* | site/* | *.md | .gitignore | .github/dependabot.yml) ;;
     .github/workflows/site.yml | .github/workflows/release.yml | .github/workflows/codeql.yml) ;;
-    .github/workflows/presets-contract.yml | .github/workflows/ci-cache.yml) ;;
+    .github/workflows/presets-contract.yml | .github/workflows/ci-cache.yml | .github/workflows/winget-first.yml) ;;
     .github/scripts/highest-tag.sh | .github/scripts/highest-tag_test.sh) ;;  # release.yml; tested in changes-test
     # Release packaging: GoReleaser puts LICENSE and NOTICE in every archive.
     LICENSE | NOTICE | .goreleaser.yaml) add snapshot ;;
-    scripts/npm/* | scripts/homebrew/*) add build snapshot ;;
+    scripts/npm/* | scripts/homebrew/* | scripts/scoop/* | scripts/winget/*) add build snapshot ;;
     # The console embeds web/; internal/cli/connect's test reads tool-setup.ts.
     web/src/lib/tool-setup.ts) add $IMAGE cli_unit ;;
     web/*) add $IMAGE ;;
     # internal/cli/checks tests read the charts.
     charts/*) add $IMAGE cli_unit ;;
     Dockerfile | .dockerignore | Makefile | hack/*) add $IMAGE ;;
-    test/cli-local.sh | test/cli-partial.sh | test/cli-install.sh) add build cli_kind ;;
+    test/cli-local.sh | test/cli-partial.sh | test/cli-install.sh | test/gitops/init-argocd.sh | test/gitops/gitserve.go) add build cli_kind ;;
     test/quickstart.sh) add build quickstart ;;
     test/lib.sh) add build quickstart e2e ;;
     test/chart.sh | test/alerts.sh | test/alerts/*) add build ;;

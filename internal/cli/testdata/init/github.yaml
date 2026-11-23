@@ -1,0 +1,45 @@
+console:
+  host: console.example.com
+  url: https://console.example.com
+dex:
+  envVars:
+  - name: SSO_CLIENT_SECRET
+    valueFrom:
+      secretKeyRef:
+        key: clientSecret
+        name: ambit-sso
+evidence:
+  enabled: true
+  retention: 8760h
+gateway:
+  replicas: 2
+  tls:
+    certificateSecret: ambit-tls
+    enabled: true
+limits:
+  enabled: true
+  failureMode: FailOpen
+llm:
+  enabled: true
+  host: llm.example.com
+  jwt:
+    dex: true
+mcp:
+  enabled: true
+  host: mcp.example.com
+  jwt:
+    dex: true
+protection:
+  enabled: true
+sso:
+  connectors:
+  - config:
+      clientID: Iv1.abc
+      clientSecret: $SSO_CLIENT_SECRET
+      loadAllGroups: false
+      orgs:
+      - name: acme
+      redirectURI: https://console.example.com/dex/callback
+    id: company
+    name: Company sign-in
+    type: github

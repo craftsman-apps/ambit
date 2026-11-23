@@ -26,7 +26,7 @@ const dryRunManager = "ambit-cli-dry-run"
 // the cluster validated by the API server (a server-side apply with dryRun=All). Objects whose CRD is not installed
 // yet are listed as not validated. Nothing is written: no Secret, no CRD, no release.
 func (a *app) dryRun(ctx context.Context, p *out.Printer, c *kube.Clients, h helmx.Client, charts local.Charts, vals map[string]any,
-	plan *crdPlan, secrets []secretFile) error {
+	plan *crdPlan, secrets []secretFile, verb string) error {
 	ns := a.g.namespace
 	if err := plan.apply(ctx, c.Ctrl, true, true); err != nil {
 		return &out.Error{What: "the API server refused the dependency CRDs (dry run)", Why: err.Error(), Next: "add --verbose for details"}
@@ -88,7 +88,7 @@ func (a *app) dryRun(ctx context.Context, p *out.Printer, c *kube.Clients, h hel
 			results = append(results, result{name, status})
 		}
 	}
-	p.Line("Would install %s in %s", strings.Join(counts, " and "), ns)
+	p.Line("Would %s %s in %s", verb, strings.Join(counts, " and "), ns)
 	p.Line("  validated by the API server: %d; not validated (CRD not installed yet): %d", validated, notValidated)
 	var absent []string
 	for n, m := range missing {

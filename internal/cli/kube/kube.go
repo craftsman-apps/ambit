@@ -133,7 +133,11 @@ func Confirm(p *out.Printer, in io.Reader, interactive, yes bool, lines []string
 		return out.Usage("no confirmation", "there is no terminal to ask in", "run the command again with --yes")
 	}
 	p.Line("%s [y/N]", question)
-	answer, _ := bufio.NewReader(in).ReadString('\n')
+	br, ok := in.(*bufio.Reader) // a command that asks twice passes one reader, so no answer is lost in a buffer
+	if !ok {
+		br = bufio.NewReader(in)
+	}
+	answer, _ := br.ReadString('\n')
 	if a := strings.ToLower(strings.TrimSpace(answer)); a != "y" && a != "yes" {
 		return &out.Error{What: "cancelled", Why: fmt.Sprintf("the answer was %q", strings.TrimSpace(answer)), Code: out.ExitFailed}
 	}

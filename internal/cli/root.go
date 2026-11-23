@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -47,6 +48,17 @@ type app struct {
 	testKube   *kube.Clients
 	testChecks func(groups map[string]bool) []checks.Result
 	testTTY    bool
+	stdinBuf   *bufio.Reader
+	// testPrompter answers the questions of ambit init in tests.
+	testPrompter prompter
+}
+
+// stdin is standard input as one buffered reader for every question of a command.
+func (a *app) stdin() *bufio.Reader {
+	if a.stdinBuf == nil {
+		a.stdinBuf = bufio.NewReader(a.in)
+	}
+	return a.stdinBuf
 }
 
 // exitCode ends a command with a code after it printed its own result (e.g. check with a failed check).
@@ -155,6 +167,6 @@ func (a *app) root() *cobra.Command {
 	f.BoolVar(&a.g.noColor, "no-color", false, "no colour in the output")
 	f.BoolVar(&a.g.verbose, "verbose", false, "print library logs (secrets are redacted)")
 	root.AddCommand(a.validateCmd(), a.lintCmd(), a.versionCmd(), a.localCmd(), a.checkCmd(), a.keyCmd(), a.connectCmd(), a.disconnectCmd(),
-		a.installCmd(), a.uninstallCmd())
+		a.initCmd(), a.installCmd(), a.upgradeCmd(), a.uninstallCmd())
 	return root
 }

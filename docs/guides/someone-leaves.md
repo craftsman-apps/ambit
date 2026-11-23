@@ -129,6 +129,10 @@ Ambit keeps a record of each offboarding. As an admin, open **Settings** and **O
 - `keysDeleted`: the personal API keys that were deleted.
 - `grants`: one line for each connected app, with `revokedAtProvider` set to `true` when the vendor confirmed the revocation. The list is empty here because User04 connected no app. A revocation that a vendor does not confirm shows its error and marks the record `completeSuccess: false`. Which vendors truly revoke is in [Offboarding](../offboarding.md).
 
+## 4. Prove it to an auditor
+
+In the console, open **Settings → Evidence**. In **Offboarding**, set both dates to today and select **Download**. In `offboarding.csv` of the ZIP file, the row for `user04@example.com` has `gateway_blocked` `true` and `accepted_calls_after` `0`: from 5 seconds after the offboarding (calls already in flight) until the export, the gateway accepted no call of User04 that the audit store kept. `first_refused_call_after` has the time of the first refused request from the [Check it works](#check-it-works) step. These three columns come from the audit store: without `evidence.enabled: true` they are empty, and the manifest says why. The page shows the ZIP's SHA-256; send it to the auditor with the file. What each column means is in [Offboarding](../offboarding.md#prove-it-to-an-auditor-the-offboarding-export).
+
 ## If the person comes back
 
 Reactivating the user in the identity provider lifts the block. The old keys and app grants stay deleted. The person signs in and creates new keys.
@@ -140,3 +144,4 @@ While a user is deactivated, the console refuses to make keys for that person wi
 - [Offboarding](../offboarding.md): which vendors truly revoke a person's grants.
 - [Personal API keys](../api-keys.md): how keys follow the identity, and what offboarding does to them.
 - [Give an agent tools and apps](mcp-apps.md): connected apps.
+- [Do a quarterly access review](access-review.md): the access review export.

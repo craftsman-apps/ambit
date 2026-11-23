@@ -61,6 +61,8 @@ type Catalog struct {
 	Audit *Audit
 	// AppAudit sends MCP app requests, decisions and refused attempts to the collector; nil when evidence is off.
 	AppAudit *AppRecorder
+	// Evidence serves Settings → Evidence (ZIP exports for an auditor); nil when evidence.exports.enabled is false.
+	Evidence *EvidenceExports
 	// Budgets shows today's use of each Budget; nil when limits are off.
 	Budgets *Budgets
 	// Dependencies reports what Ambit relies on and whether it answers; nil hides the page.
@@ -310,6 +312,9 @@ func (c *Catalog) register(mux *http.ServeMux, auth *Auth) {
 	if c.Audit != nil {
 		c.Audit.register(mux, admin)
 		mux.HandleFunc("GET /api/audit/would-refuse", admin(c.wouldRefuse))
+	}
+	if c.Evidence != nil {
+		c.registerEvidence(mux, admin)
 	}
 	if c.Budgets != nil {
 		c.Budgets.register(mux, admin)

@@ -76,30 +76,81 @@ func (s *KeyService) eachEventMeta(ctx context.Context, fn func(m *metav1.Partia
 	}
 }
 
+// Record keeps one event that is not a key change (an evidence export) in the same history, with its retention.
+func (s *KeyService) Record(ctx context.Context, actor, action, detail string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.event(ctx, actor, action, "", "", detail)
+}
+
 // Events returns the newest recorded key events (at most historyMax), newest first. Pages are read one at a
-// time and only the newest historyMax are kept, so memory stays bounded however many events exist.
+// time and only the newest historyMax are kept, so memory stays bounded however many events exist. Evidence exports
+// share the history but are not key events: Settings → Evidence lists them.
 func (s *KeyService) Events(ctx context.Context) ([]KeyEvent, error) {
-	var keep []corev1.ConfigMap
+	return s.eventsWhere(ctx, func(action string) bool { return action != evidenceAction })
+}
+
+// eventsWhere is Events for the events whose action keep accepts.
+func (s *KeyService) eventsWhere(ctx context.Context, keep func(action string) bool) ([]KeyEvent, error) {
+	var kept []corev1.ConfigMap
 	newestFirst := func(a, b corev1.ConfigMap) int { return strings.Compare(b.Name, a.Name) } // name encodes time and order
 	for cont := ""; ; {
 		var l corev1.ConfigMapList
 		if err := s.Client.List(ctx, &l, s.eventListOpts(cont)...); err != nil {
 			return nil, err
 		}
-		keep = append(keep, l.Items...)
-		slices.SortFunc(keep, newestFirst)
-		keep = keep[:min(len(keep), historyMax)]
+		for _, cm := range l.Items {
+			if keep(cm.Data["action"]) {
+				kept = append(kept, cm)
+			}
+		}
+		slices.SortFunc(kept, newestFirst)
+		kept = kept[:min(len(kept), historyMax)]
 		if cont = l.Continue; cont == "" {
 			break
 		}
 	}
-	out := make([]KeyEvent, 0, len(keep))
-	for _, cm := range keep {
+	out := make([]KeyEvent, 0, len(kept))
+	for _, cm := range kept {
 		at, _ := time.Parse(time.RFC3339, cm.Annotations[keyEventAtAnn])
 		d := cm.Data
 		out = append(out, KeyEvent{At: at, Actor: d["actor"], Action: d["action"], KeyID: d["keyId"], Email: d["email"], Detail: d["detail"]})
 	}
 	return out, nil
+}
+
+// EventsBetween returns every event in [from, to) whose action is in actions, oldest first, with no limit on their
+// number (evidence exports). Pages are read one at a time.
+func (s *KeyService) EventsBetween(ctx context.Context, from, to time.Time, actions ...string) ([]KeyEvent, error) {
+	out := []KeyEvent{}
+	for cont := ""; ; {
+		var l corev1.ConfigMapList
+		if err := s.Client.List(ctx, &l, s.eventListOpts(cont)...); err != nil {
+			return nil, err
+		}
+		for _, cm := range l.Items {
+			at, err := time.Parse(time.RFC3339, cm.Annotations[keyEventAtAnn])
+			if d := cm.Data; err == nil && !at.Before(from) && at.Before(to) && slices.Contains(actions, d["action"]) {
+				out = append(out, KeyEvent{At: at, Actor: d["actor"], Action: d["action"], KeyID: d["keyId"], Email: d["email"], Detail: d["detail"]})
+			}
+		}
+		if cont = l.Continue; cont == "" {
+			break
+		}
+	}
+	slices.SortStableFunc(out, func(a, b KeyEvent) int { return a.At.Compare(b.At) })
+	return out, nil
+}
+
+// OldestEvent is the time of the oldest kept event (zero when there is none).
+func (s *KeyService) OldestEvent(ctx context.Context) (time.Time, error) {
+	var oldest time.Time
+	err := s.eachEventMeta(ctx, func(m *metav1.PartialObjectMetadata) {
+		if at, err := time.Parse(time.RFC3339, m.Annotations[keyEventAtAnn]); err == nil && (oldest.IsZero() || at.Before(oldest)) {
+			oldest = at
+		}
+	})
+	return oldest, err
 }
 
 // cleanupEvents deletes events older than the retention period. Call it holding s.mu.

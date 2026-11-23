@@ -2,6 +2,7 @@ package console
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -179,7 +180,8 @@ func (c *Catalog) kubeEvent(ctx context.Context, ev AppEvent, obj client.Object)
 	}
 }
 
-var appEventsSQL = `SELECT Timestamp, LogAttributes['ambit.app.action'], LogAttributes['ambit.actor'], LogAttributes['ambit.actor.role'],
+// appEventsSelect reads the app events of a period, optionally of one person; scanAppEvent reads one row of it.
+const appEventsSelect = `SELECT Timestamp, LogAttributes['ambit.app.action'], LogAttributes['ambit.actor'], LogAttributes['ambit.actor.role'],
        LogAttributes['mcp.target'], LogAttributes['ambit.app.request'], LogAttributes['ambit.app.requested_by'],
        LogAttributes['ambit.app.image'], LogAttributes['ambit.app.url'], LogAttributes['ambit.app.comment'],
        LogAttributes['ambit.app.pull_request'], LogAttributes['ambit.app.tools'], LogAttributes['ambit.app.refused_reason']
@@ -187,9 +189,25 @@ FROM otel_logs
 WHERE LogAttributes['ambit.kind'] = '` + AppRecordKind + `'
   AND Timestamp >= {from:DateTime64(9)} AND Timestamp < {to:DateTime64(9)}
   AND ({email:String} = '' OR lower(LogAttributes['ambit.actor']) = lower({email:String})
-       OR lower(LogAttributes['ambit.app.requested_by']) = lower({email:String}))
+       OR lower(LogAttributes['ambit.app.requested_by']) = lower({email:String}))`
+
+var appEventsSQL = appEventsSelect + `
 ORDER BY Timestamp DESC
 LIMIT {limit:UInt32}`
+
+func scanAppEvent(rows *sql.Rows) (AppEvent, error) {
+	var e AppEvent
+	var tools string
+	if err := rows.Scan(&e.Time, &e.Action, &e.Actor, &e.Role, &e.Server, &e.Request, &e.RequestedBy, &e.Image, &e.URL,
+		&e.Comment, &e.PullRequest, &tools, &e.Reason); err != nil {
+		return e, err
+	}
+	e.Tools = []string{}
+	if tools != "" {
+		_ = json.Unmarshal([]byte(tools), &e.Tools)
+	}
+	return e, nil
+}
 
 // AppEvents lists MCP app requests, decisions and refused attempts in [from, to), newest first. A non-empty email keeps
 // the events that person did or that concern their request.
@@ -204,15 +222,9 @@ func (a *Audit) AppEvents(ctx context.Context, email string, from, to time.Time,
 	defer rows.Close()
 	out := []AppEvent{}
 	for rows.Next() {
-		var e AppEvent
-		var tools string
-		if err := rows.Scan(&e.Time, &e.Action, &e.Actor, &e.Role, &e.Server, &e.Request, &e.RequestedBy, &e.Image, &e.URL,
-			&e.Comment, &e.PullRequest, &tools, &e.Reason); err != nil {
+		e, err := scanAppEvent(rows)
+		if err != nil {
 			return nil, err
-		}
-		e.Tools = []string{}
-		if tools != "" {
-			_ = json.Unmarshal([]byte(tools), &e.Tools)
 		}
 		out = append(out, e)
 	}

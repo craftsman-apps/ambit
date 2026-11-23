@@ -5,7 +5,7 @@ description: Every command, flag and exit code of the ambit CLI, the checks of a
 
 # CLI reference
 
-`ambit` starts a local Ambit on kind, checks an install, validates Ambit objects in files, and connects coding tools to Ambit. To install it, see [Quick start](quick-start.md). This page describes release 0.2.0.
+`ambit` starts a local Ambit on kind, installs, upgrades and uninstalls Ambit on any cluster, checks an install, validates Ambit objects in files, and connects coding tools to Ambit. To install it, see [Quick start](quick-start.md); on Windows, `winget install CraftsmanApps.Ambit` or `scoop bucket add ambit https://github.com/craftsman-apps/scoop-ambit` and `scoop install ambit/ambit`. This page describes release 0.2.0.
 
 ## Global flags
 
@@ -215,6 +215,49 @@ Without flags it runs the checks that apply: the pre-install group when Ambit is
 
 `ambit check` needs read access (`get`, `list`) to the Ambit objects (Models, Servers, AccessRules), Deployments, Pods, PodDisruptionBudgets and StorageClasses in the namespace, to CustomResourceDefinitions, and `get` on Secrets in the namespace: Helm keeps the release values in Secrets, P3 reads the TLS certificate, and P10 checks that each credentials Secret exists (without reading its values). The active checks need `create` on `pods/portforward`: the health probes, and P4 and P11 with `--deep`, which read the collector's metrics on port 8888 (one test call serves both). The mark-missing line under P11 needs `create` on `pods/exec` in the ClickHouse pod: it runs one `SELECT` there with the pod's own credentials, so the CLI never reads the ClickHouse password. With an external ClickHouse, or without that permission, the line is `?`; the Audit page shows the same count. R2 uses SelfSubjectAccessReviews, which every signed-in user may create. Without a permission, the check is `?` and names what is missing, for example `cannot get secrets in ambit-system`.
 
+## ambit init
+
+Writes a values file for `ambit install` by asking questions. It never asks for a secret value: it asks for the name of each Secret and prints the `kubectl create secret` command to run. It needs a terminal (without one it stops with exit 2); a team that scripts installs writes the values file itself.
+
+```sh
+ambit init [--out values.yaml] [--gitops argocd] [--force]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--out <file>` | `values.yaml` | file to write. An existing file is refused (exit 1) without `--force`. |
+| `--gitops argocd` | off | also write the Argo CD files of a configuration repository (below). Only `argocd` is accepted. |
+| `--force` | off | overwrite `--out` and the Argo CD files |
+
+The questions, in order (Enter takes the default in brackets): the console address; the LLM gateway host, whether the MCP gateway is on, and its host; the company sign-in (`oidc`, `github`, `saml`, `ldap` or `later`), with the name of the Secret for its secret (default `ambit-sso`); where the gateway tokens come from (your identity provider: issuer, audience and JWKS URL; or Ambit's Dex, for tests); the TLS Secret (default `ambit-tls`, or `none`, which `ambit check --production` fails); the audit log, its retention and an external ClickHouse; budgets, what happens when the budget store does not answer, and an external Valkey; tool protection; GitOps mode (repository, branch, directory, GitHub App ID and the Secret of its key); the number of gateway replicas.
+
+```
+Wrote values.yaml (24 settings).
+Create these Secrets before ambit install (values are never written to files by ambit init):
+  kubectl -n ambit-system create secret generic ambit-sso --from-literal=clientSecret=<client secret>
+  kubectl -n ambit-system create secret tls ambit-tls --cert=<file> --key=<file>
+Or let ambit install create them from files: ambit install -f values.yaml --secret-file ambit-sso/clientSecret=<file> --secret-file ambit-tls/tls.crt=<file> --secret-file ambit-tls/tls.key=<file>
+Next: ambit install -f values.yaml
+```
+
+The file starts with a comment: the CLI version, the date, and that `ambit init` does not read it back, so edit it freely. Every setting it writes exists in the chart's `values.yaml` of the same version. The sign-in connector uses `$ENV_NAME` placeholders, and `dex.envVars` takes their values from the Secret you named.
+
+### --gitops argocd
+
+Argo CD renders the charts itself and keeps no Helm release, so `ambit install` is not used. `ambit init --gitops argocd` writes everything Argo CD needs, with the current directory as the root of your configuration repository:
+
+```
+<GitOps directory>/values.yaml                 the values file (the directory you answered, default ambit)
+<GitOps directory>/crds/dependency-crds.yaml   the dependency CRDs (Gateway API, agentgateway, ToolHive) of this CLI
+argocd/ambit-dependency-crds.yaml              Application: <GitOps directory>/crds, sync wave -2, ServerSideApply=true
+argocd/ambit-crds.yaml                         Application: chart ambit-crds from ghcr.io/craftsman-apps/charts, sync wave -1
+argocd/ambit.yaml                              Application: chart ambit, sync wave 0, with the values file of the repository ($values)
+argocd/ambit-objects.yaml                      Application: the accessrules/, servers/ and models/ directories, sync wave 1
+argocd-parent.yaml                             only if you asked for one parent Application (app of apps)
+```
+
+With a parent, `kubectl apply -n argocd -f argocd-parent.yaml` starts all four, in the order of their sync waves. Without one, apply the four in the order above and wait until each is Healthy. The output prints the Argo CD health check of Ambit's objects (`deploy/argocd/health.lua`) as the `argocd-cm` keys to add. `--out` cannot be used with `--gitops argocd`. To upgrade, run `ambit init --gitops argocd --force` with the newer CLI: it rewrites the chart versions and the CRD bundle, and you review the diff in a pull request.
+
 ## ambit install
 
 Installs Ambit on any cluster: the dependency CRDs (Gateway API, agentgateway, ToolHive), then the Helm releases `ambit-crds` and `ambit`. The result is two ordinary Helm releases, so `helm list`, `helm history`, `helm upgrade` and `helm rollback` keep working. The chart version is always the CLI's own version: to install another version of Ambit, use that version of the CLI.
@@ -257,6 +300,34 @@ Would create or update Secret ambit-sso key clientSecret, from ./sso-secret.txt
 `--secret-file` reads the file, and the CLI redacts its content from every output line before it does anything else with it, also every line of a multi-line value such as a PEM key. It accepts only the Secret names that the values use: the `secretKeyRef` names in `dex.envVars`, `gateway.tls.certificateSecret`, `evidence.clickhouse.external.passwordSecret`, `limits.valkey.external.passwordSecret`, and `gitops.github.privateKeySecret` when `gitops.enabled` is true. A typo is a usage error (exit 2), so it never creates a stray Secret. The Secret is written with the Kubernetes API, not through Helm: the bytes are in no Helm release, `helm get values` cannot show them, and `helm uninstall` and `ambit uninstall` leave the Secret. An existing Secret gets only the given keys (a merge patch; the CLI never reads the Secret back, and its other keys and labels stay); a new one gets the label `ambitproject.dev/created-by=ambit-cli` (type `kubernetes.io/tls` for the TLS Secret, which needs `tls.crt` and `tls.key` in the same command). The namespace is created when it does not exist.
 
 `ambit install` needs what `helm install` needs: the permissions that R2 lists.
+
+## ambit upgrade
+
+Upgrades Ambit to the CLI's own version: the dependency CRDs, then the releases of the charts `ambit-crds` and `ambit`. The releases are found by chart name, so an install made with `helm install` and other release names is upgraded under its own names. `ambit upgrade` and `helm upgrade` are interchangeable: a team can use both on the same install.
+
+```sh
+ambit upgrade (-f values.yaml... | --reuse-values) [--secret-file ...] [--dry-run] [--timeout 10m] [--recover-pending] [--yes]
+```
+
+| Flag | Meaning |
+|---|---|
+| `-f`, `--values <file>` | values file; may repeat. One of `-f` and `--reuse-values` is required, so a forgotten `-f` never keeps old settings silently. |
+| `--reuse-values` | keep the values stored in the release, on top of the new chart's defaults (Helm's `--reset-then-reuse-values`) |
+| `--recover-pending` | mark a release left in `pending-install` or `pending-upgrade` as failed, then upgrade (see below). It asks first. |
+| `--secret-file`, `--dry-run`, `--timeout`, `--chart-repo`, `--registry-config` | as for `ambit install` |
+
+Steps: the target and the question (`Upgrade Ambit 0.4.0 → 0.5.0 in context prod-eu (https://1.2.3.4:6443), namespace ambit-system`, then `Upgrade? [y/N]`; the target is printed also with `--yes`), the preflight, the Secrets, the dependency CRDs (as for install: a newer Gateway API CRD is left alone, an existing CRD that differs is changed only after a question), `ambit-crds`, `ambit`, the wait and the production checks, with the exit codes of install. Before the question it lists the sections of [Upgrading](upgrading.md) for every release between the installed version and the new one. Upgrading to the installed version applies it again (a repair), and says so. It stops with exit 1 when Ambit is not installed in the namespace (`use ambit install`), when Argo CD or another tool manages it, and when the installed chart is newer than the CLI (`use an ambit CLI of version X, or helm rollback`).
+
+A release that a stopped run left in `pending-install` or `pending-upgrade` is refused, because another person or a CI job may be in the middle of an upgrade:
+
+```
+✗ the release ambit is pending-upgrade since 2026-12-01T10:02:11Z (revision 8) — another install or upgrade may be running
+  next: check that no helm or ambit command is working on it (helm history ambit -n ambit-system), then: ambit upgrade --recover-pending
+```
+
+`--recover-pending` refuses while the pending revision is younger than 15 minutes (longer than the default `--timeout`), and says when to try again; there is no flag to skip this. Then it shows the revision, Helm's note on it and its age, and asks `Mark revision 8 of ambit as failed and upgrade? [y/N]` (`--yes` without a terminal goes on). It writes `marked failed by ambit upgrade --recover-pending` on that revision. Helm keeps no lock of its own, so check first that no one else is upgrading.
+
+There is no `ambit rollback`: `helm rollback ambit <revision> -n ambit-system` works on releases the CLI wrote, with Helm 3 and Helm 4. Where a release needs extra steps for a rollback, [Upgrading](upgrading.md) lists them.
 
 ## ambit uninstall
 

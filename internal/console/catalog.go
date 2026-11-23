@@ -607,10 +607,15 @@ func (c *Catalog) validate(r *http.Request, in RuleInput, hasServers bool) error
 // minAboveMax refuses a minimum above a maximum for the same argument. The guard applies every limit whose name equals
 // the argument's without regard to case, also across entries (the editor saves one condition per entry), and the CRD
 // compares min and max only inside one entry.
+// Input the CRD refuses anyway (more than 20 entries, a bound longer than its pattern allows) is left to the API server,
+// so this check stays small whatever a request holds.
 func minAboveMax(args []v1.ArgumentRule) error {
+	if len(args) > 20 {
+		return nil
+	}
 	for _, lo := range args {
 		for _, hi := range args {
-			if lo.Min == "" || hi.Max == "" || !strings.EqualFold(lo.Name, hi.Name) {
+			if lo.Min == "" || hi.Max == "" || len(lo.Min) > 23 || len(hi.Max) > 23 || !strings.EqualFold(lo.Name, hi.Name) {
 				continue
 			}
 			l, okL := new(big.Rat).SetString(lo.Min)

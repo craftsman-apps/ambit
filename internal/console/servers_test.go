@@ -346,3 +346,23 @@ func TestRuleRefusesMinAboveMaxAcrossEntries(t *testing.T) {
 		t.Fatalf("equal bounds, other argument: %d %s", r.Code, r.Body)
 	}
 }
+
+// minAboveMax leaves input the CRD refuses (too many entries, too long a bound) to the API server, so it does no large work.
+func TestMinAboveMaxLeavesOversizedInputToTheCRD(t *testing.T) {
+	many := make([]v1.ArgumentRule, 21)
+	for i := range many {
+		many[i] = v1.ArgumentRule{Name: "limit", Min: "10", Max: "5"}
+	}
+	long := strings.Repeat("9", 24)
+	for name, args := range map[string][]v1.ArgumentRule{
+		"21 entries": many,
+		"long min":   {{Name: "limit", Min: long}, {Name: "limit", Max: "5"}},
+	} {
+		if err := minAboveMax(args); err != nil {
+			t.Errorf("%s: %v (the CRD refuses this input)", name, err)
+		}
+	}
+	if err := minAboveMax(many[:20]); err == nil {
+		t.Error("20 entries: min above max not refused")
+	}
+}

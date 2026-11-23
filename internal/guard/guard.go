@@ -233,7 +233,9 @@ func (g *Guard) filterList(ctx context.Context, resp *extmcp.McpResponse) (*extm
 		_ = json.Unmarshal(t["description"], &desc)
 		server, tool := split(name, resp.ServiceNames)
 		approved, _, pinned := g.Pins.Pins(ctx, server)
-		if pinned && approved[tool] != controller.Fingerprint(tool, desc, t["inputSchema"]) {
+		// A legacy approval (made before 0.5.0) is accepted until the controller moves it to the new fingerprint, which
+		// it does on its next read of the server's tools if the legacy fingerprint still matches (issue 299).
+		if fp := approved[tool]; pinned && fp != controller.Fingerprint(tool, t) && fp != controller.LegacyFingerprint(tool, desc, t["inputSchema"]) {
 			slog.Warn("guard: hid changed or unapproved tool", "server", server, "tool", tool)
 			continue
 		}

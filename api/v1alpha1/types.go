@@ -415,9 +415,14 @@ type Tool struct {
 	Name string `json:"name"`
 	// +optional
 	Description string `json:"description,omitempty"`
-	// Fingerprint is sha256 over the name, description and input schema.
+	// Fingerprint is sha256 over the name, description, title, input and output schema and the standard
+	// annotations (since 0.5.0; before, the name, description and input schema only).
 	// +optional
 	Fingerprint string `json:"fingerprint,omitempty"`
+	// LegacyFingerprint is the fingerprint in the form before 0.5.0. An approval stored in that form is moved to
+	// Fingerprint once, when this still matches it; a changed tool waits for an admin.
+	// +optional
+	LegacyFingerprint string `json:"legacyFingerprint,omitempty"`
 	// ReadOnlyHint and DestructiveHint are the server's own MCP annotations, shown as hints only: a
 	// server's claims about itself are not trusted.
 	// +optional

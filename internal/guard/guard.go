@@ -37,7 +37,8 @@ func ServerOptions() []grpc.ServerOption {
 }
 
 // Pins reports the approved fingerprints of a server's tools and the current ones the controller last
-// read. pinned is false for servers without pins (unknown tools, e.g. per-user servers): nothing is hidden.
+// read. pinned is false only for a per-person server without pins (no admin has read its tools): nothing is
+// hidden. A shared server without pins, or one that cannot be read, is pinned with nothing approved.
 type Pins interface {
 	Pins(ctx context.Context, server string) (approved, current map[string]string, pinned bool)
 }
@@ -113,6 +114,9 @@ func (g *Guard) CheckRequest(ctx context.Context, req *extmcp.McpRequest) (*extm
 	if approved, current, pinned := g.Pins.Pins(ctx, server); pinned {
 		if fp, ok := approved[tool]; !ok || current[tool] != fp {
 			slog.Warn("guard: refused unapproved tool", "server", server, "tool", tool)
+			if len(approved) == 0 {
+				return deny(fmt.Sprintf("%s has no approved tool definitions (its tools have not been read yet, or the Server could not be read), so tool %s is refused", server, tool)), nil
+			}
 			return deny(fmt.Sprintf("tool %s on %s changed since it was approved; an admin must approve it again", tool, server)), nil
 		}
 	}

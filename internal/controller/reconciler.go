@@ -102,6 +102,18 @@ func (r *Reconciler) refresh() time.Duration {
 // tool whose definition no longer matches its pin, or that has none. ambit-guard hides and refuses those.
 func pinTools(s *v1.Server) {
 	if len(s.Status.Tools) == 0 {
+		if len(s.Status.ApprovedTools) > 0 {
+			return // the last read is empty; the approvals stay
+		}
+		// Nothing read and nothing approved (issue 300, option C): a shared server's tools are refused until they are
+		// read; a per-person server's tools are usable without pinning until an admin's account reads them.
+		c := metav1.Condition{Type: "ToolsPinned", Status: metav1.ConditionFalse, Reason: "NotRead", ObservedGeneration: s.Generation,
+			Message: "no tools have been read from this server yet; ambit-guard keeps its tools hidden and refused until they are read"}
+		if s.Spec.Connection != "" {
+			c.Reason = "NotPinned"
+			c.Message = "tool pinning is off: no admin's account has read this server's tools, so changed or new tools are not detected; choose a reader on the Servers page"
+		}
+		meta.SetStatusCondition(&s.Status.Conditions, c)
 		return
 	}
 	if len(s.Status.ApprovedTools) == 0 {

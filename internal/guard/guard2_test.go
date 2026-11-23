@@ -151,3 +151,51 @@ func TestPinsFailClosedWhenTheServerCannotBeRead(t *testing.T) {
 		t.Errorf("call passed while the Server could not be read: %v", res)
 	}
 }
+
+// Issue 300, option C: a shared Server (no connection) with no approved tools is pinned with nothing approved, so its
+// tools stay hidden and refused until the controller has read them. A per-person Server (connection) with no approved
+// tools stays usable without pinning; its unpinned state is shown by the controller and the console. Existing
+// approvals are used as before for both.
+func TestPinsSharedAndPerPersonServersWithoutApprovals(t *testing.T) {
+	shared := &v1.Server{}
+	shared.Name = "crm"
+	perPerson := &v1.Server{Spec: v1.ServerSpec{URL: "https://mcp.example.com", Connection: "github"}}
+	perPerson.Name = "github"
+	approvedPerPerson := perPerson.DeepCopy()
+	approvedPerPerson.Status.ApprovedTools = []v1.ToolPin{{Name: "get_customer", Fingerprint: good}}
+	approvedPerPerson.Status.Tools = []v1.Tool{{Name: "get_customer", Fingerprint: good}}
+	for _, c := range []struct {
+		name         string
+		s            *v1.Server
+		wantPinned   bool
+		wantApproved int
+	}{
+		{"shared, tools not read", shared, true, 0},
+		{"per-person, no reader", perPerson, false, 0},
+		{"per-person, approved tools", approvedPerPerson, true, 1},
+	} {
+		approved, _, pinned := KubePins{Client: pinReader{obj: c.s}, Namespace: "ambit-system"}.Pins(t.Context(), c.s.Name)
+		if pinned != c.wantPinned || len(approved) != c.wantApproved {
+			t.Errorf("%s: pinned=%v approved=%v", c.name, pinned, approved)
+		}
+	}
+	list := `{"tools":[{"name":"get_customer","description":"Look up a customer","inputSchema":` + schema + `}]}`
+	g := &Guard{Pins: KubePins{Client: pinReader{obj: shared}, Namespace: "ambit-system"}, Masker: Builtin{}}
+	res, _ := g.CheckResponse(t.Context(), &extmcp.McpResponse{ServiceNames: []string{"crm"}, Method: "tools/list", McpResponse: []byte(list)})
+	if m := res.GetMutated(); m == nil || strings.Contains(string(m), "get_customer") {
+		t.Errorf("shared server with unread tools: tool listed: %v", res)
+	}
+	call, _ := g.CheckRequest(t.Context(), &extmcp.McpRequest{ServiceNames: []string{"crm"}, Method: "tools/call", McpRequest: []byte(`{"name":"get_customer","arguments":{}}`)})
+	if e := call.GetError(); e == nil || !strings.Contains(e.GetReason(), "no approved tool definitions") {
+		t.Errorf("shared server with unread tools: call %v", call)
+	}
+	g.Pins = KubePins{Client: pinReader{obj: perPerson}, Namespace: "ambit-system"}
+	res, _ = g.CheckResponse(t.Context(), &extmcp.McpResponse{ServiceNames: []string{"github"}, Method: "tools/list", McpResponse: []byte(list)})
+	if res.GetPass() == nil {
+		t.Errorf("per-person server without pins: tools hidden: %v", res)
+	}
+	call, _ = g.CheckRequest(t.Context(), &extmcp.McpRequest{ServiceNames: []string{"github"}, Method: "tools/call", McpRequest: []byte(`{"name":"get_customer","arguments":{}}`)})
+	if call.GetError() != nil {
+		t.Errorf("per-person server without pins: call refused: %v", call)
+	}
+}

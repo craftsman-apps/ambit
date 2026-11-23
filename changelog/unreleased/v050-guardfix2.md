@@ -3,4 +3,5 @@
 - MCP guard: masking now also reads object keys and numbers in structured content and `uri` values; a masked number becomes the placeholder text, and a result whose keys mask to the same text is withheld (#298).
 - MCP guard: results of `resources/read` and `prompts/get` are masked like tool results; the gateway sends them to the guard (#297).
 - MCP guard: when the guard cannot read a `Server`, its tools are hidden and calls refused instead of passed without tool pinning (#300).
+- Tool pinning: a shared server (no `connection`) whose tools have not been read yet now has its tools hidden and refused until they are read. A server with `connection` whose tools no admin's account has read stays usable, and now shows that tool pinning is off: condition `ToolsPinned=False`, reason `NotPinned`, and "Tool pinning off" on the Servers page (#300).
 - Argument limits: a limit can now set `min` (a number at least this value) next to `max`. A limit with only `max` still allows 0 and negative numbers, as before. The access rules page offers "at least" (#302).

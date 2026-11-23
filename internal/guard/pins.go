@@ -25,7 +25,14 @@ func (k KubePins) Pins(ctx context.Context, server string) (approved, current ma
 		return map[string]string{}, map[string]string{}, true
 	}
 	if len(s.Status.ApprovedTools) == 0 {
-		return nil, nil, false
+		if s.Spec.Connection != "" {
+			// A per-person server whose tools no admin has read: usable without pinning (issue 300, option C). The
+			// controller's ToolsPinned=False (NotPinned) condition and the Servers page show it.
+			return nil, nil, false
+		}
+		// A shared server whose tools have not been read yet: nothing is approved, so its tools are hidden and refused
+		// until the controller reads (and so pins) them.
+		return map[string]string{}, map[string]string{}, true
 	}
 	approved, current = map[string]string{}, map[string]string{}
 	for _, p := range s.Status.ApprovedTools {

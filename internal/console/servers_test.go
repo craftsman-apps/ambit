@@ -292,3 +292,33 @@ func TestMyAccessByEmail(t *testing.T) {
 		t.Fatalf("user02: %+v", other)
 	}
 }
+
+// Issue 300, option C: the Servers page shows a per-person server whose tools are not pinned. A shared server is never
+// flagged: its tools are refused until they are read.
+func TestServersListShowsToolPinningOff(t *testing.T) {
+	h, c, a := serversFixture(t)
+	gh := &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "github", Namespace: testNS}, Spec: v1.ServerSpec{URL: "https://mcp.example.com/mcp", Connection: "github"}}
+	if err := c.Create(t.Context(), gh); err != nil {
+		t.Fatal(err)
+	}
+	unread := &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "crm", Namespace: testNS}, Spec: v1.ServerSpec{URL: "https://crm.example.com/mcp"}}
+	if err := c.Create(t.Context(), unread); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, s := range decodeAs[[]ServerView](t, do(t, h, "GET", "/api/servers", user(a, "user01@example.com", RoleViewer), nil).Body.String()) {
+		got[s.Name] = s.ToolPinningOff
+	}
+	if !got["github"] || got["crm"] || got["time"] {
+		t.Fatalf("toolPinningOff: %v", got)
+	}
+	gh.Status.ApprovedTools = []v1.ToolPin{{Name: "list_issues", Fingerprint: "f1"}}
+	if err := c.Status().Update(t.Context(), gh); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range decodeAs[[]ServerView](t, do(t, h, "GET", "/api/servers", user(a, "user01@example.com", RoleViewer), nil).Body.String()) {
+		if s.Name == "github" && s.ToolPinningOff {
+			t.Fatal("approved per-person server still flagged")
+		}
+	}
+}

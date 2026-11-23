@@ -179,3 +179,33 @@ func TestProbeAtCountsAnyAnswerBelow500(t *testing.T) {
 		t.Error("a closed port must fail")
 	}
 }
+
+// Issue 300, option C: with no tools read and nothing approved, ToolsPinned says why. A shared server's tools are
+// hidden and refused until they are read; a per-person server's tools are usable without pinning. Existing approvals
+// stay as they are.
+func TestPinningStateWithoutTools(t *testing.T) {
+	shared := &v1.Server{}
+	pinTools(shared)
+	c := meta.FindStatusCondition(shared.Status.Conditions, "ToolsPinned")
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != "NotRead" || !strings.Contains(c.Message, "hidden and refused") {
+		t.Fatalf("shared: %+v", c)
+	}
+	perPerson := &v1.Server{Spec: v1.ServerSpec{URL: "https://mcp.example.com", Connection: "github"}}
+	pinTools(perPerson)
+	c = meta.FindStatusCondition(perPerson.Status.Conditions, "ToolsPinned")
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != "NotPinned" || !strings.Contains(c.Message, "tool pinning is off") {
+		t.Fatalf("per-person: %+v", c)
+	}
+	// Tools read later (an admin chose a reader): pinned on first read, and the condition clears.
+	perPerson.Status.Tools = []v1.Tool{{Name: "list_issues", Fingerprint: "f1"}}
+	pinTools(perPerson)
+	if readyOfType(perPerson.Status.Conditions, "ToolsPinned") != "Pinned" || len(perPerson.Status.ApprovedTools) != 1 {
+		t.Fatalf("after first read: %+v", perPerson.Status)
+	}
+	// Approved tools with an empty last read (the reader was cleared): approvals and the condition are kept.
+	perPerson.Status.Tools = nil
+	pinTools(perPerson)
+	if readyOfType(perPerson.Status.Conditions, "ToolsPinned") != "Pinned" || len(perPerson.Status.ApprovedTools) != 1 {
+		t.Fatalf("approvals not kept: %+v", perPerson.Status)
+	}
+}

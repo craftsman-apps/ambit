@@ -108,4 +108,7 @@ spec:
             methods:
               tools/list: Response
               tools/call: Full
+              # Not reachable today (access rules grant tools only), but masked before any rule can grant them (issue 297).
+              resources/read: Response
+              prompts/get: Response
 {{- end }}

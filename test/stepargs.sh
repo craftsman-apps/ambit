@@ -43,7 +43,7 @@ metadata: { name: args-bad }
 spec: { groups: [eng], servers: [{ name: everything, tools: [echo], arguments: [{ name: message }, { name: a, max: "lots" }] }] }
 YAML
 )
-[[ "$bad" == *"set oneOf, notContains or max"* && "$bad" == *"max"* ]] || fail "0 the CRD accepted invalid limits: $bad"
+[[ "$bad" == *"set oneOf, notContains, min or max"* && "$bad" == *"max"* ]] || fail "0 the CRD accepted invalid limits: $bad"
 pass "0 two rules with argument limits are Ready; the CRD refuses a limit without a condition or with a bad maximum"
 
 A=$(token user01)
@@ -55,11 +55,21 @@ bad=$(call everything_echo '{"message":"my SECRET plan"}')
 [[ "$bad" == error* && "$bad" == *"must not contain secret"* ]] || fail "1 a forbidden word passed or the reason is missing: $bad"
 pass "1 echo 'hello' allowed; echo with 'SECRET' refused: ${bad#error }"
 
+# Issues 334 and 301: other letter cases of the argument name, and extra spaces, do not step around the limit.
+for args in '{"Message":"my secret plan"}' '{"MESSAGE":"secret"}' '{"message":"hello","Message":"secret"}' '{"message":"rm  -rf /"}' '{"message":"rm\t-rf /"}'; do
+  out=$(call everything_echo "$args")
+  [[ "$out" == error* && "$out" == *"must not contain"* ]] || fail "1b $args passed the limit: $out"
+done
+pass "1b Message, MESSAGE, a second key, and rm with two spaces or a tab are refused like the exact spelling"
+
 sum=$(call everything_get-sum '{"a":5,"b":1}')
 [[ "$sum" == ok* ]] || fail "2 get-sum within the limit was refused: $sum"
 big=$(call everything_get-sum '{"a":500,"b":1}')
 [[ "$big" == error* && "$big" == *"a must be a number at most 100"* ]] || fail "2 get-sum over the limit passed: $big"
 pass "2 get-sum a=5 allowed; a=500 refused: ${big#error }"
+big=$(call everything_get-sum '{"a":5,"A":500,"b":1}')
+[[ "$big" == error* && "$big" == *"a must be a number at most 100"* ]] || fail "2b get-sum with A=500 passed: $big"
+pass "2b get-sum with a second key A=500 refused"
 
 # user09 (ml-research) has every tool of everything through another rule, without limits: rules add up.
 M=$(token user09); tools "$M"

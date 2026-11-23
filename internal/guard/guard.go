@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,7 +37,8 @@ func ServerOptions() []grpc.ServerOption {
 }
 
 // Pins reports the approved fingerprints of a server's tools and the current ones the controller last
-// read. pinned is false for servers without pins (unknown tools, e.g. per-user servers): nothing is hidden.
+// read. pinned is false only for a per-person server without pins (no admin has read its tools): nothing is
+// hidden. A shared server without pins, or one that cannot be read, is pinned with nothing approved.
 type Pins interface {
 	Pins(ctx context.Context, server string) (approved, current map[string]string, pinned bool)
 }
@@ -112,6 +114,9 @@ func (g *Guard) CheckRequest(ctx context.Context, req *extmcp.McpRequest) (*extm
 	if approved, current, pinned := g.Pins.Pins(ctx, server); pinned {
 		if fp, ok := approved[tool]; !ok || current[tool] != fp {
 			slog.Warn("guard: refused unapproved tool", "server", server, "tool", tool)
+			if len(approved) == 0 {
+				return deny(fmt.Sprintf("%s has no approved tool definitions (its tools have not been read yet, or the Server could not be read), so tool %s is refused", server, tool)), nil
+			}
 			return deny(fmt.Sprintf("tool %s on %s changed since it was approved; an admin must approve it again", tool, server)), nil
 		}
 	}
@@ -189,7 +194,7 @@ func (g *Guard) CheckResponse(ctx context.Context, resp *extmcp.McpResponse) (*e
 	switch resp.Method {
 	case "tools/list":
 		return g.filterList(ctx, resp)
-	case "tools/call":
+	case "tools/call", "resources/read", "prompts/get":
 		return g.maskResult(ctx, resp)
 	}
 	return &extmcp.McpResponseResult{Result: &extmcp.McpResponseResult_Pass{Pass: &extmcp.Pass{}}}, nil
@@ -228,7 +233,9 @@ func (g *Guard) filterList(ctx context.Context, resp *extmcp.McpResponse) (*extm
 		_ = json.Unmarshal(t["description"], &desc)
 		server, tool := split(name, resp.ServiceNames)
 		approved, _, pinned := g.Pins.Pins(ctx, server)
-		if pinned && approved[tool] != controller.Fingerprint(tool, desc, t["inputSchema"]) {
+		// A legacy approval (made before 0.5.0) is accepted until the controller moves it to the new fingerprint, which
+		// it does on its next read of the server's tools if the legacy fingerprint still matches (issue 299).
+		if fp := approved[tool]; pinned && fp != controller.Fingerprint(tool, t) && fp != controller.LegacyFingerprint(tool, desc, t["inputSchema"]) {
 			slog.Warn("guard: hid changed or unapproved tool", "server", server, "tool", tool)
 			continue
 		}
@@ -241,60 +248,107 @@ func (g *Guard) filterList(ctx context.Context, resp *extmcp.McpResponse) (*extm
 	return mutated(result)
 }
 
-// maskResult masks personal data in every text the tool returned. If masking fails the result is
+// maskRoots are the parts of a result that hold content, per method: items are MCP content items (their type and
+// mimeType are structure, not content), keys means object keys are masked too.
+var maskRoots = map[string][]struct {
+	key        string
+	item, keys bool
+}{
+	"tools/call":     {{"content", true, false}, {"structuredContent", false, true}},
+	"resources/read": {{"contents", true, false}},
+	"prompts/get":    {{"messages", true, false}, {"description", false, false}},
+}
+
+// maskResult masks personal data in every text of a result: strings, numbers in decimal form (a masked number becomes the
+// placeholder text), uri values, and the object keys of structuredContent. If masking fails the result is
 // withheld: better a failed call than an unmasked national ID number in a model's context.
 func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extmcp.McpResponseResult, error) {
+	what := "result"
+	if resp.Method == "tools/call" {
+		what = "tool result"
+	}
+	withhold := func(reason string) (*extmcp.McpResponseResult, error) {
+		return &extmcp.McpResponseResult{Result: &extmcp.McpResponseResult_Error{Error: &extmcp.AuthorizationError{
+			Code: extmcp.AuthorizationError_UNKNOWN, Reason: "the " + what + " " + reason}}}, nil
+	}
+	// json.Unmarshal, not a Decoder with UseNumber: a Decoder holds a second copy of the raw result, and the guard
+	// has a small memory limit (TestMaskResultPeakMemory).
 	var result map[string]any
 	if err := json.Unmarshal(resp.McpResponse, &result); err != nil {
 		// A result must be an object; anything else (a list, a string, broken JSON) could hold text the walk below
 		// would never see.
-		slog.Error("guard: tool result is not a JSON object; result withheld", "server", strings.Join(resp.ServiceNames, ","))
-		return &extmcp.McpResponseResult{Result: &extmcp.McpResponseResult_Error{Error: &extmcp.AuthorizationError{
-			Code: extmcp.AuthorizationError_UNKNOWN, Reason: "the tool result is not a JSON object, so it could not be checked for personal data and was withheld"}}}, nil
+		slog.Error("guard: result is not a JSON object; result withheld", "server", strings.Join(resp.ServiceNames, ","), "method", resp.Method)
+		return withhold("is not a JSON object, so it could not be checked for personal data and was withheld")
 	}
 	// The decoded form is the only copy we need. Release the raw message now: a large result is held
 	// several times over while it is masked and encoded again, and the guard has a small memory limit.
 	resp.McpResponse = nil
-	compressed := g.compressContent(ctx, resp.ServiceNames, resp.MetadataContext, result)
-	var texts []string
+	compressed := resp.Method == "tools/call" && g.compressContent(ctx, resp.ServiceNames, resp.MetadataContext, result)
+	var texts, keys []string
 	var set []func(string)
-	var walk func(v any, put func(string))
-	walk = func(v any, put func(string)) {
+	var renames []func(string) bool // false: the masked key is taken
+	var walk func(v any, put func(any), item, withKeys bool)
+	walk = func(v any, put func(any), item, withKeys bool) {
 		switch x := v.(type) {
 		case string:
-			texts, set = append(texts, x), append(set, put)
+			texts, set = append(texts, x), append(set, func(s string) { put(s) })
+		case float64: // exact for integers up to 2^53, which holds 16-digit card numbers
+			text := strconv.FormatFloat(x, 'f', -1, 64)
+			texts, set = append(texts, text), append(set, func(s string) {
+				if s != text {
+					put(s)
+				}
+			})
 		case []any:
 			for i := range x {
-				walk(x[i], func(s string) { x[i] = s })
+				walk(x[i], func(s any) { x[i] = s }, item, withKeys)
 			}
 		case map[string]any:
 			for k, e := range x {
-				if k == "type" || k == "mimeType" || k == "uri" { // structure, not content
+				if item && (k == "type" || k == "mimeType") { // structure of a content item
 					continue
 				}
-				walk(e, func(s string) { x[k] = s })
+				walk(e, func(s any) { x[k] = s }, item, withKeys)
+				if withKeys {
+					keys, renames = append(keys, k), append(renames, func(m string) bool {
+						if m == k {
+							return true
+						}
+						if _, taken := x[m]; taken {
+							return false
+						}
+						x[m] = x[k]
+						delete(x, k)
+						return true
+					})
+				}
 			}
 		}
 	}
-	for _, k := range []string{"content", "structuredContent"} {
-		if v, ok := result[k]; ok {
-			walk(v, func(s string) { result[k] = s })
+	for _, r := range maskRoots[resp.Method] {
+		if v, ok := result[r.key]; ok {
+			walk(v, func(s any) { result[r.key] = s }, r.item, r.keys)
 		}
 	}
-	masked, total, maskErr := g.maskTexts(ctx, texts)
+	masked, total, maskErr := g.maskTexts(ctx, append(texts, keys...))
 	if maskErr != nil {
 		slog.Error("guard: masking failed; result withheld", "server", strings.Join(resp.ServiceNames, ","), "err", maskErr)
-		return &extmcp.McpResponseResult{Result: &extmcp.McpResponseResult_Error{Error: &extmcp.AuthorizationError{
-			Code: extmcp.AuthorizationError_UNKNOWN, Reason: "the tool result could not be checked for personal data, so it was withheld"}}}, nil
+		return withhold("could not be checked for personal data, so it was withheld")
 	}
 	if total == 0 && !compressed {
 		return passResp(), nil
 	}
-	for i, m := range masked {
-		set[i](m) // the unmasked text is dropped here
+	for i := range texts {
+		set[i](masked[i]) // the unmasked text is dropped here
+	}
+	for i, rename := range renames {
+		if !rename(masked[len(texts)+i]) {
+			slog.Error("guard: two keys mask to the same text; result withheld", "server", strings.Join(resp.ServiceNames, ","))
+			return withhold("has two keys that mask to the same text, so it was withheld")
+		}
 	}
 	if total > 0 {
-		slog.Info("guard: masked personal data", "server", strings.Join(resp.ServiceNames, ","), "count", total)
+		slog.Info("guard: masked personal data", "server", strings.Join(resp.ServiceNames, ","), "method", resp.Method, "count", total)
 	}
 	return mutated(result)
 }

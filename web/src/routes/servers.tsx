@@ -116,7 +116,8 @@ function ServerRow({ s, open, onToggle }: { s: ServerView; open: boolean; onTogg
         <td className="px-3 py-2.5">{s.rules.length ? s.rules.map((r, i) => <Fragment key={r}><span className="whitespace-nowrap">{r}{i < s.rules.length - 1 && ","}</span> </Fragment>) : <span className="text-muted">{noRule}</span>}</td>
         <td className="whitespace-nowrap px-3 py-2.5">{s.approvedBy || <span className="text-muted">{s.gitManaged ? "pull request" : "added directly"}</span>}</td>
         <td className="whitespace-nowrap px-3 py-2.5"><Status ready={s.ready} text={s.ready === "True" ? "Running" : undefined} />
-          {s.changedTools.length > 0 && <span className="block text-small text-bad">{s.changedTools.length} tool(s) changed</span>}</td>
+          {s.changedTools.length > 0 && <span className="block text-small text-bad">{s.changedTools.length} tool(s) changed</span>}
+          {s.toolPinningOff && <span className="block text-small text-warn" data-testid={`pinning-off-${s.name}`} title="No admin's account has read this server's tools, so a changed or new tool is not detected. Use an admin account to read its tools (open the row).">Tool pinning off</span>}</td>
       </tr>
       {s.changedTools.length > 0 && (
         <tr className="border-b border-line-soft bg-warn-soft">
@@ -151,6 +152,7 @@ function ServerRow({ s, open, onToggle }: { s: ServerView; open: boolean; onTogg
                 {(readTools.isError || clearReader.isError) && <span className="text-bad" role="alert">{(readTools.error ?? clearReader.error)?.message}</span>}
               </p>
             )}
+            {s.toolPinningOff && <p className="mb-2 text-small text-warn">Tool pinning is off for this server: no tool definitions are approved, so a changed or new tool reaches clients without review. An admin's account must read its tools once to pin them.</p>}
             {s.tools.length === 0 && <p className="text-muted">{s.ready === "True" ? "Reading tools…" : s.message || "Tools appear once the server is running."}</p>}
             <ul className="grid grid-cols-2 gap-x-6 gap-y-1">
               {s.tools.map((t) => (

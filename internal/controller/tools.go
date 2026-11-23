@@ -110,10 +110,49 @@ func ListToolsAt(ctx context.Context, base *http.Client, endpoint, transport, be
 	return listTools(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint, MaxRetries: -1, DisableStandaloneSSE: true, HTTPClient: hc})
 }
 
-// Fingerprint identifies a tool definition: what a model reads (name, description) and what it may
-// send (input schema). The schema is decoded and re-encoded, so key order does not change it.
-// ambit-guard computes the same value from the gateway's tools/list response.
-func Fingerprint(name, description string, inputSchema []byte) string {
+// Fingerprint identifies a tool definition as clients see it (issue 299): the name, description, title, input schema,
+// output schema and the standard annotations (title, readOnlyHint, destructiveHint, idempotentHint, openWorldHint,
+// with the MCP defaults for missing hints). def is the tool's JSON object as the server sends it; name is passed apart
+// because the gateway's tools/list prefixes it. Values are compared decoded, so key order, spacing and a default
+// written out do not change it. _meta, icons and unknown annotations are not pinned. A field of the wrong type makes a
+// fingerprint that no read by the controller produces, so the tool stays hidden. ambit-guard computes the same value
+// from the gateway's tools/list response.
+func Fingerprint(name string, def map[string]json.RawMessage) string {
+	var bad []string // fields that could not be decoded
+	var description, title string
+	var ann struct {
+		Title                                                        string
+		ReadOnlyHint, DestructiveHint, IdempotentHint, OpenWorldHint *bool
+	}
+	for field, v := range map[string]any{"description": &description, "title": &title, "annotations": &ann} {
+		if raw := def[field]; len(raw) > 0 && json.Unmarshal(raw, v) != nil {
+			bad = append(bad, field)
+		}
+	}
+	hint := func(b *bool, dflt bool) bool {
+		if b == nil {
+			return dflt
+		}
+		return *b
+	}
+	canonical := func(field string) any {
+		var v any
+		if raw := def[field]; len(raw) > 0 && json.Unmarshal(raw, &v) != nil {
+			bad = append(bad, field)
+		}
+		return v // decoded: json.Marshal sorts map keys
+	}
+	in, out := canonical("inputSchema"), canonical("outputSchema")
+	sort.Strings(bad)
+	b, _ := json.Marshal([]any{"ambit-tool-v2", name, description, title, in, out,
+		[]any{ann.Title, hint(ann.ReadOnlyHint, false), hint(ann.DestructiveHint, true), hint(ann.IdempotentHint, false), hint(ann.OpenWorldHint, true)}, bad})
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// LegacyFingerprint is the fingerprint before 0.5.0: name, description and input schema only. Approvals stored in
+// this form are moved to Fingerprint once, when the tool's legacy fingerprint still matches (pinTools).
+func LegacyFingerprint(name, description string, inputSchema []byte) string {
 	var v any
 	canon := inputSchema
 	if json.Unmarshal(inputSchema, &v) == nil {
@@ -138,8 +177,16 @@ func listTools(ctx context.Context, t mcp.Transport) ([]v1.Tool, error) {
 		if err != nil {
 			return nil, fmt.Errorf("tools/list: %w", err)
 		}
-		schema, _ := json.Marshal(tool.InputSchema)
-		vt := v1.Tool{Name: tool.Name, Description: tool.Description, Fingerprint: Fingerprint(tool.Name, tool.Description, schema)}
+		var def map[string]json.RawMessage // the tool as JSON, as ambit-guard sees it
+		raw, err := json.Marshal(tool)
+		if err == nil {
+			err = json.Unmarshal(raw, &def)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("tool %s: %w", tool.Name, err)
+		}
+		vt := v1.Tool{Name: tool.Name, Description: tool.Description, Fingerprint: Fingerprint(tool.Name, def),
+			LegacyFingerprint: LegacyFingerprint(tool.Name, tool.Description, def["inputSchema"])}
 		if a := tool.Annotations; a != nil {
 			ro := a.ReadOnlyHint
 			vt.ReadOnlyHint = &ro

@@ -15,6 +15,26 @@ lists the sections below that apply to your upgrade. It writes ordinary Helm rel
   (`ambit.call_id`, also on the gateway's record of the call). New Helm value `protection.compressionAudit.caller`
   (default `true`); `false` keeps the person out of these records. Records written before the upgrade have none of
   these fields.
+- **Tool pinning covers more of each tool.** A tool's fingerprint now also covers its title, its output schema and the
+  standard annotations (`title`, `readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`); before, it
+  covered the name, description and input schema only. Approvals made before the upgrade carry over: the next time
+  Ambit reads a server's tools (when the controller starts, then every 10 minutes), it moves each approval to the new
+  fingerprint if the tool's name, description and input schema are still the approved ones. It takes over the title,
+  annotations and output schema that the server shows at that moment without review, because the older release did
+  not record them. A tool that changed, and a new tool, stays hidden and refused until an admin approves it on the
+  Servers page, as before. Until a server's approvals have moved, the guard also accepts the older fingerprint for
+  them. While the guard pods restart, an older guard pod may hide the moved tools from `tools/list` for a moment. The controller logs `approvals made before 0.5.0 moved to the new tool fingerprint` with the server and the
+  number of tools. `Server` status gains `tools[].legacyFingerprint`, used only for this step.
+- **A shared server whose tools were never read is now closed.** A `Server` without `connection` and with no approved
+  tools (its tools could not be read yet) used to pass all its tools without pinning. Now the guard hides and refuses
+  them until the controller reads them; such a server has the condition `ToolsPinned=False`, reason `NotRead`. A
+  `Server` with `connection` whose tools no admin's account has read stays usable, and now shows `ToolsPinned=False`,
+  reason `NotPinned`, and "Tool pinning off" on the Servers page.
+- **Argument limits can set `min`.** The `AccessRule` CRD gains `arguments[].min`. Nothing changes for existing rules:
+  a limit with only `max` still allows 0 and negative numbers.
+- **After a downgrade below 0.5.0, approve the tools again, and remove `min`.** The older guard does not know the new
+  fingerprints, so it hides and refuses every tool approved under 0.5.0 until an admin approves the server's tools
+  again on the Servers page. The older guard does not enforce `min`.
 - **After a downgrade below 0.5.0, remove the email from the compression records.** The older Audit page lists every
   record that has the person's email, so it shows each compression record written by 0.5.0 as an empty extra row until
   the record ages out (`evidence.retention`). The older guard writes no email, so only the records written before the

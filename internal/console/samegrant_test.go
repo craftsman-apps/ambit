@@ -38,6 +38,8 @@ func TestSameGrant(t *testing.T) {
 			Servers: []v1.ServerAccess{srv("time", []string{"x", "y"}, v1.ArgumentRule{Name: "n", OneOf: []string{"1"}})}}, false},
 		{"different max", v1.AccessRuleSpec{Groups: base.Groups, Models: base.Models,
 			Servers: []v1.ServerAccess{srv("time", []string{"x", "y"}, v1.ArgumentRule{Name: "n", OneOf: []string{"1", "2"}, Max: "5"})}}, false},
+		{"min added", v1.AccessRuleSpec{Groups: base.Groups, Models: base.Models,
+			Servers: []v1.ServerAccess{srv("time", []string{"x", "y"}, v1.ArgumentRule{Name: "n", OneOf: []string{"1", "2"}, Min: "1"})}}, false},
 		{"different notContains", v1.AccessRuleSpec{Groups: base.Groups, Models: base.Models,
 			Servers: []v1.ServerAccess{srv("time", []string{"x", "y"}, v1.ArgumentRule{Name: "n", OneOf: []string{"1", "2"}, NotContains: []string{"z"}})}}, false},
 		{"no arguments", v1.AccessRuleSpec{Groups: base.Groups, Models: base.Models, Servers: []v1.ServerAccess{srv("time", []string{"x", "y"})}}, false},
@@ -80,7 +82,7 @@ func TestSameGrantComparesEveryField(t *testing.T) {
 	for typ, want := range map[reflect.Type][]string{
 		reflect.TypeFor[v1.AccessRuleSpec](): {"Groups", "Users", "AllSignedIn", "Models", "Servers"},
 		reflect.TypeFor[v1.ServerAccess]():   {"Name", "Tools", "Arguments"},
-		reflect.TypeFor[v1.ArgumentRule]():   {"Name", "OneOf", "NotContains", "Max"},
+		reflect.TypeFor[v1.ArgumentRule]():   {"Name", "OneOf", "NotContains", "Max", "Min"},
 	} {
 		var got []string
 		for i := range typ.NumField() {

@@ -245,7 +245,8 @@ type ServerAccess struct {
 }
 
 // ArgumentRule is one condition on one top-level argument of a tool call.
-// +kubebuilder:validation:XValidation:rule="has(self.oneOf) || has(self.notContains) || has(self.max)",message="set oneOf, notContains or max"
+// +kubebuilder:validation:XValidation:rule="has(self.oneOf) || has(self.notContains) || has(self.max) || has(self.min)",message="set oneOf, notContains, min or max"
+// +kubebuilder:validation:XValidation:rule="!has(self.min) || !has(self.max) || double(self.min) <= double(self.max)",message="min must not be greater than max"
 type ArgumentRule struct {
 	// Name of the argument, as the tool's input schema names it (top level only).
 	// +kubebuilder:validation:Pattern=`^[A-Za-z_][A-Za-z0-9_.-]{0,63}$`
@@ -264,9 +265,14 @@ type ArgumentRule struct {
 	// +kubebuilder:validation:items:MaxLength=256
 	NotContains []string `json:"notContains,omitempty"`
 	// Max: the argument must be present, a number, and at most this value, e.g. "1000" or "99.5".
+	// Max alone allows 0 and negative numbers; set min too for a lower bound.
 	// +optional
 	// +kubebuilder:validation:Pattern=`^-?[0-9]{1,15}(\.[0-9]{1,6})?$`
 	Max string `json:"max,omitempty"`
+	// Min: the argument must be present, a number, and at least this value, e.g. "1" or "0.01".
+	// +optional
+	// +kubebuilder:validation:Pattern=`^-?[0-9]{1,15}(\.[0-9]{1,6})?$`
+	Min string `json:"min,omitempty"`
 }
 
 type AccessRuleStatus struct {

@@ -43,7 +43,7 @@ metadata: { name: args-bad }
 spec: { groups: [eng], servers: [{ name: everything, tools: [echo], arguments: [{ name: message }, { name: a, max: "lots" }] }] }
 YAML
 )
-[[ "$bad" == *"set oneOf, notContains or max"* && "$bad" == *"max"* ]] || fail "0 the CRD accepted invalid limits: $bad"
+[[ "$bad" == *"set oneOf, notContains, min or max"* && "$bad" == *"max"* ]] || fail "0 the CRD accepted invalid limits: $bad"
 pass "0 two rules with argument limits are Ready; the CRD refuses a limit without a condition or with a bad maximum"
 
 A=$(token user01)

@@ -289,21 +289,22 @@ function RuleForm({ name, repository, onDone }: { name?: string; repository?: st
   );
 }
 
-type Kind = "oneOf" | "notContains" | "max";
+type Kind = "oneOf" | "notContains" | "min" | "max";
 // One condition per row: a limit with several conditions (possible in YAML) becomes several rows with the same
 // argument name, which means the same thing (all must hold), so editing one row never drops another.
 const split = (a: ArgumentRule): ArgumentRule[] => {
   const out: ArgumentRule[] = [];
   if (a.oneOf) out.push({ name: a.name, oneOf: a.oneOf });
   if (a.notContains) out.push({ name: a.name, notContains: a.notContains });
+  if (a.min) out.push({ name: a.name, min: a.min });
   if (a.max) out.push({ name: a.name, max: a.max });
   return out.length ? out : [a];
 };
-const kindOf = (a: ArgumentRule): Kind => (a.oneOf ? "oneOf" : a.notContains ? "notContains" : "max");
-const valueOf = (a: ArgumentRule) => a.oneOf?.join(", ") ?? a.notContains?.join(", ") ?? a.max ?? "";
+const kindOf = (a: ArgumentRule): Kind => (a.oneOf ? "oneOf" : a.notContains ? "notContains" : a.min ? "min" : "max");
+const valueOf = (a: ArgumentRule) => a.oneOf?.join(", ") ?? a.notContains?.join(", ") ?? a.min ?? a.max ?? "";
 const build = (name: string, kind: Kind, value: string): ArgumentRule => {
   const list = value.split(",").map((v) => v.trim()).filter(Boolean);
-  return kind === "max" ? { name, max: value.trim() } : { name, [kind]: list };
+  return kind === "min" || kind === "max" ? { name, [kind]: value.trim() } : { name, [kind]: list };
 };
 
 // Argument limits for the chosen tools (requirement 8): a call this rule allows must meet every limit, or it
@@ -324,10 +325,11 @@ function ArgumentLimits({ sa, onChange }: { sa: ServerAccess; onChange: (a: Argu
           <select aria-label="Condition" className={cell} value={kindOf(a)} onChange={(e) => set(i, build(a.name, e.target.value as Kind, typed[i] ?? valueOf(a)))}>
             <option value="oneOf">must be one of</option>
             <option value="notContains">must not contain</option>
+            <option value="min">at least</option>
             <option value="max">at most</option>
           </select>
           <input aria-label="Values" className={`${cell} min-w-0 flex-1`} value={typed[i] ?? valueOf(a)}
-            placeholder={kindOf(a) === "max" ? "1000" : "analytics, reporting"}
+            placeholder={kindOf(a) === "min" ? "1" : kindOf(a) === "max" ? "1000" : "analytics, reporting"}
             onChange={(e) => { setTyped({ ...typed, [i]: e.target.value }); set(i, build(a.name, kindOf(a), e.target.value)); }} />
           <button type="button" className="text-small text-muted underline" onClick={() => { setTyped({}); onChange(args.filter((_, j) => j !== i)); }}>Remove</button>
         </div>

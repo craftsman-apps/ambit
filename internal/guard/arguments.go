@@ -82,7 +82,7 @@ func CheckArguments(grants []Grant, groups []string, email string, tool string, 
 	return reason
 }
 
-// firstFailure checks one grant's limits. Arguments are decoded with json.Number, so a maximum is compared
+// firstFailure checks one grant's limits. Arguments are decoded with json.Number, so min and max are compared
 // exactly, and notContains sees every string (and key) inside a nested value as the server will receive it.
 // A limit holds for every key that equals its name without regard to case (strings.EqualFold, as Go's
 // encoding/json matches field names: "Query", "QUERY" and "ſql" reach a Go server as query and sql, issue 334).
@@ -114,20 +114,47 @@ func firstFailure(rules []v1.ArgumentRule, args map[string]any) string {
 				}
 			}
 		}
-		if a.Max != "" {
-			limit, okLimit := new(big.Rat).SetString(a.Max)
-			bad := !okLimit || len(values) == 0
+		if a.Max != "" || a.Min != "" {
+			bad := len(values) == 0
 			for _, v := range values {
 				n, isNumber := v.(json.Number)
 				value, okValue := new(big.Rat).SetString(string(n))
-				bad = bad || !isNumber || !okValue || value.Cmp(limit) > 0
+				bad = bad || !isNumber || !okValue || outside(value, a.Min, a.Max)
 			}
 			if bad {
-				return fmt.Sprintf("argument %s must be a number at most %s", a.Name, a.Max)
+				return fmt.Sprintf("argument %s must be a number%s", a.Name, bounds(a.Min, a.Max))
 			}
 		}
 	}
 	return ""
+}
+
+// outside reports whether value is below lo (min) or above hi (max); an empty bound is no bound, and a bound that is not a
+// number (the CRD pattern prevents it) refuses every value.
+func outside(value *big.Rat, lo, hi string) bool {
+	for _, b := range []struct {
+		limit string
+		sign  int
+	}{{lo, -1}, {hi, 1}} {
+		if b.limit == "" {
+			continue
+		}
+		limit, ok := new(big.Rat).SetString(b.limit)
+		if !ok || value.Cmp(limit) == b.sign {
+			return true
+		}
+	}
+	return false
+}
+
+func bounds(lo, hi string) string {
+	switch {
+	case lo != "" && hi != "":
+		return " at least " + lo + " and at most " + hi
+	case lo != "":
+		return " at least " + lo
+	}
+	return " at most " + hi
 }
 
 var sqlComment = regexp.MustCompile(`(?s)/\*.*?\*/`)

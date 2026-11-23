@@ -51,7 +51,7 @@ export type PriceInfo = {
   listError: string; licenceURL: string;
 };
 // One condition on one argument of a tool call (requirement 8); ambit-guard enforces it.
-export type ArgumentRule = { name: string; oneOf?: string[]; notContains?: string[]; max?: string };
+export type ArgumentRule = { name: string; oneOf?: string[]; notContains?: string[]; min?: string; max?: string };
 export type ServerAccess = { name: string; tools?: string[]; arguments?: ArgumentRule[] };
 export type RuleView = {
   name: string; groups: string[]; users: string[]; allSignedIn: boolean; models: string[]; servers: ServerAccess[];

@@ -25,8 +25,8 @@ func snapshotBody(t *testing.T, rules ...v1.AccessRule) string {
 }
 
 func TestArgumentLimits(t *testing.T) {
-	got := argumentLimits([]v1.ArgumentRule{{Name: "repo", OneOf: []string{"web", "api"}}, {Name: "per_page", Max: "100"}, {Name: "q", NotContains: []string{"secret"}}})
-	if got != "repo oneOf [web, api]; per_page max 100; q notContains [secret]" {
+	got := argumentLimits([]v1.ArgumentRule{{Name: "repo", OneOf: []string{"web", "api"}}, {Name: "per_page", Max: "100"}, {Name: "q", NotContains: []string{"secret"}}, {Name: "limit", Min: "1", Max: "50"}})
+	if got != "repo oneOf [web, api]; per_page max 100; q notContains [secret]; limit min 1; limit max 50" {
 		t.Error(got)
 	}
 }

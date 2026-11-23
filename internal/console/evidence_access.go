@@ -85,6 +85,9 @@ func argumentLimits(rules []v1.ArgumentRule) string {
 		if len(a.NotContains) > 0 {
 			out = append(out, a.Name+" notContains ["+strings.Join(a.NotContains, ", ")+"]")
 		}
+		if a.Min != "" {
+			out = append(out, a.Name+" min "+a.Min)
+		}
 		if a.Max != "" {
 			out = append(out, a.Name+" max "+a.Max)
 		}

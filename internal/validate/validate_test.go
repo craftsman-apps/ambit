@@ -404,3 +404,35 @@ func TestAccessRuleUsers(t *testing.T) {
 		}
 	}
 }
+
+// Issue 302: argument limits take an optional min next to max. min may equal max; min above max is refused; a
+// limit with only min, and an older limit with only max, are valid.
+func TestArgumentMinAndMax(t *testing.T) {
+	rule := func(args string) string {
+		return `apiVersion: ambitproject.dev/v1alpha1
+kind: AccessRule
+metadata: { name: export }
+spec: { groups: [eng], servers: [{ name: crm, tools: [export], arguments: [` + args + `] }] }`
+	}
+	for _, args := range []string{
+		`{ name: limit, min: "1", max: "100" }`,
+		`{ name: limit, min: "100", max: "100" }`,
+		`{ name: limit, min: "-5.5", max: "-0.5" }`,
+		`{ name: amount, min: "0.01" }`,
+		`{ name: limit, max: "100" }`,
+	} {
+		if p := check(t, rule(args)); len(p) != 0 {
+			t.Errorf("%s: want valid, got %v", args, p)
+		}
+	}
+	for args, want := range map[string]string{
+		`{ name: limit, min: "101", max: "100" }`:           "min must not be greater than max",
+		`{ name: limit, min: "0.000002", max: "0.000001" }`: "min must not be greater than max",
+		`{ name: limit, min: "1e3" }`:                       "should match",
+		`{ name: limit, min: "" }`:                          "should match",
+	} {
+		if p := check(t, rule(args)); len(p) == 0 || !strings.Contains(fmt.Sprint(p), want) {
+			t.Errorf("%s: want %q, got %v", args, want, p)
+		}
+	}
+}

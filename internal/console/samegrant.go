@@ -69,7 +69,7 @@ func uniqSorted(in []string) []string {
 // sameArguments compares argument limits as an unordered collection; each rule's lists are compared as sets.
 func sameArguments(a, b []v1.ArgumentRule) bool {
 	key := func(r v1.ArgumentRule) string {
-		return fmt.Sprintf("%q|%q|%q|%q", r.Name, uniqSorted(r.OneOf), uniqSorted(r.NotContains), r.Max)
+		return fmt.Sprintf("%q|%q|%q|%q|%q", r.Name, uniqSorted(r.OneOf), uniqSorted(r.NotContains), r.Min, r.Max)
 	}
 	ka, kb := map[string]bool{}, map[string]bool{}
 	for _, r := range a {

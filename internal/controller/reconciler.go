@@ -100,13 +100,42 @@ func (r *Reconciler) refresh() time.Duration {
 
 // pinTools pins a server's tools the first time they are read (trust on first use) and reports every
 // tool whose definition no longer matches its pin, or that has none. ambit-guard hides and refuses those.
-func pinTools(s *v1.Server) {
+// It returns how many approvals made before 0.5.0 it moved to the new fingerprint (issue 299).
+func pinTools(s *v1.Server) (repinned int) {
 	if len(s.Status.Tools) == 0 {
-		return
+		if len(s.Status.ApprovedTools) > 0 {
+			return 0 // the last read is empty; the approvals stay
+		}
+		// Nothing read and nothing approved (issue 300, option C): a shared server's tools are refused until they are
+		// read; a per-person server's tools are usable without pinning until an admin's account reads them.
+		c := metav1.Condition{Type: "ToolsPinned", Status: metav1.ConditionFalse, Reason: "NotRead", ObservedGeneration: s.Generation,
+			Message: "no tools have been read from this server yet; ambit-guard keeps its tools hidden and refused until they are read"}
+		if s.Spec.Connection != "" {
+			c.Reason = "NotPinned"
+			c.Message = "tool pinning is off: no admin's account has read this server's tools, so changed or new tools are not detected; choose a reader on the Servers page"
+		}
+		meta.SetStatusCondition(&s.Status.Conditions, c)
+		return 0
 	}
 	if len(s.Status.ApprovedTools) == 0 {
 		for _, t := range s.Status.Tools {
 			s.Status.ApprovedTools = append(s.Status.ApprovedTools, v1.ToolPin{Name: t.Name, Fingerprint: t.Fingerprint})
+		}
+	}
+	// Upgrade: an approval in the legacy form moves to the new fingerprint only when the tool's legacy fingerprint
+	// still equals it, i.e. its name, description and input schema are the approved ones. Title, annotations and
+	// output schema were not recorded before, so their current values are taken over. A pin in the new form never
+	// equals a legacy fingerprint, so this runs once per approval and is safe to repeat on a retry.
+	legacy := map[string]v1.Tool{}
+	for _, t := range s.Status.Tools {
+		if t.LegacyFingerprint != "" {
+			legacy[t.LegacyFingerprint] = t
+		}
+	}
+	for i, p := range s.Status.ApprovedTools {
+		if t, ok := legacy[p.Fingerprint]; ok && t.Name == p.Name && t.Fingerprint != p.Fingerprint {
+			s.Status.ApprovedTools[i].Fingerprint = t.Fingerprint
+			repinned++
 		}
 	}
 	pinned := map[string]string{}
@@ -126,6 +155,7 @@ func pinTools(s *v1.Server) {
 		c.Message = "changed or new since approval, hidden until an admin approves: " + strings.Join(changed, ", ")
 	}
 	meta.SetStatusCondition(&s.Status.Conditions, c)
+	return repinned
 }
 
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -481,11 +511,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 			if result.RequeueAfter == 0 {
 				result.RequeueAfter = r.refresh()
 			}
-			pinTools(next)
+			if n := pinTools(next); n > 0 {
+				logger.Info("approvals made before 0.5.0 moved to the new tool fingerprint", "server", s.Name, "tools", n)
+			}
 		} else {
 			meta.RemoveStatusCondition(&next.Status.Conditions, "ToolsRead")
 		}
 		if err := r.updateStatus(ctx, saved.Items[i].Status, next.Status, next); err != nil {
+			// The tools just read (and any approvals moved to the new fingerprint) were not saved: read them again
+			// on the retry instead of reusing the stored list until the next refresh.
+			delete(r.toolsRead, s.UID)
 			return reconcile.Result{}, err
 		}
 	}

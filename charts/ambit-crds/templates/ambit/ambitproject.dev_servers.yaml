@@ -261,7 +261,14 @@ spec:
                     destructiveHint:
                       type: boolean
                     fingerprint:
-                      description: Fingerprint is sha256 over the name, description and input schema.
+                      description: 'Fingerprint is sha256 over the name, description, title, input and output schema and the standard
+
+                        annotations (since 0.5.0; before, the name, description and input schema only).'
+                      type: string
+                    legacyFingerprint:
+                      description: 'LegacyFingerprint is the fingerprint in the form before 0.5.0. An approval stored in that form is moved to
+
+                        Fingerprint once, when this still matches it; a changed tool waits for an admin.'
                       type: string
                     name:
                       type: string

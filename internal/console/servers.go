@@ -58,6 +58,9 @@ type ServerView struct {
 	Rules []string `json:"rules"`
 	// ChangedTools changed since approval (or are new); the gateway hides and refuses them.
 	ChangedTools []string `json:"changedTools"`
+	// ToolPinningOff: a per-person server with no approved tool definitions (no admin's account has read its tools).
+	// Its tools are usable, but a changed or new tool is not detected (issue 300).
+	ToolPinningOff bool `json:"toolPinningOff"`
 }
 
 type RequestView struct {
@@ -169,7 +172,8 @@ func (c *Catalog) listServers(w http.ResponseWriter, r *http.Request, _ Session)
 	for _, s := range servers {
 		v := ServerView{Name: s.Name, DisplayName: s.Spec.DisplayName, Image: s.Spec.Image, URL: s.Spec.URL, Connection: s.Spec.Connection, Transport: s.Spec.Transport,
 			Ready: "Unknown", Tools: s.Status.Tools, RequestedBy: s.Annotations[requestedByKey], ApprovedBy: s.Annotations[approvedByKey],
-			GitManaged: gitManaged(s.Annotations), Rules: []string{}, ChangedTools: changedTools(s)}
+			GitManaged: gitManaged(s.Annotations), Rules: []string{}, ChangedTools: changedTools(s),
+			ToolPinningOff: s.Spec.Connection != "" && len(s.Status.ApprovedTools) == 0}
 		if v.Tools == nil {
 			v.Tools = []v1.Tool{}
 		}

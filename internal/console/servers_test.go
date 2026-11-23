@@ -292,3 +292,77 @@ func TestMyAccessByEmail(t *testing.T) {
 		t.Fatalf("user02: %+v", other)
 	}
 }
+
+// Issue 300, option C: the Servers page shows a per-person server whose tools are not pinned. A shared server is never
+// flagged: its tools are refused until they are read.
+func TestServersListShowsToolPinningOff(t *testing.T) {
+	h, c, a := serversFixture(t)
+	gh := &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "github", Namespace: testNS}, Spec: v1.ServerSpec{URL: "https://mcp.example.com/mcp", Connection: "github"}}
+	if err := c.Create(t.Context(), gh); err != nil {
+		t.Fatal(err)
+	}
+	unread := &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "crm", Namespace: testNS}, Spec: v1.ServerSpec{URL: "https://crm.example.com/mcp"}}
+	if err := c.Create(t.Context(), unread); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, s := range decodeAs[[]ServerView](t, do(t, h, "GET", "/api/servers", user(a, "user01@example.com", RoleViewer), nil).Body.String()) {
+		got[s.Name] = s.ToolPinningOff
+	}
+	if !got["github"] || got["crm"] || got["time"] {
+		t.Fatalf("toolPinningOff: %v", got)
+	}
+	gh.Status.ApprovedTools = []v1.ToolPin{{Name: "list_issues", Fingerprint: "f1"}}
+	if err := c.Status().Update(t.Context(), gh); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range decodeAs[[]ServerView](t, do(t, h, "GET", "/api/servers", user(a, "user01@example.com", RoleViewer), nil).Body.String()) {
+		if s.Name == "github" && s.ToolPinningOff {
+			t.Fatal("approved per-person server still flagged")
+		}
+	}
+}
+
+// Issue 302: the editor saves each condition as its own entry, so the CRD's min <= max rule does not see a minimum and a
+// maximum in two rows. The console refuses a minimum above a maximum for the same argument (any letter case), and
+// accepts equal bounds.
+func TestRuleRefusesMinAboveMaxAcrossEntries(t *testing.T) {
+	h, _, a := serversFixture(t)
+	admin := user(a, "user10@example.com", RoleAdmin)
+	rule := func(args ...v1.ArgumentRule) RuleInput {
+		return RuleInput{Name: "eng-limit", Groups: []string{"eng"}, Servers: []v1.ServerAccess{{Name: "time", Tools: []string{"convert_time"}, Arguments: args}}}
+	}
+	for _, args := range [][]v1.ArgumentRule{
+		{{Name: "limit", Min: "10"}, {Name: "limit", Max: "5"}},
+		{{Name: "limit", Min: "10"}, {Name: "LIMIT", Max: "9.999999"}},
+		{{Name: "limit", Min: "1", Max: "100"}, {Name: "limit", Min: "101"}},
+	} {
+		r := do(t, h, "POST", "/api/access-rules", admin, rule(args...))
+		if r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), "no number can meet") {
+			t.Errorf("%+v: %d %s", args, r.Code, r.Body)
+		}
+	}
+	if r := do(t, h, "POST", "/api/access-rules", admin, rule(v1.ArgumentRule{Name: "limit", Min: "5"}, v1.ArgumentRule{Name: "limit", Max: "5"}, v1.ArgumentRule{Name: "other", Min: "50"})); r.Code != http.StatusCreated {
+		t.Fatalf("equal bounds, other argument: %d %s", r.Code, r.Body)
+	}
+}
+
+// minAboveMax leaves input the CRD refuses (too many entries, too long a bound) to the API server, so it does no large work.
+func TestMinAboveMaxLeavesOversizedInputToTheCRD(t *testing.T) {
+	many := make([]v1.ArgumentRule, 21)
+	for i := range many {
+		many[i] = v1.ArgumentRule{Name: "limit", Min: "10", Max: "5"}
+	}
+	long := strings.Repeat("9", 24)
+	for name, args := range map[string][]v1.ArgumentRule{
+		"21 entries": many,
+		"long min":   {{Name: "limit", Min: long}, {Name: "limit", Max: "5"}},
+	} {
+		if err := minAboveMax(args); err != nil {
+			t.Errorf("%s: %v (the CRD refuses this input)", name, err)
+		}
+	}
+	if err := minAboveMax(many[:20]); err == nil {
+		t.Error("20 entries: min above max not refused")
+	}
+}

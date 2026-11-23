@@ -310,7 +310,7 @@
           "action": "Allow",
           "policy": {
             "matchExpressions": [
-              "true"
+              "!(has(apiKey.keyId) \u0026\u0026 apiKey.email.endsWith(\"@svc.ambit.internal\"))"
             ]
           }
         }

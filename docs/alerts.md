@@ -2,7 +2,7 @@
 
 With `alerts.enabled: true` the chart installs a `PrometheusRule` and a `PodMonitor` for the Prometheus
 Operator. The rules read kube-state-metrics and cAdvisor (kube-prometheus-stack installs both), the
-collector's own metrics, and the guard's `ambit_guard_compress_*` metrics. Set `alerts.labels` to the labels your Prometheus selects rules and monitors by:
+collector's own metrics, the guard's `ambit_guard_compress_*` metrics, and the console's `ambit_console_audit_send_failures_total`. Set `alerts.labels` to the labels your Prometheus selects rules and monitors by:
 
 ```yaml
 alerts:
@@ -20,6 +20,8 @@ alerts:
 | AmbitGuardRecordsDropped | warning | the guard dropped compression records in the last 30 minutes (only with `protection.enabled` and `evidence.enabled`). No call failed. The Savings figures are lower than the real ones | `send_failed`: the collector was not reachable, read `kubectl -n <ns> logs deploy/ambit-otel-collector`. `queue_full`: more records than the guard can send. `no_groups`: the gateway sent no groups for the call |
 | AmbitBudgetStoreDown | critical | the ratelimit service or Valkey had no ready pod for 1 minute (only with `limits.enabled`) | with `FailClosed` the gateway refuses LLM and MCP requests; with `FailOpen` requests pass uncounted |
 | AmbitAuditLogsDropped | critical | audit records failed to reach ClickHouse, or the collector refused them, in the last 10 minutes (only with `evidence.enabled`) | check ClickHouse first |
+| AmbitConsoleAuditSendFailed | warning | the console could not send records of MCP app requests, approvals, denials or refused attempts to the collector in the last 30 minutes (only with `evidence.enabled`). The requests and decisions happened; the Audit page and `otel_logs` miss these records | the `ServerRequest` objects still hold the requests and decisions: `kubectl -n <ns> get serverrequests`. Read why: `kubectl -n <ns> logs deploy/ambit-console`, then check the collector |
+| AmbitControllerRecordsDropped | warning | the controller dropped access snapshot records in the last 30 minutes (only with `evidence.enabled`). The rules were applied; an access review export for this time has a gap until the next change or the daily record at 00:05 UTC | `send_failed`: the collector was not reachable, read `kubectl -n <ns> logs deploy/ambit-otel-collector`. `queue_full`: more records than the controller can send. `too_large`: the AccessRules together are larger than 1 MiB, read `kubectl -n <ns> logs deploy/ambit-controller` |
 
 ## Finding what grew
 

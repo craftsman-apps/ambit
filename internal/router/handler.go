@@ -31,7 +31,8 @@ type Handler struct {
 	extproc.UnimplementedExternalProcessorServer
 	Store       *Store
 	Classifier  Classifier
-	Concurrency int // classifications at once per replica (default 16)
+	Guard       *Guard // llm.promptGuard in reject or mask mode; nil: none
+	Concurrency int    // classifications at once per replica (default 16)
 	Metrics     *Metrics
 
 	once sync.Once
@@ -96,13 +97,21 @@ func (h *Handler) decide(ctx context.Context, start time.Time, snap *Snapshot, a
 	if !ok {
 		return Result{}
 	}
-	if !r.AllSignedIn && !slices.ContainsFunc(a.Groups, func(g string) bool { return slices.Contains(r.Groups, g) }) &&
+	if !(r.AllSignedIn && !identity.IsService(a.Email)) && !slices.ContainsFunc(a.Groups, func(g string) bool { return slices.Contains(r.Groups, g) }) &&
 		(a.Email == "" || !slices.Contains(r.Users, a.Email)) {
 		return Result{Reason: "denied"}
 	}
 	text, ok := lastUserText(req.Messages)
 	if !ok {
 		return Result{Reason: "error"}
+	}
+	var guarded []Msg
+	if h.Guard != nil {
+		var err error
+		if guarded, err = h.Guard.Regex(msgsOf(req.Messages)); err != nil {
+			return Result{Reason: "guard"} // the gateway refuses this prompt; it never reaches the classifier
+		}
+		text = lastUser(guarded)
 	}
 	if l := snap.limits[r.Name]; l != nil && !l.Allow() {
 		return Result{Reason: "rate-limited"}
@@ -134,6 +143,14 @@ func (h *Handler) decide(ctx context.Context, start time.Time, snap *Snapshot, a
 		if r.LLM != nil {
 			key = snap.keys[r.LLM.CredentialKey]
 		}
+		text := text
+		if h.Guard != nil {
+			var err error
+			if text, err = h.Guard.Hook(cctx, guarded); err != nil {
+				ch <- out{err: err}
+				return
+			}
+		}
 		x, used, err := h.Classifier.Classify(cctx, r, key, cut(text, r.MaxBytes))
 		if r.LLM != nil {
 			h.Metrics.Tokens(r.Name, r.LLM.Model, used.Total())
@@ -147,6 +164,8 @@ func (h *Handler) decide(ctx context.Context, start time.Time, snap *Snapshot, a
 		return Result{Reason: "timeout"}
 	}
 	switch {
+	case errors.Is(o.err, errGuard):
+		return Result{Reason: "guard"}
 	case errors.Is(o.err, context.DeadlineExceeded):
 		return Result{Reason: "timeout"}
 	case o.err != nil:

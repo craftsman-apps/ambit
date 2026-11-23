@@ -9,6 +9,8 @@ package guard
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -137,7 +139,19 @@ func (g *Guard) CheckRequest(ctx context.Context, req *extmcp.McpRequest) (*extm
 			}
 		}
 	}
-	return pass(), nil
+	// The call ID links this call's compression records to the gateway's access-log record of it (#203): agentgateway
+	// keeps the metadata for the call and exposes it to CEL as mcpGuardrails.callId, in the guard policy's response
+	// metadata and in the access log. The guard makes it here, every time; it never reads a callId from the request.
+	r := pass()
+	r.Metadata, _ = structpb.NewStruct(map[string]any{"callId": newCallID(), "tool": tool})
+	return r, nil
+}
+
+// newCallID is "c_" and 128 random bits in hex.
+func newCallID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:]) // never fails (crypto/rand)
+	return "c_" + hex.EncodeToString(b[:])
 }
 
 // metadataStrings reads a list of strings the gateway put in the metadata context: a list, or a JSON
@@ -232,7 +246,11 @@ func (g *Guard) filterList(ctx context.Context, resp *extmcp.McpResponse) (*extm
 func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extmcp.McpResponseResult, error) {
 	var result map[string]any
 	if err := json.Unmarshal(resp.McpResponse, &result); err != nil {
-		return passResp(), nil
+		// A result must be an object; anything else (a list, a string, broken JSON) could hold text the walk below
+		// would never see.
+		slog.Error("guard: tool result is not a JSON object; result withheld", "server", strings.Join(resp.ServiceNames, ","))
+		return &extmcp.McpResponseResult{Result: &extmcp.McpResponseResult_Error{Error: &extmcp.AuthorizationError{
+			Code: extmcp.AuthorizationError_UNKNOWN, Reason: "the tool result is not a JSON object, so it could not be checked for personal data and was withheld"}}}, nil
 	}
 	// The decoded form is the only copy we need. Release the raw message now: a large result is held
 	// several times over while it is masked and encoded again, and the guard has a small memory limit.
@@ -314,7 +332,7 @@ func (g *Guard) compressContent(ctx context.Context, services []string, meta *st
 	items, _ := result["content"].([]any)
 	presidio := g.hasPresidio()
 	changed := false
-	for _, it := range items {
+	for part, it := range items {
 		m, _ := it.(map[string]any)
 		text, _ := m["text"].(string)
 		if m == nil || m["type"] != "text" {
@@ -339,25 +357,29 @@ func (g *Guard) compressContent(ctx context.Context, services []string, meta *st
 		compressBytesOut.WithLabelValues(server, typ).Add(float64(len(out)))
 		compressOmitted.WithLabelValues(server, typ).Add(float64(omitted))
 		slog.Info("guard: compressed tool result", "server", server, "type", typ, "mode", cfg.Mode, "bytes_in", len(text), "bytes_out", len(out), "omitted", omitted)
-		g.record(meta, server, typ, cfg.Mode, len(text), len(out), omitted)
+		g.record(meta, CompressionRecord{Server: server, Type: typ, Mode: cfg.Mode, Part: part, BytesIn: len(text), BytesOut: len(out), Omitted: omitted})
 		m["text"], changed = out, true
 	}
 	return changed
 }
 
-// record hands one compressed text to the record sink. Without the caller's groups there is no row to
-// count it in, so it is dropped (and counted) rather than filed under a made-up group.
-func (g *Guard) record(meta *structpb.Struct, server, typ, mode string, in, out, omitted int) {
+// record hands one compressed text to the record sink, with the caller and the call from the gateway's metadata.
+// Without the caller's groups there is no row to count it in, so it is dropped (and counted) rather than filed under
+// a made-up group. recordEmail and keyId are absent with protection.compressionAudit.caller false.
+func (g *Guard) record(meta *structpb.Struct, r CompressionRecord) {
 	if g.Records == nil {
 		return
 	}
 	groups, ok := metadataStrings(meta, "groups")
 	if !ok {
 		recordDropped.WithLabelValues(dropNoGroups).Inc()
-		slog.Warn("guard: no groups from the gateway; compression record dropped", "server", server)
+		slog.Warn("guard: no groups from the gateway; compression record dropped", "server", r.Server)
 		return
 	}
-	g.Records.Record(CompressionRecord{Server: server, Type: typ, Mode: mode, BytesIn: in, BytesOut: out, Omitted: omitted, Groups: groups})
+	f := meta.GetFields()
+	r.Groups, r.Email, r.KeyID = groups, f["recordEmail"].GetStringValue(), f["keyId"].GetStringValue()
+	r.CallID, r.Tool = f["callId"].GetStringValue(), f["tool"].GetStringValue()
+	g.Records.Record(r)
 }
 
 func (g *Guard) hasPresidio() bool {

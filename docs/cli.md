@@ -5,7 +5,7 @@ description: Every command, flag and exit code of the ambit CLI, the checks of a
 
 # CLI reference
 
-`ambit` starts a local Ambit on kind, checks an install, validates Ambit objects in files, and connects coding tools to Ambit. To install it, see [Quick start](quick-start.md). This page describes release 0.2.0.
+`ambit` starts a local Ambit on kind, installs, upgrades and uninstalls Ambit on any cluster, checks an install, validates Ambit objects in files, and connects coding tools to Ambit. To install it, see [Quick start](quick-start.md); on Windows, `winget install CraftsmanApps.Ambit` or `scoop bucket add ambit https://github.com/craftsman-apps/scoop-ambit` and `scoop install ambit/ambit`. This page describes release 0.2.0.
 
 ## Global flags
 
@@ -15,7 +15,7 @@ description: Every command, flag and exit code of the ambit CLI, the checks of a
 | `--context <name>` | the current context | kubeconfig context |
 | `-n`, `--namespace <name>` | `ambit-system` | namespace of the Ambit releases |
 | `--yes` | off | do not ask for confirmation. Required without a terminal. |
-| `--output text\|json` | `text` | `json` only for `ambit check` and `ambit version`. Then stdout holds only the JSON; other lines go to stderr. |
+| `--output text\|json` | `text` | `json` only for `ambit check` and `ambit version`. Then stdout holds only the JSON; other lines go to stderr. A failure prints `{"error": {"what", "why", "next", "code"}}` on stdout, with `code` the exit code. |
 | `--no-color` | off | no colour. Colour is used only on a terminal, and never when `NO_COLOR` is set. |
 | `--verbose` | off | also print the logs of the Helm and kind libraries |
 
@@ -26,6 +26,7 @@ description: Every command, flag and exit code of the ambit CLI, the checks of a
 | 0 | The command did what it says. For `ambit check`: no check failed (warnings and unknown results are allowed). |
 | 1 | A step failed, or (for `ambit check`) at least one check failed. |
 | 2 | Usage error: a bad flag, a missing file, a `--context` or `--kubeconfig` that you named and that does not exist (also for `ambit check`), or no `--yes` where the command must ask but there is no terminal. |
+| 3 | `ambit install` and `ambit upgrade` only: Ambit is installed and its workloads are ready, but a production check failed. |
 
 Every failure of `ambit local up` and the other commands prints a line `✗ <what> — <why>` and, on the next line, `next:` with the command to run or a page to read. If Docker is not running, `ambit local up` stops before it changes anything: the line reads `✗ Docker is not running — <why>`, and `next:` says `start Docker Desktop` (macOS and Windows) or `start Docker: sudo systemctl start docker` (Linux).
 
@@ -35,7 +36,7 @@ The CLI never prints the OpenRouter key, the admin password or tokens: one outpu
 
 ## ambit local up
 
-Creates a local Ambit on a kind cluster, or repairs one that `ambit local up` created. Press Ctrl+C once to stop (the command says how to remove a cluster it created); press it a second time to end the process at once. Steps: preflight (the `L` checks below), cluster, the third-party CRDs, the charts `ambit-crds` and `ambit` (with progress every 10 seconds), a model, the access rule `everyone-local`, a test call, and a summary. See [Install locally by hand](local-up.md) for each object.
+Creates a local Ambit on a kind cluster, or repairs one that `ambit local up` created. Press Ctrl+C once to stop (the command says how to remove a cluster it created); press it a second time to end the process at once. Steps: preflight (the `L` checks below), cluster, the third-party CRDs, the charts `ambit-crds` and `ambit` (with progress every 10 seconds), a model, the access rule `everyone-local`, a test call, and a summary. See [Install locally by hand](install-by-hand.md) for each object.
 
 | Flag | Default | Meaning |
 |---|---|---|
@@ -54,6 +55,8 @@ Creates a local Ambit on a kind cluster, or repairs one that `ambit local up` cr
 
 The CLI uses only the kubectl context `kind-<name>` and gives back your previous current context after kind creates the cluster. It keeps an existing OpenRouter Secret on a repair unless you give a new key. Proxies: the CLI and the kind node use `HTTPS_PROXY` and `NO_PROXY` from the environment.
 
+Two runs at once: `ambit local up` and `ambit local down` take the lock file `<name>.lock` next to the state file for the whole run. A second run for the same name stops at once with exit 1 (`another ambit local up or down for "<name>" is running`). The lock is the operating system's file lock, so it ends with the process, also after Ctrl-C, a crash or `kill -9`. A release that an earlier, stopped run left in `pending-install` or `pending-upgrade` is marked failed and upgraded: `ambit local up` does this only on a cluster it created. The names `con`, `prn`, `aux`, `nul`, `com1` to `com9` and `lpt1` to `lpt9` cannot be used, on every system, because Windows does not allow them as file names.
+
 ## ambit local down
 
 Deletes the kind cluster that `ambit local up` created, after it asks (`--yes` skips the question). Flag: `--name`. It changes nothing else.
@@ -62,20 +65,28 @@ Deletes the kind cluster that `ambit local up` created, after it asks (`--yes` s
 
 Prints the password of `admin@ambit.local` of the local cluster. Flag: `--name`.
 
-`local up` repair, `local down` and `local password` act only on a cluster with both marks of `ambit local up`, a state file and a node label; see [A cluster that ambit did not create](local-up.md#a-cluster-that-ambit-did-not-create).
+`local up` repair, `local down` and `local password` act only on a cluster with both marks of `ambit local up`, a state file and a node label; see [A cluster that ambit did not create](install-by-hand.md#a-cluster-that-ambit-did-not-create).
 
 ## ambit connect
 
 ```sh
 ambit connect <claude-code|codex|opencode|cursor> --url <llm address> --model <model id> [flags]
+ambit connect <hermes|kilocode|pi> --url <llm address> --model <model id> [--mcp-url <mcp address>] [flags]
 ambit connect claude-desktop-mcp --url <mcp address> [flags]
 ```
 
 Adds Ambit's entries to the user-level config file of a coding tool, stores the key in the keychain of your computer, and ends with one test call in the tool's own request format. It never writes the key to a config file, and it never changes a project file. For what it writes for each tool, see [Connect your coding agents](guides/coding-tools.md#before-you-start). For `cursor` it prints the steps and writes nothing.
 
-For `opencode` it runs `opencode --version` first. opencode 2 sends model calls from a background service that does not see your terminal, so for opencode 2 connect writes the key to the key file `~/.config/ambit/opencode-key` (`$XDG_CONFIG_HOME/ambit/opencode-key` when that variable is set; mode `0600`, readable only by you on Windows too) and the provider reads it with `{file:<path>}`. It writes the opencode 2 format (`providers`), or the older `provider` format when the file uses it; other providers stay. It adds no shell function, removes the function that an earlier connect added for opencode 1, and ends with the line to restart the service: `opencode service restart`. Like the header file of `claude-desktop-mcp`, the key file's content is never printed and the state file records only its SHA-256 hash. When `opencode --version` does not answer, connect sets up opencode 2 and says so. For opencode 1 it writes the `provider` format with `{env:AMBIT_API_KEY}` and adds a shell function that sets the variable, as before.
+For `opencode` it runs `opencode --version` first. opencode 2 sends model calls from a background service that does not see your terminal, so for opencode 2 connect writes the key to the key file `~/.config/ambit/opencode-key` (`$XDG_CONFIG_HOME/ambit/opencode-key` when that variable is set; mode `0600`, readable only by you on Windows too) and the provider reads it with `{file:<path>}`. It writes the opencode 2 format (`providers`), or the older `provider` format when the file uses it; other providers stay. It adds no shell function, removes the function that an earlier connect added for opencode 1, and ends with the line to restart the service: `opencode service restart`. Like the header file of `claude-desktop-mcp`, the key file's content is never printed and the state file records only its SHA-256 hash. When `opencode --version` does not answer, connect sets up opencode 2 and says so. For opencode 1 it writes the `provider` format with `{env:AMBIT_API_KEY}` and adds a shell function that sets the variable, as before; it replaces the entry of an earlier connect for opencode 2 and deletes that connect's key file (a key file changed after connect stays, with a warning).
 
-`claude-desktop-mcp` connects Claude Desktop to Ambit's MCP tools, as in [Claude Desktop with Ambit's MCP tools](guides/claude-desktop-mcp.md). `--url` is the MCP address (for example `http://mcp.localtest.me:8080/mcp`) and `--model` is not used. It adds the entry `mcpServers.ambit` (the `mcp-remote@0.14.3` bridge started with `npx`, with `--allow-http` for an `http` address whose host is not `localhost`, `127.0.0.1` or `::1`) to `claude_desktop_config.json` (macOS `~/Library/Application Support/Claude/`, Windows `%APPDATA%\Claude\`, Linux `$XDG_CONFIG_HOME/Claude/` or `~/.config/Claude/`). It writes the key to the header file `~/.ambit/mcp-headers.txt` (mode `0600`, readable only by you on Windows too), because `mcp-remote` reads the key only from a file or from the config. It is one of the two files `ambit connect` writes that hold the key (the other is the opencode 2 key file): its content is never printed, and the state file records only its SHA-256 hash. A header file that Ambit did not write is a conflict. It makes no test call: restart Claude Desktop and check Connectors. `ambit disconnect claude-desktop-mcp` removes the entry and deletes the header file while it still holds what connect wrote.
+`hermes`, `kilocode` and `pi` add Ambit as an OpenAI-compatible provider (Chat Completions) and make it the default model, as in [Connect your coding agents](guides/coding-tools.md#hermes-agent):
+
+- `hermes` changes `$HERMES_HOME/config.yaml` (default `~/.hermes/config.yaml`; on Windows `%LOCALAPPDATA%\hermes\config.yaml`). The provider `ambit` under `providers:` reads the key with `key_cmd: "<path of ambit> key print --url <llm>"`. Ambit's lines are marked blocks, as in Codex; a `model:` block that `--force` replaces stays in the file as `# ambit-replaced:` comments and comes back at disconnect. A YAML file that does not parse, or a `providers:` or `mcp_servers:` section that is not a block mapping, stops the command.
+- `kilocode` writes the key to `~/.config/ambit/kilo-key` (`$XDG_CONFIG_HOME/ambit/kilo-key` when that variable is set; mode `0600`, readable only by you on Windows too) and changes the global Kilo file in `$XDG_CONFIG_HOME/kilo/` or `~/.config/kilo/` (the first that exists of `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, `config.json`, else a new `kilo.jsonc`). The provider `ambit` reads the key with `{file:<path>}`: the Kilo Code extension for VS Code starts Kilo in the background, where the environment of your terminal is not seen, and Kilo cannot run a command for the key.
+- `pi` changes `$PI_CODING_AGENT_DIR` (default `~/.pi/agent/`): the provider `ambit` in `models.json` with `"apiKey": "!<path of ambit> key print --url <llm>"`, and `defaultProvider` and `defaultModel` in `settings.json`.
+- `--mcp-url <mcp address>` adds the MCP server `ambit` with the same key, which must have the scope LLM and MCP. Hermes reads MCP headers only from its config or from environment variables, so its entry is the `mcp-remote@0.14.3` bridge with the header file `~/.ambit/hermes-mcp-headers.txt` (mode `0600`; Node.js is needed). Kilo Code gets `mcp.ambit` with the header `Bearer {file:<key file>}`. pi gets `mcpServers.ambit` in `mcp.json` with `"auth": { "provider": "ambit" }`, which sends the key of the provider `ambit`; pi allows that only over `https` or to `localhost`, so connect stops for another `http` address.
+
+`claude-desktop-mcp` connects Claude Desktop to Ambit's MCP tools, as in [Claude Desktop with Ambit's MCP tools](guides/claude-desktop-mcp.md). `--url` is the MCP address (for example `http://mcp.localtest.me:8080/mcp`) and `--model` is not used. It adds the entry `mcpServers.ambit` (the `mcp-remote@0.14.3` bridge started with `npx`, with `--allow-http` for an `http` address whose host is not `localhost`, `127.0.0.1` or `::1`) to `claude_desktop_config.json` (macOS `~/Library/Application Support/Claude/`, Windows `%APPDATA%\Claude\`, Linux `$XDG_CONFIG_HOME/Claude/` or `~/.config/Claude/`). It writes the key to the header file `~/.ambit/mcp-headers.txt` (mode `0600`, readable only by you on Windows too), because `mcp-remote` reads the key only from a file or from the config. It is one of the files `ambit connect` writes that hold the key (the others are the opencode 2 and Kilo Code key files and the Hermes header file): its content is never printed, and the state file records only its SHA-256 hash. A header file that Ambit did not write is a conflict. It makes no test call: restart Claude Desktop and check Connectors. `ambit disconnect claude-desktop-mcp` removes the entry and deletes the header file while it still holds what connect wrote.
 
 Steps: read and parse the files (a file that does not parse stops the command, nothing is changed), find conflicts, get the key, print the diff of every file, ask `Write these changes? [y/N]`, store the key, write the files (each existing file is first copied to `<file>.ambit.bak`, mode `0600`, only the latest copy is kept), write the state file, make the test call. If a write fails after another file was written, the written files are put back.
 
@@ -87,9 +98,10 @@ Steps: read and parse the files (a file that does not parse stops the command, n
 | `--key-file <path>` | Read the key from this file. Without it: `AMBIT_API_KEY`, then a hidden prompt. A key is never a flag value. |
 | `--replace-key` | A key is stored for this address: ask for a new one and replace it. Without the flag the stored key is reused and nothing is asked. |
 | `--key-store keychain\|file` | Force a store. Default: the keychain, and a `0600` file only on Linux or BSD without a Secret Service (with a warning). |
+| `--mcp-url <address>` | `hermes`, `kilocode` and `pi` only (exit 2 for another tool): also add the MCP gateway at this address as the MCP server `ambit`. |
 | `--shell bash\|zsh\|fish\|powershell\|none` | opencode 1 only: the shell that gets the function. Default: detected. `none` prints the function and writes nothing. opencode 2 gets no function, so the flag is not used. |
 | `--dry-run` | Print the diff of every file and the key action. Write nothing, store nothing, delete nothing, ask for no key and make no test call. Exit 1 when the real run would stop (a conflict, a file that does not parse, an opencode v2 file with opencode 1), else 0. |
-| `--force` | Replace a conflicting entry that Ambit did not write. The old value is saved for `ambit disconnect`, except these, which stay only in the backup file and are not put back: `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY` and an old `provider.ambit` or `providers.ambit` of opencode. |
+| `--force` | Replace a conflicting entry that Ambit did not write. The old value is saved for `ambit disconnect`, except these, which stay only in the backup file and are not put back: `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, `CLAUDE_CODE_USE_FOUNDRY` and an old `provider.ambit` or `providers.ambit` of opencode, an old `provider.ambit` or `mcp.ambit` of Kilo Code, and an old `providers.ambit` or `mcpServers.ambit` of pi. In Hermes' `config.yaml`, replaced lines stay as `# ambit-replaced:` comments, as in Codex. |
 | `--no-test` | Skip the test call. |
 
 On Windows, `ambit connect opencode` for opencode 1 asks PowerShell for its execution policy. Windows PowerShell 5.1 starts with the policy `Restricted`, and under `Restricted` or `AllSigned` it does not load the profile that holds the function. Then connect still writes the function, prints a `warn` line, and prints `next: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`. Ambit never changes the policy: run that command yourself, or use `--shell none`.
@@ -101,11 +113,11 @@ The key is checked for the format `ambit_` and 43 letters and digits. If the sam
 ## ambit disconnect
 
 ```sh
-ambit disconnect <claude-code|codex|opencode|cursor> [flags]
+ambit disconnect <claude-code|codex|opencode|cursor|claude-desktop-mcp|hermes|kilocode|pi> [flags]
 ambit disconnect --all [flags]
 ```
 
-Removes exactly what `ambit connect` added, and keeps every other byte of the file when nothing changed in between. For Codex and opencode this needs the state file `connect.json`: without it, the blank line that connect added before a block stays. An entry that you changed after connect stays, with a `!` line. A tool that is not recorded in the state file prints `✓ <tool> is not connected (nothing recorded)`; for Codex and opencode, a marked block that is found is still removed. For opencode 2 it also deletes the key file while it still holds what connect wrote. When no other tool uses the key, the stored key is deleted. That does not revoke it: the last line says to revoke it in the console. With `--revoke`, each key that is deleted is first revoked at the console (`DELETE /api/keys/self`, see [Personal API keys](api-keys.md#revoke-a-key)). A key the console does not know (revoked or stopped already) gives a warning and is deleted. Any other failure (network, `429`, `5xx`) keeps the stored key and exits 1; the tools are already disconnected, and `ambit disconnect --all --revoke` finishes the work. A key stored with `ambit key set` is deleted only by `--all`.
+Removes exactly what `ambit connect` added, and keeps every other byte of the file when nothing changed in between. For Codex, opencode and Hermes this needs the state file `connect.json`: without it, the blank line that connect added before a block stays. An entry that you changed after connect stays, with a `!` line. A tool that is not recorded in the state file prints `✓ <tool> is not connected (nothing recorded)`; for Codex, opencode and Hermes, a marked block that is found is still removed. For opencode 2 and Kilo Code it also deletes the key file, and for Hermes the header file, while it still holds what connect wrote. When no other tool uses the key, the stored key is deleted. That does not revoke it: the last line says to revoke it in the console. With `--revoke`, each key that is deleted is first revoked at the console (`DELETE /api/keys/self`, see [Personal API keys](api-keys.md#revoke-a-key)). A key the console does not know (revoked or stopped already) gives a warning and is deleted. Any other failure (network, `429`, `5xx`) keeps the stored key and exits 1; the tools are already disconnected, and `ambit disconnect --all --revoke` finishes the work. A key stored with `ambit key set` is deleted only by `--all`.
 
 | Flag | Meaning |
 |---|---|
@@ -129,14 +141,14 @@ Prints the key that `ambit connect` stored for the address to standard output, w
 ambit key set --url <address> [--key-file <path>] [--key-store keychain|file] [--console-url <address>]
 ```
 
-Stores a key for the address without connecting a tool, so that `ambit key print --url <address>` prints it. Use it for a helper that runs `ambit key print`, for example the `headersHelper` of a managed Claude Desktop ([Claude Desktop with Ambit's MCP tools](guides/claude-desktop-mcp.md)). The key comes from `--key-file`, else `AMBIT_API_KEY`, else a hidden prompt, and must be in the Ambit format. A key already stored for the address is replaced; when the old key was in the other store, it is deleted there. It prints `✓ key for <address> stored in <store>`, and never the key. A file that holds the key and that `ambit connect` wrote for the address (the opencode 2 key file, the `claude-desktop-mcp` header file) gets the new key too, with the line `✓ wrote the new key to <file>`; a file that was changed after connect keeps its content, with a warning. A running opencode service keeps the old key until you run `opencode service restart`. A later `ambit connect` to the same address reuses the key. `ambit disconnect --all` deletes a stored key that no tool uses.
+Stores a key for the address without connecting a tool, so that `ambit key print --url <address>` prints it. Use it for a helper that runs `ambit key print`, for example the `headersHelper` of a managed Claude Desktop ([Claude Desktop with Ambit's MCP tools](guides/claude-desktop-mcp.md)). The key comes from `--key-file`, else `AMBIT_API_KEY`, else a hidden prompt, and must be in the Ambit format. A key already stored for the address is replaced; when the old key was in the other store, it is deleted there. It prints `✓ key for <address> stored in <store>`, and never the key. A file that holds the key and that `ambit connect` wrote for the address (the opencode 2 and Kilo Code key files, the `claude-desktop-mcp` and Hermes header files) gets the new key too, with the line `✓ wrote the new key to <file>`; a file that was changed after connect keeps its content, with a warning. A running opencode service keeps the old key until you run `opencode service restart`; restart Kilo Code, and run `/reload-mcp` in Hermes. Hermes and pi read the key with `ambit key print`, so their model calls use the new key without a change. A later `ambit connect` to the same address reuses the key. `ambit disconnect --all` deletes a stored key that no tool uses.
 
 `connect`, `disconnect`, `key set` and `key print` print text only: `--output json` is a usage error (exit 2). They use the exit codes 0, 1 and 2, and never 3. A failure, including an error text from the operating system, goes through the same redaction as the other commands.
 
 | Case | Exit |
 |---|---|
 | Done, including "already connected", warnings, and a `--dry-run` that finds no problem | 0 |
-| Unknown tool, missing `--url` or `--model`, `--all` with a tool name, a bad `--url`, a key that is not in the Ambit format, `--output json`, an unknown flag, `--revoke` without a console address or with `--keep-key`; no terminal and no `--yes` | 2 |
+| Unknown tool, missing `--url` or `--model`, `--all` with a tool name, a bad `--url`, a key that is not in the Ambit format, `--output json`, an unknown flag, `--mcp-url` with a tool other than `hermes`, `kilocode` and `pi`, an `http` `--mcp-url` for `pi` whose host is not `localhost`, `--revoke` without a console address or with `--keep-key`; no terminal and no `--yes` | 2 |
 | A config file that does not parse, both `opencode.json` and `opencode.jsonc`, an opencode v2 config with opencode 1 | 1 |
 | A conflict without `--force`, also under `--dry-run` | 1 |
 | A keychain error on macOS or Windows, a locked Secret Service | 1 |
@@ -168,7 +180,7 @@ Without flags it runs the checks that apply: the pre-install group when Ambit is
 | ID | Group | Check | Source |
 |---|---|---|---|
 | R1 | pre | Kubernetes 1.30 or later | live objects |
-| R2 | pre | you can create CRDs, namespaces and ClusterRoles | live objects |
+| R2 | pre | you can create what an install creates: CRDs, namespaces, ClusterRoles, ClusterRoleBindings, ValidatingAdmissionPolicies and their bindings, and Deployments, Secrets, Services, ServiceAccounts, Roles and RoleBindings in the namespace | live objects |
 | R3 | pre | which of the releases `ambit-crds` and `ambit` are installed, and their versions | live objects |
 | R4 | pre | a default StorageClass when the chart's own ClickHouse is on | values (`-f`), live objects |
 | R5 | pre | the TLS Secret named in `gateway.tls.certificateSecret` exists | values (`-f`), live objects |
@@ -203,6 +215,136 @@ Without flags it runs the checks that apply: the pre-install group when Ambit is
 
 `ambit check` needs read access (`get`, `list`) to the Ambit objects (Models, Servers, AccessRules), Deployments, Pods, PodDisruptionBudgets and StorageClasses in the namespace, to CustomResourceDefinitions, and `get` on Secrets in the namespace: Helm keeps the release values in Secrets, P3 reads the TLS certificate, and P10 checks that each credentials Secret exists (without reading its values). The active checks need `create` on `pods/portforward`: the health probes, and P4 and P11 with `--deep`, which read the collector's metrics on port 8888 (one test call serves both). The mark-missing line under P11 needs `create` on `pods/exec` in the ClickHouse pod: it runs one `SELECT` there with the pod's own credentials, so the CLI never reads the ClickHouse password. With an external ClickHouse, or without that permission, the line is `?`; the Audit page shows the same count. R2 uses SelfSubjectAccessReviews, which every signed-in user may create. Without a permission, the check is `?` and names what is missing, for example `cannot get secrets in ambit-system`.
 
+## ambit init
+
+Writes a values file for `ambit install` by asking questions. It never asks for a secret value: it asks for the name of each Secret and prints the `kubectl create secret` command to run. It needs a terminal (without one it stops with exit 2); a team that scripts installs writes the values file itself.
+
+```sh
+ambit init [--out values.yaml] [--gitops argocd] [--force]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--out <file>` | `values.yaml` | file to write. An existing file is refused (exit 1) without `--force`. |
+| `--gitops argocd` | off | also write the Argo CD files of a configuration repository (below). Only `argocd` is accepted. |
+| `--force` | off | overwrite `--out` and the Argo CD files |
+
+The questions, in order (Enter takes the default in brackets): the console address; the LLM gateway host, whether the MCP gateway is on, and its host; the company sign-in (`oidc`, `github`, `saml`, `ldap` or `later`), with the name of the Secret for its secret (default `ambit-sso`); where the gateway tokens come from (your identity provider: issuer, audience and JWKS URL; or Ambit's Dex, for tests); the TLS Secret (default `ambit-tls`, or `none`, which `ambit check --production` fails); the audit log, its retention and an external ClickHouse; budgets, what happens when the budget store does not answer, and an external Valkey; tool protection; GitOps mode (repository, branch, directory, GitHub App ID and the Secret of its key); the number of gateway replicas.
+
+```
+Wrote values.yaml (24 settings).
+Create these Secrets before ambit install (values are never written to files by ambit init):
+  kubectl -n ambit-system create secret generic ambit-sso --from-literal=clientSecret=<client secret>
+  kubectl -n ambit-system create secret tls ambit-tls --cert=<file> --key=<file>
+Or let ambit install create them from files: ambit install -f values.yaml --secret-file ambit-sso/clientSecret=<file> --secret-file ambit-tls/tls.crt=<file> --secret-file ambit-tls/tls.key=<file>
+Next: ambit install -f values.yaml
+```
+
+The file starts with a comment: the CLI version, the date, and that `ambit init` does not read it back, so edit it freely. Every setting it writes exists in the chart's `values.yaml` of the same version. The sign-in connector uses `$ENV_NAME` placeholders, and `dex.envVars` takes their values from the Secret you named.
+
+### --gitops argocd
+
+Argo CD renders the charts itself and keeps no Helm release, so `ambit install` is not used. `ambit init --gitops argocd` writes everything Argo CD needs, with the current directory as the root of your configuration repository:
+
+```
+<GitOps directory>/values.yaml                 the values file (the directory you answered, default ambit)
+<GitOps directory>/crds/dependency-crds.yaml   the dependency CRDs (Gateway API, agentgateway, ToolHive) of this CLI
+argocd/ambit-dependency-crds.yaml              Application: <GitOps directory>/crds, sync wave -2, ServerSideApply=true
+argocd/ambit-crds.yaml                         Application: chart ambit-crds from ghcr.io/craftsman-apps/charts, sync wave -1
+argocd/ambit.yaml                              Application: chart ambit, sync wave 0, with the values file of the repository ($values)
+argocd/ambit-objects.yaml                      Application: the accessrules/, servers/ and models/ directories, sync wave 1
+argocd-parent.yaml                             only if you asked for one parent Application (app of apps)
+```
+
+With a parent, `kubectl apply -n argocd -f argocd-parent.yaml` starts all four, in the order of their sync waves. Without one, apply the four in the order above and wait until each is Healthy. The output prints the Argo CD health check of Ambit's objects (`deploy/argocd/health.lua`) as the `argocd-cm` keys to add. `--out` cannot be used with `--gitops argocd`. To upgrade, run `ambit init --gitops argocd --force` with the newer CLI: it rewrites the chart versions and the CRD bundle, and you review the diff in a pull request.
+
+## ambit install
+
+Installs Ambit on any cluster: the dependency CRDs (Gateway API, agentgateway, ToolHive), then the Helm releases `ambit-crds` and `ambit`. The result is two ordinary Helm releases, so `helm list`, `helm history`, `helm upgrade` and `helm rollback` keep working. The chart version is always the CLI's own version: to install another version of Ambit, use that version of the CLI.
+
+```sh
+ambit install -f values.yaml [--secret-file <secret>/<key>=<path>]... [--dry-run] [--timeout 10m] [--chart-repo oci://...] [--registry-config <file>] [--yes]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `-f`, `--values <file>` | required | values file; may repeat (later files win, as in Helm) |
+| `--secret-file <secret>/<key>=<path>` | | create or update the Secret `<secret>` with the key `<key>` from the file's bytes before the install. May repeat. Only Secrets that the values name are accepted (see below). |
+| `--dry-run` | off | check, render and let the API server validate everything; change nothing (see below) |
+| `--timeout <duration>` | `10m` | how long to wait for the workloads |
+| `--chart-repo <repository>` | `oci://ghcr.io/craftsman-apps/charts` | a mirror of the chart registry |
+| `--registry-config <file>` | Helm's | Helm registry login file, for a private mirror |
+
+Steps, each printed as one line with its duration:
+
+1. **Target.** It prints `Installing Ambit <version> into context <context> (<API server>), namespace <namespace>` and asks `Install? [y/N]`. Without a terminal, `--yes` is required (exit 2). If the context or its API server cannot be found in the kubeconfig, it stops with exit 1 before it asks.
+2. **Preflight.** The checks R1, R2, R4 and R5 of `ambit check --pre` (R5 is skipped when `--secret-file` writes the TLS Secret), and both charts render with your values. It stops (exit 1) when a Helm release of chart `ambit` or `ambit-crds` exists in any namespace (`use ambit upgrade`), also one left in `pending-install` or `pending-upgrade`. Without `list` on Secrets in all namespaces it checks the target namespace only, and says so. It also stops when the Deployment `ambit-console` exists without a Helm release: Ambit was installed by Argo CD or another tool, so change it there.
+3. **Secrets** from `--secret-file`.
+4. **Dependency CRDs**, by server-side apply with the field manager `ambit-cli`. A CRD that does not exist is created. A Gateway API CRD with a newer `gateway.networking.k8s.io/bundle-version` on the cluster is left alone, with a warning (another product, such as a service mesh, may own it). A Gateway API CRD with an older version, and an agentgateway or ToolHive CRD that differs from the one this CLI needs (found by a server-side dry run), is listed, and the CLI asks `Update these <n> CRDs? [y/N]`; `--yes` updates them. The answer `n` stops the install before anything is written.
+5. **Charts** `ambit-crds`, then `ambit`, exactly as `helm install` would install them (client-side apply, Helm's Secret storage), so Helm 3 and Helm 4 can read, upgrade and roll them back. A release left pending is never changed on its own.
+6. **Wait** for the workloads, with progress every 10 seconds.
+7. **Production checks**, the production group of `ambit check`. All pass: exit 0. Any fails: the failures are printed and the exit code is 3 (Ambit is installed and working; the setup is not production-ready yet).
+
+`--dry-run` writes nothing: no Secret, no CRD, no release, and it asks nothing. It prints the target, runs the preflight, then: the dependency CRDs go through a server-side apply with `dryRun=All` (the API server validates them and stores nothing); both charts are rendered; each rendered object whose kind exists on the cluster is validated by the API server (a server-side apply with `dryRun=All`), and an object whose CRD comes with the same install (on a fresh cluster: every Ambit and agentgateway object) is listed as "not validated: CRD not installed yet". Objects of a namespace that does not exist yet (on a fresh cluster: the release namespace and the grants namespace the chart creates) are validated in the namespace `default`. `--secret-file` files are read and checked (they exist and are not empty), not written. Exit 1 when the API server refuses an object.
+
+```
+Would apply 31 dependency CRDs (3 skipped: newer on the cluster: gateways.gateway.networking.k8s.io (...))
+Would install ambit-crds 0.5.0 (12 objects) and ambit 0.5.0 (84 objects) in ambit-system
+  validated by the API server: 41; not validated (CRD not installed yet): 43
+    Deployment ambit-console: validated
+    ...
+Would create or update Secret ambit-sso key clientSecret, from ./sso-secret.txt
+✓ dry run: nothing was changed
+```
+
+`--secret-file` reads the file, and the CLI redacts its content from every output line before it does anything else with it, also every line of a multi-line value such as a PEM key. It accepts only the Secret names that the values use: the `secretKeyRef` names in `dex.envVars`, `gateway.tls.certificateSecret`, `evidence.clickhouse.external.passwordSecret`, `limits.valkey.external.passwordSecret`, and `gitops.github.privateKeySecret` when `gitops.enabled` is true. A typo is a usage error (exit 2), so it never creates a stray Secret. The Secret is written with the Kubernetes API, not through Helm: the bytes are in no Helm release, `helm get values` cannot show them, and `helm uninstall` and `ambit uninstall` leave the Secret. An existing Secret gets only the given keys (a merge patch; the CLI never reads the Secret back, and its other keys and labels stay); a new one gets the label `ambitproject.dev/created-by=ambit-cli` (type `kubernetes.io/tls` for the TLS Secret, which needs `tls.crt` and `tls.key` in the same command). The namespace is created when it does not exist.
+
+`ambit install` needs what `helm install` needs: the permissions that R2 lists.
+
+## ambit upgrade
+
+Upgrades Ambit to the CLI's own version: the dependency CRDs, then the releases of the charts `ambit-crds` and `ambit`. The releases are found by chart name, so an install made with `helm install` and other release names is upgraded under its own names. `ambit upgrade` and `helm upgrade` are interchangeable: a team can use both on the same install.
+
+```sh
+ambit upgrade (-f values.yaml... | --reuse-values) [--secret-file ...] [--dry-run] [--timeout 10m] [--recover-pending] [--yes]
+```
+
+| Flag | Meaning |
+|---|---|
+| `-f`, `--values <file>` | values file; may repeat. One of `-f` and `--reuse-values` is required, so a forgotten `-f` never keeps old settings silently. |
+| `--reuse-values` | keep the values stored in the release, on top of the new chart's defaults (Helm's `--reset-then-reuse-values`) |
+| `--recover-pending` | mark a release left in `pending-install` or `pending-upgrade` as failed, then upgrade (see below). It asks first. |
+| `--secret-file`, `--dry-run`, `--timeout`, `--chart-repo`, `--registry-config` | as for `ambit install` |
+
+Steps: the target and the question (`Upgrade Ambit 0.4.0 → 0.5.0 in context prod-eu (https://1.2.3.4:6443), namespace ambit-system`, then `Upgrade? [y/N]`; the target is printed also with `--yes`), the preflight, the Secrets, the dependency CRDs (as for install: a newer Gateway API CRD is left alone, an existing CRD that differs is changed only after a question), `ambit-crds`, `ambit`, the wait and the production checks, with the exit codes of install. Before the question it lists the sections of [Upgrading](upgrading.md) for every release between the installed version and the new one. Upgrading to the installed version applies it again (a repair), and says so. It stops with exit 1 when Ambit is not installed in the namespace (`use ambit install`), when Argo CD or another tool manages it, and when the installed chart is newer than the CLI (`use an ambit CLI of version X, or helm rollback`).
+
+A release that a stopped run left in `pending-install` or `pending-upgrade` is refused, because another person or a CI job may be in the middle of an upgrade:
+
+```
+✗ the release ambit is pending-upgrade since 2026-12-01T10:02:11Z (revision 8) — another install or upgrade may be running
+  next: check that no helm or ambit command is working on it (helm history ambit -n ambit-system), then: ambit upgrade --recover-pending
+```
+
+`--recover-pending` refuses while the pending revision is younger than 15 minutes (longer than the default `--timeout`), and says when to try again; there is no flag to skip this. Then it shows the revision, Helm's note on it and its age, and asks `Mark revision 8 of ambit as failed and upgrade? [y/N]` (`--yes` without a terminal goes on). It writes `marked failed by ambit upgrade --recover-pending` on that revision. Helm keeps no lock of its own, so check first that no one else is upgrading.
+
+There is no `ambit rollback`: `helm rollback ambit <revision> -n ambit-system` works on releases the CLI wrote, with Helm 3 and Helm 4. Where a release needs extra steps for a rollback, [Upgrading](upgrading.md) lists them.
+
+## ambit uninstall
+
+Uninstalls the release `ambit`, then `ambit-crds`, from the namespace. The releases are found by chart name, so an install made with `helm install` and other release names is found too; two releases of one chart stop the command (exit 1). It never deletes CRDs or the objects people wrote (the CRDs carry `helm.sh/resource-policy: keep`).
+
+On a terminal you confirm by typing the context name: a `y` is too easy for a command that stops every gateway. Without a terminal, `--yes` is required (exit 2). Afterwards it prints what stays and how to remove it:
+
+```
+✓ Uninstalled ambit (revision 7) and ambit-crds (revision 3) from context prod-eu, namespace ambit-system
+Left in the cluster (by design):
+  CRDs and your objects: kubectl get crd -o name | grep ambitproject.dev
+  ConfigMap ambit-access-mode: kubectl delete configmap -n ambit-system ambit-access-mode
+  ClickHouse volumes (audit records): kubectl get pvc -n ambit-system
+  Secrets that ambit install --secret-file wrote: kubectl get secret -n ambit-system -l ambitproject.dev/created-by=ambit-cli
+  Dependency CRDs (Gateway API, agentgateway, ToolHive): other products may use them; delete only if none does
+```
+
 ## ambit validate
 
 ```sh
@@ -233,5 +375,5 @@ Prints the CLI version, the chart version it installs, and, when the cluster ans
 ## Files the CLI writes
 
 - A state file per local cluster: `~/Library/Application Support/ambit/local/<name>.json` (macOS), `~/.config/ambit/local/<name>.json` (Linux), `%AppData%\ambit\local\<name>.json` (Windows). `ambit local down` deletes it.
-- `ambit connect` records what it wrote in `connect.json` in the `ambit` folder of your user config folder (`~/Library/Application Support/ambit` on macOS, `~/.config/ambit` on Linux, `%AppData%\ambit` on Windows), mode `0600`. The file never holds a key. `ambit connect claude-desktop-mcp` writes the header file `~/.ambit/mcp-headers.txt`, which holds the key (mode `0600`). The fallback key file is in `keys/` in the same folder. Each tool's config file that `ambit connect` changed has a copy `<file>.ambit.bak`; `ambit disconnect` does not delete it.
+- `ambit connect` records what it wrote in `connect.json` in the `ambit` folder of your user config folder (`~/Library/Application Support/ambit` on macOS, `~/.config/ambit` on Linux, `%AppData%\ambit` on Windows), mode `0600`. The file never holds a key. `ambit connect claude-desktop-mcp` writes the header file `~/.ambit/mcp-headers.txt`, `ambit connect hermes --mcp-url` writes `~/.ambit/hermes-mcp-headers.txt`, and `ambit connect opencode` (opencode 2) and `ambit connect kilocode` write `~/.config/ambit/opencode-key` and `~/.config/ambit/kilo-key`. These files hold the key (mode `0600`). The fallback key file is in `keys/` in the same folder. Each tool's config file that `ambit connect` changed has a copy `<file>.ambit.bak`; `ambit disconnect` does not delete it.
 - kind adds the context `kind-<name>` to your kubeconfig; `ambit local down` removes it.

@@ -2,7 +2,9 @@
 # 3 output tokens), streamed or not; like OpenAI, a stream carries usage only with stream_options.include_usage. Tests use it instead of a real provider where they need a successful
 # answer (token counts, cost), so they do not depend on a provider's free quota. The answer names any
 # X-Ambit-User header it received, so a test can check that clients cannot pass one through. A model name that starts
-# with mock/fail500 or mock/fail429 is answered with that status (a provider that is down or rate-limited).
+# with mock/fail500 or mock/fail429 is answered with that status (a provider that is down or rate-limited). A prompt
+# that starts with "ECHO " is repeated in the answer (what reached the model, for the prompt guard's mask test).
+# POST /request is a prompt-guard webhook (agentgateway's protocol): it refuses a prompt that contains WEBHOOK-REJECT.
 apiVersion: v1
 kind: ConfigMap
 metadata: { name: mock-llm }
@@ -10,7 +12,7 @@ data:
   server.py: |
     import json, http.server, time
     USAGE = {"prompt_tokens": 12, "completion_tokens": 3, "total_tokens": 15}
-    COUNT = {"classify": 0, "auth": "", "models": {}}  # test hooks: the classifier (step 12), requests per model name (step fallback)
+    COUNT = {"classify": 0, "auth": "", "text": "", "models": {}, "webhook": 0}  # test hooks: the classifier (step 12; text: the last prompt it got, step guard), requests per model name (step fallback), webhook calls (step guard)
     class H(http.server.BaseHTTPRequestHandler):
         def log_message(self, *a): pass
         def do_GET(self):  # classifications answered, and the last classifier Authorization header
@@ -19,6 +21,12 @@ data:
             self.end_headers(); self.wfile.write(out)
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
+            if self.path == "/request":  # prompt-guard webhook: {"body": {"messages": [...]}} -> {"action": ...}
+                COUNT["webhook"] += 1
+                hit = any("WEBHOOK-REJECT" in str(m.get("content", "")) for m in body.get("body", {}).get("messages", []))
+                out = json.dumps({"action": {"body": "Refused by the test webhook", "status_code": 403, "reason": "test"} if hit else {}}).encode()
+                self.send_response(200); self.send_header("content-type", "application/json"); self.send_header("content-length", str(len(out)))
+                self.end_headers(); self.wfile.write(out); return
             model = body.get("model")
             COUNT["models"][model] = COUNT["models"].get(model, 0) + 1
             if isinstance(model, str) and model.startswith(("mock/fail500", "mock/fail429")):  # a provider that is down or rate-limited
@@ -29,7 +37,7 @@ data:
             text = last if isinstance(last, str) else ""  # a multi-part message has a list content
             system = next((m.get("content") for m in body.get("messages", []) if m.get("role") == "system"), "") or ""
             if isinstance(system, str) and system.startswith("Classify the user's message"):  # ambit-router's classifier
-                COUNT["classify"] += 1; COUNT["auth"] = self.headers.get("authorization", "")
+                COUNT["classify"] += 1; COUNT["auth"] = self.headers.get("authorization", ""); COUNT["text"] = text
                 if text == "CLASSIFY-SLOW":
                     time.sleep(3)
                 label = "Coding, because" if text == "CLASSIFY-EXTRA" else ("coding" if ("code" in text.lower() or "python" in text.lower()) else "other")
@@ -54,14 +62,16 @@ data:
                 self.wfile.write(b"data: [DONE]\n\n")
                 return
             usage = None if text == "NO-USAGE" else USAGE
-            content = "pong" + (" x-ambit-user=" + self.headers["x-ambit-user"] if self.headers.get("x-ambit-user") else "") + (" x-ambit-route=" + self.headers["x-ambit-route"] if self.headers.get("x-ambit-route") else "") + (" x-ambit-config=" + self.headers["x-ambit-config"] if self.headers.get("x-ambit-config") else "") + (" x-ambit-classifier-input-tokens=" + self.headers["x-ambit-classifier-input-tokens"] if self.headers.get("x-ambit-classifier-input-tokens") else "")
+            content = "pong" + (" x-ambit-user=" + self.headers["x-ambit-user"] if self.headers.get("x-ambit-user") else "") + (" x-ambit-route=" + self.headers["x-ambit-route"] if self.headers.get("x-ambit-route") else "") + (" x-ambit-config=" + self.headers["x-ambit-config"] if self.headers.get("x-ambit-config") else "") + (" x-ambit-classifier-input-tokens=" + self.headers["x-ambit-classifier-input-tokens"] if self.headers.get("x-ambit-classifier-input-tokens") else "") + (" echo=" + text if text.startswith("ECHO ") else "")
             if body.get("user") == "load":  # load runs (test/load): a fixed 50 ms before the first token
                 time.sleep(0.05)
             if body.get("stream"):
                 self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
                 if not (body.get("stream_options") or {}).get("include_usage"):
                     usage = None
-                for chunk in ({"choices": [{"index": 0, "delta": {"content": "pong"}}]}, {"choices": [], **({"usage": usage} if usage else {})}):
+                # Like OpenAI: the last choice chunk has finish_reason "stop", so an agent knows the turn is over (#275).
+                for chunk in ({"choices": [{"index": 0, "delta": {"content": "pong"}, "finish_reason": None}]}, {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+                              {"choices": [], **({"usage": usage} if usage else {})}):
                     chunk.update({"id": "c1", "object": "chat.completion.chunk", "model": model})
                     self.wfile.write(b"data: " + json.dumps(chunk).encode() + b"\n\n")
                 self.wfile.write(b"data: [DONE]\n\n")

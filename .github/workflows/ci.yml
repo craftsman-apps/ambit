@@ -41,6 +41,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: The path rules in .github/scripts/changes.sh pass their tests
         run: .github/scripts/changes_test.sh
+      - name: The release workflow's highest-tag guard passes its tests
+        run: .github/scripts/highest-tag_test.sh
+      - name: The Scoop and winget steps of the release skip, with exit 0, without their secrets
+        run: .github/scripts/release-skip_test.sh
 
   build:
     needs: changes
@@ -74,7 +78,7 @@ jobs:
       - name: Front end type-check and build
         run: cd web && npm ci --no-fund --no-audit && npm run build
       - name: npm packaging and Homebrew formula scripts (node:test)
-        run: node --test scripts/npm/ scripts/homebrew/
+        run: node --test scripts/npm/ scripts/homebrew/ scripts/scoop/ scripts/winget/
       - name: Go vet, unit and integration tests (envtest API server)
         run: go vet ./... && KUBEBUILDER_ASSETS="$(make -s envtest-assets)" go test -count=1 ./...
       - name: Result compression saves tokens (offline tokenizer)
@@ -215,9 +219,9 @@ jobs:
         part:
           - { name: a, steps: "0 1 2 3 3b 3c args", ui: true }
           - { name: b, steps: "8 fallback", ui: false }
-          - { name: c, steps: "10 keys 9 compress", ui: false }
-          - { name: d, steps: "12 ext savings", ui: false }
-          - { name: e, steps: "4a 4b 4c 4d 5 6 7", ui: false }
+          - { name: c, steps: "10 keys 9 compress sa", ui: false }
+          - { name: d, steps: "12 ext savings evidence", ui: false }
+          - { name: e, steps: "4a 4b 4c 4d 5 6 7 guard", ui: false }
     steps:
       # The runner's disk held the kind images, the build cache and Go's caches until "no space left on device"
       # (2026-10-08). Preinstalled tools this job never uses are removed in the background.
@@ -226,16 +230,25 @@ jobs:
           df -h / | tail -1
           sudo nohup rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # test/stepsavings.sh builds the ClickHouse summary tests and runs them in the ClickHouse pod.
+      # test/stepsavings.sh and test/stepevidence.sh build the console's ClickHouse tests and run them in the ClickHouse pod.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        if: contains(matrix.part.steps, 'savings')
+        if: contains(matrix.part.steps, 'savings') || contains(matrix.part.steps, 'evidence')
         with: { go-version-file: go.mod }
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: 26, cache: npm, cache-dependency-path: web/package-lock.json }
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+      # Docker Hub images come through Google's mirror (mirror.gcr.io), then Docker Hub itself if the mirror fails.
+      # On 2026-11-16 the runner could not pull ClickHouse and python from Docker Hub for 10 minutes, and the install
+      # timed out (#293). The images are pinned by digest, so the mirror cannot change them. CI only: kind/cluster.yaml
+      # is the file users get, and it stays as it is.
+      - name: kind config with a Docker Hub mirror
+        run: |
+          cp kind/cluster.yaml "$RUNNER_TEMP/kind-cluster.yaml"
+          printf '%s\n' 'containerdConfigPatches:' '  - |' '    [plugins."io.containerd.grpc.v1.cri".registry]' \
+            '      config_path = "/etc/containerd/certs.d"' >> "$RUNNER_TEMP/kind-cluster.yaml"
       - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
-        with: { config: kind/cluster.yaml, cluster_name: ambit, wait: 120s }
+        with: { config: "${{ runner.temp }}/kind-cluster.yaml", cluster_name: ambit, wait: 120s }
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with: { name: images, path: "${{ runner.temp }}" }
       # Keycloak needs about 100 s to start, and third-party images take time to pull: start both now, while the
@@ -243,6 +256,9 @@ jobs:
       - name: Start slow test services early
         run: |
           mkdir -p charts/ambit/charts && cp "$RUNNER_TEMP"/thirdparty/charts/*.tgz charts/ambit/charts/
+          docker exec ambit-control-plane sh -c 'mkdir -p /etc/containerd/certs.d/docker.io && printf "%s\n" \
+            "server = \"https://registry-1.docker.io\"" "[host.\"https://mirror.gcr.io\"]" "  capabilities = [\"pull\", \"resolve\"]" \
+            > /etc/containerd/certs.d/docker.io/hosts.toml'
           make install-crds
           kubectl create namespace ambit-system
           kubectl -n ambit-system apply -f test/keycloak/keycloak.yaml >/dev/null
@@ -359,6 +375,111 @@ jobs:
         run: |
           kubectl --context kind-ambit get pods -A || true
           kubectl --context kind-ambit -n ambit-system logs deploy/ambit-console --tail=100 || true
+
+  # Spec D2 section 9, cluster test 1: ambit install and ambit uninstall on a new kind cluster, with the branch
+  # image and charts. Also runs on draft PRs (see cli-local).
+  cli-install:
+    needs: [changes, image]
+    if: needs.changes.outputs.cli_kind == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
+        with: { install_only: true }
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with: { version: v3.22.0 }   # Helm 3 for the first rollback; Helm 4 below for the second
+      - name: Helm 4 (checked against its published SHA-256)
+        run: |
+          v=v4.3.0; d="$RUNNER_TEMP/helm4"; mkdir -p "$d"; cd "$d"
+          curl -fsSLO "https://get.helm.sh/helm-$v-linux-amd64.tar.gz"
+          curl -fsSL "https://get.helm.sh/helm-$v-linux-amd64.tar.gz.sha256sum" | sha256sum --check --strict
+          tar xzf "helm-$v-linux-amd64.tar.gz" && mv linux-amd64/helm helm && ./helm version --short
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: images, path: "${{ runner.temp }}" }
+      - name: The CLI (dev build), the branch images and the chart dependencies
+        run: |
+          go build -tags dev -o bin/ambit ./cmd/ambit
+          gunzip -c "$RUNNER_TEMP/images.tar.gz" > "$RUNNER_TEMP/images.tar"
+          mkdir -p charts/ambit/charts && cp "$RUNNER_TEMP"/thirdparty/charts/*.tgz charts/ambit/charts/
+      - name: Every values file of ambit init's golden tests renders with the chart (it needs the chart dependencies)
+        run: AMBIT_RENDER_CHARTS=1 go test -count=1 -run TestInitGoldenFilesRender ./internal/cli/
+      - name: ambit install --dry-run, install, a model call, upgrade, Helm 3 and 4 rollback, uninstall, then 0.4.0 by Helm and ambit upgrade
+        env:
+          CLI_ARCHIVES: "${{ runner.temp }}/images.tar ${{ runner.temp }}/thirdparty/agentgateway.tar"
+          HELM3: helm
+          HELM4: "${{ runner.temp }}/helm4/helm"
+          CLI_PREVIOUS: "0.4.0"
+        run: test/cli-install.sh  # prints the cluster's pods itself on a failure
+
+  # Spec D2 3.1.1: the files of ambit init --gitops argocd on Argo CD on kind; the console must become Ready. The
+  # repository is served from the runner, so no GitHub repository or App is needed. Release charts and images.
+  cli-gitops-init:
+    needs: changes
+    if: needs.changes.outputs.cli_kind == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
+        with: { install_only: true }
+      - name: ambit init --gitops argocd, Argo CD syncs the files, the console becomes Ready
+        env: { CLI_PREVIOUS: "0.4.0" }
+        run: test/gitops/init-argocd.sh
+
+  # Spec D2 decision CLI-8: the same script on a real cluster that is not kind. k3s runs directly on the runner (a
+  # real kubelet, containerd, its own load balancer and storage class), without Docker in Docker.
+  cli-install-k3s:
+    needs: [changes, image]
+    if: needs.changes.outputs.cli_kind == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with: { go-version-file: go.mod }
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with: { version: v3.22.0 }
+      - name: Helm 4 (checked against its published SHA-256)
+        run: |
+          v=v4.3.0; d="$RUNNER_TEMP/helm4"; mkdir -p "$d"; cd "$d"
+          curl -fsSLO "https://get.helm.sh/helm-$v-linux-amd64.tar.gz"
+          curl -fsSL "https://get.helm.sh/helm-$v-linux-amd64.tar.gz.sha256sum" | sha256sum --check --strict
+          tar xzf "helm-$v-linux-amd64.tar.gz" && mv linux-amd64/helm helm && ./helm version --short
+      - name: k3s (pinned, checked against the release's SHA-256), started on the runner
+        run: |
+          v=v1.33.5%2Bk3s1; d="$RUNNER_TEMP/k3s"; mkdir -p "$d"; cd "$d"
+          curl -fsSLO "https://github.com/k3s-io/k3s/releases/download/$v/k3s"
+          curl -fsSL "https://github.com/k3s-io/k3s/releases/download/$v/sha256sum-amd64.txt" | grep -E ' k3s$' | sha256sum --check --strict
+          chmod +x k3s && sudo install k3s /usr/local/bin/k3s
+          sudo sh -c 'nohup k3s server --disable traefik --write-kubeconfig-mode 644 > /tmp/k3s.log 2>&1 &'
+          for _ in $(seq 1 60); do [ -f /etc/rancher/k3s/k3s.yaml ] && k3s kubectl get nodes 2>/dev/null | grep -q ' Ready' && break; sleep 3; done
+          k3s kubectl get nodes -o wide
+          cp /etc/rancher/k3s/k3s.yaml "$RUNNER_TEMP/k3s.kubeconfig"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with: { name: images, path: "${{ runner.temp }}" }
+      - name: The CLI (dev build), the branch images in k3s's containerd, and the chart dependencies
+        run: |
+          go build -tags dev -o bin/ambit ./cmd/ambit
+          gunzip -c "$RUNNER_TEMP/images.tar.gz" > "$RUNNER_TEMP/images.tar"
+          sudo k3s ctr images import "$RUNNER_TEMP/images.tar"
+          sudo k3s ctr images import "$RUNNER_TEMP/thirdparty/agentgateway.tar"
+          mkdir -p charts/ambit/charts && cp "$RUNNER_TEMP"/thirdparty/charts/*.tgz charts/ambit/charts/
+      - name: test/cli-install.sh on k3s
+        env:
+          CLI_KUBECONFIG: "${{ runner.temp }}/k3s.kubeconfig"
+          CLI_CONTEXT: default
+          HELM3: helm
+          HELM4: "${{ runner.temp }}/helm4/helm"
+          CLI_PREVIOUS: "0.4.0"
+        run: test/cli-install.sh
+      - name: k3s log on failure
+        if: failure()
+        run: sudo tail -n 100 /tmp/k3s.log || true
 
   # Spec 9.2a: an interrupted local up is repaired, and a cluster ambit did not create is refused.
   # Also runs on draft PRs (see cli-local).

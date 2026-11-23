@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/auditsql"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -121,6 +122,18 @@ func TestKeysLastUsedSQL(t *testing.T) {
 	}
 }
 
+// Records with ambit.kind set (the guard's compression records, the console's app records) are not gateway calls: every
+// query of gateway records must skip them, even when they name the person (#203).
+func TestGatewayQueriesSkipOtherRecordKinds(t *testing.T) {
+	for name, q := range map[string]string{"callsSQL": callsSQL, "subsSQL": subsSQL, "keysLastUsedSQL": keysLastUsedSQL,
+		"invalidKeySQL": invalidKeySQL, "wouldRefuseTotalsSQL": wouldRefuseTotalsSQL, "wouldRefuseGroupsSQL": wouldRefuseGroupsSQL,
+		"MarkMissingLast24h": auditsql.MarkMissingLast24h} {
+		if !strings.Contains(q, "LogAttributes['ambit.kind'] = ''") {
+			t.Errorf("%s has no record-kind filter:\n%s", name, q)
+		}
+	}
+}
+
 // Usage reads the LLM summary for the days it holds completely and the scan for older days (issue #215).
 func TestUsageSplit(t *testing.T) {
 	d := func(s string) time.Time { x, _ := time.Parse("2006-01-02 15:04", s); return x }
@@ -199,4 +212,53 @@ func TestAuditSearchModes(t *testing.T) {
 			t.Errorf("%s: %d %s, want %d", u, rec.Code, rec.Body.String(), code)
 		}
 	}
+}
+
+// The Audit page tells a prompt-guard refusal from an access-rule refusal by ambit.promptGuard alone (the chart's
+// access-log field), and reads only the action of each guard.
+func TestCallsSelectPromptGuard(t *testing.T) {
+	for _, want := range []string{"JSONExtract(LogAttributes['ambit.promptGuard'], 'Array(String)')", "splitByChar(':', x)[-1]",
+		"'reject'), 'reject',\n               has(c_pg, 'audit'), 'audit', has(c_pg, 'mask'), 'mask'"} {
+		if !strings.Contains(callsSQL, want) {
+			t.Errorf("callsSQL lacks %s", want)
+		}
+	}
+	// The prompt guard and the call ID (#203) are the last two of the 24 fields Calls scans.
+	sel := callsSQL[strings.Index(callsSQL, "SELECT Timestamp"):strings.Index(callsSQL, "FROM otel_logs")]
+	if n := topLevelCommas(sel) + 1; n != 24 {
+		t.Errorf("callsSQL selects %d columns, Calls scans 24:\n%s", n, sel)
+	}
+}
+
+// #203: compression records are read for the shown calls only, for the same person, once per call and part.
+func TestCompressionSQL(t *testing.T) {
+	for _, want := range []string{"LogAttributes['ambit.kind'] = 'compression'", "LogAttributes['jwt.email'] = {email:String}",
+		"has({ids:Array(String)}, LogAttributes['ambit.call_id'])", "Timestamp >= {from:DateTime64(9)}", "GROUP BY id, part"} {
+		if !strings.Contains(compressionSQL, want) {
+			t.Errorf("compressionSQL lacks %s", want)
+		}
+	}
+	calls := []Call{{Tool: "list_runs"}, {Method: "tools/list"}}
+	if err := (&Audit{}).addCompression(context.Background(), "user01@example.com", time.Time{}, calls); err != nil || calls[0].Compression != nil {
+		t.Fatal(calls, err) // no call IDs (records from before 0.5.0), no query (DB is nil)
+	}
+}
+
+// topLevelCommas counts the commas outside brackets and quotes.
+func topLevelCommas(s string) int {
+	n, depth, quoted := 0, 0, false
+	for _, r := range s {
+		switch {
+		case r == '\'':
+			quoted = !quoted
+		case quoted:
+		case r == '(' || r == '[':
+			depth++
+		case r == ')' || r == ']':
+			depth--
+		case r == ',' && depth == 0:
+			n++
+		}
+	}
+	return n
 }

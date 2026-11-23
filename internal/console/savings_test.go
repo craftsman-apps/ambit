@@ -403,3 +403,15 @@ func TestRouterInfosNameTheClassifier(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+// #203: the guard's compression records name the caller, but the Savings summaries must never hold a person. No
+// summary statement reads the email, the subject, the key ID or the call ID.
+func TestSummariesReadNoPerson(t *testing.T) {
+	for _, q := range summaryDDL(365) {
+		for _, a := range []string{"jwt.email", "jwt.sub", "ambit.key_id", "ambit.call_id"} {
+			if strings.Contains(q, a) {
+				t.Errorf("a summary statement reads %s:\n%s", a, q)
+			}
+		}
+	}
+}

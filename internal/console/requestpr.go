@@ -35,6 +35,10 @@ func (c *Catalog) followPR(ctx context.Context, q *v1.ServerRequest) (state, not
 		q.Status.Decision, q.Status.DecidedBy, q.Status.DecidedAt = "Approved", q.Status.PullRequestBy, &at
 		if err := c.Client.Status().Update(ctx, q); err != nil { // a concurrent listing settled it first: the view is the same
 			slog.Warn("could not record the merged pull request", "request", q.Name, "err", err)
+		} else { // once: only the update that settles the decision records it; the approver is the one who opened the pull request
+			ev := requestEvent(AppApproved, Session{Email: q.Status.PullRequestBy}, q, q.Status.Comment)
+			ev.Time = at.Time
+			c.recordApp(ctx, ev, q)
 		}
 		return "", ""
 	case found && !st.Closed:

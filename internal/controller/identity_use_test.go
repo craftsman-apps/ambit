@@ -26,8 +26,8 @@ func TestGeneratorsUseRequestIdentity(t *testing.T) {
 	if !strings.Contains(CEL(Access{Groups: []string{"eng"}}), g) || spendUser() != p {
 		t.Error("CEL or spendUser does not use the identity fragments")
 	}
-	if CEL(Access{AllSignedIn: true}) != "true" {
-		t.Error("allSignedIn must stay true; the auth Require rule guards it")
+	if CEL(Access{AllSignedIn: true}) != identity.Person {
+		t.Error("allSignedIn must be every person (not a service account); the auth Require rule guards the rest")
 	}
 }
 

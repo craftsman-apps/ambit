@@ -10,6 +10,7 @@ import { ServersPage } from "@/routes/servers";
 import { SSOPage } from "@/routes/sso";
 import { ConnectionsPage } from "@/routes/connections";
 import { OffboardingPage } from "@/routes/offboarding";
+import { EvidencePage } from "@/routes/evidence";
 import { AppsPage } from "@/routes/apps";
 import { AppPresetPage } from "@/routes/app-preset";
 import { AuditPage, UsagePage } from "@/routes/audit";
@@ -18,6 +19,7 @@ import { BudgetsPage } from "@/routes/budgets";
 import { DependenciesPage } from "@/routes/dependencies";
 import { KeysPage } from "@/routes/keys";
 import { SettingsKeysPage } from "@/routes/settings-keys";
+import { ServiceAccountsPage } from "@/routes/service-accounts";
 import "@fontsource/ibm-plex-sans/400.css";
 import "@fontsource/ibm-plex-sans/500.css";
 import "@fontsource/ibm-plex-sans/600.css";
@@ -41,6 +43,7 @@ const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/sign-in", component: SSOPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/connections", component: ConnectionsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/offboarding", component: OffboardingPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/settings/evidence", component: EvidencePage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/apps", component: AppsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/apps/add/$id", component: AppPresetPage }),
   createRoute({
@@ -48,6 +51,7 @@ const routeTree = rootRoute.addChildren([
     validateSearch: (s: Record<string, unknown>): { key?: string } => ({ key: typeof s.key === "string" ? s.key : undefined }),
   }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/keys", component: SettingsKeysPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/settings/service-accounts", component: ServiceAccountsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/audit", component: AuditPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/usage", component: UsagePage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/savings", component: SavingsPage }),

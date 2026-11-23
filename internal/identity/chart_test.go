@@ -83,21 +83,31 @@ func attr(t *testing.T, docs []doc, name string) string {
 
 // The chart's policies must decode to exactly the fragments the controller uses.
 func TestChartUsesTheSameFragments(t *testing.T) {
-	for _, re := range []bool{true, false} {
-		var docs []doc
-		if re {
-			docs = render(t)
-		} else {
-			docs = render(t, "--set", "llm.jwt.requireEmail=false", "--set", "mcp.jwt.requireEmail=false")
-		}
-		for _, n := range []string{"ambit-llm-auth", "ambit-mcp-auth"} {
-			p := find(t, docs, "AgentgatewayPolicy", n)
-			if !contains(get(t, p, "spec", "traffic", "authorization", "policy", "matchExpressions"), Gate(re)) {
-				t.Errorf("%s (requireEmail=%v): matchExpressions lack Gate: %v", n, re, get(t, p, "spec", "traffic", "authorization", "policy", "matchExpressions"))
+	// All four combinations of apiKeys.enabled and requireEmail, and serviceAccounts.enabled: the JWT branch always
+	// refuses the service account domain (guard 1); with keys on, the key branch refuses service account keys only
+	// when serviceAccounts.enabled is false.
+	for _, keys := range []bool{true, false} {
+		for _, re := range []bool{true, false} {
+			for _, svc := range []bool{true, false} {
+				docs := render(t, "--set", "apiKeys.enabled="+strconv.FormatBool(keys), "--set", "serviceAccounts.enabled="+strconv.FormatBool(svc),
+					"--set", "llm.jwt.requireEmail="+strconv.FormatBool(re), "--set", "mcp.jwt.requireEmail="+strconv.FormatBool(re))
+				want := JWTGate(re)
+				if keys {
+					want = Gate(re, svc)
+				}
+				for _, n := range []string{"ambit-llm-auth", "ambit-mcp-auth"} {
+					m := get(t, find(t, docs, "AgentgatewayPolicy", n), "spec", "traffic", "authorization", "policy", "matchExpressions")
+					if !contains(m, want) {
+						t.Errorf("%s (apiKeys=%v requireEmail=%v serviceAccounts=%v): matchExpressions lack %s: %v", n, keys, re, svc, want, m)
+					}
+				}
 			}
 		}
 	}
 	docs := render(t)
+	if got := attr(t, docs, "ambit.identity"); got != Kind {
+		t.Errorf("ambit.identity = %s, want Kind", got)
+	}
 	for _, n := range []string{"jwt.email", "jwt.groups", "jwt.sub", "ambit.key_id", "ambit.identity"} {
 		e := attr(t, docs, n)
 		if n == "jwt.email" || n == "jwt.sub" || n == "ambit.identity" {
@@ -124,6 +134,33 @@ func TestChartUsesTheSameFragments(t *testing.T) {
 			"--users-require-verified-email="+strconv.FormatBool(verified)) {
 			t.Errorf("verified=%v: controller flag missing", verified)
 		}
+	}
+}
+
+// #203: the guard's compression records name the caller with the access log's own expressions, and carry the call
+// ID the access log writes, so the two records of one call agree. compressionAudit.caller false drops the caller only.
+func TestGuardRecordsUseTheAccessLogExpressions(t *testing.T) {
+	meta := func(d []doc) map[string]any {
+		g := find(t, d, "AgentgatewayPolicy", "ambit-mcp-guard")
+		ps := get(t, g, "spec", "backend", "mcp", "guardrails", "processors").([]any)
+		if len(ps) != 1 {
+			t.Fatalf("%d guard processors", len(ps))
+		}
+		return get(t, ps[0], "remote", "metadata").(map[string]any)
+	}
+	d := render(t, "--set", "protection.enabled=true")
+	m := meta(d)
+	for key, attribute := range map[string]string{"recordEmail": "jwt.email", "keyId": "ambit.key_id", "callId": "ambit.call_id"} {
+		if want := attr(t, d, attribute); m[key] != want {
+			t.Errorf("guard %s = %v, want the access log's %s: %s", key, m[key], attribute, want)
+		}
+	}
+	if m["tool"] != `has(mcpGuardrails.tool) ? mcpGuardrails.tool : ""` {
+		t.Errorf("guard tool = %v", m["tool"])
+	}
+	m = meta(render(t, "--set", "protection.enabled=true", "--set", "protection.compressionAudit.caller=false"))
+	if _, ok := m["recordEmail"]; ok || m["keyId"] != nil || m["callId"] == nil || m["email"] == nil {
+		t.Errorf("caller false: %v", m)
 	}
 }
 

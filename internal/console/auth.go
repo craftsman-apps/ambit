@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
+	"github.com/craftsman-apps/ambit/internal/identity"
 	"golang.org/x/oauth2"
 )
 
@@ -182,6 +183,11 @@ func (a *Auth) Callback(w http.ResponseWriter, r *http.Request) {
 		fail("ID token has no email", err)
 		return
 	}
+	if identity.IsService(cl.Email) { // guard 2: only a service account's key may carry this domain
+		slog.Warn("sign-in refused: reserved address", "email", cl.Email, "connector", cl.Federated.ConnectorID)
+		http.Error(w, "Sign-in refused: this address is reserved for service accounts.", http.StatusForbidden)
+		return
+	}
 	boot := cl.Federated.ConnectorID == "local" && cl.Email == BootstrapEmail
 	s := Session{ID: randomString(), Sub: idt.Subject, Email: cl.Email, Name: cl.Name, Groups: cl.Groups, Bootstrap: boot,
 		Role: roleFor(cl.Federated.ConnectorID, cl.Email, cl.Groups), Exp: time.Now().Add(a.ttl).Unix(), SignedIn: time.Now().Unix()}
@@ -211,7 +217,7 @@ func (a *Auth) Logout(w http.ResponseWriter, r *http.Request) {
 func (a *Auth) Current(r *http.Request) (Session, bool) {
 	var s Session
 	ck, err := r.Cookie(SessionCookie)
-	if err != nil || a.codec.Decode(ck.Value, &s) != nil || time.Now().Unix() > s.Exp || !a.Sessions.Valid(s.ID) {
+	if err != nil || a.codec.Decode(ck.Value, &s) != nil || time.Now().Unix() > s.Exp || !a.Sessions.Valid(s.ID) || identity.IsService(s.Email) {
 		return Session{}, false
 	}
 	return s, true

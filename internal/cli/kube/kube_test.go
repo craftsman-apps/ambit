@@ -167,7 +167,7 @@ func TestWaitWorkloadsTimeoutNamesReasons(t *testing.T) {
 		!strings.Contains(all, "ambit-clickhouse-0: Pending: 0/1 nodes are available: 1 Insufficient memory.") {
 		t.Fatalf("pods = %q", all)
 	}
-	if len(progress) == 0 || progress[0] != "waiting for ambit-clickhouse-0, ambit-console-1" {
+	if len(progress) == 0 || progress[0] != "waiting for ambit-clickhouse-0, ambit-console-1; Deployment ambit-console: 0/1 ready" {
 		t.Fatalf("progress = %q", progress)
 	}
 }
@@ -337,5 +337,73 @@ func TestDeploymentReadyHonoursObservedGeneration(t *testing.T) {
 	d.Status.ObservedGeneration = 2
 	if !deploymentReady(d) {
 		t.Fatal("not ready after the generation was observed")
+	}
+}
+
+// #108 K1: during a rollout the old pods are Ready, so no pod waits; the line must say that the Deployment is not
+// updated yet instead of "1/1 ready".
+func TestWaitWorkloadsRolloutText(t *testing.T) {
+	d := deployment("ambit-console", nil, 1)
+	d.Status.UpdatedReplicas = 0
+	nr, progress := notReadyPods(t, fake.NewSimpleClientset(d, readyPod("ambit-console-old")), nil)
+	want := "Deployment ambit-console: 1/1 ready, 0/1 updated (rollout in progress)"
+	if all := strings.Join(nr.Pods, "\n"); !strings.Contains(all, want) {
+		t.Fatalf("pods = %q", all)
+	}
+	if len(progress) == 0 || progress[0] != "waiting for "+want {
+		t.Fatalf("progress = %q", progress)
+	}
+	d.Generation, d.Status.ObservedGeneration, d.Status.UpdatedReplicas = 3, 2, 1
+	nr, _ = notReadyPods(t, fake.NewSimpleClientset(d), nil)
+	if all := strings.Join(nr.Pods, "\n"); !strings.Contains(all, "Deployment ambit-console: the controller has not seen the new spec yet") {
+		t.Fatalf("pods = %q", all)
+	}
+}
+
+// #108 K1: a waiting pod does not hide a workload that has no pod at all (the progress line names both), and an
+// API error on one list keeps what the other lists found.
+func TestWaitWorkloadsKeepsPartialUnmetLists(t *testing.T) {
+	sel := "gateway.networking.k8s.io/gateway-name=ambit"
+	pull := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "ambit-console-1", Namespace: "ambit-system"},
+		Status: corev1.PodStatus{Phase: corev1.PodPending}}
+	_, progress := notReadyPods(t, fake.NewSimpleClientset(deployment("ambit-console", nil, 0), pull), []string{sel})
+	if len(progress) == 0 || progress[0] != "waiting for ambit-console-1; Deployment ambit-console: 0/1 ready; no Deployment matches "+sel+" (missing)" {
+		t.Fatalf("progress = %q", progress)
+	}
+	cs := fake.NewSimpleClientset(deployment("ambit-console", nil, 0))
+	cs.PrependReactor("list", "statefulsets", func(k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: "apps", Resource: "statefulsets"}, "", nil)
+	})
+	nr, _ := notReadyPods(t, cs, nil)
+	all := strings.Join(nr.Pods, "\n")
+	if !strings.Contains(all, "Deployment ambit-console: 0/1 ready") || !strings.Contains(all, "last API error: ") {
+		t.Fatalf("pods = %q", all)
+	}
+}
+
+// #108 X1: when the caller's own deadline ends the wait (install --timeout), the error names why the pods are not
+// ready, not "context deadline exceeded".
+func TestWaitWorkloadsCallerDeadlineNamesTheCause(t *testing.T) {
+	pull := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "ambit-console-1", Namespace: "ambit-system"},
+		Status: corev1.PodStatus{Phase: corev1.PodPending, ContainerStatuses: []corev1.ContainerStatus{{Name: "console",
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff", Message: "proxyconnect tcp: dial tcp 10.0.0.1:3128: connect: connection refused"}}}}}}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := WaitWorkloads(ctx, fake.NewSimpleClientset(deployment("ambit-console", nil, 0), pull), "ambit-system", nil,
+		10*time.Millisecond, time.Minute, func(string) {})
+	nr, ok := err.(*NotReadyError)
+	if !ok {
+		t.Fatalf("err = %v, want *NotReadyError", err)
+	}
+	all := strings.Join(nr.Pods, "\n")
+	if !strings.Contains(all, "proxyconnect tcp") || strings.Contains(all, "deadline exceeded") {
+		t.Fatalf("pods = %q", all)
+	}
+	// Ctrl+C (a cancelled context) still ends the wait at once with the context's error.
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	cancel2()
+	if err := WaitWorkloads(ctx2, fake.NewSimpleClientset(deployment("ambit-console", nil, 0)), "ambit-system", nil,
+		10*time.Millisecond, time.Minute, func(string) {}); err != context.Canceled {
+		t.Fatalf("cancelled: err = %v", err)
 	}
 }

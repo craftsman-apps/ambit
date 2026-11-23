@@ -12,6 +12,9 @@ const (
 	Codex      = "codex"
 	OpenCode   = "opencode"
 	Cursor     = "cursor"
+	Hermes     = "hermes"
+	KiloCode   = "kilocode"
+	Pi         = "pi"
 	// ClaudeDesktopMCP is Claude Desktop's MCP entry (mcp-remote with a header file), not its models.
 	ClaudeDesktopMCP = "claude-desktop-mcp"
 )
@@ -29,7 +32,8 @@ type Input struct {
 	Getenv    func(string) string
 	Prev      *FileRecord // what an earlier connect of this tool wrote to this file
 	Shell     string      // the opencode wrapper: bash, zsh, fish or powershell
-	KeyFile   string      // opencode 2: the file the provider reads the key from
+	KeyFile   string      // opencode 2 and Kilo Code: the file the provider reads the key from
+	MCPURL    string      // hermes, kilocode, pi: the MCP gateway address (normalised), or empty for no MCP entry
 }
 
 // Plan is the result of planning a connect.

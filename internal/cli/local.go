@@ -85,6 +85,9 @@ func (a *app) localCmd() *cobra.Command {
 }
 
 func (a *app) stdinTTY() bool {
+	if a.testTTY {
+		return true
+	}
 	if f, ok := a.in.(*os.File); ok {
 		return term.IsTerminal(int(f.Fd()))
 	}

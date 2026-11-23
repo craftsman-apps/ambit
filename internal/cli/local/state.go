@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/craftsman-apps/ambit/internal/cli/connect"
 	"github.com/craftsman-apps/ambit/internal/cli/kindx"
 	"github.com/craftsman-apps/ambit/internal/cli/out"
 )
@@ -41,7 +42,15 @@ func DefaultStore() (Store, error) {
 // first and at most 63 characters, so a name can never leave the store directory or become a hidden file.
 var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{0,62}$`)
 
+// windowsReserved are device names that Windows does not allow as a file name, also with an extension (#108).
+var windowsReserved = regexp.MustCompile(`^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)`)
+
 func checkName(name string) error {
+	if validName.MatchString(name) && windowsReserved.MatchString(name) {
+		return out.Usage(fmt.Sprintf("%q is not a valid cluster name", name),
+			"con, prn, aux, nul, com1 to com9 and lpt1 to lpt9 are reserved file names on Windows, so the state file could not be written there",
+			"pass another name, for example --name ambit-try")
+	}
 	if validName.MatchString(name) {
 		return nil
 	}
@@ -92,11 +101,50 @@ func (s Store) Write(st State) error {
 		os.Remove(tmp.Name())
 		return err
 	}
+	// The bytes reach the disk before the rename: after a power loss the file is the old or the new one, never
+	// empty, so the ownership proof is not lost (#108).
+	if err := syncFile(tmp); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmp.Name())
 		return err
 	}
 	return os.Rename(tmp.Name(), s.Path(st.Name))
+}
+
+// syncFile is (*os.File).Sync; a variable so a test can check the order and a failure.
+var syncFile = (*os.File).Sync
+
+// Lock takes the lock <Dir>/<name>.lock for the whole of one local up or local down, so two runs for the same name
+// cannot both create or repair the cluster (#107). It does not wait: a second run fails at once. The lock is the
+// operating system's (flock, LockFileEx), so it ends with the process, also after a crash or kill -9; there is no
+// stale lock to clean. The returned function releases it.
+func (s Store) Lock(name string) (func(), error) {
+	if err := checkName(name); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(s.Dir, 0o700); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(s.Dir, name+".lock")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	ok, err := connect.TryLock(f)
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if !ok {
+		f.Close()
+		return nil, &out.Error{What: fmt.Sprintf("another ambit local up or down for %q is running", name),
+			Why: "it holds the lock " + path, Next: "wait until it ends, then run the command again", Code: out.ExitFailed}
+	}
+	return func() { f.Close() }, nil // closing the file releases the lock
 }
 
 func (s Store) Remove(name string) error {
@@ -167,6 +215,11 @@ func CheckOwnership(ctx context.Context, store Store, c Cluster, name string) (O
 	if st == nil {
 		return notOwned("there is no state file %s", store.Path(name))
 	}
+	unreachable := func(format string, a ...any) (Ownership, error) {
+		o, _ := notOwned(format, a...)
+		o.Unreachable = true
+		return o, nil
+	}
 	recovered := false
 	if st.ContainerID == "" {
 		if st.Status != "creating" {
@@ -174,7 +227,7 @@ func CheckOwnership(ctx context.Context, store Store, c Cluster, name string) (O
 		}
 		cs, err := c.Containers(name)
 		if err != nil {
-			return notOwned("its node containers cannot be read: %v", err)
+			return unreachable("its node containers cannot be read: %v", err)
 		}
 		if len(cs) != 1 {
 			return notOwned("the state file %s has no container ID, and %d containers carry the label %s=%s (ambit local up creates one)",
@@ -185,11 +238,6 @@ func CheckOwnership(ctx context.Context, store Store, c Cluster, name string) (O
 				cs[0].Created.UTC().Format(time.RFC3339), store.Path(name), st.Created.UTC().Format(time.RFC3339))
 		}
 		st.ContainerID, recovered = cs[0].ID, true
-	}
-	unreachable := func(format string, a ...any) (Ownership, error) {
-		o, _ := notOwned(format, a...)
-		o.Unreachable = true
-		return o, nil
 	}
 	cp, err := c.ControlPlane(name)
 	if err != nil {
@@ -235,7 +283,7 @@ func (o Ownership) Refusal(name string) *out.Error {
 	return &out.Error{
 		What: fmt.Sprintf("a kind cluster named %q exists and was not created by ambit local up", name),
 		Why:  o.Reason,
-		Next: "ambit local up --name " + other + " (or see https://ambitproject.dev/docs/local-up#a-cluster-that-ambit-did-not-create)",
+		Next: "ambit local up --name " + other + " (or see https://ambitproject.dev/docs/install-by-hand#a-cluster-that-ambit-did-not-create)",
 		Code: out.ExitFailed,
 	}
 }

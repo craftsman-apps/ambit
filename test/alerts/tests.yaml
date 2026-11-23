@@ -128,3 +128,18 @@ tests:
             exp_annotations:
               summary: "Audit records were lost in the last 10 minutes (7)"
               description: "The collector could not write to ClickHouse, or refused records near its memory limit. Check ClickHouse first: kubectl -n ambit-system logs deploy/ambit-otel-collector"
+  # The console could not send MCP app request or approval records (issue #112); a console with no failures is quiet.
+  - interval: 1m
+    input_series:
+      - series: 'ambit_console_audit_send_failures_total{namespace="ambit-system",pod="ambit-console-1"}'
+        values: '0x5 3x30'
+      - series: 'ambit_console_audit_send_failures_total{namespace="ambit-system",pod="ambit-console-2"}'
+        values: '0x35'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AmbitConsoleAuditSendFailed
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: ambit-system, pod: ambit-console-1 }
+            exp_annotations:
+              summary: "The console could not send 3 MCP app request or approval records to the collector in 30 minutes"
+              description: "The requests and decisions happened; the Audit page and otel_logs miss these records. The ServerRequest objects still hold them (kubectl -n ambit-system get serverrequests). Read why: kubectl -n ambit-system logs deploy/ambit-console | grep 'app audit record'; check the collector: kubectl -n ambit-system logs deploy/ambit-otel-collector"

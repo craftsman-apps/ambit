@@ -40,6 +40,17 @@ export function outcomeLabel(outcome: Outcome | undefined, status: string): { te
   }
 }
 
+// The Outcome label of a call the prompt guard acted on (llm.promptGuard); undefined: the guard let it through or did
+// not run. A guard refusal is told apart from an access-rule refusal, which has the same status (403).
+export function guardLabel(promptGuard: string | undefined, status: string): { text: string; tone: "bad" | "warn" } | undefined {
+  switch (promptGuard) {
+    case "reject": return { text: `Refused by prompt guard (${status})`, tone: "bad" };
+    case "audit": return { text: `Prompt guard would refuse (${status})`, tone: "warn" };
+    case "mask": return { text: `Masked by prompt guard (${status})`, tone: "warn" };
+    default: return undefined;
+  }
+}
+
 export type WouldRefuse = {
   from: string; to: string; rules: "all" | "current"; rulesVersion?: string;
   requests: number; people: number; markMissing: number; refused: number; newest: string | null;

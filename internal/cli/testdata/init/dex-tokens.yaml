@@ -1,0 +1,23 @@
+console:
+  host: console.example.com
+  url: https://console.example.com
+evidence:
+  enabled: true
+  retention: 8760h
+gateway:
+  replicas: 2
+  tls:
+    certificateSecret: ambit-tls
+    enabled: true
+limits:
+  enabled: true
+  failureMode: FailOpen
+llm:
+  enabled: true
+  host: llm.example.com
+  jwt:
+    dex: true
+mcp:
+  enabled: false
+protection:
+  enabled: true

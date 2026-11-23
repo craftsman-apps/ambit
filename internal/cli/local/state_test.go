@@ -22,6 +22,7 @@ type fakeCluster struct {
 	apiErr     error
 	cpErr      error
 	containers []kindx.Container
+	listErr    error
 }
 
 func (f *fakeCluster) Exists(string) (bool, error)         { return f.exists, nil }
@@ -30,7 +31,7 @@ func (f *fakeCluster) ContainerID(string) (string, error)  { return f.id, nil }
 func (f *fakeCluster) NodeLabels(context.Context, string) (map[string]map[string]string, error) {
 	return f.labels, f.apiErr
 }
-func (f *fakeCluster) Containers(string) ([]kindx.Container, error) { return f.containers, nil }
+func (f *fakeCluster) Containers(string) ([]kindx.Container, error) { return f.containers, f.listErr }
 
 const cid = "4f1c2e7d9a0b5566778899aabbccddeeff00112233445566778899aabbccddee"
 
@@ -291,5 +292,23 @@ func TestInvalidNameNextIsNeutral(t *testing.T) {
 	var e *out.Error
 	if !errors.As(err, &e) || !strings.Contains(e.Next, "--name ambit-try") || strings.Contains(e.Next, "ambit local") || strings.Contains(e.Next, "--name ambit\n") {
 		t.Fatalf("next = %#v", err)
+	}
+}
+
+// #108 comment 1 (O1): the state file has no container ID yet and the container list cannot be read (Docker is
+// down): the CLI cannot reach the cluster; it has not found a foreign one.
+func TestUnreadableContainerListIsUnreachable(t *testing.T) {
+	s := Store{Dir: t.TempDir()}
+	if err := s.Write(State{Name: "ambit", Status: "creating", Created: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	c := owned()
+	c.listErr = errors.New("Cannot connect to the Docker daemon")
+	o, err := CheckOwnership(context.Background(), s, c, "ambit")
+	if err != nil || o.Verdict != NotOwned || !o.Unreachable {
+		t.Fatalf("ownership = %+v, %v; want NotOwned and Unreachable", o, err)
+	}
+	if e := o.Refusal("ambit"); strings.Contains(e.What, "not created by") || !strings.Contains(e.What, "cannot prove") {
+		t.Fatalf("what = %q", e.What)
 	}
 }

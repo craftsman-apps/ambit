@@ -21,6 +21,7 @@ import (
 	"github.com/craftsman-apps/ambit/internal/pricing"
 	"github.com/craftsman-apps/ambit/web"
 	"github.com/dexidp/dex/api/v2"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -56,6 +57,19 @@ func keySettingsFromEnv() (console.KeySettings, error) {
 		return k, fmt.Errorf("AMBIT_KEYS_MAX_DAYS is %d; it must be 30, 90 or 365", k.MaxDays)
 	}
 	return k, nil
+}
+
+// serviceSettingsFromEnv reads the serviceAccounts.* values; values the service cannot work with stop the start.
+func serviceSettingsFromEnv() (console.ServiceSettings, error) {
+	s := console.ServiceSettings{Enabled: os.Getenv("AMBIT_SA_ENABLED") != "false",
+		MaxDays: envInt("AMBIT_SA_MAX_DAYS", 90), ExposureDays: envInt("AMBIT_SA_EXPOSURE_DAYS", 7)}
+	if s.MaxDays != 30 && s.MaxDays != 90 && s.MaxDays != 365 {
+		return s, fmt.Errorf("AMBIT_SA_MAX_DAYS is %d; it must be 30, 90 or 365", s.MaxDays)
+	}
+	if s.ExposureDays < 0 || s.ExposureDays > 30 {
+		return s, fmt.Errorf("AMBIT_SA_EXPOSURE_DAYS is %d; it must be 0 to 30", s.ExposureDays)
+	}
+	return s, nil
 }
 
 // retry runs f until it succeeds or ctx ends. Dex may still be starting when the console starts.
@@ -162,7 +176,11 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	keySvc := &console.KeyService{Client: objects, Namespace: ns, Now: time.Now, Settings: keySettings}
+	services, err := serviceSettingsFromEnv()
+	if err != nil {
+		return err
+	}
+	keySvc := &console.KeyService{Client: objects, Namespace: ns, Now: time.Now, Settings: keySettings, Services: services}
 	go console.RunLeader(ctx, kube, ns, podName, keySvc.StartTerm, keySvc.EndTerm)
 	go func() { // the hourly full repair bounds any stale write or interrupted refresh to one hour
 		t := time.NewTicker(time.Hour)
@@ -289,6 +307,20 @@ func run(ctx context.Context) error {
 		}
 		go audit.RunSummaries(ctx, days, 15*time.Second) // retries until the collector has created otel_logs
 	}
+	var appAudit *console.AppRecorder
+	if ep := os.Getenv("AMBIT_OTLP_ENDPOINT"); ep != "" {
+		if appAudit, err = console.NewAppRecorder(ep); err != nil {
+			return fmt.Errorf("AMBIT_OTLP_ENDPOINT: %w", err)
+		}
+		// ambit_console_audit_send_failures_total, for the AmbitConsoleAuditSendFailed alert.
+		msrv := &http.Server{Addr: ":8084", Handler: promhttp.Handler(), ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			if err := msrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("metrics listener stopped", "err", err)
+			}
+		}()
+		go func() { <-ctx.Done(); msrv.Close() }()
+	}
 	var budgets *console.Budgets
 	if addr := os.Getenv("AMBIT_VALKEY_ADDR"); addr != "" {
 		tlsc, err := console.TLSConfig(os.Getenv("AMBIT_VALKEY_TLS") == "true", os.Getenv("AMBIT_VALKEY_CA"))
@@ -323,8 +355,20 @@ func run(ctx context.Context) error {
 	if bootstrapAdmin {
 		loginOpts.Namespace = ns
 	}
+	var evidence *console.EvidenceExports
+	if os.Getenv("AMBIT_EVIDENCE_EXPORTS") == "true" {
+		maxRows, err := strconv.ParseInt(env("AMBIT_EVIDENCE_MAX_ROWS", "5000000"), 10, 64)
+		if err != nil || maxRows < 1 {
+			return fmt.Errorf("AMBIT_EVIDENCE_MAX_ROWS %q is not a positive number", os.Getenv("AMBIT_EVIDENCE_MAX_ROWS"))
+		}
+		maxDays, err := strconv.Atoi(env("AMBIT_EVIDENCE_MAX_DAYS", "366"))
+		if err != nil || maxDays < 1 {
+			return fmt.Errorf("AMBIT_EVIDENCE_MAX_DAYS %q is not a positive number", os.Getenv("AMBIT_EVIDENCE_MAX_DAYS"))
+		}
+		evidence = &console.EvidenceExports{MaxRows: maxRows, MaxDays: maxDays, Retention: env("AMBIT_EVIDENCE_RETENTION", "8760h"), Version: os.Getenv("AMBIT_VERSION")}
+	}
 	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), loginOpts,
-		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, Budgets: budgets, Dependencies: deps, AccessMode: os.Getenv("AMBIT_ACCESS_MODE"), Prices: prices, Tools: reader, Presets: catalogPresets,
+		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, AppAudit: appAudit, Evidence: evidence, Budgets: budgets, Dependencies: deps, AccessMode: os.Getenv("AMBIT_ACCESS_MODE"), Prices: prices, Tools: reader, Presets: catalogPresets,
 			Groups: groupStore, Keys: keySvc, LLMURL: os.Getenv("AMBIT_LLM_URL"), MCPURL: os.Getenv("AMBIT_MCP_URL")}), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()

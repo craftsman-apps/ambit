@@ -317,7 +317,7 @@ func deepFailure(e *Env, code int, body string, err error) string {
 	}
 	body = strings.Join(strings.Fields(strings.ReplaceAll(body, e.Token, "[redacted]")), " ")
 	if len(body) > 120 {
-		body = body[:120]
+		body = strings.ToValidUTF8(body[:120], "") // the cut can split a character
 	}
 	return fmt.Sprintf("%s (HTTP %d) %s", cause, code, body)
 }

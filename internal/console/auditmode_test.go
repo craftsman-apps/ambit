@@ -150,6 +150,8 @@ func TestAuditOutcomesAgainstClickHouse(t *testing.T) {
 		{"403 with refuse mark is refused for real", audit(map[string]string{"http.status": "403", "ambit.wouldRefuse": "refuse:model"}), "refused", "refuse:model"},
 		{"429 with allow mark is refused for real", audit(map[string]string{"http.status": "429", "ambit.wouldRefuse": "allow"}), "refused", "allow"},
 		{"401 without a mark is refused for real", audit(map[string]string{"http.status": "401"}), "refused", ""},
+		{"403 from the prompt guard is not an access refusal", audit(map[string]string{"http.status": "403", "ambit.wouldRefuse": "allow", "ambit.promptGuard": `["request:regex:reject"]`}), "n/a", "allow"},
+		{"403 with the guard only auditing is refused for real", audit(map[string]string{"http.status": "403", "ambit.promptGuard": `["request:regex:audit"]`}), "refused", ""},
 		{"v1.6 status name", without(audit(map[string]string{"http.response.status_code": "403"}), "http.status"), "refused", ""},
 		{"LLM call without the field is mark-missing", audit(nil), "mark-missing", ""},
 		{"value outside the list is mark-missing", audit(map[string]string{"ambit.wouldRefuse": "maybe"}), "mark-missing", "maybe"},

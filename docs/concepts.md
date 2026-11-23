@@ -28,7 +28,7 @@ In this documentation, **MCP server** means a `Server`. **App** means a `Connect
 
 ### AccessRule
 
-A rule names its people with `groups` (groups from the `groups` claim of the identity provider), with `users` (email addresses), or with `allSignedIn: true` (everyone with a valid token). `groups` and `users` can be used together; a person who matches either one is allowed. `allSignedIn: true` cannot be combined with them. A `users` entry is an exact, lowercase email address (no wildcards, no domains). It matches the owner of a personal API key, or the `email` claim of a JWT; a token without a usable email never matches it. People are matched by a verified email. If your identity provider does not send `email_verified`, set `accessRules.usersRequireVerifiedEmail: false` only if users cannot change their own email. Prefer groups; use people for exceptions such as a pilot user or a contractor. Offboarding still refuses a listed person, and budgets still follow the groups in the person's token. A rule names `models`, `servers`, or both. Each entry in `servers` has a `name` and, optionally, `tools`: the tools of that server the people may call. Without `tools`, every tool of the server is allowed, including tools it adds later. A server entry can also carry `arguments`, which limit the values a tool may be called with. That needs `protection.enabled` (see [Install on your cluster](install.md)).
+A rule names its people with `groups` (groups from the `groups` claim of the identity provider), with `users` (email addresses), or with `allSignedIn: true` (every person with a valid token or personal key; not [service accounts](service-accounts.md), which get only what a rule names by their group or identity). `groups` and `users` can be used together; a person who matches either one is allowed. `allSignedIn: true` cannot be combined with them. A `users` entry is an exact, lowercase email address (no wildcards, no domains). It matches the owner of a personal API key, a service account's identity (`<name>@svc.ambit.internal`), or the `email` claim of a JWT; a token without a usable email never matches it. People are matched by a verified email. If your identity provider does not send `email_verified`, set `accessRules.usersRequireVerifiedEmail: false` only if users cannot change their own email. Prefer groups; use people for exceptions such as a pilot user or a contractor. Offboarding still refuses a listed person, and budgets still follow the groups in the person's token. A rule names `models`, `servers`, or both. Each entry in `servers` has a `name` and, optionally, `tools`: the tools of that server the people may call. Without `tools`, every tool of the server is allowed, including tools it adds later. A server entry can also carry `arguments`, which limit the values a tool may be called with. That needs `protection.enabled` (see [Install on your cluster](install.md)).
 
 Rules are deny by default, except in audit-only mode (`access.mode: audit`, see [Turn Ambit on without blocking anyone](guides/audit-only.md)). In that mode every signed-in request to a model or an MCP tool is allowed, and every tool is listed to everyone; each audit record says whether the rules in force at that moment would have refused the request. Still enforced in that mode: sign-in, the LLM path allowlist, offboarding, budgets and the refusal of an unpriced model for a group with a dollar limit, and argument limits and tool approval.
 
@@ -42,7 +42,7 @@ A group has one `Budget`. Limits count requests, estimated dollars, or both, per
 
 ### ModelRouter
 
-A router is a model name that clients can ask for. For each request the gateway picks one of your models by ordered `routes`, and only a model the person may use. See [Model routing](routing.md).
+A router is a model name that clients can ask for. For each request the gateway picks one of your models by ordered `routes`, and only a model the person may use. See [Model routing](routing.md). With the [prompt guard](#prompt-guard) on, a router of type `LLM` sends its classifier model only text that passed the guard's rules.
 
 ### Connection
 
@@ -57,6 +57,7 @@ Ambit accepts three kinds of identity.
 | Company token | Your identity provider signs people in through a Dex connector, or the gateway trusts the provider's tokens directly (`llm.jwt` and `mcp.jwt`). | People and scripts that can refresh a sign-in |
 | Ambit's own Dex | The bundled Dex with the bootstrap admin (`admin@ambit.local`). Set `llm.jwt.dex` and `mcp.jwt.dex` to `true`. | The quick start and first setup |
 | Personal API key | A person creates it in the console (**Keys**). It starts with `ambit_`. | Claude Code, Cursor, SDKs and MCP clients that cannot refresh a sign-in |
+| Service account key | An admin creates a [service account](service-accounts.md) (`<name>@svc.ambit.internal`, one group) and its keys in the console. | CI jobs and background agents |
 
 A personal API key carries the access of its owner, never more: the same access rules, budgets, audit records and offboarding. See [Personal API keys](api-keys.md).
 
@@ -72,8 +73,9 @@ Clients call `https://<llm host>/v1/chat/completions` (and the other OpenAI-comp
 2. **Model access.** An `AccessRule` must allow the requested model for this person. Otherwise the answer is 403. (In audit-only mode the request goes on, and the record says whether it would have been refused.)
 3. **Budget.** The ratelimit service and Valkey count the request against the `Budget` of the person's group and against the person's own limit. Over the limit, the answer is 429.
 4. **Router (optional).** If the requested name is a `ModelRouter`, Ambit picks one `Model` the person may use.
-5. **Provider.** The gateway adds the provider credentials from the Secret and forwards the request.
-6. **Audit.** The call is recorded, denied calls included.
+5. **Prompt guard (optional).** With `llm.promptGuard`, the gateway checks the prompt and records, refuses or masks what matches. See [Prompt guard](#prompt-guard).
+6. **Provider.** The gateway adds the provider credentials from the Secret and forwards the request.
+7. **Audit.** The call is recorded, denied calls included.
 
 ### Request to an MCP server (`/mcp`)
 
@@ -92,11 +94,59 @@ Budgets belong to the model path. They count LLM requests.
 
 With `protection.enabled`, `ambit-guard` masks personal data in the results of MCP tools before the client sees them. It reads every text in the result, including the structured content. It does not mask tool arguments, and it does not mask the model path.
 
-- **Default masks.** Korean resident registration numbers and US Social Security numbers become `<NATIONAL_ID>`. Card numbers (a valid Luhn check is required) become `<CARD_NUMBER>`. Email addresses become `<EMAIL>`. These masks need no other service.
+- **Default masks.** Korean resident registration numbers and US Social Security numbers become `<NATIONAL_ID>`. Card numbers become `<CARD_NUMBER>`. Email addresses become `<EMAIL>`. These masks need no other service. They find these written forms:
+
+  | Kind | Masked as it is | Masked only with a label just before it |
+  |---|---|---|
+  | Korean resident registration number (7th digit 1 to 8, also foreign residents; not 9 or 0, people born before 1900) | `900101-1234567` | `9001011234567`, `900101 1234567`: the date must be valid, and a word such as `RRN`, `resident`, `registration`, `주민`, `외국인` or `등록번호` must stand in the 40 characters before it (a JSON key counts) |
+  | US Social Security number | `078-05-1120` | `078051120`, `078 05 1120`: it must be a valid SSN (not area 000, 666 or 900 to 999, group 00 or serial 0000), and `SSN` or `social security` must stand in the 40 characters before it |
+  | Card number | 13 to 19 digits that pass the Luhn check and start with 2 to 6, written without separators or in groups (first group of 4 digits) with spaces, `-` or `.`; ASCII or full-width digits. A date, time or other number next to it does not stop the mask. | |
+  | Email address | `kim@acme.com`, and `kim%40acme.com` in a link | |
+
+  Without a label, a 13-digit or 9-digit number is not masked as a national ID: most such numbers are order numbers, Unix times or amounts. A number with a label before it is masked even when it is not an ID, for example a 9-digit order number right after an SSN in the same record. Dates, times, IP addresses, version strings and decimal numbers are not masked.
 - **Presidio adds to the default masks.** If you set `protection.presidio.analyzerURL`, the guard first applies the default masks to each text, and then sends the masked text to [Microsoft Presidio](https://microsoft.github.io/presidio/). Presidio can find names, addresses and more languages. Because the default masks run first, Korean resident registration numbers are masked even when Presidio's own recognizers do not find them. Each Presidio finding is replaced by `<ENTITY_TYPE>`, for example `<PERSON>`. Presidio does not change the default placeholders. While Presidio is set, the guard does not compress JSON, because removing the spaces in JSON hides names from Presidio (see [Order](#compressing-tool-results) under Compressing tool results).
 - **Presidio is not part of Ambit.** Ambit does not install it. You run the Presidio analyzer service yourself and give its address in the `protection.presidio` values (see `charts/ambit/values.yaml`). `anonymizerURL` is no longer used. The guard sends the text of one result to the analyzer in pieces of at most 100,000 characters, up to 4 at the same time, and `protection.presidio.timeout` (default 10 s) limits all of those calls together.
 - **Fail closed.** If masking fails (Presidio is down, too slow, or returns an error), the guard withholds the whole result and the call fails. The client never receives unmasked text. If the guard itself is down, the call also fails.
+- **What is not masked.** The gateway sends the guard only the JSON-RPC **result** of a `tools/call`. Other messages a server sends while it handles the call reach the client unmasked: a JSON-RPC **error** (`error.message` and `error.data`), log notifications (`notifications/message`), progress notifications (`notifications/progress`), and requests from the server to the client (`sampling/createMessage`, `elicitation/create`). Ambit cannot change this without a change in agentgateway (issue #333). A server that puts a customer record in an error message, for example "no customer with email ...", sends that text to the client as it is. Use only MCP servers that you trust not to put personal data in errors or notifications. The audit log does not store the text of errors (see [Compliance](compliance.md#limits)). A result that is not a JSON object cannot be checked, so the guard withholds it.
 - **Size limit.** The guard accepts a tool result up to 32 MiB by message size. It holds a result several times while it masks it. In a test with the default memory limit (`protection.memoryLimitMiB`, 512 MiB), results of 16 MiB and 30 MiB were masked and returned, and the guard used at most 323 MiB and did not restart. If you set a lower limit, plan for about 10 times the size of the largest result plus 50 MiB. A result that is too large for the guard makes the call fail with an error; unmasked text is never returned. While the guard restarts, every MCP tool call fails.
+
+## Prompt guard
+
+The prompt guard checks the prompt of a model request before the model receives it. Think of it as a scanner at the door of the model: it looks for text you describe (a card number, a secret key, an internal code name) and records, refuses or blanks it out. It is off by default. Turn it on with the Helm value `llm.promptGuard`:
+
+```yaml
+llm:
+  promptGuard:
+    enabled: true
+    mode: audit            # audit (default), reject or mask
+    builtins: [CreditCard, Ssn, Email, PhoneNumber]   # the default; also CaSin
+    patterns:              # your own regular expressions, at most 1,024 characters each
+      - '(?i)ignore (all )?previous instructions'
+      - 'AKIA[0-9A-Z]{16}'
+    rejectMessage: "The prompt was refused by the prompt guard of this gateway."
+    webhook:               # optional: your own guard, a Service in the cluster
+      service: ""
+      namespace: ""        # empty: the release namespace
+      port: 8000
+      failureMode: FailClosed
+```
+
+- **Modes.** `audit` lets every prompt through unchanged and records which ones the guard would refuse; start here and read the Audit page for a week. `reject` refuses a matching prompt with HTTP 403 and `rejectMessage` in a JSON error body that OpenAI and Anthropic clients read as an error (`{"type": "error", "error": {"type": "permission_error", "code": "prompt_guard", "message": "<rejectMessage>"}}`); the model is not called. A refusal by the webhook keeps the webhook's own status and body. `mask` replaces each match with a placeholder and sends the rest of the prompt to the model: `<CREDIT_CARD>`, `<EMAIL_ADDRESS>` and the like for the built-in patterns, `<masked>` for your own.
+- **What is checked.** Requests to `/v1/chat/completions`, `/v1/messages` and `/v1/responses`, streaming requests included. The patterns read the system prompt, the messages and the tool results in the prompt; the webhook receives the system prompt and the messages. Neither reads the arguments of the tool calls in earlier turns. **Answers are not checked**: a check of a streamed answer would delay every answer. **Embeddings (`/v1/embeddings`) are not checked.**
+- **Built-in patterns** come from agentgateway: `CreditCard`, `Ssn` (US Social Security number), `Email`, `PhoneNumber`, `CaSin` (Canadian Social Insurance Number). There is no built-in pattern for Korean resident registration numbers; add your own pattern.
+- **Your own patterns** use the syntax of the Rust `regex` crate, the same as Go's: no look-around and no back-references. The chart refuses to install a pattern that Go cannot read, or one longer than 1,024 characters.
+- **Webhook.** With `webhook.service`, the gateway also sends each prompt to `POST /request` on that Service, after the patterns ([agentgateway's guardrail webhook protocol](https://agentgateway.dev/docs/kubernetes/latest/documentation/llm/guardrails/webhook/guardrails/)). The webhook answers pass, mask or reject itself. In `audit` mode the gateway only records its answer. `failureMode: FailClosed` refuses the prompt when the webhook does not answer (also in `audit` mode); `FailOpen` lets it through. The webhook's own reason text is not recorded by Ambit.
+- **The text stays in the cluster.** Patterns run in the gateway. The webhook must be a Service in your cluster. Guards that send the prompt to a vendor (OpenAI Moderation, Amazon Bedrock Guardrails, Google Model Armor) are not supported yet: each adds a call over the internet before every model request (more time, and one more service that must be up), and each sends the prompt text to that vendor, which is a new data processor for your company even when the model itself runs in your cluster.
+- **A pattern filter, not a prompt-injection detector.** It finds the text its patterns describe and nothing else. A pattern such as "ignore previous instructions" stops that exact phrase, not the many other ways to say it.
+- **Audit records.** Each guarded request's record says what the guard did, as `phase:guard:action` (for example `request:regex:reject`), never the matched text. The Audit page shows **Refused by prompt guard**, **Prompt guard would refuse** (audit mode) and **Masked by prompt guard**, apart from a refusal by an access rule (also a 403).
+- **One guard for every model.** The guard is one `AgentgatewayPolicy` (`ambit-llm-guard`) on the LLM route, so it covers every `Model`, `ModelRouter` and fallback. Ambit sets no guard on a single model: agentgateway would use a model's own guard instead of the route's, not both.
+- **Order of the checks** (tested on kind). The access rule runs first: a person who may not use a model gets the access rule's 403, and the guard does not read the prompt. A prompt the guard refuses is **not charged** to the daily request and dollar limits of a `Budget` (they are charged after the answer, and there is none), but it **is counted** by the per-minute limits (`userRequestsPerMinute`, `groupRequestsPerMinute`), which count a request when it arrives.
+- **A `ModelRouter` of type `LLM`: the classifier model gets only what passed the guard** (tested on kind). The gateway asks `ambit-router` for the label before it picks the model, and it runs the guard only when it calls the chosen model (agentgateway v1.7.0). So `ambit-router` applies the same rules itself, from the same Helm values, to the messages before it sends the last user message to the classifier, in the same order: your patterns, the built-in patterns, then the webhook (which gets the messages, as from the gateway).
+  - `reject`: when any message matches, nothing is sent to the classifier. The request gets no label (reason `guard`), and the gateway then refuses it with the guard's 403.
+  - `mask`: the classifier gets the masked text (`<CREDIT_CARD>`, `<masked>` and the like), and the webhook's masked text.
+  - `audit`: the classifier gets the prompt unchanged, as the model does, and the request's record says what the guard would have done.
+  - Differences from the gateway, all on the safe side or narrow: `PhoneNumber` in `ambit-router` counts any 7 to 15 digits that could be a phone number (the gateway also asks libphonenumber), so in `reject` mode a prompt with such a number (a date, an order number) can get no label and the default model while the gateway lets it through. In your own patterns, `ambit-router` uses Go's regular expressions, where `\d`, `\w`, `\s` and `\b` match ASCII only (Unicode in the gateway): a pattern that needs non-ASCII digits or letters to match can miss in `ambit-router`.
+  - With a webhook, `ambit-router` calls it too (one call per classified prompt, within the router's `timeout`), so the webhook Service must accept connections from the `ambit-router` pods.
 
 ## Compressing tool results
 
@@ -184,7 +234,7 @@ Limits: one model, one task, synthetic data, 3 runs per cell, and results that f
 | `ambit_guard_compress_seconds` | `type` |
 | `ambit_guard_record_dropped_total` | `reason` (`send_failed`, `queue_full`, `no_groups`) |
 
-**Compression records.** With `evidence.enabled`, the guard also writes one record to the audit trail for each text it compressed (OpenTelemetry log, sent to `ambit-otel-collector:4317`, the same collector the gateway uses). The record holds the Server name, the type, the mode, the bytes before and after, the number of cuts and the caller's groups (`ambit.kind` is `compression`). It holds no email and no content. Sending is best effort: when the collector is down or the queue (1,000 records) is full, the record is dropped, `ambit_guard_record_dropped_total` goes up and the call is not changed. Audit and Usage ignore these records.
+**Compression records.** With `evidence.enabled`, the guard also writes one record to the audit trail for each text it compressed (OpenTelemetry log, sent to `ambit-otel-collector:4317`, the same collector the gateway uses). The record holds the Server name, the tool, the type, the mode, the bytes before and after, the number of cuts, the index of the text in the result, the caller's groups, email and key ID, and a call ID (`ambit.kind` is `compression`). The call ID is also on the gateway's record of the same call (`ambit.call_id`), so each record belongs to exactly one call. It holds no content. With `protection.compressionAudit.caller: false` the record has no email and no key ID (the groups and the call ID stay). Sending is best effort: when the collector is down or the queue (1,000 records) is full, the record is dropped, `ambit_guard_record_dropped_total` goes up and the call is not changed. The [Audit page](compliance.md#where-the-evidence-is) shows each record on the row of its call (a "shortened" or "compressed" tag and the sizes), not as a row of its own; Usage ignores the records.
 
 Bytes saved for a server are `bytes_in` minus `bytes_out`. These are bytes, not tokens. The [Savings page](savings.md) turns the compression records into estimated tokens and dollars for each group. The guard also writes one log line for each compressed text with the sizes (never the content).
 

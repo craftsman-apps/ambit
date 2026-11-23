@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/identity"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -61,7 +62,7 @@ func Limited(grants []Grant) bool {
 func CheckArguments(grants []Grant, groups []string, email string, tool string, args map[string]any) string {
 	var applicable []Grant
 	for _, g := range grants {
-		if (g.AllSignedIn || slices.ContainsFunc(g.Groups, func(x string) bool { return slices.Contains(groups, x) }) ||
+		if ((g.AllSignedIn && !identity.IsService(email)) || slices.ContainsFunc(g.Groups, func(x string) bool { return slices.Contains(groups, x) }) ||
 			(email != "" && slices.Contains(g.Users, email))) &&
 			(g.Tools == nil || slices.Contains(g.Tools, tool)) {
 			applicable = append(applicable, g)

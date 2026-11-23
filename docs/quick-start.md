@@ -12,7 +12,7 @@ description: Install the ambit CLI and start a local Ambit with one command, amb
 - **It creates:** a kind cluster named `ambit` (kubectl context `kind-ambit`). It installs the CRDs and the Ambit Helm charts into it, sets up a model and an access rule, and makes a test call.
 - **To remove it:** `ambit local down`.
 
-This install is for testing only: plain HTTP, one gateway replica, and sign-in tokens from Ambit's own Dex. To install on a real cluster, see [Install on your cluster](install.md). To see each object that `ambit local up` creates, or to do the steps by hand, see [Install locally by hand](local-up.md).
+This install is for testing only: plain HTTP, one gateway replica, and sign-in tokens from Ambit's own Dex. To install on a real cluster, see [Install on your cluster](install.md). To see each object that `ambit local up` creates, or to do the steps by hand, see [Install locally by hand](install-by-hand.md).
 
 ## What you need
 
@@ -43,6 +43,13 @@ PowerShell (Windows):
 
 ```powershell
 irm https://ambitproject.dev/install.ps1 | iex
+```
+
+winget or Scoop (Windows). Both install the same `ambit.exe` as the GitHub release and check its SHA-256:
+
+```powershell
+winget install CraftsmanApps.Ambit
+scoop bucket add ambit https://github.com/craftsman-apps/scoop-ambit; scoop install ambit/ambit
 ```
 
 npm (any system with Node.js). This runs the CLI without installing it; `npm install -g @craftsman-apps/ambit` installs it:

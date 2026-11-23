@@ -14,16 +14,32 @@ has(jwt.email) && type(jwt.email) == string && jwt.email.trim().matches('^[^@\\s
 has(apiKey.keyId) && timestamp(apiKey.until) > request.startTime
 {{- end -}}
 {{- define "ambit.identity.jwtGate" -}}
-{{- if .requireEmail -}}has(jwt.sub) && {{ include "ambit.identity.hasEmail" . }}{{- else -}}has(jwt.sub){{- end -}}
+{{- if .requireEmail -}}has(jwt.sub) && {{ include "ambit.identity.hasEmail" . }} && !jwt.email.trim().lowerAscii().endsWith("@svc.ambit.internal")
+{{- else -}}has(jwt.sub) && !jwt.sub.trim().lowerAscii().endsWith("@svc.ambit.internal") && !({{ include "ambit.identity.hasEmail" . }} && jwt.email.trim().lowerAscii().endsWith("@svc.ambit.internal")){{- end -}}
 {{- end -}}
+{{/* (dict "requireEmail" <bool> "services" <bool>): services false (serviceAccounts.enabled) refuses service account keys */}}
 {{- define "ambit.identity.gate" -}}
-({{ include "ambit.identity.presented" . }}) ? ({{ include "ambit.identity.validKey" . }}) : {{ if .requireEmail }}({{ include "ambit.identity.jwtGate" . }}){{ else }}{{ include "ambit.identity.jwtGate" . }}{{ end }}
+({{ include "ambit.identity.presented" . }}) ? ({{ include "ambit.identity.validKey" . }}{{ if not .services }} && !apiKey.email.endsWith("@svc.ambit.internal"){{ end }}) : ({{ include "ambit.identity.jwtGate" . }})
+{{- end -}}
+{{- define "ambit.identity.kind" -}}
+({{ include "ambit.identity.validKey" . }}) ? (apiKey.email.endsWith("@svc.ambit.internal") ? "service account" : "key") : (({{ include "ambit.identity.presented" . }}) ? "invalid key" : "jwt")
 {{- end -}}
 {{- define "ambit.identity.groups" -}}
 (has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : []))
 {{- end -}}
 {{- define "ambit.identity.email" -}}
 (has(apiKey.keyId) ? apiKey.email : (({{ include "ambit.identity.hasEmail" . }}{{ if .verified }} && has(jwt.email_verified) && jwt.email_verified == true{{ end }}) ? jwt.email.trim().lowerAscii() : ""))
+{{- end -}}
+{{/* The caller as the access log records it (jwt.email, ambit.key_id); the guard's compression records use the same. */}}
+{{- define "ambit.identity.logEmail" -}}
+({{ include "ambit.identity.validKey" . }}) ? apiKey.email : (({{ include "ambit.identity.presented" . }}) ? "" : (has(jwt.email) ? jwt.email.trim().lowerAscii() : ""))
+{{- end -}}
+{{- define "ambit.identity.logKeyId" -}}
+({{ include "ambit.identity.validKey" . }}) ? apiKey.keyId : ""
+{{- end -}}
+{{/* The call ID ambit-guard returns for each tools/call (#203); "" for other requests. */}}
+{{- define "ambit.callId" -}}
+has(mcpGuardrails.callId) ? mcpGuardrails.callId : ""
 {{- end -}}
 {{- define "ambit.identity.principal" -}}
 {{- if .requireEmail -}}(has(apiKey.keyId) ? apiKey.email : jwt.email.trim().lowerAscii()){{- else -}}(has(apiKey.keyId) ? apiKey.email : (({{ include "ambit.identity.hasEmail" . }}) ? jwt.email.trim().lowerAscii() : jwt.sub)){{- end -}}
@@ -42,7 +58,7 @@ authorization:
       {{- range .extra }}
       - {{ . | quote }}
       {{- end }}
-      - {{ include (ternary "ambit.identity.gate" "ambit.identity.jwtGate" $keys) (dict "requireEmail" .jwt.requireEmail) | quote }}
+      - {{ include (ternary "ambit.identity.gate" "ambit.identity.jwtGate" $keys) (dict "requireEmail" .jwt.requireEmail "services" (ne (toString (.root.Values.serviceAccounts | default dict).enabled) "false")) | quote }}
 jwtAuthentication:
   mode: {{ ternary "Permissive" "Strict" $keys }}
   providers:

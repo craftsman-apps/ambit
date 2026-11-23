@@ -16,7 +16,19 @@ Ambit is installed with two Helm charts. The charts and the console image are pu
 - A public HTTPS address for the console, and one for the LLM gateway (and one for MCP, if you use it). Cursor, for example, sends its requests from its own servers, so the address must be reachable from the internet.
 - An identity provider that Dex can connect to (OIDC, SAML, LDAP, GitHub and others), or one that issues OIDC tokens.
 
-## Install
+## Install with the ambit CLI
+
+Install the [ambit CLI](cli.md) of the Ambit version you want, then:
+
+```sh
+ambit init                      # asks questions and writes values.yaml; never asks for a secret value
+# create the Secrets it names, with the kubectl commands it prints
+ambit install -f values.yaml
+```
+
+It shows the target cluster and asks first, then installs the dependency CRDs, the chart `ambit-crds` and the chart `ambit`, waits for the pods, and runs the production checklist. Exit code 3 means that Ambit works but a production check failed. The result is the same two Helm releases as the commands below, so you can use `helm` and the CLI on the same install. See [ambit install](cli.md#ambit-install) for every flag, and for `--secret-file`, which creates the Secrets your values name from files.
+
+## Install with Helm only
 
 Install the dependency CRDs, the Ambit CRDs, and then Ambit. This page installs 0.4.0. To install another release, replace `0.4.0` with it.
 
@@ -158,6 +170,8 @@ Valkey holds the budget counters (see [Budgets](budgets.md)). The Valkey that th
 
 ## Argo CD and GitOps
 
+`ambit init --gitops argocd` writes the values file, the dependency CRDs and four Argo CD Applications into your configuration repository, so Argo CD installs Ambit itself (see [ambit init](cli.md#--gitops-argocd)).
+
 In GitOps mode the console opens pull requests in your configuration repository instead of changing the cluster. Argo CD applies what is merged.
 
 ```yaml
@@ -190,8 +204,15 @@ The gateway then serves HTTPS on `gateway.tls.port` (default 8443), and plain HT
 
 ## Upgrade and uninstall
 
-Read [Upgrading](upgrading.md) before each upgrade. Apply the new release's dependency CRDs and upgrade the CRD chart
-first, then Ambit:
+Read [Upgrading](upgrading.md) before each upgrade. With the CLI of the new version:
+
+```sh
+ambit upgrade -f values.yaml
+```
+
+It finds the releases (also ones you installed with Helm), applies the dependency CRDs, upgrades `ambit-crds`, then
+`ambit`, waits and runs the production checklist. With Helm only, apply the new release's dependency CRDs and upgrade
+the CRD chart first, then Ambit:
 
 ```sh
 R=https://github.com/craftsman-apps/ambit/releases/download/v<new version>
@@ -201,7 +222,7 @@ helm upgrade ambit-crds oci://ghcr.io/craftsman-apps/charts/ambit-crds --version
 helm upgrade ambit oci://ghcr.io/craftsman-apps/charts/ambit --version <new version> -n ambit-system -f values.yaml --wait
 ```
 
-To remove Ambit, run `helm uninstall ambit -n ambit-system`, then `helm uninstall ambit-crds -n ambit-system`. The CRDs carry `helm.sh/resource-policy: keep`, so Helm leaves them, and your objects, in the cluster.
+To remove Ambit, run `ambit uninstall` (it asks you to type the context name), or `helm uninstall ambit -n ambit-system`, then `helm uninstall ambit-crds -n ambit-system`. The CRDs carry `helm.sh/resource-policy: keep`, so Helm leaves them, and your objects, in the cluster.
 
 ## Audit-only mode: start before the rules are complete
 

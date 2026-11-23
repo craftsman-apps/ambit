@@ -31,3 +31,28 @@ func TestKeySettingsFromEnv(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceSettingsFromEnv(t *testing.T) {
+	for name, c := range map[string]struct {
+		enabled, max, exposure string
+		want                   console.ServiceSettings
+		fail                   bool
+	}{
+		"defaults":          {"", "", "", console.ServiceSettings{Enabled: true, MaxDays: 90, ExposureDays: 7}, false},
+		"off":               {"false", "365", "0", console.ServiceSettings{Enabled: false, MaxDays: 365, ExposureDays: 0}, false},
+		"upper bound":       {"true", "30", "30", console.ServiceSettings{Enabled: true, MaxDays: 30, ExposureDays: 30}, false},
+		"max 60":            {"", "60", "", console.ServiceSettings{}, true},
+		"exposure 31":       {"", "", "31", console.ServiceSettings{}, true},
+		"negative exposure": {"", "", "-1", console.ServiceSettings{}, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("AMBIT_SA_ENABLED", c.enabled)
+			t.Setenv("AMBIT_SA_MAX_DAYS", c.max)
+			t.Setenv("AMBIT_SA_EXPOSURE_DAYS", c.exposure)
+			got, err := serviceSettingsFromEnv()
+			if (err != nil) != c.fail || (!c.fail && got != c.want) {
+				t.Fatalf("got %+v, %v", got, err)
+			}
+		})
+	}
+}

@@ -11,7 +11,8 @@ that person's token: the same access rules, budgets, audit records and offboardi
   a group in the identity provider, their keys lose that group at their next console sign-in. For an immediate
   effect, offboard the person (or revoke their keys).
 - A key is **not a service account**. It belongs to a person and stops when that person is offboarded or has
-  not signed in to the console for a while.
+  not signed in to the console for a while. For a CI job or a background agent, an admin creates a
+  [service account](service-accounts.md).
 - The key is **shown once**, when you create it. Ambit stores only a SHA-256 hash and a short display prefix
   (`ambit_` and 4 characters). If you lose a key, revoke it and create a new one.
 - Treat the key like a password: do not paste it into chat, tickets or a Git repository.
@@ -22,7 +23,8 @@ that person's token: the same access rules, budgets, audit records and offboardi
 1. Sign in to the console and open **Keys**.
 2. Give the key a name, choose the scope and the end date, and create it.
 3. Copy the key, choose the tab for your tool and copy its snippet. The console fills in your company's addresses and
-   the model name you choose. The tabs are Claude Code, Codex, opencode, Cursor, SDK (OpenAI and Anthropic) and MCP.
+   the model name you choose. The tabs are Claude Code, Codex, opencode, Hermes Agent, Kilo Code, pi, Cursor, SDK
+   (OpenAI and Anthropic) and MCP.
    Where a tool reads an environment variable, the tab shows the line for bash or zsh, fish and PowerShell. The
    opencode tab shows opencode 2 first, and opencode 1 under **Version**.
 4. To see the steps again later, choose the key's name in the list. The key's page shows its name, scope, dates, last
@@ -34,8 +36,9 @@ gateways. Clients send the **provider's model ID** (for example `google/gemma-4-
 the Model object.
 
 With the `ambit` CLI you do not need to copy the snippets: `ambit connect <tool> --url <llm> --model <model>`
-writes the settings for Claude Code, Codex and opencode, and keeps the key in the keychain of your computer; opencode 2
-reads it from a file that only you can read (see [Where the Ambit CLI keeps the key](#where-the-ambit-cli-keeps-the-key)).
+writes the settings for Claude Code, Codex, opencode, Hermes Agent, Kilo Code and pi, and keeps the key in the keychain
+of your computer; opencode 2 and Kilo Code read it from a file that only you can read (see
+[Where the Ambit CLI keeps the key](#where-the-ambit-cli-keeps-the-key)).
 
 The console writes these snippets for you. `<llm>` is the LLM address (for example `https://llm.example.com`),
 `<mcp>` is the MCP address (for example `https://mcp.example.com/mcp`) and `<model>` is the provider's model ID.
@@ -92,10 +95,12 @@ minutes without a request it says "No request seen yet. Check the steps above, o
 `ambit connect` asks for the key once and stores it. It never writes the key into a tool's config file. The tool runs
 `ambit key print --url <llm>` to read it.
 
-Two tools cannot run a command to read the key, so `ambit connect` also writes the key to a file that only your user
+Some tools cannot run a command to read the key, so `ambit connect` also writes the key to a file that only your user
 can read (mode `0600`; on Windows an access list for your user only): opencode 2 reads `~/.config/ambit/opencode-key`,
-because it sends model calls from a background service that does not see your terminal, and `claude-desktop-mcp` reads
-`~/.ambit/mcp-headers.txt`. `ambit key set` writes a new key into these files too, and `ambit disconnect` deletes them.
+because it sends model calls from a background service that does not see your terminal; Kilo Code reads
+`~/.config/ambit/kilo-key`, because its VS Code extension starts Kilo in the background; `claude-desktop-mcp` reads
+`~/.ambit/mcp-headers.txt`; and the MCP server of Hermes Agent (with `--mcp-url`) reads `~/.ambit/hermes-mcp-headers.txt`,
+because Hermes reads MCP headers only from its config or its environment. `ambit key set` writes a new key into these files too, and `ambit disconnect` deletes them.
 Their content is never printed, and the state file holds only a hash of it.
 
 | System | Where the key is stored |
@@ -208,6 +213,10 @@ When the identity provider deactivates or deletes a person (SCIM), Ambit:
 
 Reactivating the person removes the block. Their old keys stay deleted. They create new ones.
 
+[Service account](service-accounts.md) keys are not affected, with one exception: when the person is an admin who
+issued a service account key, that key stops within `serviceAccounts.exposureDays` (default 7 days) unless it is
+rotated (the exposure rule).
+
 When the identity provider changes a person's email, Ambit deletes the keys under the old email. Keys follow
 the identity: the person creates new keys, which carry the new email.
 
@@ -218,6 +227,9 @@ providers retry on 503, so the change completes later. Offboarding of SaaS grant
 ## How the gateway checks a key
 
 Every request to the LLM or MCP gateway must pass these checks. A request that fails one gets **403** (while keys are on).
+On the LLM gateway, a request with no key and no token at all (or an empty one, such as `Authorization: Bearer ` with
+nothing after it) gets 403 with the message "authorization failed: no Ambit key or token was sent", which says how to
+send a key. Every other refusal keeps its message.
 
 1. The request has a credential. If it carries `x-api-key`, or `Authorization: Bearer ambit_...`, it presents a
    key, and **only the key counts**. A token sent alongside is ignored.
@@ -228,7 +240,9 @@ Every request to the LLM or MCP gateway must pass these checks. A request that f
 5. The owner's groups (from the key) allow the model, the MCP tool and the budget, as for a token.
 
 A request without a key must carry a valid token, with a usable `email` claim unless `requireEmail` is
-`false`.
+`false`. A token whose email ends with `@svc.ambit.internal` (the [service account](service-accounts.md) domain) is
+refused; with `requireEmail: false`, so is a token without an email whose subject ends with it. With
+`serviceAccounts.enabled: false`, the keys of service accounts are refused at step 2.
 
 Before the request goes on, the gateway removes the `Authorization` and `x-api-key` headers. The provider or
 MCP server never receives the key. Ambit then adds the provider's own credential. Audit records show the key

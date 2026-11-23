@@ -4,15 +4,35 @@ import { Button } from "@/components/ui/button";
 import { Shell, Status } from "@/components/shell";
 import { useConfig } from "@/api";
 import { csvRow } from "@/lib/csv";
-import { isStale, outcomeLabel, switchCheck, utcMinute, type Outcome, type WouldRefuse } from "@/lib/audit-mode";
+import { guardLabel, isStale, outcomeLabel, switchCheck, utcMinute, type Outcome, type WouldRefuse } from "@/lib/audit-mode";
 
 type Call = { time: string; email: string; route: string; method: string; server: string; tool: string; model: string; status: string; error: string; inputTokens: number; outputTokens: number; router: string; label: string; labelReason: string;
   // Audit-only mode: the verdict written when the request was served, the rules it was judged by, and its class.
   accessMode?: string; mark?: string; rulesVersion?: string; outcome?: Outcome;
   // The request path (/v1/models is a model list), and for a request with an invalid key the address it came from.
-  path?: string; identity?: string; clientAddress?: string };
+  path?: string; identity?: string; clientAddress?: string; keyId?: string;
+  // What the prompt guard did: reject, audit (would refuse), mask, allow, or empty.
+  promptGuard?: string;
+  // What the guard did to the tool result (#203); absent when it did not compress it or its record did not arrive.
+  compression?: Compression };
+type Compression = { mode: string; bytesIn: number; bytesOut: number; match: string;
+  parts: { part: number; type: string; bytesIn: number; bytesOut: number; omitted: number }[] };
+const kb = (n: number) => n < 1024 ? `${n} bytes` : `${(n / 1024).toFixed(1)} KB`;
+const modeHelp: Record<string, string> = { shorten: "shorten: parts were left out", lossless: "lossless: same information, fewer bytes" };
+// "Result shortened: 37.2 KB → 9.8 KB (shorten, logs, 14 parts left out)", one line per compressed text.
+const compressionLines = (z: Compression) => z.parts.map((p) => `${z.parts.length > 1 ? `Text ${p.part + 1}: r` : "R"}esult ${z.mode === "shorten" ? "shortened" : "compressed"}: ${kb(p.bytesIn)} → ${kb(p.bytesOut)} (${z.mode}, ${p.type}${z.mode === "shorten" ? `, ${p.omitted} ${p.omitted === 1 ? "part" : "parts"} left out` : ""})`);
 // A routed call shows the router and the model that answered, e.g. "auto → mock/echo (coding)".
 const target = (c: Call) => c.identity === "invalid key" ? `from ${c.clientAddress || "an unknown address"}` : c.router ? `${c.router} → ${c.model}${c.label || c.labelReason ? ` (${c.label || c.labelReason})` : ""}` : (c.server || c.model);
+// One step of an MCP app's request and approval (issue #112): who did what, on which server, and why it was refused.
+type AppEvent = { time: string; action: string; actor: string; role: string; server: string; request: string; requestedBy: string;
+  image: string; url: string; comment: string; pullRequest: string; tools: string[]; reason: string };
+const actionLabel: Record<string, string> = { requested: "Requested", approved: "Approved", denied: "Denied", "pull-request-opened": "Approved; pull request opened",
+  "tools-approved": "Changed tools approved", "approve-refused": "Approve refused", "deny-refused": "Deny refused", "tools-approve-refused": "Tool approval refused" };
+const appWhat = (e: AppEvent) => e.image || e.url || (e.tools.length ? e.tools.join(", ") : "");
+function appCsv(events: AppEvent[]) {
+  const rows = events.map((e) => csvRow([utc(e.time), e.action, e.actor, e.role, e.server, e.request, e.requestedBy, appWhat(e), e.comment, e.reason, e.pullRequest]));
+  return ["time_utc,action,by,role,server,request,requested_by,image_url_or_tools,comment,refused_reason,pull_request", ...rows].join("\n") + "\n";
+}
 type Usage = { day: string; group: string; requests: number; inputTokens: number; outputTokens: number; cost?: number; unpricedModels?: string[] };
 
 async function get<T>(url: string): Promise<T> {
@@ -39,14 +59,16 @@ const what = (c: Call) => c.method ? `${c.method}${c.tool ? ` · ${c.tool}` : ""
   : c.identity === "invalid key" ? c.path || c.route : c.model || /llm$/.test(c.route) ? "LLM request" : c.route;
 // In audit-only mode the server classifies a record (outcome); the page's own reading applies to every other record.
 const outcome = (c: Call) => {
-  const o = outcomeLabel(c.outcome, c.status);
+  const o = guardLabel(c.promptGuard, c.status) ?? outcomeLabel(c.outcome, c.status);
   if (o) return o.text.replace(/ \(\d+\)$/, "");
   return refused(c) ? "Refused by policy" : failed(c) ? "Failed" : "OK";
 };
 
 function csv(calls: Call[]) {
-  const rows = calls.map((c) => csvRow([utc(c.time), c.email || "no person", what(c), target(c), outcome(c), c.status, c.error, c.inputTokens, c.outputTokens, c.mark ?? "", c.rulesVersion ?? ""]));
-  return ["time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version", ...rows].join("\n") + "\n";
+  // The compression columns are at the end, so existing spreadsheets keep their positions (#203).
+  const rows = calls.map((c) => csvRow([utc(c.time), c.email || "no person", what(c), target(c), outcome(c), c.status, c.error, c.inputTokens, c.outputTokens, c.mark ?? "", c.rulesVersion ?? "",
+    c.compression?.bytesIn ?? "", c.compression?.bytesOut ?? "", c.compression?.parts.map((p) => `${c.compression!.mode} ${p.type} ${p.omitted}`).join("; ") ?? ""]));
+  return ["time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version,result_bytes_in,result_bytes_out,compression", ...rows].join("\n") + "\n";
 }
 function download(name: string, text: string) {
   const a = document.createElement("a");
@@ -59,15 +81,19 @@ function download(name: string, text: string) {
 // Audit (journey A5): every gateway call one person made in a period, refused ones included; or every request made
 // with an invalid key (wrong, revoked or expired), which has no person (issue #117).
 export function AuditPage() {
-  const [form, setForm] = useState({ invalidKey: false, email: "", from: monthAgo(), to: today() });
+  const [form, setForm] = useState({ invalidKey: false, approvals: false, email: "", from: monthAgo(), to: today() });
   const [q, setQ] = useState<typeof form | null>(null);
   const [protocol, setProtocol] = useState(false);
   const [onlyWouldRefuse, setOnlyWouldRefuse] = useState(false);
   const audit = useConfig().data?.accessMode === "audit";
   const res = useQuery({
-    queryKey: ["audit", q], enabled: !!q, retry: false,
+    queryKey: ["audit", q], enabled: !!q && !q.approvals, retry: false,
     queryFn: () => get<{ calls: Call[]; limited: boolean }>(`/api/audit?${new URLSearchParams({
       ...(q!.invalidKey ? { invalidKey: "true" } : { email: q!.email }), from: q!.from, to: nextDay(q!.to) })}`),
+  });
+  const apps = useQuery({
+    queryKey: ["audit-approvals", q], enabled: !!q?.approvals, retry: false,
+    queryFn: () => get<{ events: AppEvent[]; limited: boolean }>(`/api/audit?${new URLSearchParams({ approvals: "true", email: q!.email, from: q!.from, to: nextDay(q!.to) })}`),
   });
   const all = res.data?.calls ?? [];
   const hasVerdicts = all.some((c) => c.outcome === "would-refuse" || c.outcome === "other-model" || c.outcome === "mark-missing");
@@ -76,26 +102,29 @@ export function AuditPage() {
   const search = (e: React.FormEvent) => {
     e.preventDefault();
     // The same search again must ask again (after an error, or for new calls), not reuse the answer.
-    if (JSON.stringify(form) === JSON.stringify(q)) res.refetch(); else setQ({ ...form });
+    if (JSON.stringify(form) === JSON.stringify(q)) (q?.approvals ? apps : res).refetch(); else setQ({ ...form });
   };
   return (
     <Shell crumb="Evidence / Audit">
       <section className="space-y-4 p-5">
         <div>
           <h1 className="text-h1 font-semibold tracking-tight">Audit</h1>
-          <p className="text-muted">Every call a person made through the gateway, including the ones it refused. Kept for a year. Dates and times are UTC.</p>
+          <p className="text-muted">Every call a person made through the gateway, including the ones it refused, and every request for an MCP app and its decision. Kept for a year. Dates and times are UTC.</p>
         </div>
         <form className="flex flex-wrap items-end gap-2" onSubmit={search}>
           <label><span className="mb-1 block text-muted">Search</span>
-            <select id="audit-mode" className={field} value={form.invalidKey ? "invalid" : "email"} onChange={(e) => setForm({ ...form, invalidKey: e.target.value === "invalid" })}>
-              <option value="email">One person</option><option value="invalid">Requests with an invalid key</option>
+            <select id="audit-mode" className={field} value={form.approvals ? "approvals" : form.invalidKey ? "invalid" : "email"} onChange={(e) => setForm({ ...form, invalidKey: e.target.value === "invalid", approvals: e.target.value === "approvals" })}>
+              <option value="email">One person</option><option value="invalid">Requests with an invalid key</option><option value="approvals">MCP app requests and approvals</option>
             </select></label>
-          {!form.invalidKey && <label><span className="mb-1 block text-muted">Email</span><input id="audit-email" className={field} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="user01@acme.com" required /></label>}
+          {!form.invalidKey && <label><span className="mb-1 block text-muted">{form.approvals ? "Email (optional)" : "Email"}</span><input id="audit-email" className={field} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="user01@acme.com" required={!form.approvals} /></label>}
           <label><span className="mb-1 block text-muted">From (UTC)</span><input id="audit-from" type="date" className={field} value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} /></label>
           <label><span className="mb-1 block text-muted">To (UTC, inclusive)</span><input id="audit-to" type="date" className={field} value={form.to} onChange={(e) => setForm({ ...form, to: e.target.value })} /></label>
-          <Button type="submit" className="w-auto" disabled={res.isFetching}>{res.isFetching ? "Searching…" : "Search"}</Button>
+          <Button type="submit" className="w-auto" disabled={res.isFetching || apps.isFetching}>{res.isFetching || apps.isFetching ? "Searching…" : "Search"}</Button>
         </form>
         <WouldRefuseSummary />
+        {q?.approvals && apps.isError && !apps.isFetching && <p className="text-bad" role="alert">{apps.error.message}</p>}
+        {q?.approvals && apps.data && !apps.isError && <AppEvents events={apps.data.events} limited={apps.data.limited}
+          onExport={() => download(`audit-app-approvals-${q.email || "all"}-${q.from}-${q.to}.csv`, appCsv(apps.data.events))} />}
         {res.isError && !res.isFetching && <p className="text-bad" role="alert">{res.error.message}</p>}
         {res.data && !res.isError && (
           <>
@@ -118,7 +147,12 @@ export function AuditPage() {
                   {shown.map((c, i) => (
                     <tr key={i} className="border-b border-line-soft align-top">
                       <td className="whitespace-nowrap px-3 py-2 font-mono text-small">{utc(c.time)}</td>
-                      <td className="px-3 py-2 font-mono">{what(c)}</td>
+                      <td className="px-3 py-2 font-mono">{what(c)}{c.identity === "service account" && (
+                        <span data-testid="sa-badge" className="ml-1.5 whitespace-nowrap rounded border border-line px-1 font-sans text-small text-muted" title={`Called with the service account key ${c.keyId ?? ""}`}>service account</span>)}
+                        {c.compression && <>
+                          <span data-testid="compression-tag" className="ml-1.5 whitespace-nowrap rounded border border-line px-1 font-sans text-small text-muted" title={modeHelp[c.compression.mode]}>{c.compression.mode === "shorten" ? "shortened" : "compressed"}</span>
+                          {compressionLines(c.compression).map((l, j) => <span key={j} className="block font-sans text-small text-muted">{l}</span>)}
+                        </>}</td>
                       <td className="px-3 py-2 font-mono text-small">{target(c)}</td>
                       <td className="px-3 py-2"><OutcomeCell c={c} />
                         {c.error && <span className="block text-small text-muted">{c.error}</span>}</td>
@@ -129,6 +163,7 @@ export function AuditPage() {
                 </tbody>
               </table>
             </div>
+            {shown.some((c) => c.method === "tools/call") && <p className="text-small text-muted">A tool call without a "shortened" or "compressed" tag has no compression record. Records are best effort: if the server compresses results, check <code>ambit_guard_record_dropped_total</code>. Ambit never stores the content of a result.</p>}
           </>
         )}
       </section>
@@ -136,8 +171,40 @@ export function AuditPage() {
   );
 }
 
+// MCP app requests, decisions and refused attempts (the console's records in otel_logs).
+function AppEvents({ events, limited, onExport }: { events: AppEvent[]; limited: boolean; onExport: () => void }) {
+  return <>
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-small text-muted">
+      <span>{events.length} events: {events.filter((e) => e.action.endsWith("-refused")).length} refused attempts{limited && " — showing the newest 1,000; narrow the period"}.</span>
+      <Button variant="outline" className="ml-auto w-auto" disabled={events.length === 0} onClick={onExport}>Export CSV</Button>
+    </div>
+    <div className="overflow-x-auto">
+      <table className="w-full border-collapse text-body" data-testid="app-events">
+        <thead><tr className="border-b border-line"><th className={th}>Time (UTC)</th><th className={th}>Action</th><th className={th}>By</th><th className={th}>Server</th><th className={th}>Requested by</th><th className={th}>Image, URL or tools</th><th className={th}>Comment or reason</th></tr></thead>
+        <tbody>
+          {events.map((e, i) => (
+            <tr key={i} className="border-b border-line-soft align-top">
+              <td className="whitespace-nowrap px-3 py-2 font-mono text-small">{utc(e.time)}</td>
+              <td className="px-3 py-2">{e.action.endsWith("-refused") ? <Status ready="False" text={actionLabel[e.action] ?? e.action} /> : (actionLabel[e.action] ?? e.action)}
+                {e.pullRequest && <a className="block text-small text-accent underline" href={e.pullRequest} target="_blank" rel="noreferrer">pull request</a>}</td>
+              <td className="px-3 py-2 font-mono text-small">{e.actor}{e.role && <span className="block text-muted">{e.role}</span>}</td>
+              <td className="px-3 py-2 font-mono text-small">{e.server}{e.request && <span className="block text-muted">{e.request}</span>}</td>
+              <td className="px-3 py-2 font-mono text-small">{e.requestedBy}</td>
+              <td className="break-all px-3 py-2 font-mono text-small">{appWhat(e)}</td>
+              <td className="px-3 py-2 text-small">{e.reason || e.comment}</td>
+            </tr>
+          ))}
+          {events.length === 0 && <tr><td colSpan={7} className="px-3 py-6 text-muted">No MCP app requests or decisions in this period.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  </>;
+}
+
 // The Outcome cell. An audit-only verdict (would be refused, mark missing) is shown with the status the person got.
 function OutcomeCell({ c }: { c: Call }) {
+  const g = guardLabel(c.promptGuard, c.status);
+  if (g) return <Status ready={g.tone === "bad" ? "False" : "Unknown"} text={g.text} />;
   const o = outcomeLabel(c.outcome, c.status);
   if (o) return <>
     <Status ready={o.tone === "bad" ? "False" : "Unknown"} text={o.text} />

@@ -169,3 +169,53 @@ test("the opencode tab shows opencode 2 first and keeps opencode 1", async ({ pa
     await revokeAll(page);
   }
 });
+
+test("Hermes Agent, Kilo Code and pi tabs, on the new key and on the key's page", async ({ page }) => {
+  await signInAsAdmin(page);
+  try {
+    const answers = recordAnswers(page);
+    await page.goto("/keys");
+    await page.getByRole("button", { name: "Create key" }).click();
+    await page.getByLabel("Name").fill("e2e new tools");
+    await page.getByLabel("Scope").selectOption("both");
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+    const key = (await page.getByTestId("new-key").textContent())!;
+    const panel = page.getByRole("tabpanel");
+    // Hermes and pi run ambit key print: no block on their tabs holds the key
+    await page.getByRole("tab", { name: "Hermes Agent", exact: true }).click();
+    await expect(page.getByTestId("cli-command-hermes")).toContainText("ambit connect hermes --url ");
+    await expect(page.getByTestId("cli-command-hermes")).toContainText(" --mcp-url ");
+    await expect(page.getByTestId("snippet-hermes-1")).toContainText("key_cmd: ambit key print --url ");
+    await expect(panel).not.toContainText(key);
+    await page.getByRole("tab", { name: "pi", exact: true }).click();
+    await expect(page.getByTestId("snippet-pi-1")).toContainText('"apiKey": "!ambit key print --url ');
+    await expect(page.getByTestId("snippet-pi-2")).toContainText('"defaultProvider": "ambit"');
+    await expect(panel).not.toContainText(key);
+    // Kilo Code reads a user-only key file
+    await page.getByRole("tab", { name: "Kilo Code", exact: true }).click();
+    await expect(page.getByTestId("snippet-kilocode-0")).toContainText(`chmod 600 ~/.config/ambit/kilo-key && printf '%s' '${key}' > ~/.config/ambit/kilo-key`);
+    await expect(page.getByTestId("snippet-kilocode-1")).toContainText('"apiKey": "{file:~/.config/ambit/kilo-key}"');
+    await page.getByRole("tab", { name: "MCP", exact: true }).click();
+    await expect(panel).toContainText("hermes-mcp-headers.txt");
+    await expect(panel).toContainText('"Authorization": "Bearer {file:~/.config/ambit/kilo-key}"');
+    await expect(panel).toContainText('"provider": "ambit"');
+    const id = (await listKeys(page)).find((k) => k.name === "e2e new tools")!.id;
+    await page.getByRole("button", { name: "Done" }).click();
+    // the key's page: the same tabs, with the placeholder
+    await page.goto(`/keys?key=${id}`);
+    const detail = page.getByTestId("key-detail");
+    await page.getByRole("tab", { name: "Kilo Code", exact: true }).click();
+    await expect(page.getByTestId("snippet-kilocode-0")).toContainText("'ambit_...' > ~/.config/ambit/kilo-key");
+    await page.getByRole("tab", { name: "Hermes Agent", exact: true }).click();
+    await expect(page.getByTestId("snippet-hermes-1")).toContainText("provider: custom:ambit");
+    await page.getByRole("tab", { name: "pi", exact: true }).click();
+    await expect(page.getByTestId("snippet-pi-1")).toContainText("!ambit key print");
+    await page.getByRole("tab", { name: "MCP", exact: true }).click();
+    await expect(panel).toContainText("printf 'Authorization: Bearer %s\\n' 'ambit_...'");
+    await expect(detail).not.toContainText(key);
+    // the key is in the answer that created it, and in no other answer
+    expect((await answers()).filter((body) => body.includes(key)).length).toBe(1);
+  } finally {
+    await revokeAll(page);
+  }
+});

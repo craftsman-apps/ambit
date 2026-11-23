@@ -173,7 +173,7 @@ OpenRouter changes its free models often. If this one is gone, use another model
 
 ## 2. Replace the open rule with two group rules
 
-An `AccessRule` only adds access. The rule `everyone-local` from `ambit local up` (`everyone-free-model` if you used the [by-hand steps](../local-up.md)) lets everyone use `free-model`, so delete it first. Then create one rule for each group:
+An `AccessRule` only adds access. The rule `everyone-local` from `ambit local up` (`everyone-free-model` if you used the [by-hand steps](../install-by-hand.md)) lets everyone use `free-model`, so delete it first. Then create one rule for each group:
 
 ```sh
 kubectl -n ambit-system delete accessrule everyone-local everyone-free-model --ignore-not-found

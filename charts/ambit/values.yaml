@@ -79,6 +79,33 @@ llm:
     jwksURL: ""
     # Refuse gateway JWTs without a usable email claim. Offboarding, per-person budgets and audit are keyed by email; with false, such tokens are identified by their subject and offboarding cannot block them before they expire.
     requireEmail: true
+  # Prompt guard (docs/concepts.md, "Prompt guard"): the gateway checks the prompt of every chat, messages and
+  # responses request before it reaches a model. Prompts only: answers are not checked. Embeddings are not checked.
+  # The text never leaves the cluster: regular expressions run in the gateway, and the webhook must be a Service in
+  # the cluster. The audit record says what the guard did (never the matched text).
+  promptGuard:
+    enabled: false
+    # audit: record what the guard would refuse, and let the prompt through unchanged (start here).
+    # reject: refuse a matching prompt with 403 and rejectMessage; the model is not called.
+    # mask: replace each match with a placeholder (for example <CREDIT_CARD>) and send the rest to the model.
+    #   With a webhook, the webhook decides itself whether to pass, mask or refuse.
+    mode: audit
+    # Patterns built into the gateway: CreditCard, Ssn (US Social Security number), Email, PhoneNumber, CaSin
+    # (Canadian Social Insurance Number). [] for none.
+    builtins: [CreditCard, Ssn, Email, PhoneNumber]
+    # Your own regular expressions (Rust regex syntax: no look-around, no back-references), at most 1,024
+    # characters each. Example: ['(?i)ignore (all )?previous instructions', 'AKIA[0-9A-Z]{16}']
+    patterns: []
+    # The error message of a refused prompt (mode reject).
+    rejectMessage: "The prompt was refused by the prompt guard of this gateway."
+    # An optional guard of your own, run after the patterns: POST /request on this Service (agentgateway's
+    # guardrail webhook protocol). Empty service: no webhook.
+    webhook:
+      service: ""
+      namespace: ""     # empty: the release namespace
+      port: 8000
+      # FailClosed refuses the prompt when the webhook does not answer; FailOpen lets it through.
+      failureMode: FailClosed
 
 apiKeys:
   # Personal API keys (console: Keys). false: the gateways accept JWTs only; existing keys are kept but refused.
@@ -87,6 +114,16 @@ apiKeys:
   inactivityDays: 30
   # The longest end date a person may choose: 30, 90 or 365.
   maxDays: 365
+
+serviceAccounts:
+  # Service accounts (console: Settings / Service accounts): identities <name>@svc.ambit.internal for CI jobs and
+  # agents, created by admins. false: the emergency stop; creating accounts and keys is refused, the gateways refuse
+  # every service account key (kept, and accepted again when switched back on). Off as well when apiKeys.enabled is false.
+  enabled: true
+  # The longest end date of a service account key: 30, 90 or 365.
+  maxDays: 90
+  # Days a service account key keeps working after the admin who issued it is offboarded (0-30; 0: it stops at once).
+  exposureDays: 7
 
 routing:
   router:
@@ -164,6 +201,12 @@ evidence:
   # How long the daily summaries behind the Savings page are kept (counts only: no email, no content; group names are
   # the only identifying text). Rounded up to whole days, at least 24h. A change applies at the next console start.
   summaryRetention: 26280h  # three years
+  # Settings → Evidence: ZIP files for an auditor (CSV files and a manifest with SHA-256), admins only. The audit
+  # export and the audit columns of the other exports need evidence.enabled.
+  exports:
+    enabled: true
+    maxRows: 5000000  # an export with more rows is refused (413): split the period
+    maxDays: 366      # the longest period of one export
   clickhouse:
     image: clickhouse/clickhouse-server:26.3.36.6@sha256:5b10577fc3382ee6b26c4916a1d915d90543ade66e85fc29e3a78c4ce08daeb3
     storage: 10Gi
@@ -203,6 +246,11 @@ protection:
   # How often each server's tools are read again; a changed definition is hidden at once, and calls to it
   # are refused from the next read.
   toolsRefresh: 10m
+  # Records of compressed tool results (Server spec.resultCompression; written only with evidence.enabled).
+  compressionAudit:
+    # Name the caller (email, key ID) on each record, so the Audit page shows it on the row of its call.
+    # false: records keep the caller's groups only, as before 0.5.0 (the Savings page works either way).
+    caller: true
   # Memory limit of ambit-guard, in MiB. The guard holds a tool result several times while it masks it: a 30 MiB
   # result used 323 MiB in a test. 512 fits the largest result it accepts (32 MiB). See Masking in docs/concepts.md.
   memoryLimitMiB: 512

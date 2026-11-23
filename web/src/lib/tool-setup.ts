@@ -44,12 +44,36 @@ export const keySetCommand = ({ llm, mcp }: { llm: string; mcp: string }, scope:
 const ocKeyFile = "~/.config/ambit/opencode-key";
 const ocKeyRef = `{file:${ocKeyFile}}`;
 const ocRestart = "opencode service restart";
-const writeKeyFile = (key: string): Record<Shell, string> => ({
-  bash: `mkdir -p ~/.config/ambit && touch ${ocKeyFile} && chmod 600 ${ocKeyFile} && printf '%s' '${key}' > ${ocKeyFile}`,
-  fish: `mkdir -p ~/.config/ambit; and touch ${ocKeyFile}; and chmod 600 ${ocKeyFile}; and printf '%s' '${key}' > ${ocKeyFile}`,
-  // the file is limited to the person before the key goes in; no key is written when icacls fails
-  powershell: `New-Item -ItemType Directory -Force "$HOME\\.config\\ambit" | Out-Null; New-Item -ItemType File -Force "$HOME\\.config\\ambit\\opencode-key" | Out-Null; icacls "$HOME\\.config\\ambit\\opencode-key" /inheritance:r /grant:r "\${env:USERNAME}:F"; if ($LASTEXITCODE -eq 0) { Set-Content -NoNewline -Path "$HOME\\.config\\ambit\\opencode-key" -Value '${key}' }`,
-});
+// writeSecret writes text (printf format fmt with the key; psText for PowerShell) to dir/name, a file only the person
+// can read. dir starts with "~/".
+const writeSecret = (dir: string, name: string, fmt: string, key: string, psText: string): Record<Shell, string> => {
+  const f = `${dir}/${name}`;
+  const w = `$HOME\\${dir.slice(2).replace(/\//g, "\\")}`;
+  return {
+    bash: `mkdir -p ${dir} && touch ${f} && chmod 600 ${f} && printf '${fmt}' '${key}' > ${f}`,
+    fish: `mkdir -p ${dir}; and touch ${f}; and chmod 600 ${f}; and printf '${fmt}' '${key}' > ${f}`,
+    // the file is limited to the person before the key goes in; no key is written when icacls fails
+    powershell: `New-Item -ItemType Directory -Force "${w}" | Out-Null; New-Item -ItemType File -Force "${w}\\${name}" | Out-Null; icacls "${w}\\${name}" /inheritance:r /grant:r "\${env:USERNAME}:F"; if ($LASTEXITCODE -eq 0) { Set-Content -NoNewline -Path "${w}\\${name}" -Value '${psText}' }`,
+  };
+};
+const writeKeyFile = (key: string) => writeSecret("~/.config/ambit", "opencode-key", "%s", key, key);
+// Kilo Code reads {file:...} like opencode; its VS Code extension starts Kilo in the background (kilo serve).
+const kiloKeyFile = "~/.config/ambit/kilo-key";
+const kiloKeyRef = `{file:${kiloKeyFile}}`;
+const writeKiloKey = (key: string) => writeSecret("~/.config/ambit", "kilo-key", "%s", key, key);
+// Hermes reads MCP headers only from its config or its environment: its MCP entry is mcp-remote with a header file.
+const hermesHeaderFile = "~/.ambit/hermes-mcp-headers.txt";
+const writeHermesHeader = (key: string) => writeSecret("~/.ambit", "hermes-mcp-headers.txt", "Authorization: Bearer %s\\n", key, `Authorization: Bearer ${key}`);
+// mcp-remote refuses http:// unless the host is localhost; pi sends a provider's key to an MCP server only over https
+// or to localhost. The same rule as needsAllowHTTP in internal/cli/connect.
+export function plainHttpRemote(url: string): boolean {
+  let u: URL;
+  try { u = new URL(url); } catch { return false; }
+  return u.protocol === "http:" && !["localhost", "127.0.0.1", "[::1]"].includes(u.hostname);
+}
+// The ambit connect command; --mcp-url when the key's scope has MCP and the tool can use the address.
+const connectWithMcp = (tool: string, llm: string, m: string, mcp: string, scope: Scope, note: string) =>
+  ({ command: `ambit connect ${tool} --url ${llm} --model ${m}${scope === "both" ? ` --mcp-url ${mcp}` : ""}`, note });
 
 export function toolTabs({ llm, mcp, key, model }: Setup, scope: Scope): ToolTab[] {
   const m = model || "<model-id>";
@@ -92,6 +116,37 @@ export function toolTabs({ llm, mcp, key, model }: Setup, scope: Scope): ToolTab
     tabs.push({ id: "opencode", title: "opencode", cli: { command: `ambit connect opencode --url ${llm} --model ${m}`,
       note: askKey.replace("The key goes to your keychain, not to a config file.", `It finds your opencode version. For opencode 2 it also writes the key to ${ocKeyFile}, readable only by you: opencode cannot run a command to read the key, and its background service does not see your terminal.`) },
       steps: opencode2.steps, blocks: opencode2.blocks, variants: [opencode2, opencode1] });
+    const keySet = { label: "Store the key, in your terminal (ambit CLI)", text: `ambit key set --url ${llm}` };
+    tabs.push({ id: "hermes", title: "Hermes Agent", cli: connectWithMcp("hermes", llm, m, mcp, scope,
+      askKey + " Hermes runs ambit key print to read the key." + (scope === "both" ? ` The MCP server gets the key from ${hermesHeaderFile}, readable only by you; Node.js is needed.` : "")), blocks: [
+      keySet,
+      { label: "~/.hermes/config.yaml", text: `model:\n  provider: custom:ambit\n  default: ${m}\n\nproviders:\n  ambit:\n    base_url: ${llm}/v1\n    api_mode: chat_completions\n    key_cmd: ambit key print --url ${llm}` },
+    ], steps: [
+      "Store the key in your keychain with the ambit CLI: the command asks for the key (the input is hidden). Hermes runs ambit key print to read it, so no file holds the key.",
+      "Merge the settings into ~/.hermes/config.yaml (Windows: %LOCALAPPDATA%\\hermes\\config.yaml). Replace your model block. Keep your other providers.",
+      "Start hermes and send one prompt. If the Hermes gateway service runs, restart it: hermes gateway restart. The service must find ambit on its PATH; if it does not, write the full path of ambit in key_cmd.",
+    ] });
+    tabs.push({ id: "kilocode", title: "Kilo Code", cli: connectWithMcp("kilocode", llm, m, mcp, scope,
+      askKey.replace("The key goes to your keychain, not to a config file.", `It also writes the key to ${kiloKeyFile}, readable only by you: Kilo Code cannot run a command to read the key, and the VS Code extension starts Kilo in the background, where it does not see your terminal.`)), blocks: [
+      { label: "Key file, in your terminal", shells: writeKiloKey(key) },
+      { label: "~/.config/kilo/kilo.jsonc", text: JSON.stringify({ $schema: "https://app.kilo.ai/config.json", model: `ambit/${m}`,
+        provider: { ambit: { npm: "@ai-sdk/openai-compatible", name: "Ambit", options: { baseURL: `${llm}/v1`, apiKey: kiloKeyRef },
+          models: { [m]: { name: m } } } } }, null, 2) },
+    ], steps: [
+      `Write the key to ${kiloKeyFile} with the command below (Windows: %USERPROFILE%\\.config\\ambit\\kilo-key). Only you can read the file. Run it again when the key changes.`,
+      "Merge the provider into ~/.config/kilo/kilo.jsonc (the file that the Kilo CLI and the VS Code extension both read; Windows: %USERPROFILE%\\.config\\kilo\\kilo.jsonc). Keep your other settings. Never put the key in a project's kilo.json.",
+      "Restart Kilo Code so that it reads the settings and the key: in VS Code run Developer: Reload Window; start the CLI (kilo) again.",
+    ] });
+    tabs.push({ id: "pi", title: "pi", cli: connectWithMcp("pi", llm, m, mcp, plainHttpRemote(mcp) ? "llm" : scope, askKey + " pi runs ambit key print to read the key."), blocks: [
+      keySet,
+      { label: "~/.pi/agent/models.json", text: JSON.stringify({ providers: { ambit: { baseUrl: `${llm}/v1`, api: "openai-completions",
+        apiKey: `!ambit key print --url ${llm}`, models: [{ id: m }] } } }, null, 2) },
+      { label: "~/.pi/agent/settings.json", text: JSON.stringify({ defaultProvider: "ambit", defaultModel: m }, null, 2) },
+    ], steps: [
+      "Store the key in your keychain with the ambit CLI: the command asks for the key (the input is hidden). pi runs ambit key print (the apiKey value that starts with !) to read it, so no file holds the key.",
+      "Merge the provider into ~/.pi/agent/models.json and the default model into ~/.pi/agent/settings.json (Windows: %USERPROFILE%\\.pi\\agent\\). Keep your other settings.",
+      "Start pi and send one prompt. pi reads models.json again when you open /model.",
+    ] });
     const cursor: ToolTab = { id: "cursor", title: "Cursor", cli: { command: `ambit connect cursor --url ${llm} --model ${m}`, note: "Cursor has no config file for this: the command prints these steps with your address and writes nothing." }, blocks: [
       { label: "OpenAI API Key", text: key },
       { label: "Override OpenAI Base URL", text: `${llm}/v1` },
@@ -121,11 +176,20 @@ export function toolTabs({ llm, mcp, key, model }: Setup, scope: Scope): ToolTab
       { label: "opencode: opencode.json", text: JSON.stringify({ mcp: { ambit: { type: "remote", url: mcp, oauth: false,
         headers: { Authorization: `Bearer ${ocKeyRef}` } } } }, null, 2) },
       { label: "Key file for opencode, in your terminal", shells: writeKeyFile(key) },
+      { label: "Hermes Agent: ~/.hermes/config.yaml", text: `mcp_servers:\n  ambit:\n    command: npx\n    args: ["-y", "mcp-remote@0.14.3", "${mcp}"${plainHttpRemote(mcp) ? ', "--allow-http"' : ""}, "--header-file", "\${userHome}\${/}.ambit\${/}hermes-mcp-headers.txt"]` },
+      { label: "Header file for Hermes, in your terminal", shells: writeHermesHeader(key) },
+      { label: "Kilo Code: ~/.config/kilo/kilo.jsonc", text: JSON.stringify({ mcp: { ambit: { type: "remote", url: mcp, oauth: false,
+        headers: { Authorization: `Bearer ${kiloKeyRef}` } } } }, null, 2) },
+      { label: "Key file for Kilo Code, in your terminal", shells: writeKiloKey(key) },
+      { label: "pi: ~/.pi/agent/mcp.json", text: JSON.stringify({ mcpServers: { ambit: { url: mcp, auth: { provider: "ambit" } } } }, null, 2) },
       { label: "Cursor (beta: being tested): ~/.cursor/mcp.json", text: JSON.stringify({ mcpServers: { ambit: { url: mcp, headers: { Authorization: `Bearer ${key}` } } } }, null, 2) },
     ], steps: [
       "Claude Code: run the command in a terminal.",
       "Codex: merge the block into ~/.codex/config.toml, set the variable in your terminal, and start Codex from that terminal. " + keepShell,
       `opencode: merge the block into ~/.config/opencode/opencode.json and write the key file. opencode 2 reads the key from the file because its background service does not see your terminal; restart it with ${ocRestart}. Keep "oauth": false: the gateway has no OAuth sign-in, so opencode does not need to try one.`,
+      `Hermes Agent: merge the block into ~/.hermes/config.yaml and write the header file (${hermesHeaderFile}; only you can read it). Hermes starts mcp-remote with npx, so Node.js is needed. Hermes reads MCP headers only from its config or its environment, so the header file keeps the key out of both. Run /reload-mcp in Hermes after a change.`,
+      `Kilo Code: merge the block into ~/.config/kilo/kilo.jsonc and write the key file (${kiloKeyFile}). Restart Kilo Code after a change.`,
+      "pi: merge the block into ~/.pi/agent/mcp.json. It needs the provider \"ambit\" from the pi tab: pi sends that provider's key (the output of ambit key print) to the server, and only over https or to localhost. Use the user file, not a project's .pi/mcp.json: pi does not allow auth there.",
       "Cursor: merge the block into ~/.cursor/mcp.json. This file holds the key, so keep it private. Cursor does not see variables set in a terminal when you start it from the dock or the Start menu.",
     ] });
   }
@@ -159,4 +223,25 @@ export function firstUseLine({ available, lastUsed, waitedMs }: { available?: bo
   }
   if (waitedMs >= FIRST_USE_TIMEOUT_MS) return { kind: "timeout", text: "No request seen yet. Check the steps above, or see Audit." };
   return { kind: "waiting", text: "Waiting for the first request with this key…" };
+}
+
+// The setup steps for a service account key (a CI job or an agent): plain environment variables, and a GitHub
+// Actions workflow that reads the key from a repository secret. Other CI systems are in docs/service-accounts.md.
+export function ciTabs({ llm, mcp, key, model }: Setup, scope: Scope): ToolTab[] {
+  const m = model || "<model-id>";
+  const pairs: [string, string][] = [];
+  if (scope !== "mcp") pairs.push(["OPENAI_BASE_URL", `${llm}/v1`], ["OPENAI_API_KEY", key], ["ANTHROPIC_BASE_URL", llm], ["ANTHROPIC_API_KEY", key]);
+  if (scope !== "llm") pairs.push(["AMBIT_MCP_URL", mcp], ["AMBIT_API_KEY", key]);
+  const secret = "${{ secrets.AMBIT_API_KEY }}";
+  const yaml = ["env:", ...pairs.map(([k, v]) => `  ${k}: ${v === key ? secret : JSON.stringify(v)}`)].join("\n");
+  const mcpStep = scope !== "llm" ? ["MCP clients send the key as the header Authorization: Bearer <key> to AMBIT_MCP_URL."] : [];
+  const modelStep = scope !== "mcp" ? [`Send the model name ${m}: the provider's model name, not the name of the Model object.`] : [];
+  return [
+    { id: "env", title: "Environment variables", blocks: [{ label: "Environment variables", shells: vars(pairs) }],
+      steps: ["Set these where the job runs. Keep the key in the CI system's secret store, never in the repository.", ...modelStep, ...mcpStep] },
+    { id: "github", title: "GitHub Actions", blocks: [{ label: "Workflow (job or step level)", text: yaml }],
+      steps: ["In the repository: Settings → Secrets and variables → Actions → New repository secret. Name: AMBIT_API_KEY. Value: the key.",
+        "Add the env block to the job that calls the model. Use a GitHub environment with required reviewers when the key gives wide access: anyone who can change a workflow can read the secret.",
+        ...modelStep, ...mcpStep] },
+  ];
 }

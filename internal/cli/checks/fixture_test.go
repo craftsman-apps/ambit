@@ -48,10 +48,17 @@ type fakeHelm struct {
 	err       error
 }
 
-func (f *fakeHelm) Apply(context.Context, string, string, string, map[string]any) (helmx.Release, error) {
+func (f *fakeHelm) Apply(context.Context, string, string, string, map[string]any, helmx.ApplyOptions) (helmx.Release, error) {
 	return helmx.Release{}, errors.New("checks never install")
 }
 func (f *fakeHelm) Get(n string) (*helmx.Release, error) { return f.rel[n], f.err }
+func (f *fakeHelm) List(bool) ([]helmx.Release, error)   { return nil, errors.New("checks never list") }
+func (f *fakeHelm) Uninstall(string) (helmx.Release, error) {
+	return helmx.Release{}, errors.New("checks never uninstall")
+}
+func (f *fakeHelm) Render(context.Context, string, string, string, map[string]any, string) (string, error) {
+	return "", errors.New("checks never render")
+}
 func (f *fakeHelm) Values(_ string, all bool) (map[string]any, error) {
 	if all {
 		return f.all, f.err

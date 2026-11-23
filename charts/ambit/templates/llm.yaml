@@ -109,9 +109,14 @@ spec:
       # path is read last, only for such a 429, which always has the request (agentgateway snapshots it for policy
       # refusals and before calling a model).
       {{- end }}
+      # A 403 for a call to a known path that carried no key and no token (no x-api-key, and no Authorization or only
+      # "Bearer " with nothing after it; no valid JWT or key either) gets a body that says so and how to fix it, in
+      # the API's error format (#303: opencode 2's background service sent an empty key). The status stays 403
+      # (docs/upgrading.md). Invalid keys and tokens and access-rule refusals keep "authorization failed".
       response:
         metadata:
           ambitUnknownPath: 'response.code in [401, 403] && !(request.path in [{{ $paths }}]) && request.host != null && request.host.startsWith({{ .Values.llm.host | quote }})'
+          ambitNoKey: 'response.code == 403 && request.path in [{{ $paths }}] && request.host != null && request.host.startsWith({{ .Values.llm.host | quote }}) && !has(jwt.sub) && !has(apiKey.keyId) && !("x-api-key" in request.headers && request.headers["x-api-key"].trim() != "") && !("authorization" in request.headers && request.headers["authorization"].replace("Bearer", "").trim() != "")'
           {{- if .Values.limits.enabled }}
           ambitBudgetRefusal: 'response.code == 429 && !("content-type" in response.headers) && "retry-after" in response.headers && "x-ratelimit-remaining" in response.headers && response.headers["x-ratelimit-remaining"] == "0" && request.path in ["/v1/chat/completions", "/v1/completions", "/v1/responses", "/v1/embeddings", "/v1/messages"]'
           {{- end }}
@@ -120,9 +125,55 @@ spec:
           - name: ":status"
             value: 'has(metadata.ambitUnknownPath) && metadata.ambitUnknownPath ? uint(404) : null'
           - name: content-type
-            value: '{{ if .Values.limits.enabled }}(has(metadata.ambitUnknownPath) && metadata.ambitUnknownPath) || metadata.ambitBudgetRefusal{{ else }}has(metadata.ambitUnknownPath) && metadata.ambitUnknownPath{{ end }} ? "application/json" : ("content-type" in response.headers ? response.headers["content-type"] : null)'
+            value: '(has(metadata.ambitUnknownPath) && metadata.ambitUnknownPath) || (has(metadata.ambitNoKey) && metadata.ambitNoKey){{ if .Values.limits.enabled }} || metadata.ambitBudgetRefusal{{ end }} ? "application/json" : ("content-type" in response.headers ? response.headers["content-type"] : null)'
         {{- if .Values.limits.enabled }}
         remove: [x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset]
         {{- end }}
-        body: 'has(metadata.ambitUnknownPath) && metadata.ambitUnknownPath ? {"error": {"type": "not_found", "message": "no such path on the Ambit LLM gateway: " + request.path + "; check the base URL"}} : {{ if .Values.limits.enabled }}(metadata.ambitBudgetRefusal ? (request.path == "/v1/messages" ? {"type": "error", "error": {"type": "rate_limit_error", "message": "A Budget limit was reached: a request or spending limit per minute or per day, for you or for your group. Try again after the number of seconds in the Retry-After header."}} : {"error": {"message": "A Budget limit was reached: a request or spending limit per minute or per day, for you or for your group. Try again after the number of seconds in the Retry-After header.", "type": "insufficient_quota", "code": "budget_exceeded"}}) : null){{ else }}null{{ end }}'
+        {{- $noKey := printf "authorization failed: no Ambit key or token was sent. Send your Ambit key in the header \\\"Authorization: Bearer ambit_...\\\" or \\\"x-api-key: ambit_...\\\". Make a key on the Keys page of the Ambit console (%s/keys), or run \\\"ambit connect <tool>\\\"." .Values.console.url }}
+        body: 'has(metadata.ambitUnknownPath) && metadata.ambitUnknownPath ? {"error": {"type": "not_found", "message": "no such path on the Ambit LLM gateway: " + request.path + "; check the base URL"}} : (has(metadata.ambitNoKey) && metadata.ambitNoKey) ? (request.path == "/v1/messages" ? {"type": "error", "error": {"type": "authentication_error", "message": "{{ $noKey }}"}} : {"error": {"type": "invalid_request_error", "code": "no_api_key", "message": "{{ $noKey }}"}}) : {{ if .Values.limits.enabled }}(metadata.ambitBudgetRefusal ? (request.path == "/v1/messages" ? {"type": "error", "error": {"type": "rate_limit_error", "message": "A Budget limit was reached: a request or spending limit per minute or per day, for you or for your group. Try again after the number of seconds in the Retry-After header."}} : {"error": {"message": "A Budget limit was reached: a request or spending limit per minute or per day, for you or for your group. Try again after the number of seconds in the Retry-After header.", "type": "insufficient_quota", "code": "budget_exceeded"}}) : null){{ else }}null{{ end }}'
+{{- with .Values.llm.promptGuard }}{{ if .enabled }}
+{{- if not (or .builtins .patterns .webhook.service) }}
+{{- fail "llm.promptGuard.enabled=true needs builtins, patterns or webhook.service: a guard with nothing to check would only look like protection" }}
+{{- end }}
+{{- range .patterns }}
+{{- /* Go and the gateway's Rust regex share their syntax (no look-around, no back-references): a pattern Go refuses
+fails here, at install, instead of in the gateway. */}}
+{{- $_ := mustRegexMatch . "" }}
+{{- end }}
+---
+# Prompt guard (llm.promptGuard): checks the prompt of every request on the LLM route before it reaches a model.
+# Ambit sets no promptGuard on a model (AgentgatewayModel): a model's own would replace this one for that model.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: ambit-llm-guard
+spec:
+  targetRefs: [{ group: gateway.networking.k8s.io, kind: HTTPRoute, name: ambit-llm }]
+  backend:
+    ai:
+      promptGuard:
+        request:
+          {{- if or .builtins .patterns }}
+          - regex:
+              action: {{ get (dict "audit" "Audit" "reject" "Reject" "mask" "Mask") .mode }}
+              {{- with .builtins }}
+              builtins: {{ toJson . }}
+              {{- end }}
+              {{- with .patterns }}
+              matches: {{ toJson . }}
+              {{- end }}
+            # One JSON body that both APIs read as an error: OpenAI clients read error.message, Anthropic clients
+            # type "error" and error.type.
+            response:
+              message: {{ dict "type" "error" "error" (dict "type" "permission_error" "code" "prompt_guard" "message" .rejectMessage) | toJson | quote }}
+              headers: [{ name: content-type, value: application/json }]
+          {{- end }}
+          {{- with .webhook }}{{ if .service }}
+          # The webhook answers pass, mask or reject itself; in audit mode the gateway only records its answer.
+          - webhook:
+              action: {{ eq $.Values.llm.promptGuard.mode "audit" | ternary "Audit" "Reject" }}
+              backendRef: { name: {{ .service | quote }}{{ with .namespace }}, namespace: {{ . | quote }}{{ end }}, port: {{ .port }} }
+              failureMode: {{ .failureMode }}
+          {{- end }}{{ end }}
+{{- end }}{{ end }}
 {{- end }}

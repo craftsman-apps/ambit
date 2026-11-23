@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"strings"
@@ -11,7 +12,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/yaml"
 
-	"github.com/craftsman-apps/ambit/internal/cli/assets"
 	"github.com/craftsman-apps/ambit/internal/cli/checks"
 	"github.com/craftsman-apps/ambit/internal/cli/helmx"
 	"github.com/craftsman-apps/ambit/internal/cli/kube"
@@ -109,15 +109,8 @@ func (a *app) check(ctx context.Context, f checkFlags) error {
 	}
 	token := os.Getenv("AMBIT_TOKEN")
 	p.Redactor().Add(token)
-	e := &checks.Env{Kube: c.Kube, Ctrl: c.Ctrl, Helm: h, Namespace: a.g.namespace, Context: c.Context, ValuesFile: valuesFile,
-		CRDBundle: assets.CRDBundle(), Deep: f.deep, Token: token, HTTP: &http.Client{Timeout: 30 * time.Second},
-		Now: time.Now,
-		Forward: func(ctx context.Context, sel string, port int) (int, func(), error) {
-			return kube.Forward(ctx, c, a.g.namespace, sel, port)
-		},
-		Exec: func(ctx context.Context, sel string, cmd []string) (string, error) {
-			return kube.Exec(ctx, c, a.g.namespace, sel, cmd)
-		}}
+	e := a.checksEnv(c, h, valuesFile)
+	e.Deep, e.Token = f.deep, token
 
 	installed, consoleURL := false, ""
 	if r, err := h.Get("ambit"); err == nil && r != nil {
@@ -152,13 +145,26 @@ func (a *app) finishCheck(ctx context.Context, f checkFlags, groups map[string]b
 		}
 		docker := le.Docker()
 		var own local.Ownership
+		var ownErr error
 		if docker.Reachable { // kind's docker ps must not run against an unreachable daemon
-			if own, err = le.Owner(ctx, f.name); err != nil {
-				return err
-			}
+			own, ownErr = le.Owner(ctx, f.name)
 		}
 		results = append(results, local.Preflight(local.PreflightInput{Name: f.name, HTTPPort: f.httpPort, HTTPSPort: f.httpsPort,
 			Docker: docker, Ownership: own, PortFree: le.PortFree})...)
+		if ownErr != nil {
+			// The ownership check could not run: L5 cannot say anything, and the error becomes its result, so the
+			// JSON document is still printed (#107).
+			r := checks.Result{ID: "L5", Group: checks.GroupLocal, Status: checks.Unknown, Message: ownErr.Error(), Source: "docker"}
+			var oe *out.Error
+			if errors.As(ownErr, &oe) {
+				r.Message, r.Next = oe.What+": "+oe.Why, oe.Next
+			}
+			for i := range results {
+				if results[i].ID == "L5" {
+					results[i] = r
+				}
+			}
+		}
 		if !docker.Reachable {
 			results = append(results, checks.Result{ID: "L5", Group: checks.GroupLocal, Status: checks.Unknown,
 				Message: "Docker is not running, so the cluster cannot be looked at", Next: "start Docker, then run ambit check --pre --local again", Source: "docker"})
@@ -181,6 +187,9 @@ func (a *app) finishCheck(ctx context.Context, f checkFlags, groups map[string]b
 	}
 	return nil
 }
+
+// newCheckHTTP is the HTTP client of the checks' probes and --deep calls.
+func newCheckHTTP() *http.Client { return &http.Client{Timeout: 30 * time.Second} }
 
 // explicitTargetError is the usage error for a --kubeconfig or --context that cannot be used.
 func explicitTargetError(kubeconfig, kctx string, connErr error) error {

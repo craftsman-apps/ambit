@@ -16,8 +16,8 @@ import (
 // service's units ($0.00001 for dollars). The gateway's response transformation gives it an error body in the API's
 // format and removes those headers; other responses keep their body and content type.
 func TestBudgetRefusalHasAnErrorBody(t *testing.T) {
-	if r := budgetResponse(t, render(t)); len(get(t, r, "metadata").(map[string]any)) != 1 || contains(r["remove"], "x-ratelimit-limit") {
-		t.Fatal("without limits.enabled the gateway must only rewrite unknown-path refusals")
+	if r := budgetResponse(t, render(t)); len(get(t, r, "metadata").(map[string]any)) != 2 || contains(r["remove"], "x-ratelimit-limit") {
+		t.Fatal("without limits.enabled the gateway must only rewrite unknown-path and no-key refusals")
 	}
 	r := budgetResponse(t, render(t, "--set", "limits.enabled=true"))
 	if r == nil {
@@ -29,7 +29,7 @@ func TestBudgetRefusalHasAnErrorBody(t *testing.T) {
 		}
 	}
 	meta := get(t, r, "metadata").(map[string]any)
-	if len(meta) != 2 {
+	if len(meta) != 3 {
 		t.Fatalf("metadata %v", meta)
 	}
 	flagExpr := meta["ambitBudgetRefusal"].(string)
@@ -219,5 +219,115 @@ func TestUnknownLLMPathAnswers404(t *testing.T) {
 	empty := map[string]any{"request": map[string]any{"path": "/x"}, "response": map[string]any{"code": int64(403), "headers": map[string]any{}}, "metadata": map[string]any{"ambitBudgetRefusal": false}}
 	if eval(statusExpr, empty) != nil || eval(bodyExpr, empty) != nil {
 		t.Error("without the metadata key the response must be left alone")
+	}
+}
+
+// #303 and the issue of this change: a 403 for a known LLM path whose request carried no key and no token (or only an
+// empty one, as opencode 2's service sent) gets a body that says so and how to fix it, in the API's error format. The
+// status stays 403 (docs/upgrading.md). Invalid keys, invalid tokens and access-rule refusals keep their answer.
+func TestNoKeyRefusalSaysSo(t *testing.T) {
+	for _, limits := range []string{"false", "true"} {
+		r := budgetResponse(t, render(t, "--set", "llm.host=llm.example.com", "--set", "console.url=https://console.example.com", "--set", "limits.enabled="+limits))
+		flagExpr := get(t, r, "metadata", "ambitNoKey").(string)
+		var statusExpr, ctExpr string
+		for _, h := range get(t, r, "set").([]any) {
+			switch get(t, h, "name") {
+			case ":status":
+				statusExpr = get(t, h, "value").(string)
+			case "content-type":
+				ctExpr = get(t, h, "value").(string)
+			}
+		}
+		bodyExpr := get(t, r, "body").(string)
+		env, err := cel.NewEnv(ext.Strings(), cel.Variable("request", cel.DynType), cel.Variable("response", cel.DynType),
+			cel.Variable("metadata", cel.DynType), cel.Variable("jwt", cel.DynType), cel.Variable("apiKey", cel.DynType))
+		if err != nil {
+			t.Fatal(err)
+		}
+		eval := func(expr string, in map[string]any) any {
+			t.Helper()
+			ast, iss := env.Parse(expr)
+			if iss.Err() != nil {
+				t.Fatalf("does not parse: %v\n%s", iss.Err(), expr)
+			}
+			prg, err := env.Program(ast)
+			if err != nil {
+				t.Fatal(err)
+			}
+			v, _, err := prg.Eval(in)
+			if err != nil {
+				t.Fatalf("evaluation failed (agentgateway would answer 500): %v\n%s\ninput %v", err, expr, in)
+			}
+			if v.Type() == types.NullType {
+				return nil
+			}
+			if n, err := v.ConvertToNative(reflect.TypeOf(map[string]any{})); err == nil {
+				return n
+			}
+			return v.Value()
+		}
+		none := map[string]any{}
+		key := map[string]any{"keyId": "k1", "email": "user01@example.com"}
+		claims := map[string]any{"sub": "u1", "email": "user01@example.com"}
+		cases := []struct {
+			name, host, path string
+			code             int64
+			headers, jwt     map[string]any
+			apiKey           map[string]any
+			want             bool
+		}{
+			{"no headers", "llm.example.com", "/v1/chat/completions", 403, none, none, none, true},
+			{"empty Bearer (opencode 2 service)", "llm.example.com:8443", "/v1/chat/completions", 403, map[string]any{"authorization": "Bearer "}, none, none, true},
+			{"Bearer only", "llm.example.com", "/v1/responses", 403, map[string]any{"authorization": "Bearer"}, none, none, true},
+			{"empty x-api-key", "llm.example.com", "/v1/messages", 403, map[string]any{"x-api-key": " "}, none, none, true},
+			{"models list", "llm.example.com", "/v1/models", 403, none, none, none, true},
+			{"invalid key", "llm.example.com", "/v1/chat/completions", 403, map[string]any{"authorization": "Bearer ambit_wrong"}, none, none, false},
+			{"invalid x-api-key", "llm.example.com", "/v1/messages", 403, map[string]any{"x-api-key": "ambit_wrong"}, none, none, false},
+			{"invalid token", "llm.example.com", "/v1/chat/completions", 403, map[string]any{"authorization": "Bearer eyJ.bad.sig"}, none, none, false},
+			{"valid key, model refused by the access rules", "llm.example.com", "/v1/chat/completions", 403, none, none, key, false},
+			{"valid token, model refused by the access rules", "llm.example.com", "/v1/chat/completions", 403, none, claims, none, false},
+			{"no key, but not a 403", "llm.example.com", "/v1/chat/completions", 401, none, none, none, false},
+			{"no key, unknown path (the 404 rewrite)", "llm.example.com", "/v1/v1/messages", 403, none, none, none, false},
+			{"MCP host", "mcp.example.com", "/v1/chat/completions", 403, none, none, none, false},
+			{"answer", "llm.example.com", "/v1/chat/completions", 200, none, none, none, false},
+		}
+		for _, c := range cases {
+			name := c.name + " (limits.enabled=" + limits + ")"
+			in := map[string]any{"request": map[string]any{"path": c.path, "host": c.host, "headers": c.headers},
+				"response": map[string]any{"code": c.code, "headers": map[string]any{"content-type": "text/plain"}}, "jwt": c.jwt, "apiKey": c.apiKey}
+			flag := eval(flagExpr, in)
+			if flag != c.want {
+				t.Fatalf("%s: flag %v, want %v", name, flag, c.want)
+			}
+			in["metadata"] = map[string]any{"ambitNoKey": flag, "ambitUnknownPath": false, "ambitBudgetRefusal": false}
+			status, ct, body := eval(statusExpr, in), eval(ctExpr, in), eval(bodyExpr, in)
+			if status != nil {
+				t.Fatalf("%s: status changed to %v; it must stay %d", name, status, c.code)
+			}
+			if !c.want {
+				if body != nil || ct != "text/plain" {
+					t.Fatalf("%s: changed: content-type %v, body %v", name, ct, body)
+				}
+				continue
+			}
+			b, _ := json.Marshal(body)
+			s := string(b)
+			if ct != "application/json" || !strings.Contains(s, "no Ambit key or token was sent") ||
+				!strings.Contains(s, "https://console.example.com/keys") || !strings.Contains(s, "ambit connect") {
+				t.Fatalf("%s: content-type %v, body %s", name, ct, s)
+			}
+			anthropic := strings.Contains(s, `"type":"error"`) && strings.Contains(s, `"type":"authentication_error"`)
+			openai := strings.Contains(s, `"code":"no_api_key"`) && strings.Contains(s, `"type":"invalid_request_error"`)
+			if (c.path == "/v1/messages") != anthropic || anthropic == openai {
+				t.Fatalf("%s: not in the API's error format: %s", name, s)
+			}
+		}
+		// A refusal without a request snapshot fails the flag expression, so agentgateway leaves the key out of
+		// metadata: the response must stay as it is.
+		empty := map[string]any{"request": map[string]any{"path": "/v1/chat/completions"}, "response": map[string]any{"code": int64(403), "headers": map[string]any{}},
+			"metadata": map[string]any{"ambitBudgetRefusal": false}}
+		if eval(statusExpr, empty) != nil || eval(bodyExpr, empty) != nil {
+			t.Fatal("without the metadata key the response must be left alone")
+		}
 	}
 }

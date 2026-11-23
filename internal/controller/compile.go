@@ -142,15 +142,16 @@ func ruleCondition(r v1.AccessRule, missing, missingServers []string) metav1.Con
 }
 
 // CEL returns the authorization expression for one model: a member of a listed group, or a listed user by the
-// request's email (an identity without a usable email never matches users).
+// request's email (an identity without a usable email never matches users). allSignedIn grants every person, not
+// a service account (decision SA-8 B): a service account gets only what a rule names by its group or identity.
 func CEL(a Access) string {
-	switch {
-	case a.AllSignedIn:
-		return "true"
-	case len(a.Groups) == 0 && len(a.Users) == 0:
+	if !a.AllSignedIn && len(a.Groups) == 0 && len(a.Users) == 0 {
 		return "false"
 	}
 	var parts []string
+	if a.AllSignedIn {
+		parts = append(parts, person())
+	}
 	if len(a.Groups) > 0 {
 		parts = append(parts, principalGroups+".exists(g, g in ["+quoted(a.Groups)+"])")
 	}

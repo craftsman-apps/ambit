@@ -1,0 +1,25 @@
+console:
+  host: console.example.com
+  url: https://console.example.com
+evidence:
+  enabled: true
+  retention: 8760h
+gateway:
+  replicas: 3
+  tls:
+    enabled: false
+limits:
+  enabled: true
+  failureMode: FailOpen
+llm:
+  enabled: true
+  host: llm.example.com
+  jwt:
+    dex: true
+mcp:
+  enabled: true
+  host: mcp.example.com
+  jwt:
+    dex: true
+protection:
+  enabled: true

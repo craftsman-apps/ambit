@@ -8,6 +8,155 @@ For upgrade steps in detail, read [docs/upgrading.md](docs/upgrading.md).
 
 Each pull request adds a file in changelog/unreleased/ (see its README); the release assembles them here.
 
+## 0.5.0 (2026-11-25)
+
+### What is new
+
+- **Service accounts.** CI jobs and background agents get their own identity, `<name>@svc.ambit.internal`, with up
+  to 2 keys. An admin creates one under **Settings → Service accounts** and gives it exactly one group. AccessRules,
+  Budgets and Audit treat the account as one person of that group, and Audit marks its calls as `service account`.
+  `allSignedIn: true` does not grant a service account (see the upgrade notes). See
+  [Service accounts](docs/service-accounts.md).
+- **Evidence exports for auditors.** On the new page **Settings → Evidence** (admins only), an admin downloads a ZIP
+  file in three clicks: an access review for a date (who may use what), offboarding evidence for a period (no
+  accepted call after a person left), or the audit log for a period. Each ZIP has CSV files and a manifest with the
+  SHA-256 of each file. The access review needs `evidence.enabled` and covers dates from the upgrade to 0.5.0 on.
+  MCP app requests and approvals are now audit records too. See [Compliance](docs/compliance.md#evidence-exports)
+  and the new guide [Do a quarterly access review](docs/guides/access-review.md).
+- **Prompt guard on the model path, off by default.** With `llm.promptGuard.enabled: true`, the gateway checks the
+  prompt of every chat, messages and responses request before it reaches a model, with built-in patterns (card
+  numbers, US Social Security numbers, email addresses, phone numbers), your own regular expressions and an optional
+  webhook in your cluster. Mode `audit` (the default when turned on) only records; `reject` refuses with a JSON
+  error; `mask` replaces the matches. A `ModelRouter` of type `LLM` sends its classifier only text that passed the
+  guard. Nothing changes until you turn it on. See [Prompt guard](docs/concepts.md#prompt-guard).
+- **The MCP guard masks more.** Card numbers next to dates and times, more written forms of card numbers,
+  resident registration numbers, US Social Security numbers and emails. Fewer ordinary numbers are taken for card
+  numbers. A tool result that is not a JSON object is withheld.
+- **Clearer errors for clients.** A model request with no key gets 403 with "authorization failed: no Ambit key or
+  token was sent", in the API's own error format. A refusal by the prompt guard is a JSON error with code
+  `prompt_guard`.
+- **Command-line tool (`ambit`) for any cluster:** `ambit init` writes a `values.yaml` by asking questions (also for
+  Argo CD), `ambit install` installs Ambit (`--dry-run` changes nothing), `ambit upgrade` upgrades in the right order
+  and lists the upgrade notes that apply, and `ambit uninstall` removes it. They write ordinary Helm releases, so you
+  can mix them with `helm`. Tested in CI on kind and k3s.
+- **More coding tools:** `ambit connect hermes`, `kilocode` and `pi`, and opencode 2 support.
+- **Docs:** the page "Install locally by hand" moved from `/docs/local-up` to
+  [`/docs/install-by-hand`](docs/install-by-hand.md); the old address redirects to it.
+
+### Upgrade notes
+
+Read [Upgrading](docs/upgrading.md), section "To the release with service accounts (0.5.0)". `ambit upgrade` lists it
+for you. In short:
+
+- **No CRD and no dependency change.** agentgateway stays at v1.7.0. The AccessRule CRD changes only the description
+  of `allSignedIn`. Upgrade `ambit-crds`, then `ambit`, as before.
+- **`allSignedIn: true` grants every person, but no service account.** No service account exists before 0.5.0, so
+  nothing changes at the upgrade. When you add a service account, name its group or identity in a rule.
+- **Tokens with an email that ends in `@svc.ambit.internal` are refused** by the gateways, the console sign-in and
+  SCIM.
+- **New Helm values, all optional:**
+
+  | Value | Default | What it does |
+  |---|---|---|
+  | `llm.promptGuard.*` | `enabled: false` | Prompt guard on the model path (mode, built-in patterns, your patterns, reject message, webhook) |
+  | `serviceAccounts.enabled` | `true` | `false` is the emergency stop for service account keys at the gateways |
+  | `serviceAccounts.maxDays` | `90` | Longest end date of a service account key: 30, 90 or 365 |
+  | `serviceAccounts.exposureDays` | `7` | Days a service account key keeps working after the admin who issued it is offboarded (0 to 30) |
+  | `evidence.exports.enabled` | `true` | The Settings → Evidence page and its API |
+  | `evidence.exports.maxRows` | `5000000` | An export with more rows is refused (413) |
+  | `evidence.exports.maxDays` | `366` | The longest period of one export |
+  | `protection.compressionAudit.caller` | `true` | `false` keeps the caller's email and key ID out of compression records |
+
+- **Some answers change.** A model request with no key gets a new 403 message and body. A prompt guard refusal is
+  JSON (it was plain text). In audit-only mode, the summary's "refused" count no longer includes prompt guard
+  refusals. The MCP guard masks more text, and withholds a tool result that is not a JSON object.
+- **The audit log no longer stores the text of an MCP server's JSON-RPC error** (`mcp.error.message`), because it
+  can hold personal data. `mcp.error.code` stays.
+- **The console needs one more right**, to create Events (the chart adds it). With `evidence.enabled`, the console
+  has a new metrics port, 8084.
+- **Before a downgrade below 0.5.0:** delete service accounts first, and remove the email from compression records.
+  See [Upgrading](docs/upgrading.md).
+
+### Verify the image signature
+
+With cosign 2.0 or newer:
+
+```sh
+cosign verify ghcr.io/craftsman-apps/ambit-console:0.5.0 \
+  --certificate-identity-regexp '^https://github.com/craftsman-apps/ambit/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+### Known limits
+
+- **winget and Scoop are not available yet.** The release workflow can publish to them, but the Scoop bucket and the
+  first winget package are not set up, so the release skips both with a notice. On Windows, use `install.ps1` or
+  npm. The first winget package also needs Microsoft's review, which takes days.
+- The MCP guard does not see JSON-RPC errors, log and progress notifications, and sampling or elicitation requests
+  from an MCP server; they reach the client unmasked. See [Compliance](docs/compliance.md#limits).
+- The prompt guard checks prompts only, not answers or embeddings.
+- The Databricks and PagerDuty presets are still not verified and not offered in the console (issue #244).
+- The benchmark run in which all MCP requests with masking failed is still not explained (issue #274).
+
+### All changes
+
+- CLI on Windows: `winget install CraftsmanApps.Ambit` and `scoop install ambit/ambit` (bucket `craftsman-apps/scoop-ambit`) install the same binary as the GitHub release, checked by SHA-256, once the maintainers have set up the Scoop bucket and the first winget package (not yet for 0.5.0; see Known limits) (#78).
+- Release workflow: before any channel is written, `gh attestation verify` proves that `checksums.txt` was made by this repository's release workflow; a Windows job checks the zip, `install.ps1`, Scoop and the winget manifests (#78).
+- CLI: `ambit install --dry-run` checks the cluster, renders both charts and lets the API server validate the dependency CRDs and every object whose kind exists, and lists the objects whose CRD is not installed yet; it changes nothing (#78).
+- CLI: `ambit init` writes `values.yaml` for `ambit install` by asking questions (addresses, company sign-in, gateway tokens, TLS, audit log, budgets, tool protection, GitOps, replicas). It never asks for a secret value: it prints the `kubectl create secret` commands for the Secrets the values name (#78).
+- CLI: `ambit init --gitops argocd` also writes the dependency CRDs and four Argo CD Applications (with an optional parent Application) into a configuration repository, so Argo CD installs Ambit (#78).
+- CLI: `ambit install -f values.yaml` installs Ambit on any cluster: it shows the target and asks, checks the cluster, applies the dependency CRDs (never downgrades a newer Gateway API CRD, asks before it changes an existing one), installs the Helm releases `ambit-crds` and `ambit`, waits for the pods and runs the production checklist (exit 3 when a production check fails). `--secret-file <secret>/<key>=<path>` creates the Secrets the values name from files, outside Helm (#78).
+- CLI: `ambit uninstall` removes the releases `ambit` and `ambit-crds` after you type the context name, and lists what stays in the cluster (CRDs, your objects, audit volumes) (#78).
+- CLI: `ambit check` R2 checks every permission an install needs, also ClusterRoleBindings, admission policies and the objects in the namespace (#78).
+- CI: `ambit install`, `upgrade` and `uninstall` are tested on k3s as well as on kind, so the CLI is proven on a cluster that is not kind (#78).
+- CLI: two `ambit local up` or `ambit local down` runs for the same `--name` no longer run at the same time; the second stops at once with exit 1 (#107).
+- CLI: with `--output json`, a failure prints `{"error": {"what", "why", "next", "code"}}` on standard output, and `ambit check --pre --local --output json` prints its JSON when the kind cluster cannot be checked (#107).
+- CLI: `--verbose` output redacts every line of a multi-line secret, such as a PEM private key, and a secret that a long line splits across two pieces (#108).
+- CLI: waiting for pods shows a Deployment whose rollout is in progress as `1/1 ready, 0/1 updated`, names workloads that have no pod next to the waiting pods, and names the cause instead of `context deadline exceeded` when the time runs out (#108).
+- CLI: `ambit local up --name` refuses the names that Windows reserves (`con`, `nul`, `com1` and others) on every system (#108).
+- CLI: the `--deep` audit check no longer counts the collector's `_created` series as sent records (#108).
+- Release workflow: a re-run of an older stable tag is no longer marked as the latest release and is not sent to Homebrew or npm (#108).
+- CLI: `ambit upgrade -f values.yaml` (or `--reuse-values`) upgrades Ambit to the CLI's version in the right order, finds releases installed with Helm under any name, lists the upgrade notes between the two versions, refuses a downgrade, and refuses a release left pending unless `--recover-pending` (15 minutes or older, asks first). `ambit upgrade` and `helm upgrade` can be mixed, and `helm rollback` works on the releases (#78).
+- `ambit connect hermes`, `ambit connect kilocode` and `ambit connect pi` add Ambit as an OpenAI-compatible provider and make it the default model, and `ambit disconnect` removes it again. Hermes Agent (`~/.hermes/config.yaml`, provider `key_cmd`) and pi (`~/.pi/agent/models.json`, `apiKey` starting with `!`) run `ambit key print` to read the key, so no file holds it. Kilo Code cannot run a command for the key, and its VS Code extension starts Kilo in the background, so connect writes the key to `~/.config/ambit/kilo-key`, which only you can read, and `kilo.jsonc` refers to it with `{file:...}`.
+- New flag `ambit connect --mcp-url <address>` for `hermes`, `kilocode` and `pi`: it also adds the Ambit MCP gateway as the MCP server `ambit`, with the same key (scope LLM and MCP). Hermes gets the `mcp-remote` bridge with the header file `~/.ambit/hermes-mcp-headers.txt` (mode `0600`), because Hermes reads MCP headers only from its config or its environment.
+- `ambit key set` and `ambit connect --replace-key` also write the new key into the Kilo Code key file and the Hermes header file.
+- Console, **Keys**: new tabs **Hermes Agent**, **Kilo Code** and **pi** under **Connect a tool**, on the new key and on the key's page, and a block for each of them on the MCP tab.
+- Docs: [Connect your coding agents](docs/guides/coding-tools.md) has a section for Hermes Agent, Kilo Code and pi, with the steps by hand and the known limits.
+- `ambit connect opencode` supports opencode 2. opencode 2 sends model calls from a background service that does not see the shell function, so the old setup sent no key and the gateway answered 403 "authorization failed". For opencode 2 (found with `opencode --version`), connect now writes the key to `~/.config/ambit/opencode-key`, which only you can read, and the provider reads it with `{file:...}`. It writes the opencode 2 format (`providers`), or the older `provider` format when your file uses it, adds no shell function, removes the one an earlier connect added, and tells you to run `opencode service restart`. `ambit disconnect opencode` deletes the key file. opencode 1 works as before.
+- `ambit key set` also writes the new key into the files that `ambit connect` wrote for that address and that hold the key: the opencode 2 key file and the `claude-desktop-mcp` header file.
+- Console, **Keys**: the opencode tab shows the opencode 2 steps (the key file, the config, the service restart), with opencode 1 under **Version**. The MCP tab's opencode block reads the key file too.
+- Console, **Keys**: choose a key's name to open its page: name, scope, dates, last use, owner, `ambit key set`, and the **Connect a tool** steps again, with `ambit_...` where the key goes. The console still shows a key only once.
+- **Prompt guard on the model path (`llm.promptGuard`), off by default.** The gateway checks the prompt of every chat, messages and responses request before it reaches a model, with patterns built into the gateway (card numbers, US Social Security numbers, email addresses, phone numbers), your own regular expressions, and an optional webhook in your cluster. Three modes: `audit` (the default when turned on: record what would be refused, change nothing), `reject` (403 with your message; the model is not called and the prompt is not charged to daily budgets) and `mask` (matches replaced before the model sees the prompt). The prompt text never leaves the cluster. The Audit page shows "Refused by prompt guard", "Prompt guard would refuse" and "Masked by prompt guard", apart from access-rule refusals; no record holds the matched text. Answers and embeddings are not checked. See [Prompt guard](docs/concepts.md#prompt-guard).
+- **A `ModelRouter` of type `LLM` sends its classifier model only text that passed the prompt guard.** The gateway asks `ambit-router` for the label before it runs the prompt guard, so a prompt the guard refuses or masks used to reach the classifier model unchanged. With `llm.promptGuard` in mode `reject` or `mask`, `ambit-router` now applies the same patterns, built-in patterns and webhook, from the same Helm values, before it calls the classifier: a refused prompt is not sent (route reason `guard`), and a masked prompt is sent masked. In mode `audit` nothing changes. The webhook Service must accept connections from the `ambit-router` pods. See [Prompt guard](docs/concepts.md#prompt-guard).
+- **The prompt guard's refusal is a JSON error.** Mode `reject` answers with `{"type": "error", "error": {"type": "permission_error", "code": "prompt_guard", "message": "<rejectMessage>"}}` and `content-type: application/json`, which OpenAI and Anthropic clients both read as an error (it was plain text).
+- **Audit-only mode: the summary's "refused" count no longer includes refusals by the prompt guard.** They are not access refusals. The Audit page still lists them as "Refused by prompt guard".
+- Audit: MCP app requests, approvals, denials, approvals of changed tool definitions, and refused attempts (for example a viewer who tries to approve, or a self-approval) are now audit records. They are in ClickHouse `otel_logs` (`ambit.kind = app-approval`, kept for `evidence.retention`), on the Audit page under the new search "MCP app requests and approvals" with CSV export, and in `GET /api/audit?approvals=true`. Each step also writes a Kubernetes Event on the `ServerRequest` or `Server` (#112).
+- Alerts: `AmbitConsoleAuditSendFailed` fires when the console cannot send these records to the collector (metric `ambit_console_audit_send_failures_total`, on the new console metrics port 8084 with `evidence.enabled`).
+- Each compression record (one per tool result text the guard shortened or compressed, with `evidence.enabled`) now names the caller and the call: the caller's email and key ID, the tool, the index of the text, and `ambit.call_id`, a random ID that the gateway's record of the same call also has. The record still holds no content. New Helm value `protection.compressionAudit.caller` (default `true`); `false` keeps the email and key ID out of the records. See [Compliance](docs/compliance.md#limits). Before a downgrade below 0.5.0, read [Upgrading](docs/upgrading.md).
+- The Audit page shows which tool calls had their result shortened or compressed by the guard: a "shortened" or "compressed" tag on the call's row and the sizes before and after (for example "Result shortened: 37.2 KB → 9.8 KB (shorten, logs, 14 parts left out)"). `GET /api/audit` gives the same facts in a new field `compression`, and the Audit CSV has three new columns at the end: `result_bytes_in`, `result_bytes_out` and `compression`. A record of the guard is never a row of its own on the Audit page. See [Compliance](docs/compliance.md#where-the-evidence-is).
+- Evidence exports, part 3: admins can download an access review for a date, `GET /api/evidence/access.zip?date=2026-12-31`: `grants.csv` (one row per AccessRule, who and what in force at the end of the date, from the controller's access snapshots, with argument limits, the rules version and the access mode), `keys.csv` (personal and service account keys alive at the end of the date), `people-seen.csv` (people whose calls carried each group in the 90 days before) and `manifest.json` (the snapshot used and every snapshot of the day). Group membership comes from your identity provider; the manifest says so. Access reviews are available from the upgrade to 0.5.0 on.
+- Evidence exports, part 1: admins can download the audit log of a period as one ZIP file, `GET /api/evidence/audit.zip?from=2026-10-01&to=2026-12-31[&email=...]` (dates are whole UTC days, both included; at most `evidence.exports.maxDays`, default 366, and `evidence.exports.maxRows`, default 5,000,000 rows). The ZIP holds `calls.csv` (every gateway record, with the identity, key ID, rules version, prompt guard action and, for wrong-key requests, the client address), `daily-counts.csv` (records per UTC day, to make a gap visible), `app-requests.csv` (MCP app requests and decisions) and `manifest.json` (rows and SHA-256 of each file, the exact SQL, the audit retention read from the table and the oldest record kept). Each export is recorded with the ZIP's SHA-256; `GET /api/evidence` lists them. The Settings → Evidence page follows in a later change.
+- Evidence exports, part 2: admins can download the offboarding evidence of a period, `GET /api/evidence/offboarding.zip?from=…&to=…`: `offboarding.csv` (one row per offboarding record, with the last accepted call before, the number of calls the gateway accepted from 5 s after the offboarding until the export, which should be 0, and the first refused call after), `grants-revoked.csv`, `calls-after.csv` (each accepted call after the offboarding; an empty file is the good result), `key-events.csv` (key and service account key revocations of the period) and `manifest.json` with each source's available period. Without `evidence.enabled` the audit columns are empty and the manifest says so.
+- Evidence exports: the audit export ZIP gains `compression.csv` (one row per compression record of the guard: call ID, caller, server, tool, mode, sizes; never content), and `calls.csv` and `calls-after.csv` gain a last column `call_id`, which links a call to its compression records (#348).
+- Console: new page **Settings → Evidence** (admins only). Pick an export (access review for a date, offboarding or audit log for a period; the default is the last full quarter) and download it in three clicks. The page shows the audit retention and the oldest record kept (in red when the period starts before it), says when a date has no access snapshot, shows the ZIP's SHA-256 after each download to send to the auditor, and lists the export history. New guide: [Do a quarterly access review](docs/guides/access-review.md). `docs/compliance.md` describes the three exports and points SOC 2 CC6.2, CC6.3, CC7.3 and ISO/IEC 27001 controls 5.18 and 8.15 to them.
+- With `evidence.enabled`, the controller records the AccessRules in force in the audit store (`otel_logs`, `ambit.kind` = `access-snapshot`): when a rules or access mode change is active, when only an argument limit changes, at start, and once a day at 00:05 UTC. These records are the base of the coming evidence exports ("who may use what on date D"); see "Access snapshots" in `docs/compliance.md`. A new alert, `AmbitControllerRecordsDropped`, fires when a record could not be sent.
+- MCP guard: a card number is now masked when a date, time or other short number stands next to it, as in a log line `2026-11-17 10:00:01 4111 1111 1111 1111` or a card followed by its expiry date or CVV (#295).
+- MCP guard: the default masks find more written forms: card numbers with dots, runs of spaces or full-width digits; foreign resident registration numbers (7th digit 5 to 8); resident registration numbers and US Social Security numbers without a dash or with spaces, when a label such as `RRN`, `주민등록번호` or `SSN` stands just before them; and emails URL-encoded as `%40` (#296). The placeholders are the same (`<NATIONAL_ID>`, `<CARD_NUMBER>`, `<EMAIL>`); more text is masked.
+- MCP guard: fewer ordinary numbers are masked as card numbers: a number that starts with 0, 1, 7, 8 or 9 (for example a Unix time in milliseconds) is not a card number, and a number written in groups must start with a group of 4 digits and use one kind of separator, as cards are printed (#296).
+- MCP guard: a tool result that is not a JSON object is withheld instead of passed unchecked (#333).
+- Audit log: the text of an MCP server's JSON-RPC error (`mcp.error.message`) is no longer stored in ClickHouse or written to the gateway's log, because it can hold personal data the guard does not see; `mcp.error.code` stays (#335).
+- Docs: concepts.md and compliance.md list the written forms each default mask finds, and say that JSON-RPC errors, log and progress notifications, and sampling or elicitation requests from an MCP server reach the client unmasked, because the gateway sends only tool results to the guard (#333).
+- Service accounts (#83): identities for CI jobs and background agents, named `<name>@svc.ambit.internal`. An admin creates one under **Settings → Service accounts** with exactly one group and a description, and gives it up to 2 keys (ordinary `ambit_` keys, shown once, with environment variable and GitHub Actions steps). AccessRules (`groups` or `users`), Budgets and Audit see the account as one person of its group; Audit marks its calls as `service account`. Its keys do not stop for inactivity and are not touched when a person is offboarded, except that a key stops within 7 days when the admin who issued it is offboarded (rotate it). Names are never reused. The account page warns about keys not used for 30 days. See docs/service-accounts.md.
+- New console endpoints for admins: `GET` and `POST /api/admin/service-accounts`, `DELETE /api/admin/service-accounts/{name}` and `POST /api/admin/service-accounts/{name}/keys`. Keys are revoked with the existing `DELETE /api/admin/keys/{id}`.
+- New Helm values: `serviceAccounts.enabled` (default `true`; `false` is the emergency stop for service account keys at the gateways), `serviceAccounts.maxDays` (default `90`) and `serviceAccounts.exposureDays` (default `7`).
+- Changed: `allSignedIn: true` in an AccessRule grants every person, but no service account. A service account gets only what a rule names by its group or identity. See docs/upgrading.md.
+- The gateways refuse a token whose email (or, with `requireEmail: false`, whose subject) ends with `@svc.ambit.internal`; the console refuses such a sign-in, and SCIM refuses such a user.
+- **A model request with no key says so.** A request to the LLM gateway with no Ambit key and no token (or an empty one, such as `Authorization: Bearer ` with nothing after it) still gets 403, now with the message "authorization failed: no Ambit key or token was sent", which says how to send a key and where to make one. The body is in the API's error format (Anthropic's for `/v1/messages`, OpenAI's for the others). A wrong key, a wrong token and a model the access rules refuse keep their answers (#321).
+- The docs page "Install locally by hand" moved from `/docs/local-up` to `/docs/install-by-hand`, so it no longer reads as the page of `ambit local up`. The old address redirects to the new one (#320).
+- `ambit connect opencode` with opencode 1, after a connect for opencode 2, now replaces Ambit's opencode 2 entry and deletes the opencode 2 key file. Before, it stopped with "uses the opencode v2 config format" (#305).
+- A failed `ambit connect` no longer leaves an empty folder that it created for a new file (#305).
+- `ambit connect` stops when a config file is a link to a file that does not exist, and says so; before, it replaced the link with a plain file (#257).
+
 ## 0.4.0 (2026-11-16)
 
 ### What is new

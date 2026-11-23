@@ -33,6 +33,18 @@ lists the sections below that apply to your upgrade. It writes ordinary Helm rel
 - **New Helm values** `serviceAccounts.enabled` (default `true`), `serviceAccounts.maxDays` (default `90`) and
   `serviceAccounts.exposureDays` (default `7`). No CRD and no admission policy changes. The console records the new
   settings once in the key History at its first start.
+- **More new Helm values, all optional:** `llm.promptGuard` (the prompt guard on the model path, `enabled: false` by
+  default, so nothing changes until you turn it on), `evidence.exports.enabled` (default `true`),
+  `evidence.exports.maxRows` (default `5000000`) and `evidence.exports.maxDays` (default `366`). Access reviews
+  (Settings → Evidence) cover dates from the upgrade on, and only with `evidence.enabled`.
+- **Some answers change.** A model request with no key or an empty token gets 403 with the message "authorization
+  failed: no Ambit key or token was sent", in the API's error format. A prompt guard refusal is a JSON error (code
+  `prompt_guard`), no longer plain text. In audit-only mode, the summary's "refused" count no longer includes prompt
+  guard refusals.
+- **The MCP guard masks more and withholds more.** The default masks find more written forms of card numbers,
+  national ID numbers and emails, and a tool result that is not a JSON object is withheld instead of passed unchecked.
+  Test a tool whose results contain long numbers before you upgrade production. The audit log no longer stores
+  `mcp.error.message`; `mcp.error.code` stays.
 - **Delete service accounts before a downgrade** below 0.5.0. An older console reads a service account as a person who
   never signed in, so its hourly repair deletes the account's keys within an hour (fail closed). Until that repair
   runs, the older gateways accept those keys as ordinary keys, also when `serviceAccounts.enabled` was `false`, and

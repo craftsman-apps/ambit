@@ -322,3 +322,27 @@ func TestServersListShowsToolPinningOff(t *testing.T) {
 		}
 	}
 }
+
+// Issue 302: the editor saves each condition as its own entry, so the CRD's min <= max rule does not see a minimum and a
+// maximum in two rows. The console refuses a minimum above a maximum for the same argument (any letter case), and
+// accepts equal bounds.
+func TestRuleRefusesMinAboveMaxAcrossEntries(t *testing.T) {
+	h, _, a := serversFixture(t)
+	admin := user(a, "user10@example.com", RoleAdmin)
+	rule := func(args ...v1.ArgumentRule) RuleInput {
+		return RuleInput{Name: "eng-limit", Groups: []string{"eng"}, Servers: []v1.ServerAccess{{Name: "time", Tools: []string{"convert_time"}, Arguments: args}}}
+	}
+	for _, args := range [][]v1.ArgumentRule{
+		{{Name: "limit", Min: "10"}, {Name: "limit", Max: "5"}},
+		{{Name: "limit", Min: "10"}, {Name: "LIMIT", Max: "9.999999"}},
+		{{Name: "limit", Min: "1", Max: "100"}, {Name: "limit", Min: "101"}},
+	} {
+		r := do(t, h, "POST", "/api/access-rules", admin, rule(args...))
+		if r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), "no number can meet") {
+			t.Errorf("%+v: %d %s", args, r.Code, r.Body)
+		}
+	}
+	if r := do(t, h, "POST", "/api/access-rules", admin, rule(v1.ArgumentRule{Name: "limit", Min: "5"}, v1.ArgumentRule{Name: "limit", Max: "5"}, v1.ArgumentRule{Name: "other", Min: "50"})); r.Code != http.StatusCreated {
+		t.Fatalf("equal bounds, other argument: %d %s", r.Code, r.Body)
+	}
+}

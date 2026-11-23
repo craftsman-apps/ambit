@@ -300,7 +300,7 @@ const split = (a: ArgumentRule): ArgumentRule[] => {
   if (a.max) out.push({ name: a.name, max: a.max });
   return out.length ? out : [a];
 };
-const kindOf = (a: ArgumentRule): Kind => (a.oneOf ? "oneOf" : a.notContains ? "notContains" : a.min ? "min" : "max");
+const kindOf = (a: ArgumentRule): Kind => (a.oneOf ? "oneOf" : a.notContains ? "notContains" : a.min !== undefined ? "min" : "max");
 const valueOf = (a: ArgumentRule) => a.oneOf?.join(", ") ?? a.notContains?.join(", ") ?? a.min ?? a.max ?? "";
 const build = (name: string, kind: Kind, value: string): ArgumentRule => {
   const list = value.split(",").map((v) => v.trim()).filter(Boolean);

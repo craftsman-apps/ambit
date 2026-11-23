@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"mime"
 	"net/http"
 	"regexp"
@@ -576,6 +577,9 @@ func (c *Catalog) validate(r *http.Request, in RuleInput, hasServers bool) error
 					return fmt.Errorf("server %q: %q is not a valid tool name", sa.Name, t)
 				}
 			}
+			if err := minAboveMax(sa.Arguments); err != nil {
+				return fmt.Errorf("server %q: %w", sa.Name, err)
+			}
 		}
 	}
 	for _, g := range in.Groups {
@@ -595,6 +599,25 @@ func (c *Catalog) validate(r *http.Request, in RuleInput, hasServers bool) error
 	for _, m := range in.Models {
 		if !slices.ContainsFunc(ms, func(x v1.Model) bool { return x.Name == m }) {
 			return fmt.Errorf("no model named %q", m)
+		}
+	}
+	return nil
+}
+
+// minAboveMax refuses a minimum above a maximum for the same argument. The guard applies every limit whose name equals
+// the argument's without regard to case, also across entries (the editor saves one condition per entry), and the CRD
+// compares min and max only inside one entry.
+func minAboveMax(args []v1.ArgumentRule) error {
+	for _, lo := range args {
+		for _, hi := range args {
+			if lo.Min == "" || hi.Max == "" || !strings.EqualFold(lo.Name, hi.Name) {
+				continue
+			}
+			l, okL := new(big.Rat).SetString(lo.Min)
+			h, okH := new(big.Rat).SetString(hi.Max)
+			if okL && okH && l.Cmp(h) > 0 {
+				return fmt.Errorf("argument %s: at least %s and at most %s together allow no value; no number can meet both", lo.Name, lo.Min, hi.Max)
+			}
 		}
 	}
 	return nil

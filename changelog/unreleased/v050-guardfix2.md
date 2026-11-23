@@ -1,5 +1,5 @@
 - Argument limits: a limit on an argument now also holds for every letter case of its name (`Query`, `QUERY` for `query`), because MCP servers written in Go read those as the same argument (#334).
-- Argument limits: `notContains` treats runs of spaces, tabs and new lines, and SQL comments (`/* ... */`), as one space, so `DROP  TABLE` and `DROP/**/TABLE` are refused by `notContains: [DROP TABLE]` (#301).
+- Argument limits: `notContains` treats runs of spaces, tabs and new lines, and SQL comments (`/* ... */`), as one space, so `DROP  TABLE` and `DROP/**/TABLE` are refused by `notContains: [DROP TABLE]`. The text inside a comment is checked too (#301).
 - MCP guard: masking now also reads object keys and numbers in structured content and `uri` values; a masked number becomes the placeholder text, and a result whose keys mask to the same text is withheld (#298).
 - MCP guard: results of `resources/read` and `prompts/get` are masked like tool results; the gateway sends them to the guard (#297).
 - MCP guard: when the guard cannot read a `Server`, its tools are hidden and calls refused instead of passed without tool pinning (#300).

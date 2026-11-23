@@ -56,6 +56,10 @@ func TestArgumentLimitsSpellings(t *testing.T) {
 		{`{"query":"DROP /* x */ TABLE users",` + ok + `}`, "query must not contain DROP TABLE"},
 		{`{"query":"select DROPTABLE",` + ok + `}`, ""}, // words stay words: no space is added
 		{`{"query":"a /* comment */ b",` + ok + `}`, ""},
+		// Text inside a comment still reaches the server, so it is checked too.
+		{`{"query":"select 1 /* secret */",` + ok + `}`, "query must not contain secret"},
+		{`{"query":"select 1 /* DROP  TABLE */",` + ok + `}`, "query must not contain DROP TABLE"},
+		{`{"query":"/* a */ select 1 /* b */",` + ok + `}`, ""},
 	} {
 		got := CheckArguments(grants, []string{"eng"}, "", "run", numArgs(t, c.args))
 		if (c.want == "") != (got == "") || !strings.Contains(got, c.want) {

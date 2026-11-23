@@ -106,9 +106,10 @@ func firstFailure(rules []v1.ArgumentRule, args map[string]any) string {
 		}
 		for _, v := range values {
 			for _, text := range texts(v, nil) {
-				text = folded(text)
+				// Both with and without comments: the server receives the text inside a comment too.
+				withComments, withoutComments := spaced(text), folded(text)
 				for _, bad := range a.NotContains {
-					if strings.Contains(text, folded(bad)) {
+					if b := folded(bad); strings.Contains(withComments, b) || strings.Contains(withoutComments, b) {
 						return fmt.Sprintf("argument %s must not contain %s", a.Name, bad)
 					}
 				}
@@ -162,7 +163,12 @@ var sqlComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
 // folded is text for notContains: lower case, SQL comments (/* ... */) as a space, and every run of white space as
 // one space, so "DROP  TABLE", "DROP\tTABLE" and "DROP/**/TABLE" all contain "drop table" (issue 301).
 func folded(s string) string {
-	return strings.Join(strings.Fields(sqlComment.ReplaceAllString(strings.ToLower(s), " ")), " ")
+	return spaced(sqlComment.ReplaceAllString(s, " "))
+}
+
+// spaced is s in lower case with every run of white space as one space.
+func spaced(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
 }
 
 // texts collects every string in a decoded JSON value: strings, object keys, and numbers as written.

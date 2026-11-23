@@ -167,6 +167,10 @@ account for this.
   admits only the controller to that port.
 - With no usable reader the controller keeps the last list and sets `ToolsRead=False`, reason
   `ReaderUnavailable`; the Servers page asks for another reader.
+- Until a reader's account has read the tools once, tool pinning is off for that server: its tools are usable,
+  but a changed or new tool is not detected. The server has the condition `ToolsPinned=False`, reason
+  `NotPinned`, and the Servers page shows "Tool pinning off". The first read pins the tools; from then on
+  pinning works as for any other server, also when the reader is cleared later.
 
 Known limit: with protection on, a tool that is hidden from one user's list can still be called by name, if
 the vendor shows that user a different definition than it shows the reader. Calls are checked against the

@@ -15,6 +15,7 @@ result here (spec of the CLI, section 9.3).
 
 | Date | Version | System | Docker | Result |
 |---|---|---|---|---|
+| 2026-11-24 | 0.5.0 candidate (dev build of 9087b0a, `--chart-dir`) | macOS 27.0, arm64 | Docker 29.6.1 | Pass: `local up` seven `✓` steps and the summary in 114 s, sign-in and the test call in Audit, `local down` deleted the cluster. Homebrew not checked (no `brew install` in this run). Windows: not run, no Windows machine. |
 
 ## Release order
 

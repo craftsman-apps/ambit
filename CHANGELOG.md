@@ -15,33 +15,35 @@ Each pull request adds a file in changelog/unreleased/ (see its README); the rel
 - **Service accounts.** CI jobs and background agents get their own identity, `<name>@svc.ambit.internal`, with up
   to 2 keys. An admin creates one under **Settings → Service accounts** and gives it exactly one group. AccessRules,
   Budgets and Audit treat the account as one person of that group, and Audit marks its calls as `service account`.
+  Its keys do not stop for inactivity; a key stops within 7 days when the admin who issued it is offboarded.
   `allSignedIn: true` does not grant a service account (see the upgrade notes). See
   [Service accounts](docs/service-accounts.md).
-- **Evidence exports for auditors.** On the new page **Settings → Evidence** (admins only), an admin downloads a ZIP
-  file in three clicks: an access review for a date (who may use what), offboarding evidence for a period (no
-  accepted call after a person left), or the audit log for a period. Each ZIP has CSV files and a manifest with the
-  SHA-256 of each file. The access review needs `evidence.enabled` and covers dates from the upgrade to 0.5.0 on.
+- **Evidence exports for auditors.** On the new page **Settings → Evidence** (admins only), an admin chooses and
+  downloads a ZIP file: an access review for a date (who may use what), offboarding evidence for a period (no
+  accepted call after a person left), or the audit log for a period. Each ZIP has CSV files and `manifest.json`,
+  which lists the SHA-256 of each file. The access review needs `evidence.enabled` and covers dates from the upgrade to 0.5.0 on.
   MCP app requests and approvals are now audit records too. See [Compliance](docs/compliance.md#evidence-exports)
   and the new guide [Do a quarterly access review](docs/guides/access-review.md).
 - **Prompt guard on the model path, off by default.** With `llm.promptGuard.enabled: true`, the gateway checks the
   prompt of every chat, messages and responses request before it reaches a model, with built-in patterns (card
   numbers, US Social Security numbers, email addresses, phone numbers), your own regular expressions and an optional
   webhook in your cluster. Mode `audit` (the default when turned on) only records; `reject` refuses with a JSON
-  error; `mask` replaces the matches. A `ModelRouter` of type `LLM` sends its classifier only text that passed the
-  guard. Nothing changes until you turn it on. See [Prompt guard](docs/concepts.md#prompt-guard).
+  error; `mask` replaces the matches. In modes `reject` and `mask`, a `ModelRouter` of type `LLM` does not send a
+  refused prompt to its classifier, and sends a masked prompt masked. Nothing changes until you turn it on. See [Prompt guard](docs/concepts.md#prompt-guard).
 - **The MCP guard is stricter.** It masks card numbers next to dates and times, more written forms of card numbers,
   resident registration numbers, US Social Security numbers and emails, and also object keys, numbers and `uri`
   values in structured content. It masks `resources/read` and `prompts/get` results too. Fewer ordinary numbers are
   taken for card numbers. A tool result that is not a JSON object is withheld.
-- **Argument limits are harder to get around.** A limit holds for every letter case of the argument name, and
-  `notContains` treats runs of white space and SQL comments as one space. A limit can set `min` next to `max`.
+- **Argument limits are harder to get around.** A limit holds for the argument name in any mix of upper and lower
+  case letters (`Query`, `QUERY`), and `notContains` treats one or more spaces, tabs or new lines, and SQL comments,
+  as one space. A limit can set `min` next to `max`.
 - **Tool pinning covers more of each tool:** its title, output schema and standard annotations. Approvals made
   before the upgrade carry over when the name, description and input schema are unchanged.
 - **Security fixes.** The CLI and the console image are built with Go 1.27.4, which fixes GO-2026-6859
   (`net/http`) and GO-2026-6809 (`crypto/x509`). The console uses brotli v1.2.7 and compress v1.20.3, which fix
   GO-2026-6888 and GO-2026-6865. `govulncheck ./...` reports no called vulnerability.
 - **Clearer errors for clients.** A model request with no key gets 403 with "authorization failed: no Ambit key or
-  token was sent", in the API's own error format. A refusal by the prompt guard is a JSON error with code
+  token was sent", in Anthropic's error format for `/v1/messages` and OpenAI's for the other paths. A refusal by the prompt guard is a JSON error with code
   `prompt_guard`.
 - **Command-line tool (`ambit`) for any cluster:** `ambit init` writes a `values.yaml` by asking questions (also for
   Argo CD), `ambit install` installs Ambit (`--dry-run` changes nothing), `ambit upgrade` upgrades in the right order
@@ -83,16 +85,17 @@ for you. In short:
   | `evidence.exports.maxDays` | `366` | The longest period of one export |
   | `protection.compressionAudit.caller` | `true` | `false` keeps the caller's email and key ID out of compression records |
 
-- **Some answers change.** A model request with no key gets a new 403 message and body. A prompt guard refusal is
+- **Some answers change.** A model request with no key gets a new 403 message, in Anthropic's error format for
+  `/v1/messages` and OpenAI's for the other paths. A prompt guard refusal is
   JSON (it was plain text). In audit-only mode, the summary's "refused" count no longer includes prompt guard
   refusals. The MCP guard masks more text, and withholds a tool result that is not a JSON object.
 - **The audit log no longer stores the text of an MCP server's JSON-RPC error** (`mcp.error.message`), because it
   can hold personal data. `mcp.error.code` stays.
-- **The console needs one more right**, to create Events (the chart adds it). With `evidence.enabled`, the console
-  has a new metrics port, 8084.
+- **The console needs one more right**, to create Events; the chart adds it. With `evidence.enabled`, the console
+  also has a new metrics port, 8084.
 - **Before a downgrade below 0.5.0:** delete service accounts first. After it, approve the tools again (the older
-  guard does not know the new fingerprints), remove `min` from argument limits, and remove the email from compression
-  records. See [Upgrading](docs/upgrading.md).
+  guard does not know the new fingerprints), remove `min` from argument limits, and run the SQL statement in
+  [Upgrading](docs/upgrading.md) that removes the email from the compression records.
 
 ### Verify the image signature
 

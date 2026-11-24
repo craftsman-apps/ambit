@@ -93,3 +93,49 @@ func TestCheckArgumentsAllSignedInSkipsServiceAccounts(t *testing.T) {
 		t.Errorf("a service account must get only its group's rule: %q", r)
 	}
 }
+
+// Issue 302: min is a lower bound next to max. Rules without min keep their old meaning: max alone allows 0 and
+// negative numbers.
+func TestArgumentMin(t *testing.T) {
+	rows := Grant{Rule: "export", Groups: []string{"eng"}, Arguments: []v1.ArgumentRule{{Name: "limit", Min: "1", Max: "100"}}}
+	refund := Grant{Rule: "refund", Groups: []string{"support"}, Arguments: []v1.ArgumentRule{{Name: "amount", Min: "0.01"}}}
+	old := Grant{Rule: "old", Groups: []string{"ops"}, Arguments: []v1.ArgumentRule{{Name: "limit", Max: "100"}}}
+	for _, tc := range []struct {
+		name  string
+		g     Grant
+		value any // nil: argument missing
+		want  string
+	}{
+		{"lowest allowed value", rows, json.Number("1"), ""},
+		{"highest allowed value", rows, json.Number("100"), ""},
+		{"inside the range", rows, json.Number("25"), ""},
+		{"zero, below min", rows, json.Number("0"), "limit must be a number at least 1 and at most 100"},
+		{"negative", rows, json.Number("-1"), "at least 1 and at most 100"},
+		{"just below min, finer than float precision", rows, json.Number("0.99999999999999999999"), "at least 1"},
+		{"huge negative exponent form", rows, json.Number("-1e400"), "at least 1"},
+		{"above max", rows, json.Number("101"), "at least 1 and at most 100"},
+		{"missing", rows, nil, "limit must be a number"},
+		{"as text", rows, "5", "limit must be a number"},
+		{"min alone: at min", refund, json.Number("0.01"), ""},
+		{"min alone: large value", refund, json.Number("1e9"), ""},
+		{"min alone: below", refund, json.Number("0"), "amount must be a number at least 0.01"},
+		{"no min (older rule): zero passes", old, json.Number("0"), ""},
+		{"no min (older rule): negative passes", old, json.Number("-1"), ""},
+		{"no min (older rule): above max", old, json.Number("101"), "limit must be a number at most 100"},
+	} {
+		args := map[string]any{}
+		name := tc.g.Arguments[0].Name
+		if tc.value != nil {
+			args[name] = tc.value
+		}
+		r := CheckArguments([]Grant{tc.g}, tc.g.Groups, "", "x", args)
+		if (tc.want == "") != (r == "") || !strings.Contains(r, tc.want) {
+			t.Errorf("%s: got %q, want %q", tc.name, r, tc.want)
+		}
+	}
+	// A min limit also holds for every letter case of the name (issue 334).
+	r := CheckArguments([]Grant{rows}, []string{"eng"}, "", "x", map[string]any{"limit": json.Number("5"), "LIMIT": json.Number("-1")})
+	if !strings.Contains(r, "at least 1") {
+		t.Errorf("other letter case passed min: %q", r)
+	}
+}

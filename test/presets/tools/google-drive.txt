@@ -6,3 +6,4 @@ get_file_permissions
 list_recent_files
 read_file_content
 search_files
+upload_file_revision

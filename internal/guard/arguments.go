@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -81,35 +82,93 @@ func CheckArguments(grants []Grant, groups []string, email string, tool string, 
 	return reason
 }
 
-// firstFailure checks one grant's limits. Arguments are decoded with json.Number, so a maximum is compared
+// firstFailure checks one grant's limits. Arguments are decoded with json.Number, so min and max are compared
 // exactly, and notContains sees every string (and key) inside a nested value as the server will receive it.
+// A limit holds for every key that equals its name without regard to case (strings.EqualFold, as Go's
+// encoding/json matches field names: "Query", "QUERY" and "ſql" reach a Go server as query and sql, issue 334).
 func firstFailure(rules []v1.ArgumentRule, args map[string]any) string {
 	for _, a := range rules {
-		v, present := args[a.Name]
+		var values []any
+		for k, v := range args {
+			if strings.EqualFold(k, a.Name) {
+				values = append(values, v)
+			}
+		}
 		if len(a.OneOf) > 0 {
-			if s, ok := v.(string); !present || !ok || !slices.Contains(a.OneOf, s) {
+			bad := len(values) == 0
+			for _, v := range values {
+				s, ok := v.(string)
+				bad = bad || !ok || !slices.Contains(a.OneOf, s)
+			}
+			if bad {
 				return fmt.Sprintf("argument %s must be one of %s", a.Name, strings.Join(a.OneOf, ", "))
 			}
 		}
-		if len(a.NotContains) > 0 && present {
+		for _, v := range values {
 			for _, text := range texts(v, nil) {
+				// Both with and without comments: the server receives the text inside a comment too.
+				withComments, withoutComments := spaced(text), folded(text)
 				for _, bad := range a.NotContains {
-					if strings.Contains(strings.ToLower(text), strings.ToLower(bad)) {
+					if b := folded(bad); strings.Contains(withComments, b) || strings.Contains(withoutComments, b) {
 						return fmt.Sprintf("argument %s must not contain %s", a.Name, bad)
 					}
 				}
 			}
 		}
-		if a.Max != "" {
-			limit, okLimit := new(big.Rat).SetString(a.Max)
-			n, isNumber := v.(json.Number)
-			value, okValue := new(big.Rat).SetString(string(n))
-			if !okLimit || !present || !isNumber || !okValue || value.Cmp(limit) > 0 {
-				return fmt.Sprintf("argument %s must be a number at most %s", a.Name, a.Max)
+		if a.Max != "" || a.Min != "" {
+			bad := len(values) == 0
+			for _, v := range values {
+				n, isNumber := v.(json.Number)
+				value, okValue := new(big.Rat).SetString(string(n))
+				bad = bad || !isNumber || !okValue || outside(value, a.Min, a.Max)
+			}
+			if bad {
+				return fmt.Sprintf("argument %s must be a number%s", a.Name, bounds(a.Min, a.Max))
 			}
 		}
 	}
 	return ""
+}
+
+// outside reports whether value is below lo (min) or above hi (max); an empty bound is no bound, and a bound that is not a
+// number (the CRD pattern prevents it) refuses every value.
+func outside(value *big.Rat, lo, hi string) bool {
+	for _, b := range []struct {
+		limit string
+		sign  int
+	}{{lo, -1}, {hi, 1}} {
+		if b.limit == "" {
+			continue
+		}
+		limit, ok := new(big.Rat).SetString(b.limit)
+		if !ok || value.Cmp(limit) == b.sign {
+			return true
+		}
+	}
+	return false
+}
+
+func bounds(lo, hi string) string {
+	switch {
+	case lo != "" && hi != "":
+		return " at least " + lo + " and at most " + hi
+	case lo != "":
+		return " at least " + lo
+	}
+	return " at most " + hi
+}
+
+var sqlComment = regexp.MustCompile(`(?s)/\*.*?\*/`)
+
+// folded is text for notContains: lower case, SQL comments (/* ... */) as a space, and every run of white space as
+// one space, so "DROP  TABLE", "DROP\tTABLE" and "DROP/**/TABLE" all contain "drop table" (issue 301).
+func folded(s string) string {
+	return spaced(sqlComment.ReplaceAllString(s, " "))
+}
+
+// spaced is s in lower case with every run of white space as one space.
+func spaced(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
 }
 
 // texts collects every string in a decoded JSON value: strings, object keys, and numbers as written.

@@ -1,1 +1,0 @@
-- CLI: `ambit install --dry-run` checks the cluster, renders both charts and lets the API server validate the dependency CRDs and every object whose kind exists, and lists the objects whose CRD is not installed yet; it changes nothing (#78).

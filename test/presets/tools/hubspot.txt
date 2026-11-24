@@ -1,3 +1,4 @@
+crm_property_history
 discover_hubspot_schema
 get_aeo_metrics
 get_campaign_attribution_reports
@@ -21,6 +22,7 @@ query_crm_data
 query_segments
 read_campaign_data
 read_social_posts
+search_communications
 search_conversations
 search_crm_objects
 search_intent_signals

@@ -5,6 +5,7 @@ all_monday_api
 all_widgets_schema
 board_insights
 change_item_column_values
+check-integration-connection-status
 connect_external_agent
 create_action
 create_agent
@@ -75,6 +76,7 @@ manage_agent_tools
 manage_agent_triggers
 manage_automations
 move_object
+onboard_to_monday
 read_docs
 run_action
 run_workflow_once
@@ -86,6 +88,7 @@ show-chart
 show-monday
 show-table
 show-table-preview
+show_connect_integration
 stop_workflow_run_once
 submit_bug_or_feature_request
 update_action

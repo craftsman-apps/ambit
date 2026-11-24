@@ -51,7 +51,7 @@ lists the sections below that apply to your upgrade. It writes ordinary Helm rel
 - **Tokens with an `@svc.ambit.internal` email are refused** by the gateways and the console sign-in. Such an address
   cannot be a real mailbox (`.internal` is reserved for private use), so no person should have one.
 - **New Helm values** `serviceAccounts.enabled` (default `true`), `serviceAccounts.maxDays` (default `90`) and
-  `serviceAccounts.exposureDays` (default `7`). No CRD and no admission policy changes. The console records the new
+  `serviceAccounts.exposureDays` (default `7`). No admission policy changes (the CRD changes are above). The console records the new
   settings once in the key History at its first start.
 - **More new Helm values, all optional:** `llm.promptGuard` (the prompt guard on the model path, `enabled: false` by
   default, so nothing changes until you turn it on), `evidence.exports.enabled` (default `true`),

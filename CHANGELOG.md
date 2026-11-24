@@ -8,7 +8,7 @@ For upgrade steps in detail, read [docs/upgrading.md](docs/upgrading.md).
 
 Each pull request adds a file in changelog/unreleased/ (see its README); the release assembles them here.
 
-## 0.5.0 (2026-11-25)
+## 0.5.0 (2026-11-24)
 
 ### What is new
 
@@ -29,9 +29,17 @@ Each pull request adds a file in changelog/unreleased/ (see its README); the rel
   webhook in your cluster. Mode `audit` (the default when turned on) only records; `reject` refuses with a JSON
   error; `mask` replaces the matches. A `ModelRouter` of type `LLM` sends its classifier only text that passed the
   guard. Nothing changes until you turn it on. See [Prompt guard](docs/concepts.md#prompt-guard).
-- **The MCP guard masks more.** Card numbers next to dates and times, more written forms of card numbers,
-  resident registration numbers, US Social Security numbers and emails. Fewer ordinary numbers are taken for card
-  numbers. A tool result that is not a JSON object is withheld.
+- **The MCP guard is stricter.** It masks card numbers next to dates and times, more written forms of card numbers,
+  resident registration numbers, US Social Security numbers and emails, and also object keys, numbers and `uri`
+  values in structured content. It masks `resources/read` and `prompts/get` results too. Fewer ordinary numbers are
+  taken for card numbers. A tool result that is not a JSON object is withheld.
+- **Argument limits are harder to get around.** A limit holds for every letter case of the argument name, and
+  `notContains` treats runs of white space and SQL comments as one space. A limit can set `min` next to `max`.
+- **Tool pinning covers more of each tool:** its title, output schema and standard annotations. Approvals made
+  before the upgrade carry over when the name, description and input schema are unchanged.
+- **Security fixes.** The CLI and the console image are built with Go 1.27.4, which fixes GO-2026-6859
+  (`net/http`) and GO-2026-6809 (`crypto/x509`). The console uses brotli v1.2.7 and compress v1.20.3, which fix
+  GO-2026-6888 and GO-2026-6865. `govulncheck ./...` reports no called vulnerability.
 - **Clearer errors for clients.** A model request with no key gets 403 with "authorization failed: no Ambit key or
   token was sent", in the API's own error format. A refusal by the prompt guard is a JSON error with code
   `prompt_guard`.
@@ -48,8 +56,16 @@ Each pull request adds a file in changelog/unreleased/ (see its README); the rel
 Read [Upgrading](docs/upgrading.md), section "To the release with service accounts (0.5.0)". `ambit upgrade` lists it
 for you. In short:
 
-- **No CRD and no dependency change.** agentgateway stays at v1.7.0. The AccessRule CRD changes only the description
-  of `allSignedIn`. Upgrade `ambit-crds`, then `ambit`, as before.
+- **No dependency change:** agentgateway stays at v1.7.0, and `crds.yaml` is the same as in 0.4.0. **The Ambit CRDs
+  change:** AccessRule gains `arguments[].min`, and the Server status gains `tools[].legacyFingerprint`. Upgrade
+  `ambit-crds`, then `ambit`, as before (`ambit upgrade` does both).
+- **Tool approvals move to the new fingerprint by themselves.** The controller moves each approval when it next reads
+  a server's tools (at start, then every 10 minutes), if the tool's name, description and input schema are the
+  approved ones. A tool that changed stays hidden until an admin approves it again. The controller logs
+  `approvals made before 0.5.0 moved to the new tool fingerprint`.
+- **A shared server whose tools were never read is now closed** (`ToolsPinned=False`, reason `NotRead`) until the
+  controller reads them. A server with `connection` whose tools no admin has read stays usable and shows
+  "Tool pinning off".
 - **`allSignedIn: true` grants every person, but no service account.** No service account exists before 0.5.0, so
   nothing changes at the upgrade. When you add a service account, name its group or identity in a rule.
 - **Tokens with an email that ends in `@svc.ambit.internal` are refused** by the gateways, the console sign-in and
@@ -74,8 +90,9 @@ for you. In short:
   can hold personal data. `mcp.error.code` stays.
 - **The console needs one more right**, to create Events (the chart adds it). With `evidence.enabled`, the console
   has a new metrics port, 8084.
-- **Before a downgrade below 0.5.0:** delete service accounts first, and remove the email from compression records.
-  See [Upgrading](docs/upgrading.md).
+- **Before a downgrade below 0.5.0:** delete service accounts first. After it, approve the tools again (the older
+  guard does not know the new fingerprints), remove `min` from argument limits, and remove the email from compression
+  records. See [Upgrading](docs/upgrading.md).
 
 ### Verify the image signature
 
@@ -95,6 +112,8 @@ cosign verify ghcr.io/craftsman-apps/ambit-console:0.5.0 \
 - The MCP guard does not see JSON-RPC errors, log and progress notifications, and sampling or elicitation requests
   from an MCP server; they reach the client unmasked. See [Compliance](docs/compliance.md#limits).
 - The prompt guard checks prompts only, not answers or embeddings.
+- A number above 2^53 in a tool result is masked from a rounded value, so its masked form can differ from the
+  original in the last digits (issue #360).
 - The Databricks and PagerDuty presets are still not verified and not offered in the console (issue #244).
 - The benchmark run in which all MCP requests with masking failed is still not explained (issue #274).
 
@@ -146,11 +165,20 @@ cosign verify ghcr.io/craftsman-apps/ambit-console:0.5.0 \
 - MCP guard: a tool result that is not a JSON object is withheld instead of passed unchecked (#333).
 - Audit log: the text of an MCP server's JSON-RPC error (`mcp.error.message`) is no longer stored in ClickHouse or written to the gateway's log, because it can hold personal data the guard does not see; `mcp.error.code` stays (#335).
 - Docs: concepts.md and compliance.md list the written forms each default mask finds, and say that JSON-RPC errors, log and progress notifications, and sampling or elicitation requests from an MCP server reach the client unmasked, because the gateway sends only tool results to the guard (#333).
+- Argument limits: a limit on an argument now also holds for every letter case of its name (`Query`, `QUERY` for `query`), because MCP servers written in Go read those as the same argument (#334).
+- Argument limits: `notContains` treats runs of spaces, tabs and new lines, and SQL comments (`/* ... */`), as one space, so `DROP  TABLE` and `DROP/**/TABLE` are refused by `notContains: [DROP TABLE]`. The text inside a comment is checked too (#301).
+- MCP guard: masking now also reads object keys and numbers in structured content and `uri` values; a masked number becomes the placeholder text, and a result whose keys mask to the same text is withheld (#298).
+- MCP guard: results of `resources/read` and `prompts/get` are masked like tool results; the gateway sends them to the guard (#297).
+- MCP guard: when the guard cannot read a `Server`, its tools are hidden and calls refused instead of passed without tool pinning (#300).
+- Tool pinning: a shared server (no `connection`) whose tools have not been read yet now has its tools hidden and refused until they are read. A server with `connection` whose tools no admin's account has read stays usable, and now shows that tool pinning is off: condition `ToolsPinned=False`, reason `NotPinned`, and "Tool pinning off" on the Servers page (#300).
+- Argument limits: a limit can now set `min` (a number at least this value) next to `max`. A limit with only `max` still allows 0 and negative numbers, as before. The access rules page offers "at least" (#302).
+- Tool pinning now also covers a tool's title, output schema and standard annotations (`readOnlyHint`, `destructiveHint` and the others), so a server that changes them after approval has the tool hidden until an admin approves it again. Approvals made before the upgrade carry over when the tool's name, description and input schema are unchanged; see Upgrading (#299).
 - Service accounts (#83): identities for CI jobs and background agents, named `<name>@svc.ambit.internal`. An admin creates one under **Settings → Service accounts** with exactly one group and a description, and gives it up to 2 keys (ordinary `ambit_` keys, shown once, with environment variable and GitHub Actions steps). AccessRules (`groups` or `users`), Budgets and Audit see the account as one person of its group; Audit marks its calls as `service account`. Its keys do not stop for inactivity and are not touched when a person is offboarded, except that a key stops within 7 days when the admin who issued it is offboarded (rotate it). Names are never reused. The account page warns about keys not used for 30 days. See docs/service-accounts.md.
 - New console endpoints for admins: `GET` and `POST /api/admin/service-accounts`, `DELETE /api/admin/service-accounts/{name}` and `POST /api/admin/service-accounts/{name}/keys`. Keys are revoked with the existing `DELETE /api/admin/keys/{id}`.
 - New Helm values: `serviceAccounts.enabled` (default `true`; `false` is the emergency stop for service account keys at the gateways), `serviceAccounts.maxDays` (default `90`) and `serviceAccounts.exposureDays` (default `7`).
 - Changed: `allSignedIn: true` in an AccessRule grants every person, but no service account. A service account gets only what a rule names by its group or identity. See docs/upgrading.md.
 - The gateways refuse a token whose email (or, with `requireEmail: false`, whose subject) ends with `@svc.ambit.internal`; the console refuses such a sign-in, and SCIM refuses such a user.
+- Security: the CLI, the console image and the test images are built with Go 1.27.4 (was Go 1.27.2 for the CLI and Go 1.27.3 for the console image). This fixes GO-2026-6859 (`net/http`) and GO-2026-6809 (`crypto/x509`). The console also uses `github.com/andybalholm/brotli` v1.2.7 and `github.com/klauspost/compress` v1.20.3 (through clickhouse-go v2.51.0, #309), which fix GO-2026-6888 and GO-2026-6865. `govulncheck ./...` reports no called vulnerability (#357).
 - **A model request with no key says so.** A request to the LLM gateway with no Ambit key and no token (or an empty one, such as `Authorization: Bearer ` with nothing after it) still gets 403, now with the message "authorization failed: no Ambit key or token was sent", which says how to send a key and where to make one. The body is in the API's error format (Anthropic's for `/v1/messages`, OpenAI's for the others). A wrong key, a wrong token and a model the access rules refuse keep their answers (#321).
 - The docs page "Install locally by hand" moved from `/docs/local-up` to `/docs/install-by-hand`, so it no longer reads as the page of `ambit local up`. The old address redirects to the new one (#320).
 - `ambit connect opencode` with opencode 1, after a connect for opencode 2, now replaces Ambit's opencode 2 entry and deletes the opencode 2 key file. Before, it stopped with "uses the opencode v2 config format" (#305).

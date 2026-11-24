@@ -91,7 +91,13 @@ spec:
                         description: ArgumentRule is one condition on one top-level argument of a tool call.
                         properties:
                           max:
-                            description: 'Max: the argument must be present, a number, and at most this value, e.g. "1000" or "99.5".'
+                            description: 'Max: the argument must be present, a number, and at most this value, e.g. "1000" or "99.5".
+
+                              Max alone allows 0 and negative numbers; set min too for a lower bound.'
+                            pattern: ^-?[0-9]{1,15}(\.[0-9]{1,6})?$
+                            type: string
+                          min:
+                            description: 'Min: the argument must be present, a number, and at least this value, e.g. "1" or "0.01".'
                             pattern: ^-?[0-9]{1,15}(\.[0-9]{1,6})?$
                             type: string
                           name:
@@ -119,8 +125,10 @@ spec:
                         - name
                         type: object
                         x-kubernetes-validations:
-                        - message: set oneOf, notContains or max
-                          rule: has(self.oneOf) || has(self.notContains) || has(self.max)
+                        - message: set oneOf, notContains, min or max
+                          rule: has(self.oneOf) || has(self.notContains) || has(self.max) || has(self.min)
+                        - message: min must not be greater than max
+                          rule: '!has(self.min) || !has(self.max) || double(self.min) <= double(self.max)'
                       maxItems: 20
                       type: array
                     name:

@@ -23,7 +23,7 @@ lists the sections below that apply to your upgrade. It writes ordinary Helm rel
   annotations and output schema that the server shows at that moment without review, because the older release did
   not record them. A tool that changed, and a new tool, stays hidden and refused until an admin approves it on the
   Servers page, as before. Until a server's approvals have moved, the guard also accepts the older fingerprint for
-  them. While the guard pods restart, an older guard pod may hide the moved tools from `tools/list` for a moment. The controller logs `approvals made before 0.5.0 moved to the new tool fingerprint` with the server and the
+  them. While the `ambit-guard` pods restart during the upgrade, an older guard pod may hide the moved tools from `tools/list` for a moment. The controller logs `approvals made before 0.5.0 moved to the new tool fingerprint` with the server and the
   number of tools. `Server` status gains `tools[].legacyFingerprint`, used only for this step.
 - **A shared server whose tools were never read is now closed.** A `Server` without `connection` and with no approved
   tools (its tools could not be read yet) used to pass all its tools without pinning. Now the guard hides and refuses
@@ -48,11 +48,24 @@ lists the sections below that apply to your upgrade. It writes ordinary Helm rel
 - **`allSignedIn: true` no longer grants service accounts.** It means every person with a valid token or personal key.
   No service account exists before this release, so nothing changes at the upgrade. When you add a service account,
   name its group or its identity in a rule: a rule that relies on `allSignedIn` will not give it access.
-- **Tokens with an `@svc.ambit.internal` email are refused** by the gateways and the console sign-in. Such an address
+- **Tokens with an `@svc.ambit.internal` email are refused** by the gateways and the console sign-in, and SCIM
+  refuses a user with such an email. Such an address
   cannot be a real mailbox (`.internal` is reserved for private use), so no person should have one.
 - **New Helm values** `serviceAccounts.enabled` (default `true`), `serviceAccounts.maxDays` (default `90`) and
-  `serviceAccounts.exposureDays` (default `7`). No CRD and no admission policy changes. The console records the new
+  `serviceAccounts.exposureDays` (default `7`). No admission policy changes (the CRD changes are above). The console records the new
   settings once in the key History at its first start.
+- **More new Helm values, all optional:** `llm.promptGuard` (the prompt guard on the model path, `enabled: false` by
+  default, so nothing changes until you turn it on), `evidence.exports.enabled` (default `true`),
+  `evidence.exports.maxRows` (default `5000000`) and `evidence.exports.maxDays` (default `366`). Access reviews
+  (Settings → Evidence) cover dates from the upgrade on, and only with `evidence.enabled`.
+- **Some answers change.** A model request with no key or an empty token gets 403 with the message "authorization
+  failed: no Ambit key or token was sent", in Anthropic's error format for `/v1/messages` and OpenAI's for the other paths. A prompt guard refusal is a JSON error (code
+  `prompt_guard`), no longer plain text. In audit-only mode, the summary's "refused" count no longer includes prompt
+  guard refusals.
+- **The MCP guard masks more and withholds more.** The default masks find more written forms of card numbers,
+  resident registration numbers (also foreign residents'), US Social Security numbers and emails, and a tool result that is not a JSON object is withheld instead of passed unchecked.
+  Test a tool whose results contain long numbers before you upgrade production. The audit log no longer stores
+  `mcp.error.message`; `mcp.error.code` stays.
 - **Delete service accounts before a downgrade** below 0.5.0. An older console reads a service account as a person who
   never signed in, so its hourly repair deletes the account's keys within an hour (fail closed). Until that repair
   runs, the older gateways accept those keys as ordinary keys, also when `serviceAccounts.enabled` was `false`, and

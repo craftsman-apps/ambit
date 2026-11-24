@@ -30,13 +30,13 @@ It shows the target cluster and asks first, then installs the dependency CRDs, t
 
 ## Install with Helm only
 
-Install the dependency CRDs, the Ambit CRDs, and then Ambit. This page installs 0.4.0. To install another release, replace `0.4.0` with it.
+Install the dependency CRDs, the Ambit CRDs, and then Ambit. This page installs 0.5.0. To install another release, replace `0.5.0` with it.
 
 ```sh
-R=https://github.com/craftsman-apps/ambit/releases/download/v0.4.0
+R=https://github.com/craftsman-apps/ambit/releases/download/v0.5.0
 curl -fsSLO $R/crds.yaml
 kubectl apply --server-side -f crds.yaml
-helm install ambit-crds oci://ghcr.io/craftsman-apps/charts/ambit-crds --version 0.4.0 -n ambit-system --create-namespace --wait
+helm install ambit-crds oci://ghcr.io/craftsman-apps/charts/ambit-crds --version 0.5.0 -n ambit-system --create-namespace --wait
 ```
 
 Write a values file, `values.yaml`. This one is the smallest useful production file: HTTPS addresses, the LLM and MCP gateways, and the audit log.
@@ -64,7 +64,7 @@ protection:
 The chart refuses to render with `llm.enabled` or `mcp.enabled` and no token issuer. Add the settings from [Tokens for the gateways](#tokens-for-the-gateways) to this file before you install.
 
 ```sh
-helm install ambit oci://ghcr.io/craftsman-apps/charts/ambit --version 0.4.0 -n ambit-system -f values.yaml --wait --timeout 10m
+helm install ambit oci://ghcr.io/craftsman-apps/charts/ambit --version 0.5.0 -n ambit-system -f values.yaml --wait --timeout 10m
 ```
 
 `console.host` must be the host of `console.url`. Point DNS for the three hosts at the gateway's Service (`kubectl -n ambit-system get service`; with `gateway.service.type: LoadBalancer` it has an external address).

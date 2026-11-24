@@ -1,2 +1,0 @@
-- CLI: `ambit init` writes `values.yaml` for `ambit install` by asking questions (addresses, company sign-in, gateway tokens, TLS, audit log, budgets, tool protection, GitOps, replicas). It never asks for a secret value: it prints the `kubectl create secret` commands for the Secrets the values name (#78).
-- CLI: `ambit init --gitops argocd` also writes the dependency CRDs and four Argo CD Applications (with an optional parent Application) into a configuration repository, so Argo CD installs Ambit (#78).

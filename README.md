@@ -67,7 +67,7 @@ ambit local up
 ```
 
 `ambit local up` creates a local kind cluster, installs Ambit for testing only (plain HTTP, one gateway replica), adds a model and an access rule, makes a first call, and prints the console address and the sign-in.
-The [full guide](https://ambitproject.dev/docs/quick-start) has the other install methods (winget and Scoop on Windows, PowerShell, npm, `go install`) and the next steps.
+The [full guide](https://ambitproject.dev/docs/quick-start) has the other install methods (PowerShell, npm, `go install`) and the next steps.
 
 ## Status: Alpha
 

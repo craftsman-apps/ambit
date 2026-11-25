@@ -91,16 +91,16 @@ for s in ['system:serviceaccount:ambit-system:ambit-console','authentication.kub
   assert s in we, s
 assert [v['expression'] for v in w['validations']]==['variables.console || variables.cleanup'], w['validations']
 assert w['validations'][0]['message']=='only the Ambit console may write personal API key objects', w
-sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event']
+sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event','ambitproject.dev/agent']
 bs={x['metadata']['name']:x['spec'] for x in docs if x['kind']=='ValidatingAdmissionPolicyBinding'}
-assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(3)}|{'ambit-key-lease'}, list(bs)
+assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(4)}|{'ambit-key-lease'}, list(bs)
 assert all('paramRef' not in b for b in bs.values()), bs
 bs.pop('ambit-key-lease')
 for n,b in bs.items():
   i=int(n[-1])
   assert b['policyName']=='ambit-keys-writer' and b['validationActions']==['Deny'], b
   assert b['matchResources']['namespaceSelector']=={'matchLabels':{'kubernetes.io/metadata.name':'ambit-system'}}, b
-  assert b['matchResources']['objectSelector']=={'matchExpressions':[{'key':sel[i],'operator':'Exists'}]}, b" "admission: console-only writes to key objects (three label bindings), cleanup exempt, no Lease-holder check"
+  assert b['matchResources']['objectSelector']=={'matchExpressions':[{'key':sel[i],'operator':'Exists'}]}, b" "admission: console-only writes to key objects (four label bindings), cleanup exempt, no Lease-holder check"
 check_qs "p=one('ValidatingAdmissionPolicy','ambit-key-lease')['spec']
 assert p['failurePolicy']=='Fail' and 'paramKind' not in p, p
 r=p['matchConstraints']['resourceRules'][0]
@@ -165,7 +165,7 @@ assert m=={"tools/list":"Response","tools/call":"Full","resources/read":"Respons
 check_qs 'assert not [x for x in docs if x["kind"]=="AgentgatewayPolicy" and x["metadata"]["name"]=="ambit-access-log"]
 s=yaml.safe_load(one("ConfigMap","ambit-access-log-base")["data"]["spec.yaml"])
 assert s["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"Gateway","name":"ambit"}], s
-assert [x["name"] for x in s["frontend"]["accessLog"]["attributes"]["add"]]==["jwt.email","jwt.groups","jwt.sub","ambit.key_id","ambit.identity","ambit.router","ambit.route","ambit.routeReason","ambit.classifier.input_tokens","ambit.classifier.output_tokens"], s
+assert [x["name"] for x in s["frontend"]["accessLog"]["attributes"]["add"]]==["jwt.email","jwt.groups","jwt.sub","ambit.key_id","ambit.identity","ambit.agent","ambit.agent_mode","ambit.agent_owner_at_issue","ambit.platform_declared","ambit.grant_id","ambit.token_issuer","ambit.router","ambit.route","ambit.routeReason","ambit.classifier.input_tokens","ambit.classifier.output_tokens"], s
 assert s["frontend"]["accessLog"]["attributes"]["remove"]==["mcp.error.message"], s
 assert s["frontend"]["accessLog"]["otlp"]=={"protocol":"GRPC","backendRef":{"name":"ambit-otel-collector","port":4317}}, s' "access-log base ConfigMap, no chart AgentgatewayPolicy ambit-access-log"
 noev=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set evidence.enabled=false)
@@ -225,6 +225,33 @@ for bad in "--set llm.promptGuard.mode=block" "--set-json llm.promptGuard.builti
   ! pg --set llm.promptGuard.enabled=true $bad >/dev/null 2>&1 || { echo "FAIL chart: prompt guard values must be refused: $bad"; exit 1; }
 done
 echo "PASS prompt guard: bad mode, built-in, long or invalid pattern, unknown key, failure mode, port, Service name, and nothing to check are refused"
+# Injection guard (protection.injectionGuard, #82): off by default; the guard gets the whole value in AMBIT_INJECTION_GUARD.
+ig() { helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set protection.enabled=true "$@"; }
+! grep -q AMBIT_INJECTION_GUARD <<<"$(ig)" || { echo "FAIL chart: the injection guard must be off by default"; exit 1; }
+! grep -q AMBIT_INJECTION_GUARD <<<"$(ig --set protection.injectionGuard.enabled=false --set protection.injectionGuard.mode=reject)" || { echo "FAIL chart: enabled=false renders the injection guard"; exit 1; }
+igv=$(ig --set protection.injectionGuard.enabled=true --set protection.injectionGuard.mode=mask --set 'protection.injectionGuard.disabledBuiltins[0]=role-prefix' \
+  --set 'protection.injectionGuard.patterns[0]=(?i)secret handshake' --set protection.injectionGuard.webhook.service=inj-hook --set protection.injectionGuard.webhook.namespace=guards \
+  --set protection.injectionGuard.webhook.port=9000 --set protection.injectionGuard.webhook.timeout=500ms --set protection.injectionGuard.webhook.failureMode=FailOpen)
+IGV="$igv" uv run --no-project --with pyyaml python -c "import os,json,yaml
+docs=[d for d in yaml.safe_load_all(os.environ['IGV']) if d]
+d=[x for x in docs if x['kind']=='Deployment' and x['metadata']['name']=='ambit-guard'][0]
+v=[e['value'] for e in d['spec']['template']['spec']['containers'][0]['env'] if e['name']=='AMBIT_INJECTION_GUARD'][0]
+assert json.loads(v)=={'mode':'mask','builtins':True,'disabledBuiltins':['role-prefix'],'patterns':['(?i)secret handshake'],
+  'webhook':{'url':'http://inj-hook.guards.svc:9000/request','timeout':'500ms','failureMode':'FailOpen'}}, v" || { echo "FAIL chart: the guard's AMBIT_INJECTION_GUARD value"; exit 1; }
+igd=$(ig --set protection.injectionGuard.enabled=true)
+grep -q 'AMBIT_INJECTION_GUARD' <<<"$igd" && grep -q 'mode.*audit' <<<"$igd" && grep -q 'builtins.*true' <<<"$igd" || { echo "FAIL chart: injectionGuard.enabled=true must give audit mode with the built-in rules"; exit 1; }
+longp=$(printf 'a%.0s' $(seq 1 1025))
+# every built-in rule switched off, and nothing else to check: refused (the names come from the schema)
+allrules=$(python3 -c "import json;print(' '.join('--set protection.injectionGuard.disabledBuiltins[%d]=%s'%(i,n) for i,n in enumerate(json.load(open('charts/ambit/values.schema.json'))['properties']['protection']['properties']['injectionGuard']['properties']['disabledBuiltins']['items']['enum'])))")
+for bad in "--set protection.injectionGuard.mode=block" "--set protection.injectionGuard.disabledBuiltins[0]=no-such-rule" "--set protection.injectionGuard.patterns[0]=$longp" \
+    "--set protection.injectionGuard.patterns[0]=(?<=a)b" "--set protection.injectionGuard.patterns[0]=a(b" "--set protection.injectionGuard.builtins=false" \
+    "--set protection.injectionGuard.webhook.timeout=soon" "--set protection.injectionGuard.webhook.failureMode=Open" "--set protection.injectionGuard.webhook.port=0" \
+    "--set protection.injectionGuard.webhook.service=Guard_Hook" "--set protection.injectionGuard.rules=x" "--set protection.injectionGuard.webhook.timeout=0s" \
+    "--set protection.injectionGuard.webhook.timeout=0.0ms" "--set protection.injectionGuard.patterns[0]=^" "--set protection.injectionGuard.patterns[0]=a*" "$allrules"; do
+  # shellcheck disable=SC2086
+  ! ig --set protection.injectionGuard.enabled=true $bad >/dev/null 2>&1 || { echo "FAIL chart: injection guard values must be refused: $bad"; exit 1; }
+done
+echo "PASS injection guard: off by default; the value reaches the guard; bad mode, rule name, long or invalid pattern, nothing to check, webhook timeout, failure mode, port and Service name are refused"
 # helm upgrade --reuse-values from 0.1.0 (#81): the old release's values replace the chart's defaults, so every key
 # added since 0.1.0 is missing. Render every template with the chart's own values.yaml swapped for 0.1.0's.
 old=$(mktemp -d); trap 'rm -rf "$old"' EXIT
@@ -234,6 +261,8 @@ reuse=$(helm template ambit "$old/ambit" -n ambit-system -f deploy/quickstart.ya
 grep -q -- '--users-require-verified-email=true' <<<"$reuse" || { echo "FAIL chart: values of 0.1.0 only must keep users on verified emails"; exit 1; }
 grep -q -- '--access-mode=enforce' <<<"$reuse" && grep -q -- '--activation-timeout=120s' <<<"$reuse" && grep -q -- '--activation-settle=3s' <<<"$reuse" || { echo "FAIL chart: values of 0.1.0 only must give enforce and the default timings"; exit 1; }
 ! grep -q 'access.mode is audit' <<<"$(helm template ambit "$old/ambit" -n ambit-system -f deploy/quickstart.yaml --show-only templates/NOTES.txt 2>&1)" || { echo "FAIL chart: no audit warning with the values of 0.1.0 only"; exit 1; }
+igold=$(helm template ambit "$old/ambit" -n ambit-system -f deploy/quickstart.yaml --set protection.enabled=true --set protection.injectionGuard.enabled=true 2>&1) || { echo "FAIL chart: injectionGuard.enabled=true with the values of 0.1.0 only: $igold"; exit 1; }
+grep -q 'AMBIT_INJECTION_GUARD' <<<"$igold" && grep -q 'mode.*audit' <<<"$igold" || { echo "FAIL chart: the values of 0.1.0 only plus injectionGuard.enabled must give audit mode with the built-in rules"; exit 1; }
 # The public front door (frontDoor.*): off by default, and when on, HTTPS only, one host, one route, keys only.
 fdv=(-f deploy/quickstart.yaml -f test/frontdoor/values.yaml)
 fdt() { helm template ambit charts/ambit -n ambit-system "${fdv[@]}" "$@"; }
@@ -269,7 +298,8 @@ assert p["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute"
 assert "jwtAuthentication" not in t, "no token is accepted on the public route"
 assert t["apiKeyAuthentication"]["secretSelector"]["matchLabels"]=={"ambitproject.dev/key":"true","ambitproject.dev/key-mcp":"true"}, t
 e=t["authorization"]["policy"]["matchExpressions"]
-assert t["authorization"]["action"]=="Require" and len(e)==1 and "has(apiKey.keyId)" in e[0] and "Bearer ambit_" in e[0] and "timestamp(apiKey.until)" in e[0], e' "public route: keys only (no JWT), a valid unexpired MCP key is required"
+assert t["authorization"]["action"]=="Require" and len(e)==2 and "sourceRanges" in e[0] and "cidr(r).containsIP(source.address)" in e[0], e
+assert "has(apiKey.keyId)" in e[1] and "Bearer ambit_" in e[1] and "timestamp(apiKey.until)" in e[1], e' "public route: keys only (no JWT), a valid unexpired MCP key is required"
 check_fd 'p=one("AgentgatewayPolicy","ambit-public-limits")["spec"]
 assert p["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"Gateway","name":"ambit-public"}], p
 g=p["traffic"]["rateLimit"]["global"]
@@ -298,8 +328,19 @@ assert {"name":"ambit.ingress","expression":"\"private\""} in s, s
 # Nothing rendered by the chart is a load balancer except through the gateways Parameters; no Service names the public gateway.
 assert all(x["spec"].get("type","ClusterIP")=="ClusterIP" for x in docs if x["kind"]=="Service"), [x["metadata"]["name"] for x in docs if x["kind"]=="Service" and x["spec"].get("type","ClusterIP")!="ClusterIP"]
 # The only policies aimed at the public Gateway or its route are the chart'"'"'s three; the controller adds its access-log and offboarding policies.
-t=sorted(x["metadata"]["name"] for x in docs if x["kind"]=="AgentgatewayPolicy" and any(r["name"] in ("ambit-public","ambit-mcp-public") for r in x["spec"].get("targetRefs",[])))
+t=sorted(x["metadata"]["name"] for x in docs if x["kind"]=="AgentgatewayPolicy" and any(r["kind"] in ("Gateway","HTTPRoute") and r["name"] in ("ambit-public","ambit-mcp-public") for r in x["spec"].get("targetRefs",[])))
 assert t==["ambit-mcp-public-auth","ambit-public-limits"], t' "public gateway: ClusterIP in the test values, controller flag, ambit.ingress in the access-log base, only two chart policies target it"
+check_fd 'g=one("AgentgatewayPolicy","ambit-mcp-guard")["spec"]["targetRefs"]
+assert [t["name"] for t in g]==["ambit-mcp","ambit-mcp-public"], g
+n=one("NetworkPolicy","ambit-mcp-servers-front-door")["spec"]
+assert n["podSelector"]["matchLabels"]=={"toolhive":"true","ambitproject.dev/front-door":"true"}, n
+assert n["ingress"]==[{"from":[{"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"ambit-public"}}}],"ports":[{"port":8080}]}], n
+base=one("NetworkPolicy","ambit-mcp-servers")["spec"]["ingress"]
+assert not any("ambit-public" in json.dumps(i) for i in base), base
+b=one("NetworkPolicy","ambit-console-broker")["spec"]["ingress"]
+assert not any("ambit-public" in json.dumps(i) for i in b), b
+gd=one("NetworkPolicy","ambit-guard")["spec"]["ingress"][0]["from"]
+assert {"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"ambit-public"}}} in gd, gd' "public gateway: the guard covers the public backend; only front-door server pods and the guard admit the public gateway pods; the token broker does not"
 # The load balancer defaults of the real thing (type LoadBalancer): the client address is kept and the source ranges are passed on.
 lb=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml -f test/frontdoor/values.yaml --set frontDoor.service.type=LoadBalancer --set 'frontDoor.service.loadBalancerSourceRanges={203.0.113.0/24}' --set 'frontDoor.service.annotations.service\.beta\.kubernetes\.io/aws-load-balancer-type=nlb')
 fd=$lb check_fd 'a=one("AgentgatewayParameters","ambit-public")["spec"]["service"]
@@ -318,6 +359,7 @@ MSG='certificateSecret' refuse "no certificate" --set frontDoor.tls.certificateS
 MSG='also a private host name' refuse "the console's host name" --set frontDoor.host=console.localtest.me
 MSG='also a private host name' refuse "the MCP host name" --set frontDoor.host=mcp.localtest.me
 MSG='limits.enabled' refuse "no shared limits" --set limits.enabled=false
+MSG='protection.enabled' refuse "no guard" --set protection.enabled=false
 MSG='evidence.enabled' refuse "no audit" --set evidence.enabled=false
 MSG='apiKeys.enabled' refuse "no API keys" --set apiKeys.enabled=false
 MSG='mcp.enabled' refuse "no MCP" --set mcp.enabled=false

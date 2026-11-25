@@ -10,7 +10,8 @@ import { Shell } from "@/components/shell";
 export type KeyView = { id: string; name: string; prefix: string; scope: "llm" | "mcp" | "both"; created: string;
   expires: string; until: string; owner?: string; lastUsed: string | null;
   status: "active" | "stops-soon" | "stopped"; stopsBecause: "inactivity" | "end-date";
-  issuedBy?: string; exposed?: string }; // service account keys only
+  issuedBy?: string; exposed?: string; // service account keys only
+  agent?: string; sourceRanges?: string[] }; // agent keys only (docs/agents.md)
 // A key's owner is a service account when its identity is in this domain (only service account keys carry it).
 export const isServiceAccount = (owner?: string) => !!owner?.endsWith("@svc.ambit.internal");
 export type KeySettings = { enabled: boolean; inactivityDays: number; maxDays: number; lastUsedAvailable: boolean };
@@ -162,7 +163,7 @@ function KeyDetail({ k, urls, lastUsedAvailable, onClose }: { k: KeyView; urls: 
         {facts.map(([t, v]) => <div key={t} className="contents"><dt className="text-muted">{t}</dt>
           <dd data-testid={`key-${t.toLowerCase().replace(/ /g, "-")}`} className={t === "Starts with" ? "font-mono text-small" : ""}>{v}</dd></div>)}
       </dl>
-      <p>The console showed this key once, when it was created, and cannot show it again. Where the steps below show <span className="font-mono">{KEY_PLACEHOLDER}</span>, put in the key you saved. If you lost it, revoke this key and create a new one.</p>
+      <p>The console showed this key once, when it was created, and cannot show it again. Where the steps below show <span className="font-mono">{KEY_PLACEHOLDER}</span>, put in the key you saved. {k.agent ? <>This key belongs to the agent <span className="font-mono">{k.agent}</span> and carries its scope. If you lost it, revoke this key and create a new key for the agent with <span className="font-mono">POST /api/agents/{k.agent}/keys</span>; a key created on this page has no scope.</> : "If you lost it, revoke this key and create a new one."}</p>
       <div className="space-y-1">
         <CopyBlock text={keySetCommand(urls, k.scope)} testId="key-set-command" label="Store the key you saved in your keychain (ambit CLI)" />
         <p className="text-small text-muted">It asks for the key (the input is hidden). After it, ambit connect and ambit key print use the stored key.</p>

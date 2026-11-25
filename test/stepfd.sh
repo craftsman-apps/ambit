@@ -9,17 +9,15 @@ set -euo pipefail
 NS=${1:-ambit-system}
 cd "$(dirname "$0")/.."
 source test/lib.sh
+source test/frontdoor/lib.sh
 G=ambitproject.dev
 PUB=mcp-public.localtest.me
-PY=(uv run --no-project python)
-PIDS=()
 CH_POD=ambit-clickhouse-0
 ch() { kubectl -n "$NS" exec "$CH_POD" -- sh -c 'clickhouse-client --user ambit --password "$CLICKHOUSE_PASSWORD" -q "$0"' "$1"; }
 # values used by every helm upgrade of this step; the limits are high so the other checks never reach them (check 7 lowers them)
 fdset() { helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/frontdoor/values.yaml \
   --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 \
   "$@" --wait --timeout 5m >/dev/null; }
-past() { date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '1 hour ago' +%Y-%m-%dT%H:%M:%SZ; }
 cleanup() {
   for p in ${PIDS[@]+"${PIDS[@]}"}; do kill "$p" 2>/dev/null || true; done
   kubectl -n "$NS" delete configmap ambit-offboarded --ignore-not-found >/dev/null 2>&1 || true
@@ -65,43 +63,9 @@ sign_in local admin@ambit.local "$PW"
 mkkey fd-mcp mcp; K=$KEY; KID_K=$KID
 mkkey fd-llm llm; LK=$KEY
 mkkey fd-mcp-2 mcp; K2=$KEY; KID_K2=$KID
-# one local port per gateway pod
-forward() { # forward POD -> prints the local port
-  local port; port=$("${PY[@]}" -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])')
-  kubectl -n "$NS" port-forward "pod/$1" "$port:8443" >/dev/null 2>&1 &
-  PIDS+=($!)
-  for _ in $(seq 1 30); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break; sleep 0.5; done
-  echo "$port"
-}
 PODS=($(kubectl -n "$NS" get pods -l gateway.networking.k8s.io/gateway-name=ambit-public --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}'))
 [[ ${#PODS[@]} -eq 2 ]] || fail "0 want 2 public gateway pods, have: ${PODS[*]}"
 PA=$(forward "${PODS[0]}"); PB=$(forward "${PODS[1]}")
-pub() { # pub PORT PATH [curl args]: HTTP status of one request to the public Gateway; body in $W/pub, headers in $W/pubh
-  local port=$1 path=$2; shift 2
-  command curl -s -o "${PUBOUT:-$W/pub}" -D "${PUBHDR:-$W/pubh}" -w '%{http_code}' --max-time 15 --cacert "$W/ca.pem" --resolve "$PUB:$port:127.0.0.1" "$@" "https://$PUB:$port$path" || true
-}
-MCPH=(-H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream')
-INIT='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"stepfd","version":"1"}}}'
-pinit() { # pinit PORT [curl args]: opens an MCP session on the public Gateway; sets PCODE (the status) and PSID. No subshell: PSID must survive.
-  local port=$1; shift
-  PCODE=$(pub "$port" /mcp -X POST "${MCPH[@]}" -d "$INIT" "$@")
-  PSID=$(awk 'tolower($1)=="mcp-session-id:"{print $2}' "$W/pubh" | tr -d '\r')
-}
-psend() { # psend PORT JSON [curl args]: one request in the open session; prints the status; the answer's JSON is in $W/pubj
-  local port=$1 json=$2; shift 2
-  local c; c=$(pub "$port" /mcp -X POST -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' -H "Mcp-Session-Id: $PSID" -d "$json" "$@")
-  awk '/^data: /{print substr($0, 7); next} /^\{/{print}' "$W/pub" > "$W/pubj"
-  echo "$c"
-}
-ptools() { # ptools PORT [curl args]: the tool names of a new session, space separated; "<status>" when it cannot be opened
-  pinit "$@"
-  local c=$PCODE
-  [[ "$c" == 200 && -n "$PSID" ]] || { echo "<$c>"; return; }
-  psend "$1" '{"jsonrpc":"2.0","method":"notifications/initialized"}' "${@:2}" >/dev/null
-  c=$(psend "$1" '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' "${@:2}")
-  [[ "$c" == 200 ]] || { echo "<$c>"; return; }
-  "${PY[@]}" -c 'import json,sys;print(" ".join(sorted(t["name"] for t in json.load(open(sys.argv[1]))["result"]["tools"])))' "$W/pubj"
-}
 KH=(-H "x-api-key: $K")
 # a new key is accepted within seconds; the public Gateway needs the same time
 wait_for 120 '[[ $(ptools $PA "${KH[@]}") == *time_get_current_time* ]]' || fail "0 a valid key does not reach the public backend: $(ptools "$PA" "${KH[@]}")"
@@ -223,19 +187,6 @@ PSID=$S1; wait_for 60 'c=$(psend "$PA" "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\"
 pass "6 an MCP session opened on one public pod is answered by the other and by the new pods after a rollout restart (session secrets: $SESSKEY)"
 
 # --- 7 · limits: per key, per source, per pod, and the limiter down
-# pubk PORT PATH [curl args]: one request, classified: ok | limited | refused | other:<status>. A limit answers 429, or (agentgateway
-# maps an error of an MCP request to a JSON-RPC error) 200 with an "error" in the body.
-pubk() {
-  local out c; out=$(mktemp "$W/pk.XXXXXX")
-  c=$(PUBOUT=$out PUBHDR=/dev/null pub "$@")
-  case $c in
-    429) echo limited ;;
-    403) echo refused ;;
-    200) if grep -q '"error"' "$out"; then echo limited; else echo ok; fi ;;
-    *) echo "other:$c" ;;
-  esac
-  rm -f "$out"
-}
 next_window() { local s; s=$(date +%S); s=$((10#$s)); (( s < 35 )) || sleep $((62 - s)); } # leave 25 s or more in this minute
 burst() { # burst N PORT [curl args]: N MCP initialize requests in a row; prints "<ok> <limited> <refused> <other>"
   local n=$1 port=$2; shift 2; local ok=0 lim=0 den=0 other=0 r

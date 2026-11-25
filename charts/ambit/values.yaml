@@ -227,7 +227,8 @@ frontDoor:
   # protocol v2 enabled, and others); the gateway then refuses connections without it. X-Forwarded-For is never trusted.
   clientAddress: direct
   rateLimit:
-    # Shared by all gateway pods (the ratelimit service counts in Valkey). Per valid key, and per source address.
+    # Shared by all gateway pods (the ratelimit service counts in Valkey). Per valid key; and per source address, counting
+    # every request of the address, refused ones included (a wrong key, an unknown path), before authentication.
     perCredentialPerMinute: 600
     perSourcePerMinute: 120
     # A second line in each gateway pod, for all requests, if the ratelimit service is down.

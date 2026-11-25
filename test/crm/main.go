@@ -101,6 +101,13 @@ func main() {
 		func(_ context.Context, _ *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
 			return nil, nil, &jsonrpc.Error{Code: -32000, Message: "lookup " + a.ID + " failed for customer RRN 900101-1234567, email minsu.kim@example.com"}
 		})
+	// lookup_fail_result fails the way the MCP specification asks a tool to: with a result that has isError true, not a
+	// JSON-RPC error. The guard masks this result (step 9, check 1f); it does not see lookup_fail's error (issue 333).
+	mcp.AddTool(s, &mcp.Tool{Name: "lookup_fail_result", Description: "Fail with an error result that names the customer."},
+		func(_ context.Context, _ *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{
+				Text: "lookup " + a.ID + " failed for customer RRN 900101-1234567, email minsu.kim@example.com"}}}, nil, nil
+		})
 	// get_index returns structured content keyed by email, with a card number as a JSON number and a Unix time in
 	// milliseconds (step 9, check 1e: keys and numbers are masked, the time is not). big is a long number that is not a card.
 	mcp.AddTool(s, &mcp.Tool{Name: "get_index", Description: "Return orders by customer email."},

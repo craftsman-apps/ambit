@@ -11,6 +11,7 @@
 {{- if eq $other $fd.host }}{{ fail (printf "frontDoor.host %q is also a private host name: the public Gateway must not share a name with the console, the LLM host or the private MCP host" $fd.host) }}{{ end }}
 {{- end }}
 {{- if not (has ($fd.clientAddress | default "direct") (list "direct" "proxyProtocol")) }}{{ fail "frontDoor.clientAddress must be direct or proxyProtocol (X-Forwarded-For is never trusted)" }}{{ end }}
+{{- if and (eq ($fd.clientAddress | default "direct") "proxyProtocol") (eq (($fd.service | default dict).type | default "LoadBalancer") "NodePort") }}{{ fail "frontDoor.clientAddress=proxyProtocol cannot be used with frontDoor.service.type=NodePort: anyone who can reach the node port could write its own client address in the PROXY header. Only your load balancer may reach the gateway pods (docs/front-door.md, \"Load balancers and the client address\")" }}{{ end }}
 {{- $rl := $fd.rateLimit | default dict }}
 {{- if not (has ($rl.failureMode | default "FailOpen") (list "FailOpen" "FailClosed")) }}{{ fail "frontDoor.rateLimit.failureMode must be FailOpen or FailClosed" }}{{ end }}
 {{- range $k := list "perCredentialPerMinute" "perSourcePerMinute" "perPodPerSecond" }}
@@ -173,8 +174,10 @@ data:
       - key: fd_source
         rate_limit: { unit: minute, requests_per_unit: {{ $rl.perSourcePerMinute }} }
 ---
-# Only the public route may be attached to ambit-public. A route of any other name that names the Gateway is refused,
-# and so is a route of the right name for another host.
+# Only the public route may be attached to ambit-public, and only as this chart writes it: the name, the host, one rule with
+# the exact path /mcp, one backend (the public backend), and no other Gateway. A route of another name that names the
+# Gateway, or a change of the right route (another path, host or backend), is refused. A route that already names
+# ambit-public before the front door is turned on is not checked: see docs/front-door.md ("Before you turn it on").
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
 metadata:
@@ -194,8 +197,16 @@ spec:
   validations:
     - expression: >-
         !variables.onPublic || (object.kind == "HTTPRoute" && object.metadata.name == "ambit-mcp-public" &&
-        has(object.spec.hostnames) && object.spec.hostnames == [{{ $fd.host | quote }}])
-      message: "only the route ambit-mcp-public for the front door host may be attached to the public Gateway ambit-public"
+        size(object.spec.parentRefs) == 1 &&
+        has(object.spec.hostnames) && object.spec.hostnames == [{{ $fd.host | quote }}] &&
+        has(object.spec.rules) && size(object.spec.rules) == 1 &&
+        has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) == 1 &&
+        has(object.spec.rules[0].matches[0].path) && object.spec.rules[0].matches[0].path.type == "Exact" &&
+        object.spec.rules[0].matches[0].path.value == "/mcp" &&
+        has(object.spec.rules[0].backendRefs) && size(object.spec.rules[0].backendRefs) == 1 &&
+        object.spec.rules[0].backendRefs[0].name == "ambit-mcp-public" &&
+        has(object.spec.rules[0].backendRefs[0].kind) && object.spec.rules[0].backendRefs[0].kind == "AgentgatewayBackend")
+      message: "only the route ambit-mcp-public may be attached to the public Gateway ambit-public, with the host, the exact path /mcp and the backend ambit-mcp-public that the chart sets"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

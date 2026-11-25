@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -72,8 +73,8 @@ func (c *ConsoleBackend) call(ctx context.Context, method, path string, body, ou
 	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(tok)))
 	req.Header.Set("Content-Type", "application/json")
 	hc := c.HTTP
-	if hc == nil {
-		hc = &http.Client{Timeout: 10 * time.Second}
+	if hc == nil { // a console that does not answer must not hold a sign-in or a refresh for long: 3 s to connect, 6 s in all
+		hc = &http.Client{Timeout: 6 * time.Second, Transport: &http.Transport{DialContext: (&net.Dialer{Timeout: 3 * time.Second}).DialContext}}
 	}
 	resp, err := hc.Do(req)
 	if err != nil {

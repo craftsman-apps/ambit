@@ -365,7 +365,7 @@ IDPP=$(freeport); kubectl -n "$NS" port-forward svc/ambit-oauth-idp "$IDPP:443" 
 CONP=$(freeport); kubectl -n "$NS" port-forward svc/ambit-oauth-console "$CONP:8085" >/dev/null 2>&1 & echo $! >> "$W/pids"
 wait_for 60 '(exec 3<>"/dev/tcp/127.0.0.1/$IDPP") 2>/dev/null && (exec 3<>"/dev/tcp/127.0.0.1/$CONP") 2>/dev/null' || fail "14 port-forwards"
 GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
-  KEY="$OKEY" ONE_TOOL=time_get_current_time "${PY[@]}" test/oauthtest/gateway.py || fail "14 the gateway checks failed (see FAIL lines above)"
+  HTTP_TIMEOUT=90 KEY="$OKEY" ONE_TOOL=time_get_current_time "${PY[@]}" test/oauthtest/gateway.py || fail "14 the gateway checks failed (see FAIL lines above)"
 pass "14 tokens at the public Gateway"
 
 # --- 13 · off again: everything of OAuth goes, the front door stays

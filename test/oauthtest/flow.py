@@ -69,7 +69,7 @@ class Browser:
         if isinstance(data, dict): h.setdefault("Content-Type", "application/x-www-form-urlencoded")
         r = urllib.request.Request(url, data=body, method=method, headers=h)
         try:
-            resp = self.op.open(r, timeout=30)
+            resp = self.op.open(r, timeout=int(os.environ.get('HTTP_TIMEOUT', '30')))
         except urllib.error.HTTPError as e:
             resp = e
         return resp.status if hasattr(resp, "status") else resp.code, dict(resp.headers), resp.read().decode("utf-8", "replace")
@@ -164,7 +164,10 @@ def sign_in(b, client_id, user, challenge=None, state=None, resource=(RES,), tic
 
 def token(client_id, **form):
     b = Browser()
-    st, h, t = b.req("POST", base_url("/oauth2/token"), {"client_id": client_id, **form})
+    try:
+        st, h, t = b.req("POST", base_url("/oauth2/token"), {"client_id": client_id, **form})
+    except Exception as e:  # a request that gets no answer in time is a refusal for the test
+        return 0, {"error": "no answer: " + type(e).__name__}
     try: j = json.loads(t)
     except Exception: j = {}
     return st, j

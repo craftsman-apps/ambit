@@ -9,3 +9,10 @@ frontDoor:
   service: { type: ClusterIP }
 limits:
   enabled: true
+evidence:
+  enabled: true
+# MCP with tokens from Ambit's own Dex: the step needs no other identity provider.
+mcp:
+  enabled: true
+  host: mcp.localtest.me
+  jwt: { dex: true }

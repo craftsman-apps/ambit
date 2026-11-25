@@ -85,3 +85,19 @@ func TestMaskResultPeakMemory(t *testing.T) {
 		t.Fatalf("peak extra heap is %d bytes, more than 5 times the result (%d bytes)", p, len(in))
 	}
 }
+
+// A result with a number of 16 digits or more is decoded with exact numbers (issue 360), which holds a second copy
+// of the result. It may need more than the 5 times above, but not 6.
+func TestMaskResultPeakMemoryWithLongNumber(t *testing.T) {
+	if testing.Short() {
+		t.Skip("samples the heap")
+	}
+	in := bigResult(10 << 20)
+	in = append(in[:len(in)-1], []byte(`,"structuredContent":{"id":12345678901234567890}}`)...)
+	g := &Guard{Masker: Builtin{}}
+	p := peakHeap(func() { checkBig(t, g, append([]byte(nil), in...)) })
+	t.Logf("peak extra heap %.1f MiB for a %.1f MiB result (%.1f times)", float64(p)/(1<<20), float64(len(in))/(1<<20), float64(p)/float64(len(in)))
+	if p > 6*uint64(len(in)) {
+		t.Fatalf("peak extra heap is %d bytes, more than 6 times the result (%d bytes)", p, len(in))
+	}
+}

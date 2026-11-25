@@ -8,7 +8,7 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 const password = process.env.AMBIT_ADMIN_PASSWORD ?? "";
 const NOW = new Date("2026-11-25T10:00:00Z");
 
-type Agent = { name: string; displayName: string; owner: string; mode: "person" | "itself"; group?: string; identity?: string; platform: string;
+type Agent = { stopRequestedAt?: string; stoppedAt?: string; stopUnlisted?: boolean; stopNotConfirmedAt?: string; orphanedAt?: string; name: string; displayName: string; owner: string; mode: "person" | "itself"; group?: string; identity?: string; platform: string;
   scope: string[]; connectionConsent: string[]; state: string; rev: number; created: string; createdBy: string; manageable: boolean };
 type Key = { id: string; name: string; prefix: string; scope: "mcp"; created: string; expires: string; until: string; lastUsed: string | null; status: string; stopsBecause: string;
   agent: string; sourceRanges?: string[] };
@@ -30,7 +30,7 @@ const call = (time: string, extra: Record<string, unknown> = {}) => ({
 const agentCall = (time: string, extra: Record<string, unknown> = {}) => call(time, {
   agent: "grok-bot-x7k2pq", agentMode: "person", agentOwnerAtIssue: "user09@example.com", agentOwnerNow: "user09@example.com", platformDeclared: "grok", ingress: "private", ...extra });
 
-type Setup = { saMaxDays?: number; keyDelayMs?: number; maxDays?: number; role?: "admin" | "viewer"; agents?: Agent[]; keys?: Key[]; enabled?: boolean; lastUsedAvailable?: boolean; calls?: object[]; auditError?: string;
+type Setup = { confirmAfter?: number; startError?: string; connections?: object[]; saMaxDays?: number; keyDelayMs?: number; maxDays?: number; role?: "admin" | "viewer"; agents?: Agent[]; keys?: Key[]; enabled?: boolean; lastUsedAvailable?: boolean; calls?: object[]; auditError?: string;
   seen?: { method: string; path: string; search: string; body?: unknown }[] };
 
 // A small stateful mock of the console: agents, their keys, the audit trail.
@@ -40,6 +40,7 @@ async function setup(page: Page, o: Setup = {}) {
   const email = role === "admin" ? "user10@example.com" : "user09@example.com";
   const agents = o.agents ?? [];
   const keys = o.keys ?? [];
+  let polls = 0;
   const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
   const settings = { enabled: o.enabled ?? true, maxTotal: 2000, maxPerPerson: 10, keyMaxDays: 90 };
   const keySettings = { enabled: true, inactivityDays: 30, maxDays: o.maxDays ?? 90, lastUsedAvailable: o.lastUsedAvailable ?? true };
@@ -53,6 +54,9 @@ async function setup(page: Page, o: Setup = {}) {
     if (p === "/api/config") return json(route, { mode: "direct", accessMode: "enforce" });
     if (p === "/api/settings/keys") return json(route, keySettings);
     if (p === "/api/admin/service-accounts") return json(route, { settings: { enabled: true, maxDays: o.saMaxDays ?? 90 }, accounts: [], urls: {} });
+    if (p === "/api/connections") return json(route, o.connections ?? [
+      { name: "slack", displayName: "Slack", state: "connected", revocable: true, connectURL: "/auth/connect/slack", servers: ["chat"] },
+      { name: "jira", displayName: "Jira", state: "not-connected", revocable: false, connectURL: "/auth/connect/jira", servers: ["tickets"] }]);
     if (p === "/api/servers") return json(route, servers);
     if (p === "/api/groups") return json(route, [{ name: "ops", source: "rules" }]);
     if (p === "/api/keys" || p === "/api/admin/keys") return json(route, { settings: keySettings, keys, urls: { llm: "https://llm.example.com", mcp: "https://mcp.example.com/mcp" } });
@@ -68,9 +72,23 @@ async function setup(page: Page, o: Setup = {}) {
     if (one) {
       const a = agents.find((x) => x.name === one[1]);
       if (!a) return json(route, { error: "no such agent" }, 404);
-      if (m === "GET") return json(route, { ...a, keys: keys.filter((k) => k.agent === a.name) });
+      if (m === "GET") {
+        // a stop is confirmed after a few polls: the console reports Stopped only when every gateway confirmed
+        if (a.state === "stopping" && !a.stopNotConfirmedAt && ++polls >= (o.confirmAfter ?? 2)) { a.state = "stopped"; a.stoppedAt = "2026-11-25T10:00:08Z"; }
+        return json(route, { ...a, keys: keys.filter((k) => k.agent === a.name) });
+      }
       if (m === "PATCH") { Object.assign(a, req.postDataJSON()); return json(route, a); }
       if (m === "DELETE") { agents.splice(agents.indexOf(a), 1); return route.fulfill({ status: 204 }); }
+    }
+    const own = p.match(/^\/api\/agents\/([^/]+)\/owner$/);
+    if (own && m === "PUT") { const a = agents.find((x) => x.name === own[1])!; a.owner = req.postDataJSON().owner; delete a.orphanedAt; return json(route, a); }
+    const act = p.match(/^\/api\/agents\/([^/]+)\/(stop|start)$/);
+    if (act && m === "POST") {
+      const a = agents.find((x) => x.name === act[1]);
+      if (!a) return json(route, { error: "no such agent" }, 404);
+      if (act[2] === "stop") { a.state = "stopping"; a.stopRequestedAt = "2026-11-25T10:00:00Z"; polls = 0; keys.splice(0, keys.length, ...keys.filter((k) => k.agent !== a.name)); return json(route, a, 202); }
+      if (o.startError) return json(route, { error: o.startError }, 409);
+      a.state = "active"; delete a.stoppedAt; delete a.stopRequestedAt; return json(route, a);
     }
     const newKey = p.match(/^\/api\/agents\/([^/]+)\/keys$/);
     if (newKey && m === "POST") {
@@ -461,4 +479,138 @@ test("Audit: without an audit trail the error is shown, not an empty list", asyn
   await page.goto("/audit?agent=grok-bot-x7k2pq");
   await expect(page.getByRole("alert").filter({ hasText: "the audit store (ClickHouse) did not answer" })).toBeVisible();
   await expect(page.getByText("No calls of the agent")).toHaveCount(0);
+});
+
+const mine = (o: Partial<Agent> = {}) => agent({ name: "grok-bot-x7k2pq", displayName: "Grok Bot for sales", scope: ["crm"], ...o });
+
+test("stop: confirmed on every gateway before it says Stopped, with the measured time; then start", async ({ page }) => {
+  const seen: Setup["seen"] = [];
+  await setup(page, { agents: [mine()], keys: [key({ id: "k1", agent: "grok-bot-x7k2pq" })], seen });
+  await page.goto("/agents?agent=grok-bot-x7k2pq");
+  const detail = page.getByTestId("agent-detail");
+  await detail.getByRole("button", { name: "Stop agent" }).click();
+  const dialog = page.getByRole("alertdialog", { name: "Stop agent" });
+  await expect(dialog).toContainText("The page shows Stopped only after every gateway has confirmed the stop.");
+  await expect(dialog).toContainText("A call that is already on its way can still be accepted until then.");
+  await expect(dialog).not.toContainText(/zero|no call/i);
+  await snap(page, "agents-stop-confirm");
+  await dialog.getByRole("button", { name: "Stop agent" }).click();
+
+  expect(await sent(seen, "POST", "/api/agents/grok-bot-x7k2pq/stop")).toEqual({});
+  const stopping = page.getByTestId("stop-note-info");
+  await expect(stopping).toContainText("Stopping since 2026-11-25 10:00:00 UTC");
+  await expect(stopping).toContainText("Until then a call can still be accepted.");
+  await expect(page.getByTestId("agent-state")).toHaveText("Stopping");
+  await expect(detail.getByRole("button", { name: "New key" })).toHaveCount(0);
+  await snap(page, "agents-stopping");
+
+  // the page asks again and shows Stopped when the console says so
+  await expect(page.getByTestId("agent-state")).toHaveText("Stopped", { timeout: 15_000 });
+  await expect(page.getByTestId("stop-note-ok")).toContainText("It was confirmed on every gateway 8 seconds after the request (measured).");
+  await expect(page.getByTestId("stop-note-ok")).toContainText("Its keys were deleted and stay deleted.");
+  await expect(detail).not.toContainText(/zero calls|no call will/i);
+  await expect(detail.getByRole("row", { name: /connector/ })).toHaveCount(0);
+  await expect(detail.getByRole("button", { name: "Change" })).toHaveCount(0);
+  await expect(detail.getByRole("button", { name: "Stop agent" })).toHaveCount(0);
+  await expect(page.getByTestId("agent-row-grok-bot-x7k2pq")).toContainText("Stopped");
+  await snap(page, "agents-stopped");
+
+  await detail.getByRole("button", { name: "Start agent" }).click();
+  expect(await sent(seen, "POST", "/api/agents/grok-bot-x7k2pq/start")).toEqual({});
+  await expect(page.getByTestId("agent-state")).toHaveText("Active");
+  await expect(detail.getByRole("button", { name: "Stop agent" })).toBeVisible();
+  await expect(detail.getByRole("button", { name: "New key" })).toBeVisible();
+});
+
+test("a stop that is not confirmed says so, and a full stop list; the list shows Stopping", async ({ page }) => {
+  await setup(page, { agents: [mine({ state: "stopping", stopRequestedAt: "2026-11-25T09:58:00Z", stopNotConfirmedAt: "2026-11-25T09:59:00Z", stopUnlisted: true })] });
+  await page.goto("/agents");
+  await expect(page.getByTestId("agent-row-grok-bot-x7k2pq")).toContainText("Stopping");
+  await page.goto("/agents?agent=grok-bot-x7k2pq");
+  await expect(page.getByTestId("stop-note-warn").first()).toContainText("Not confirmed on every gateway after 60 seconds (since 2026-11-25 09:59:00 UTC)");
+  await expect(page.getByTestId("stop-note-warn").nth(1)).toContainText("The stop list is full (1,000 agents)");
+  await expect(page.getByTestId("agent-state")).toHaveText("Stopping"); // stays: the mock does not confirm it
+});
+
+test("start is refused while the proxies drop the keys: the console's reason is shown", async ({ page }) => {
+  await setup(page, { agents: [mine({ state: "stopped", stopRequestedAt: "2026-11-25T09:59:30Z", stoppedAt: "2026-11-25T09:59:38Z" })], startError: "wait one minute after the keys were deleted, then start the agent" });
+  await page.goto("/agents?agent=grok-bot-x7k2pq");
+  await page.getByRole("button", { name: "Start agent" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "wait one minute after the keys were deleted" })).toBeVisible();
+  await expect(page.getByTestId("agent-state")).toHaveText("Stopped");
+});
+
+test("admins stop another person's agent and get the stop evidence; a person does not see the evidence link", async ({ page }) => {
+  const theirs = agent({ name: "theirs-bbbbbb", displayName: "Theirs", owner: "user02@example.com", manageable: false, state: "stopped", stopRequestedAt: "2026-11-25T09:59:30Z", stoppedAt: "2026-11-25T09:59:38Z" });
+  await setup(page, { role: "admin", agents: [theirs, agent({ name: "live-aaaaaa", displayName: "Live", owner: "user02@example.com", manageable: false })] });
+  await page.goto("/agents?agent=theirs-bbbbbb");
+  const link = page.getByRole("link", { name: "Download the stop evidence (agent-stop.zip)" });
+  await expect(link).toHaveAttribute("href", "/api/evidence/agent-stop/theirs-bbbbbb.zip");
+  await expect(page.getByRole("button", { name: "Start agent" })).toBeVisible();
+  await page.goto("/agents?agent=live-aaaaaa");
+  await expect(page.getByRole("button", { name: "Stop agent" })).toBeVisible();
+
+  await page.unrouteAll();
+  await setup(page, { agents: [mine({ state: "stopped", stoppedAt: "2026-11-25T09:59:38Z", stopRequestedAt: "2026-11-25T09:59:30Z" })] });
+  await page.goto("/agents?agent=grok-bot-x7k2pq");
+  await expect(page.getByRole("button", { name: "Start agent" })).toBeVisible();
+  await expect(page.getByRole("link", { name: /stop evidence/ })).toHaveCount(0);
+});
+
+test("connection consent: none ticked by default; the owner ticks one and saves; it gives nothing alone", async ({ page }) => {
+  const seen: Setup["seen"] = [];
+  await setup(page, { agents: [mine()], seen });
+  await page.goto("/agents?agent=grok-bot-x7k2pq");
+  const consent = page.getByTestId("consent");
+  await expect(consent).toContainText("Nothing is ticked by default.");
+  await expect(consent).toContainText("Ticking gives nothing by itself");
+  const slack = consent.getByLabel("May use my Slack connection");
+  const jira = consent.getByLabel("May use my Jira connection");
+  await expect(slack).not.toBeChecked();
+  await expect(jira).not.toBeChecked();
+  await expect(consent).toContainText("(not connected yet)");
+  await expect(consent.getByRole("button", { name: "Save connections" })).toBeDisabled();
+  await slack.check();
+  await snap(page, "agents-consent");
+  await consent.getByRole("button", { name: "Save connections" }).click();
+  expect(await sent(seen, "PATCH", "/api/agents/grok-bot-x7k2pq")).toEqual({ connectionConsent: ["slack"] });
+  await expect(consent.getByText("Saved.")).toBeVisible();
+  await expect(consent.getByLabel("May use my Slack connection")).toBeChecked();
+  await consent.getByLabel("May use my Slack connection").uncheck();
+  await expect(consent.getByRole("button", { name: "Save connections" })).toBeEnabled();
+});
+
+test("consent: an admin sees another person's list read-only; an itself-mode agent has none; an unknown name can be removed; no connections", async ({ page }) => {
+  const theirs = agent({ name: "theirs-bbbbbb", displayName: "Theirs", owner: "user02@example.com", manageable: false, connectionConsent: ["slack"] });
+  const itself = agent({ name: "nightly-report", displayName: "Nightly", mode: "itself", owner: "group:platform", identity: "nightly-report@svc.ambit.internal" });
+  await setup(page, { role: "admin", agents: [theirs, itself] });
+  await page.goto("/agents?agent=theirs-bbbbbb");
+  await expect(page.getByTestId("consent-list")).toContainText("Allowed: slack");
+  await expect(page.getByTestId("consent").getByRole("checkbox")).toHaveCount(0);
+  await page.goto("/agents?agent=nightly-report");
+  await expect(page.getByTestId("consent-itself")).toHaveText("An itself-mode agent gets no app connections in 0.6.0.");
+
+  await page.unrouteAll();
+  await setup(page, { agents: [mine({ connectionConsent: ["slack", "old-app"] })] });
+  await page.goto("/agents?agent=grok-bot-x7k2pq");
+  await expect(page.getByTestId("consent")).toContainText("not a connection of yours: old-app");
+  await page.getByTestId("consent").getByRole("button", { name: "Remove them" }).click();
+  await expect(page.getByTestId("consent")).not.toContainText("old-app");
+
+  await page.unrouteAll();
+  await setup(page, { agents: [mine()], connections: [] });
+  await page.goto("/agents?agent=grok-bot-x7k2pq");
+  await expect(page.getByTestId("consent")).toContainText("There are no apps with their own sign-in.");
+});
+
+test("owner left: the banner says so and an admin moves an itself-mode agent", async ({ page }) => {
+  const seen: Setup["seen"] = [];
+  const itself = agent({ name: "nightly-report", displayName: "Nightly", mode: "itself", owner: "former@example.com", identity: "nightly-report@svc.ambit.internal", orphanedAt: "2026-11-24T08:00:00Z" });
+  await setup(page, { role: "admin", agents: [itself], seen });
+  await page.goto("/agents?agent=nightly-report");
+  await expect(page.getByTestId("orphan-banner")).toContainText("The owner of this agent left on 2026-11-24 08:00:00 UTC.");
+  await expect(page.getByTestId("orphan-banner")).toContainText("Then it is stopped.");
+  await page.getByLabel("New owner").fill("group:platform");
+  await page.getByRole("button", { name: "Move agent" }).click();
+  expect(await sent(seen, "PUT", "/api/agents/nightly-report/owner")).toEqual({ owner: "group:platform" });
 });

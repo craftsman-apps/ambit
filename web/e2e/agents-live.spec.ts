@@ -98,3 +98,41 @@ test("Audit has the agent, platform and entrance filters", async ({ page }) => {
   await page.locator("#audit-agent").fill("no-such-agent-aaaaaa");
   await expect(page.locator("#audit-ingress")).toBeEnabled();
 });
+
+test("agents: stop is confirmed by the gateways, then start; the connection boxes are there", async ({ page }) => {
+  await signInAsAdmin(page);
+  const display = uniqueName();
+  try {
+    await page.goto("/agents");
+    await page.getByRole("button", { name: "New agent" }).click();
+    const form = page.getByRole("form", { name: "New agent" });
+    await form.getByLabel("Name", { exact: true }).fill(display);
+    await form.getByRole("button", { name: "Create agent" }).click();
+    const detail = page.getByTestId("agent-detail");
+    await expect(page.getByTestId("agent-state")).toHaveText("Active");
+
+    // Consent: nothing is ticked by default (the boxes exist when the install has apps with their own sign-in).
+    const consent = page.getByTestId("consent");
+    await expect(consent).toContainText("Nothing is ticked by default.");
+    await expect(consent.getByRole("checkbox", { checked: true })).toHaveCount(0);
+
+    // Stop: the page says Stopping, then Stopped only after the console reports every gateway confirmed it.
+    await detail.getByRole("button", { name: "Stop agent" }).click();
+    await page.getByRole("alertdialog", { name: "Stop agent" }).getByRole("button", { name: "Stop agent" }).click();
+    await expect(page.getByTestId("agent-state")).toHaveText(/Stopping|Stopped/);
+    await expect(page.getByTestId("agent-state")).toHaveText("Stopped", { timeout: 120_000 });
+    await expect(page.getByTestId("stop-note-ok")).toContainText("seconds after the request (measured)");
+    await expect(detail.getByRole("button", { name: "New key" })).toHaveCount(0);
+
+    // Start: the console refuses it for one minute after the keys were deleted; ask again until it works.
+    const start = detail.getByRole("button", { name: "Start agent" });
+    for (let i = 0; i < 30 && (await page.getByTestId("agent-state").textContent()) !== "Active"; i++) {
+      await start.click({ timeout: 3_000 }).catch(() => null);
+      await page.waitForTimeout(5_000);
+    }
+    await expect(page.getByTestId("agent-state")).toHaveText("Active");
+    await expect(detail.getByRole("button", { name: "Stop agent" })).toBeVisible();
+  } finally {
+    await removeAgents(page);
+  }
+});

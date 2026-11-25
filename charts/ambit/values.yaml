@@ -125,6 +125,22 @@ serviceAccounts:
   # Days a service account key keeps working after the admin who issued it is offboarded (0-30; 0: it stops at once).
   exposureDays: 7
 
+agents:
+  # Agents (console: Agents): a hosted assistant that calls MCP tools with its own key, for one person (person mode) or
+  # on its own (itself mode: a service account with an owner). EXPERIMENTAL in 0.6.x: the API and the key fields may
+  # change in 0.7.0 with an upgrade note (docs/agents.md). false: creating agents and agent keys is refused; the keys
+  # that exist keep working until they end.
+  enabled: true
+  # At most this many agents in all (each is one small ConfigMap; at most 2000), and per person in person mode.
+  maxTotal: 2000
+  maxPerPerson: 10
+  # The longest end date of an agent key: 30, 90 or 365 (also limited by apiKeys.maxDays, and for itself mode by
+  # serviceAccounts.maxDays).
+  keyMaxDays: 90
+  # Reserved for OAuth (0.6.0, later): the issuer whose tokens may carry agent claims. Empty: no token is read as an
+  # agent's, and no token is limited by an agent scope.
+  tokenIssuer: ""
+
 routing:
   router:
     # ambit-router labels prompts for ModelRouters of type LLM. Installed but at 0 replicas until such a router
@@ -174,6 +190,41 @@ mcp:
     jwksURL: ""
     # Refuse gateway JWTs without a usable email claim. Offboarding, per-person budgets and audit are keyed by email; with false, such tokens are identified by their subject and offboarding cannot block them before they expire.
     requireEmail: true
+
+frontDoor:
+  # EXPERIMENTAL in 0.6.x (docs/front-door.md): a second, public Gateway (ambit-public) for hosted agents. HTTPS only, one
+  # host, one route (/mcp), API keys only. The console, Dex and the LLM host are never reachable on it. Off by default.
+  # Needs mcp.enabled, apiKeys.enabled, limits.enabled (shared rate limits), evidence.enabled (audit) and a certificate.
+  enabled: false
+  # Public MCP host name, for example mcp-public.example.com. It must differ from console.host, llm.host and mcp.host.
+  host: ""
+  tls:
+    # A kubernetes.io/tls Secret in this namespace whose certificate covers frontDoor.host.
+    certificateSecret: ""
+  # Listener and Service port of the public Gateway (HTTPS).
+  port: 8443
+  replicas: 2
+  service:
+    # LoadBalancer in the cloud. ClusterIP or NodePort for a load balancer or tunnel you run yourself.
+    type: LoadBalancer
+    annotations: {}
+    # Local keeps the client's address (the source limit and the audit log use it). Cluster hides it behind a node.
+    externalTrafficPolicy: Local
+    # Cloud firewall: only these source ranges reach the load balancer. [] allows every address.
+    loadBalancerSourceRanges: []
+    nodePort: null
+  # How the gateway learns the client's address. direct: from the connection (externalTrafficPolicy Local, or a load
+  # balancer that keeps the address). proxyProtocol: the load balancer sends the PROXY protocol (AWS NLB with proxy
+  # protocol v2 enabled, and others); the gateway then refuses connections without it. X-Forwarded-For is never trusted.
+  clientAddress: direct
+  rateLimit:
+    # Shared by all gateway pods (the ratelimit service counts in Valkey). Per valid key, and per source address.
+    perCredentialPerMinute: 600
+    perSourcePerMinute: 120
+    # A second line in each gateway pod, for all requests, if the ratelimit service is down.
+    perPodPerSecond: 200
+    # FailOpen: if the ratelimit service is down, the per-pod limit still applies. FailClosed: requests are refused.
+    failureMode: FailOpen
 
 access:
   # enforce: AccessRules decide (default).

@@ -95,6 +95,29 @@ func TestRequestApproveCreatesServer(t *testing.T) {
 	}
 }
 
+// The public front door is an admin's decision about a running server: a request written with kubectl that already
+// says frontDoor.enabled does not put its server on the internet through an approval.
+func TestApprovalNeverCarriesTheFrontDoorSetting(t *testing.T) {
+	h, c, a := serversFixture(t)
+	user11 := user(a, "user11@example.com", RoleApprover)
+	q := &v1.ServerRequest{ObjectMeta: metav1.ObjectMeta{Name: "crm-abc", Namespace: testNS},
+		Spec: v1.ServerRequestSpec{ServerName: "crm", RequestedBy: "user01@example.com", Server: v1.ServerSpec{Image: echoDigest, Transport: "stdio",
+			FrontDoor: &v1.ServerFrontDoor{Enabled: true, AcceptUnmaskedServerMessages: true}}}}
+	if err := c.Create(t.Context(), q); err != nil {
+		t.Fatal(err)
+	}
+	if r := do(t, h, "POST", "/api/server-requests/crm-abc/approve", user11, DecisionInput{}); r.Code != 200 {
+		t.Fatalf("approve: %d %s", r.Code, r.Body)
+	}
+	var srv v1.Server
+	if err := c.Get(t.Context(), client.ObjectKey{Namespace: testNS, Name: "crm"}, &srv); err != nil {
+		t.Fatal(err)
+	}
+	if srv.Spec.FrontDoor != nil {
+		t.Fatalf("the approved server is on the front door: %+v", srv.Spec.FrontDoor)
+	}
+}
+
 func TestNobodyApprovesTheirOwnRequest(t *testing.T) {
 	h, c, a := serversFixture(t)
 	user10 := user(a, "user10@example.com", RoleAdmin, "ambit-admins")

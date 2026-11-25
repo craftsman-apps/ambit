@@ -111,4 +111,16 @@ ev=$(kubectl -n "$NS" get events --field-selector "involvedObject.name=$REQ" -o 
 sign_in keycloak user01 user01-test-pass
 [[ $(api GET "/api/audit?approvals=true") == 403 ]] || fail "8 a viewer could read the approval records"
 pass "8 Audit (approvals): $want; $n otel_logs rows for $REQ, none with jwt.email; Events: $ev; viewer gets 403"
+
+# 9 · issue #332: deleting the Server (here with kubectl, so no person is known) is a "removed" record of the same request
+kubectl -n "$NS" delete "servers.$G" time-b >/dev/null || fail "9 delete time-b"
+sign_in keycloak user10 user10-test-pass
+for _ in $(seq 1 30); do
+  n=$(ch "SELECT count() FROM otel.otel_logs WHERE LogAttributes['ambit.kind'] = 'app-approval' AND LogAttributes['ambit.app.action'] = 'removed' AND LogAttributes['ambit.app.request'] = '$REQ' AND LogAttributes['mcp.target'] = 'time-b' AND LogAttributes['ambit.app.requested_by'] = 'user01@example.com' AND LogAttributes['ambit.app.image'] = '$IMAGE' AND LogAttributes['ambit.actor'] = '' AND LogAttributes['jwt.email'] = ''")
+  [[ "$n" == 1 ]] && break; sleep 2
+done
+[[ "$n" == 1 ]] || fail "9 removed records for $REQ: $n (want 1)"
+[[ $(api GET "/api/audit?approvals=true&from=$day&to=$next") == 200 && $(field '[e["action"] for e in d["events"] if e["request"] == "'"$REQ"'" and e["action"] == "removed"]') == "['removed']" ]] ||
+  fail "9 Audit (approvals) does not list the removal: $(head -c 400 "$W/api")"
+pass "9 deleting time-b wrote one removed record (request $REQ, requested by user01, image digest, no actor); the Audit page lists it"
 done_step 4b

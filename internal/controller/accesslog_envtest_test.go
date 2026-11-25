@@ -327,3 +327,68 @@ func TestAccessSnapshotsFollowTheRulesInForce(t *testing.T) {
 		t.Errorf("mode change: %d records", c.n())
 	}
 }
+
+// With a public Gateway (frontDoor.enabled) the controller writes one access-log policy for each Gateway, the second
+// one saying ambit.ingress "public"; the startup writes both before it is ready; with the front door turned off the
+// public policy is removed again (its Gateway is gone) and the private one is left alone.
+func TestPublicAccessLogPolicyIsWrittenAndRemoved(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-accesslog-public"
+	namespace(t, ns)
+	ctx := t.Context()
+	createBase(t, ns)
+	s := &AccessLogStartup{Client: envClient, Namespace: ns, PublicGateway: "ambit-public"}
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{AccessLogPolicy, PublicAccessLogPolicy} {
+		if _, err := genGet(ctx, ns, "AgentgatewayPolicy", name); err != nil {
+			t.Fatalf("startup did not write %s: %v", name, err)
+		}
+	}
+	// A restart with only the private policy left (an upgrade that turns the front door on) writes the public one only.
+	if err := envClient.Delete(ctx, mustGen(t, ctx, ns, PublicAccessLogPolicy)); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := genGet(ctx, ns, "AgentgatewayPolicy", AccessLogPolicy)
+	if err := s.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	pub, err := genGet(ctx, ns, "AgentgatewayPolicy", PublicAccessLogPolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, _ := genGet(ctx, ns, "AgentgatewayPolicy", AccessLogPolicy)
+	if before.GetResourceVersion() != after.GetResourceVersion() {
+		t.Error("startup rewrote the private policy")
+	}
+	refs, _, _ := unstructured.NestedSlice(pub.Object, "spec", "targetRefs")
+	if len(refs) != 1 || refs[0].(map[string]any)["name"] != "ambit-public" || attributes(pub)["ambit.ingress"] != `"public"` {
+		t.Fatalf("public policy: %v %v", refs, attributes(pub))
+	}
+
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}}
+	if _, err := r.writeAccessLog(ctx, "enforce", "abc", nil); err != nil { // front door off
+		t.Fatal(err)
+	}
+	if _, err := genGet(ctx, ns, "AgentgatewayPolicy", PublicAccessLogPolicy); !apierrors.IsNotFound(err) {
+		t.Fatalf("the public policy stays with the front door off: %v", err)
+	}
+	if _, err := genGet(ctx, ns, "AgentgatewayPolicy", AccessLogPolicy); err != nil {
+		t.Fatalf("the private policy is gone: %v", err)
+	}
+	r.PublicGateway = "ambit-public"
+	gs, err := r.writeAccessLog(ctx, "enforce", "abc", nil)
+	if err != nil || len(gs) != 2 {
+		t.Fatalf("written for the gate: %d (%v)", len(gs), err)
+	}
+}
+
+func mustGen(t *testing.T, ctx context.Context, ns, name string) *unstructured.Unstructured {
+	t.Helper()
+	p, err := genGet(ctx, ns, "AgentgatewayPolicy", name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}

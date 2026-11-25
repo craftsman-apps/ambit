@@ -199,7 +199,8 @@ func andUnlessTrue(expr string) string {
 // RelaxForAudit returns the objects of audit mode (#81) from the enforce compile: every AccessRule decision allows.
 // Each Model's authorization is `true`, keeping RefuseUnpriced's refusal (it guards a Budget, which audit mode still
 // enforces); the MCP access policy is `true`; the virtual models of routers are compiled again by compileRouters
-// (CompileRouters with the enforce inputs) from the relaxed Models. res is not changed.
+// (CompileRouters with the enforce inputs) from the relaxed Models. An agent's own scope is not an AccessRule: it
+// stays enforced in audit mode (the MCP policy is the agent-scope clause alone). res is not changed.
 func RelaxForAudit(res Result, refused map[string][]string, compileRouters func(*Result)) []*unstructured.Unstructured {
 	a := Result{Access: res.Access, RuleConditions: res.RuleConditions, Audit: true}
 	for _, o := range res.Objects {
@@ -217,7 +218,7 @@ func RelaxForAudit(res Result, refused map[string][]string, compileRouters func(
 			}
 			_ = unstructured.SetNestedSlice(o.Object, []any{expr}, "spec", "policies", "authorization", "policy", "matchExpressions")
 		case o.GetKind() == "AgentgatewayPolicy" && o.GetName() == MCPBackendName+"-access":
-			_ = unstructured.SetNestedSlice(o.Object, []any{"true"}, "spec", "backend", "mcp", "authorization", "policy", "matchExpressions")
+			_ = unstructured.SetNestedSlice(o.Object, []any{"(true) && (" + agentScope() + ")"}, "spec", "backend", "mcp", "authorization", "policy", "matchExpressions")
 		}
 		a.Objects = append(a.Objects, o)
 	}

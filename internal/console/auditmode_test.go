@@ -178,7 +178,7 @@ func TestAuditOutcomesAgainstClickHouse(t *testing.T) {
 	a := &Audit{DB: db}
 	for i, r := range rows {
 		email := fmt.Sprintf("p%d@example.com", i)
-		calls, err := a.Calls(ctx, email, base.Add(-time.Hour), base.Add(time.Hour), 10)
+		calls, err := a.Calls(ctx, email, base.Add(-time.Hour), base.Add(time.Hour), 10, CallFilter{})
 		if err != nil || len(calls) != 1 {
 			t.Fatalf("%s: %v %+v", r.name, err, calls)
 		}

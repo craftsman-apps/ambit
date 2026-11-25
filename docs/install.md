@@ -202,6 +202,10 @@ gateway:
 
 The gateway then serves HTTPS on `gateway.tls.port` (default 8443), and plain HTTP on the console, LLM and (if enabled) MCP hosts redirects to it. Clients use that port in the address unless it is 443. Set `console.url` to the address people open, with `https://`: it is also the issuer address of Dex.
 
+## Let hosted agents in: the public front door (experimental)
+
+Agents that run on the internet (Grok Bot, Copilot Studio, AWS AgentCore, Cloudflare Agents) cannot reach a gateway on your company network. `frontDoor.enabled: true` adds a second, public gateway that serves HTTPS only, one host name and one route (`/mcp`), with personal and service account API keys only. The console, Dex and the LLM host are never reachable on it. It is off by default. See [The public front door](front-door.md).
+
 ## Upgrade and uninstall
 
 Read [Upgrading](upgrading.md) before each upgrade. With the CLI of the new version:

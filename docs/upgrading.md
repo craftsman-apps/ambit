@@ -8,6 +8,35 @@ lists the sections below that apply to your upgrade. It writes ordinary Helm rel
 `pending-upgrade` (a laptop that stopped in the middle of an upgrade) is refused; see
 [ambit upgrade](cli.md#ambit-upgrade) for `--recover-pending`.
 
+## To the release with agents (0.6.0)
+
+This release adds [agents](agents.md): records, keys with a scope and source ranges, and audit fields. **The agent API, the
+agent fields of a key and the audit columns of an agent are experimental in 0.6.x**: they may change in 0.7.0, with a note on
+this page, and never silently inside 0.6.x. What may be relied on in 0.6.0 is the `ambit_` key format, the seven audit
+attributes (`ambit.agent`, `ambit.agent_mode`, `ambit.agent_owner_at_issue`, `ambit.platform_declared`, `ambit.grant_id`,
+`ambit.token_issuer`, `ambit.ingress`) and the eight columns appended to `calls.csv`; exports only ever append columns.
+
+- New Helm values `agents.enabled` (default `true`), `agents.maxTotal`, `agents.maxPerPerson`, `agents.keyMaxDays` and `agents.tokenIssuer` (reserved for OAuth; leave it empty). `agents.enabled: false` refuses new agents and agent keys; existing keys keep working until they end.
+- The MCP access policy `ambit-mcp-access` gets one more constant clause, so **the rules version shown in Audit changes once** after the upgrade. The access of people does not change.
+- The access log gets seven more attributes. A custom access-log policy of your own is not changed.
+- With `--reuse-values` from an earlier release the new values are missing and the defaults apply.
+
+## To the release with the public front door (0.6.0)
+
+- **New and off by default (experimental).** `frontDoor.enabled: false` renders nothing new and changes nothing. With it
+  on, the chart adds a second Gateway `ambit-public` (its own pods, Service and load balancer), a route, three policies,
+  a ConfigMap `ambit-ratelimit-front-door` and an admission policy. Read [The public front door](front-door.md) first:
+  it needs a certificate Secret, `limits.enabled` and `evidence.enabled`.
+- **With the front door on**, the ratelimit service reads two ConfigMaps (the budgets' and the front door's), its network
+  policy admits the public gateway pods, the controller starts with `--public-gateway=ambit-public`, and the audit
+  records of both gateways carry `ambit.ingress` (`private` or `public`). Records written before the upgrade have none.
+- The front door is experimental: its values and objects may change in 0.7.0 with an upgrade note, never silently inside 0.6.x.
+- **New field `Server.spec.frontDoor`** (experimental, additive). Apply the new `ambit-crds` chart first, as always. A server
+  without the field is unchanged. With `enabled: true` and without `acceptUnmaskedServerMessages: true`, the server is not
+  served at all (`Ready` `False`, reason `FrontDoorNotAcknowledged`).
+- **The guard withholds a tool list that is not an object with a list of tools** (it passed such a list before). A
+  correct MCP server never sends one.
+
 ## To the release with service accounts (0.5.0)
 
 - **Compression records name the caller.** With `evidence.enabled` and a Server with `resultCompression`, the guard's

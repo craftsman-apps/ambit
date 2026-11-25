@@ -27,6 +27,7 @@ func main() {
 	ns := os.Getenv("AMBIT_NAMESPACE")
 	requireEmail := flag.Bool("require-email", true, "gateway JWTs must carry a usable email (llm/mcp.jwt.requireEmail)")
 	usersVerified := flag.Bool("users-require-verified-email", true, "an AccessRule's users match a JWT's email only with email_verified: true (accessRules.usersRequireVerifiedEmail)")
+	agentIssuer := flag.String("agent-token-issuer", "", "the issuer whose tokens may carry agent claims (agents.tokenIssuer); empty: none")
 	route := flag.String("llm-route", "ambit-llm", "HTTPRoute that every model attaches to")
 	rlService := flag.String("ratelimit-service", "", "Service of envoy's ratelimit for Budgets; empty turns budgets off")
 	rlPort := flag.Int64("ratelimit-port", 8081, "gRPC port of the ratelimit service")
@@ -41,9 +42,11 @@ func main() {
 	accessMode := flag.String("access-mode", "enforce", "enforce: AccessRules decide; audit: every signed-in request is allowed and its record says whether the rules would have refused it")
 	activationTimeout := flag.Duration("activation-timeout", 2*time.Minute, "how long a mode switch or rules change waits for agentgateway to apply one step")
 	activationSettle := flag.Duration("activation-settle", 3*time.Second, "wait after agentgateway accepted a step, for the change to reach every gateway pod")
+	publicGateway := flag.String("public-gateway", "", "the public Gateway (frontDoor.enabled): it gets its own access-log policy, and offboarded people are refused on its route; empty: none")
 	flag.Parse()
 	controller.RequireEmail = *requireEmail
 	controller.UsersRequireVerifiedEmail = *usersVerified
+	controller.AgentTokenIssuer = *agentIssuer
 	ctrl.SetLogger(zap.New())
 	log := ctrl.Log.WithName("setup")
 	if ns == "" {
@@ -84,6 +87,7 @@ func main() {
 	}
 	// Access snapshots (evidence exports) go to the collector, like the gateway's records; no endpoint: off.
 	var snapshots *controller.Snapshots
+	var appRemovals *controller.AppRemovals
 	if ep := os.Getenv("AMBIT_OTLP_ENDPOINT"); ep != "" {
 		exp, err := otlplog.New(ep, "ambit-controller", controller.RecordDropped)
 		if err != nil {
@@ -92,6 +96,7 @@ func main() {
 		}
 		defer exp.Close()
 		snapshots = &controller.Snapshots{Send: exp.Send}
+		appRemovals = &controller.AppRemovals{Send: exp.Send}
 		if err := mgr.Add(snapshots); err != nil { // the daily record, on the leader
 			log.Error(err, "add access snapshots")
 			os.Exit(1)
@@ -104,7 +109,7 @@ func main() {
 	if err := (&controller.Reconciler{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), ListTools: listTools, Namespace: ns, Route: controller.RouteRef{Name: *route},
 		RateLimit: controller.RateLimit{Service: *rlService, Port: *rlPort, FailureMode: *rlFailure}, ToolsRefresh: *toolsRefresh, ArgumentLimits: *argLimits,
 		Classifier: controller.Classifier{Deployment: *routerDep, Replicas: int32(*routerReplicas)}, AccessMode: *accessMode,
-		Activation: activation, Snapshots: snapshots}).SetupWithManager(mgr); err != nil {
+		Activation: activation, Snapshots: snapshots, AppRemovals: appRemovals, PublicGateway: *publicGateway}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "set up controller")
 		os.Exit(1)
 	}
@@ -115,7 +120,7 @@ func main() {
 		}
 	}
 	// Ready only once ambit-access-log exists: an upgrade from a chart that rendered it leaves no gap unnoticed.
-	accessLog := &controller.AccessLogStartup{Client: mgr.GetClient(), Namespace: ns}
+	accessLog := &controller.AccessLogStartup{Client: mgr.GetClient(), Namespace: ns, PublicGateway: *publicGateway}
 	if err := mgr.Add(accessLog); err != nil {
 		log.Error(err, "add access-log start")
 		os.Exit(1)

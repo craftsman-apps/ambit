@@ -49,7 +49,7 @@ func (f *fakeHydra) addConsent(ch, subject, requestURL string, redirects ...stri
 		redirects = []string{"https://chatgpt.com/connector_platform_oauth_redirect"}
 	}
 	f.consents[ch] = &ConsentRequest{Challenge: ch, Subject: subject, RequestURL: requestURL, RequestedScope: []string{"mcp", "offline_access"},
-		Client: Client{ID: "c1", Name: "ChatGPT", RedirectURIs: redirects}, Context: map[string]any{"groups": []any{"eng"}}}
+		Client: Client{ID: "c1", Name: "ChatGPT", RedirectURIs: redirects}, Context: map[string]any{"groups": []any{"eng"}, "bind": "bind-of-" + ch}}
 }
 
 func (f *fakeHydra) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -151,6 +151,8 @@ func (f *fakeIdP) AuthURL(state, nonce, verifier string) string {
 	f.nonces[state] = nonce
 	return idpIss + "/auth?state=" + url.QueryEscape(state)
 }
+
+func (f *fakeIdP) IssRequired() bool { return false }
 
 // Exchange: the code is "<name>|<state>"; the claims are looked up by name, and carry the nonce of the state.
 func (f *fakeIdP) Exchange(_ context.Context, code, _ string) (IDClaims, error) {
@@ -258,13 +260,24 @@ func newEnv(t *testing.T) *env {
 
 // browser keeps cookies like a browser does, by name.
 type browser struct {
+	e       *env
 	h       http.Handler
 	cookies map[string]string
 	addr    string
 }
 
 func (e *env) browser() *browser {
-	return &browser{h: e.handler, cookies: map[string]string{}, addr: "203.0.113.7"}
+	return &browser{e: e, h: e.handler, cookies: map[string]string{}, addr: "203.0.113.7"}
+}
+
+// bind gives the browser the cookie that the callback gives the person who signed in for this consent request.
+func (e *env) bind(b *browser, consent string) {
+	id, _ := e.hydra.consents[consent].Context["bind"].(string)
+	v, err := e.srv.Sealer.Seal(Tx{Login: id, Exp: e.now.Add(time.Minute).Unix()}, bindName(id))
+	if err != nil {
+		panic(err)
+	}
+	b.cookies[bindName(id)] = v
 }
 
 func (b *browser) do(method, target string, form url.Values, hdr map[string]string) *httptest.ResponseRecorder {
@@ -298,7 +311,12 @@ func (b *browser) do(method, target string, form url.Values, hdr map[string]stri
 func loc(w *httptest.ResponseRecorder) string { return w.Header().Get("Location") }
 
 func goodRequestURL(extra string) string {
-	return "https://auth.example.com/oauth2/auth?client_id=c1&response_type=code&resource=" + url.QueryEscape(resource) + extra
+	return "https://auth.example.com/oauth2/auth?client_id=c1&response_type=code&redirect_uri=" + url.QueryEscape("https://chatgpt.com/connector_platform_oauth_redirect") + "&resource=" + url.QueryEscape(resource) + extra
+}
+
+// validAuthPath is an authorization request that passes the front's checks (a continuation carries these parameters again).
+func validAuthPath(extra string) string {
+	return strings.TrimPrefix(goodRequestURL("&state=state-0123&code_challenge="+strings.Repeat("a", 43)+"&code_challenge_method=S256&scope=mcp+offline_access"+extra), pubURL)
 }
 
 // startLogin runs /login and returns the state that went to the identity provider.
@@ -334,8 +352,10 @@ func TestTwoSignInsInOneBrowserCompleteInReverseOrder(t *testing.T) {
 			t.Fatalf("login %s accepted for %v", c.ch, e.hydra.accepted[c.ch]["subject"])
 		}
 	}
-	if len(b.cookies) != 0 {
-		t.Fatalf("the transaction cookies must be gone: %v", b.cookies)
+	for n := range b.cookies {
+		if strings.HasPrefix(n, txPrefix) {
+			t.Fatalf("the transaction cookies must be gone: %v", b.cookies)
+		}
 	}
 	// replay of a finished callback: no cookie, refused
 	if w := b.do("GET", "/callback?code=alice|"+url.QueryEscape(stA)+"&state="+url.QueryEscape(stA), nil, nil); w.Code != 400 {
@@ -482,6 +502,7 @@ func TestResourceChecks(t *testing.T) {
 			t.Errorf("login %s: %d, Hydra reject %q", name, w.Code, e.hydra.rejected["L"+name])
 		}
 		e.hydra.addConsent("C"+name, "alice@acme.test", ru)
+		e.bind(b, "C"+name)
 		if w := b.do("GET", "/consent?consent_challenge=C"+name, nil, nil); w.Code != 302 || e.hydra.rejected["C"+name] != "invalid_target" {
 			t.Errorf("consent %s: %d, Hydra reject %q", name, w.Code, e.hydra.rejected["C"+name])
 		}
@@ -499,13 +520,13 @@ func TestAuthorizeAddsIssOnlyToTheResponseThatLeaves(t *testing.T) {
 		"other no code": {"https://chatgpt.com/cb?state=s", "https://chatgpt.com/cb?state=s"},
 	} {
 		e.hydra.authLoc = tc.from
-		w := b.do("GET", "/oauth2/auth?login_verifier=v", nil, nil)
+		w := b.do("GET", validAuthPath("&login_verifier=v"), nil, nil)
 		if loc(w) != tc.want {
 			t.Errorf("%s: Location %q, want %q", name, loc(w), tc.want)
 		}
 	}
 	e.hydra.authLoc = "https://chatgpt.com/cb?code=abc&iss=https%3A%2F%2Fhydra"
-	if w := b.do("GET", "/oauth2/auth?login_verifier=v", nil, nil); w.Code != 502 {
+	if w := b.do("GET", validAuthPath("&login_verifier=v"), nil, nil); w.Code != 502 {
 		t.Errorf("Hydra sent its own iss: %d, want 502 (never two)", w.Code)
 	}
 }

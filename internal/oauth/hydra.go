@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -17,6 +18,23 @@ import (
 type HydraAdmin struct {
 	Base string
 	HTTP *http.Client
+}
+
+// pathOnly drops the query: it holds Hydra's challenges and verifiers, which never go into a log.
+func pathOnly(p string) string {
+	if i := strings.IndexByte(p, '?'); i >= 0 {
+		return p[:i]
+	}
+	return p
+}
+
+// stripURL removes the request address from a transport error: net/http puts the whole URL (with its query) into it.
+func stripURL(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return fmt.Errorf("%s: %w", ue.Op, ue.Err)
+	}
+	return err
 }
 
 // ErrUnknown: Hydra does not know the challenge, or it was used or has expired.
@@ -48,7 +66,7 @@ func (h *HydraAdmin) do(ctx context.Context, method, path string, body, out any)
 	req.Header.Set("Accept", "application/json")
 	resp, err := h.client().Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("hydra admin: %w", err)
+		return 0, fmt.Errorf("hydra admin: %w", stripURL(err))
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
@@ -56,11 +74,11 @@ func (h *HydraAdmin) do(ctx context.Context, method, path string, body, out any)
 	case resp.StatusCode == 404 || resp.StatusCode == 409 || resp.StatusCode == 410:
 		return resp.StatusCode, ErrUnknown
 	case resp.StatusCode > 299:
-		return resp.StatusCode, fmt.Errorf("hydra admin: %s %s: HTTP %d", method, path, resp.StatusCode)
+		return resp.StatusCode, fmt.Errorf("hydra admin: %s %s: HTTP %d", method, pathOnly(path), resp.StatusCode)
 	}
 	if out != nil && len(data) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {
-			return resp.StatusCode, fmt.Errorf("hydra admin: %s %s: bad answer", method, path)
+			return resp.StatusCode, fmt.Errorf("hydra admin: %s %s: bad answer", method, pathOnly(path))
 		}
 	}
 	return resp.StatusCode, nil
@@ -194,7 +212,7 @@ func (h *HydraAdmin) ListClients(ctx context.Context, each func(Client) error) e
 		req, _ := http.NewRequestWithContext(ctx, "GET", h.Base+u, nil)
 		resp, err := h.client().Do(req)
 		if err != nil {
-			return fmt.Errorf("hydra admin: %w", err)
+			return fmt.Errorf("hydra admin: %w", stripURL(err))
 		}
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 		resp.Body.Close()

@@ -32,6 +32,8 @@ type IDClaims struct {
 // expiry of the ID token; the server compares the nonce and the rest.
 type Identity interface {
 	AuthURL(state, nonce, verifier string) string
+	// IssRequired: the provider says it sends iss in its authorization responses (RFC 9207), so a response without it is refused.
+	IssRequired() bool
 	Exchange(ctx context.Context, code, verifier string) (IDClaims, error)
 }
 
@@ -171,21 +173,22 @@ var challengeRE = regexp.MustCompile(`^[A-Za-z0-9_-]{43,128}$`)
 
 // authorize is the front of Hydra's /oauth2/auth. The first request of a sign-in (it has no Hydra verifier) must be
 // exactly what Ambit serves: the code flow, PKCE with S256, the query response mode, our one resource, our scopes,
-// and no parameter twice. The requests that come back from login and consent carry Hydra's verifiers and are passed on.
+// and no parameter twice. The requests that come back from login and consent carry the same parameters and Hydra's
+// verifiers, and are checked the same way.
 // The response that leaves our host with a code or an error gets `iss` (RFC 9207).
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	if !q.Has("login_verifier") && !q.Has("consent_verifier") {
-		if reason, msg := s.checkAuthorize(q); reason != "" {
-			mFront.WithLabelValues(reason).Inc()
-			s.log().Info("authorization request refused", "reason", reason)
-			oauthError(w, 400, "invalid_request", msg)
-			return
-		}
-		if !q.Has("scope") {
-			q.Set("scope", strings.Join(Scopes, " "))
-			r.URL.RawQuery = q.Encode()
-		}
+	// Every request is checked, also the ones that come back from login and consent: they carry the original parameters
+	// again, and an empty or made-up verifier must not turn the check off (Hydra reads such a request as a new one).
+	if reason, msg := s.checkAuthorize(q); reason != "" {
+		mFront.WithLabelValues(reason).Inc()
+		s.log().Info("authorization request refused", "reason", reason)
+		oauthError(w, 400, "invalid_request", msg)
+		return
+	}
+	if !q.Has("scope") {
+		q.Set("scope", strings.Join(Scopes, " "))
+		r.URL.RawQuery = q.Encode()
 	}
 	req, err := http.NewRequestWithContext(r.Context(), "GET", s.HydraPub+r.URL.Path+"?"+r.URL.RawQuery, nil)
 	if err != nil {
@@ -206,9 +209,9 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 	loc := resp.Header.Get("Location")
-	if loc != "" && !strings.HasPrefix(loc, s.Cfg.PublicURL+"/") {
-		u, err := url.Parse(loc)
-		if err == nil && u.Fragment == "" && (u.Query().Has("code") || u.Query().Has("error")) {
+	if u, err := url.Parse(loc); loc != "" && err == nil && !s.internalStep(u) {
+		// A response to the platform (it leaves our own pages): code or error, always with our one iss.
+		if u.Query().Has("code") || u.Query().Has("error") {
 			if u.Query().Has("iss") { // Hydra added its own: never send two
 				s.log().Error("authorize: Hydra sent iss itself")
 				oauthError(w, 502, "server_error", "unexpected answer of the authorization server")
@@ -229,6 +232,15 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, io.LimitReader(resp.Body, 1<<20))
+}
+
+// internalStep: the redirect goes to one of our own pages (login, consent, error), not to the platform.
+func (s *Server) internalStep(u *url.URL) bool {
+	base, err := url.Parse(s.Cfg.PublicURL)
+	if err != nil || !strings.EqualFold(u.Host, base.Host) || u.Scheme != "https" {
+		return false
+	}
+	return u.Path == "/login" || u.Path == "/consent" || u.Path == "/error"
 }
 
 // checkAuthorize returns a short reason (a metric label) and a message, or "".
@@ -302,6 +314,12 @@ func (s *Server) checkRedirect(raw, appType string) (host string, err error) {
 	u, perr := url.Parse(raw)
 	if perr != nil || len(raw) > 512 || u.Fragment != "" || u.User != nil || u.Host == "" || strings.Contains(raw, "#") {
 		return "", fmt.Errorf("redirect_uri %q is not acceptable", raw)
+	}
+	// The answer to the platform adds code, state, error and iss to the address: it must not have them already.
+	for _, k := range []string{"code", "state", "error", "error_description", "iss"} {
+		if u.Query().Has(k) {
+			return "", fmt.Errorf("redirect_uri must not have the query parameter %q", k)
+		}
 	}
 	switch u.Scheme {
 	case "https":

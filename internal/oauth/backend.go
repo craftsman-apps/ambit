@@ -40,7 +40,8 @@ type Backend interface {
 	Groups(ctx context.Context, email string) ([]string, error)
 }
 
-// ErrRefused: the console refused (for example the person has too many agents). The text is safe to show.
+// ErrRefused: the console refused (for example the person has too many agents). The text is for the log; the person and
+// the platform get a fixed sentence.
 type ErrRefused struct{ Msg string }
 
 func (e ErrRefused) Error() string { return e.Msg }
@@ -75,7 +76,7 @@ func (c *ConsoleBackend) call(ctx context.Context, method, path string, body, ou
 	}
 	resp, err := hc.Do(req)
 	if err != nil {
-		return fmt.Errorf("console: %w", err)
+		return fmt.Errorf("console: %w", stripURL(err)) // the address holds the person's email
 	}
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -90,7 +91,7 @@ func (c *ConsoleBackend) call(ctx context.Context, method, path string, body, ou
 		}
 		return ErrRefused{e.Error}
 	case resp.StatusCode > 299:
-		return fmt.Errorf("console: %s %s: HTTP %d", method, path, resp.StatusCode)
+		return fmt.Errorf("console: %s %s: HTTP %d", method, pathOnly(path), resp.StatusCode)
 	}
 	if out != nil {
 		if err := json.Unmarshal(data, out); err != nil {
@@ -185,6 +186,10 @@ func (d *ConfigDeny) Refresh(ctx context.Context) error {
 			return errors.New("the stop list is unreadable")
 		}
 		for _, e := range l.Entries {
+			// An entry that cannot be understood is an error, not an empty list: the last good list stays and goes stale.
+			if k := strings.ToLower(e.Kind); (k != "agent" && k != "grant") || e.Name == "" {
+				return errors.New("the stop list has an entry that cannot be read")
+			}
 			st[strings.ToLower(e.Kind)+":"+e.Name] = true
 		}
 	}

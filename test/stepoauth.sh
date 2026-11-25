@@ -78,7 +78,7 @@ for v in 17 15; do
 done
 # dsn VERSION [ROLE PASSWORD DATABASE HOST-SUFFIX EXTRA]: the address Hydra gets; sslmode=verify-full unless EXTRA replaces it
 dsn() {
-  local v=$1 role=${2:-hydra} pw=${3:-$HP} db=${4:-hydra} host=${5:-.$NS.svc} extra=${6:-sslmode=verify-full&sslrootcert=/ca/ca.crt&max_conns=8&max_idle_conns=4}
+  local v=$1 role=${2:-hydra} pw=${3:-$HP} db=${4:-hydra} host=${5-.$NS.svc} extra=${6:-sslmode=verify-full&sslrootcert=/ca/ca.crt&max_conns=8&max_idle_conns=4}
   echo "postgres://$role:$pw@ambit-pg$v$host:5432/$db?$extra"
 }
 sec ambit-oauth-db --from-literal=dsn="$(dsn 17)"

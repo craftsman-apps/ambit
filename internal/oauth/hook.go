@@ -30,8 +30,13 @@ func (s *Server) tokenHook(w http.ResponseWriter, r *http.Request) {
 	agent, _ := in.Session.Extra["ambit_agent"].(string)
 	grant, _ := in.Session.Extra["ambit_grant"].(string)
 	email, _ := in.Session.Extra["email"].(string)
-	if email == "" {
-		email = in.Session.Subject
+	// Every grant of this server is made at the consent page and carries an agent, a grant and an email. A request
+	// without them is not ours, or is damaged: it is refused, never allowed because nothing matched.
+	if agent == "" || grant == "" || email == "" || len(in.Request.GrantTypes) == 0 {
+		mHook.WithLabelValues("incomplete").Inc()
+		s.log().Warn("token hook: incomplete request refused", "client_id", in.Request.ClientID)
+		w.WriteHeader(http.StatusForbidden)
+		return
 	}
 	stopped, err := s.Deny.Stopped(agent, grant)
 	if err != nil {
@@ -60,7 +65,7 @@ func (s *Server) tokenHook(w http.ResponseWriter, r *http.Request) {
 	for _, g := range in.Request.GrantTypes {
 		refresh = refresh || g == "refresh_token"
 	}
-	if !refresh || email == "" {
+	if !refresh {
 		mHook.WithLabelValues("allowed").Inc()
 		w.WriteHeader(http.StatusNoContent)
 		return

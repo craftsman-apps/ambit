@@ -51,6 +51,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.resourceOK(lr.RequestURL) {
 		mSignins.WithLabelValues("bad_resource").Inc()
+		if first, err := s.claim(r.Context(), "login", ch); err != nil || !first {
+			plain(w, 400, "This sign-in link is not valid any more. Start again from the platform you are connecting.")
+			return
+		}
 		s.rejectLogin(w, r, ch, "invalid_target", "the resource parameter must be given once and be this server's MCP URL")
 		return
 	}
@@ -74,6 +78,12 @@ func (s *Server) rejectLogin(w http.ResponseWriter, r *http.Request, ch, code, d
 // callback is where the company's identity provider sends the person back.
 func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	for _, k := range []string{"state", "code", "error", "iss"} { // a parameter twice is read differently by different parts
+		if len(q[k]) > 1 {
+			plain(w, 400, "This sign-in could not be completed. Start again from the platform you are connecting.")
+			return
+		}
+	}
 	t, err := s.Sealer.takeTx(w, r, q.Get("state"), s.now())
 	if err != nil {
 		mSignins.WithLabelValues("no_transaction").Inc()
@@ -95,12 +105,16 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 		s.rejectLogin(w, r, t.Login, "access_denied", why)
 	}
 	// RFC 9207 at the identity provider: when it says which server answered, it must be the one we sent the person to.
-	if q.Has("iss") && q.Get("iss") != s.Cfg.IdPIssuer {
+	if (q.Has("iss") && q.Get("iss") != s.Cfg.IdPIssuer) || (!q.Has("iss") && s.IdP.IssRequired()) {
 		deny("idp_iss", "the identity provider's answer came from another issuer")
 		return
 	}
 	if q.Has("error") {
 		deny("idp_error", "the identity provider refused the sign-in")
+		return
+	}
+	if q.Get("code") == "" {
+		deny("idp_no_code", "the identity provider sent no code")
 		return
 	}
 	claims, err := s.IdP.Exchange(r.Context(), q.Get("code"), t.Verifier)
@@ -140,14 +154,42 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 	if len(groups) > 200 {
 		groups = groups[:200]
 	}
-	to, err := s.Hydra.AcceptLogin(r.Context(), t.Login, email, map[string]any{"groups": groups, "idp_iss": claims.Issuer, "idp_sub": claims.Subject})
+	// The consent step belongs to this browser: Hydra hands the context back with the consent request, and a cookie that
+	// is sealed for this id is asked for there. (Hydra's own challenge strings change from step to step.)
+	bind := random(18)
+	to, err := s.Hydra.AcceptLogin(r.Context(), t.Login, email, map[string]any{"groups": groups, "idp_iss": claims.Issuer, "idp_sub": claims.Subject, "bind": bind})
 	if err != nil {
 		mSignins.WithLabelValues("hydra").Inc()
 		plain(w, 400, "This sign-in link is not valid any more. Start again from the platform you are connecting.")
 		return
 	}
+	if v, err := s.Sealer.Seal(Tx{Login: bind, Exp: s.now().Add(txMaxAge * time.Second).Unix()}, bindName(bind)); err == nil {
+		setCookie(w, bindName(bind), v, txMaxAge)
+	}
 	mSignins.WithLabelValues("ok").Inc()
 	redirect(w, r, to)
+}
+
+const bindPrefix = "__Host-ambit_bind_"
+
+func bindName(id string) string {
+	h := sha256.Sum256([]byte(id))
+	return bindPrefix + hex.EncodeToString(h[:6])
+}
+
+// bound says whether this browser is the one that signed in for the consent request: the consent link alone (in a
+// message, a log, a screenshot) neither shows the person's tools nor lets anyone create an agent.
+func (s *Server) bound(r *http.Request, cr ConsentRequest) bool {
+	id, _ := cr.Context["bind"].(string)
+	if id == "" {
+		return false
+	}
+	c, err := r.Cookie(bindName(id))
+	if err != nil {
+		return false
+	}
+	var t Tx
+	return s.Sealer.Open(c.Value, bindName(id), &t) == nil && t.Login == id && s.now().Unix() <= t.Exp
 }
 
 // ---- consent
@@ -189,14 +231,15 @@ func printable(s string, max int) string {
 	return s
 }
 
-func redirectHost(c Client) string {
-	if len(c.RedirectURIs) == 0 {
-		return ""
+// requestRedirect is the address this authorization request returns to: the redirect_uri of the request (Hydra has
+// compared it with the client's registered addresses), not the client's first one.
+func requestRedirect(cr ConsentRequest) *url.URL {
+	if u, err := url.Parse(cr.RequestURL); err == nil {
+		if ru, err := url.Parse(u.Query().Get("redirect_uri")); err == nil && ru.Host != "" {
+			return ru
+		}
 	}
-	if u, err := url.Parse(c.RedirectURIs[0]); err == nil {
-		return u.Host
-	}
-	return ""
+	return &url.URL{}
 }
 
 func (s *Server) rejectConsent(w http.ResponseWriter, r *http.Request, ch, code, desc string) {
@@ -219,6 +262,11 @@ func (s *Server) consentPage(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if !s.bound(r, cr) {
+		mConsent.WithLabelValues("not_bound").Inc()
+		plain(w, 403, "This page can be opened only in the browser where you signed in. Start again from the platform you are connecting.")
+		return
+	}
 	if !s.resourceOK(cr.RequestURL) {
 		mConsent.WithLabelValues("bad_resource").Inc()
 		s.rejectConsent(w, r, ch, "invalid_target", "the resource parameter must be given once and be this server's MCP URL")
@@ -239,7 +287,7 @@ func (s *Server) consentPage(w http.ResponseWriter, r *http.Request) {
 	cookie := random(24)
 	setCookie(w, csrfName(ch), cookie, 600)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = consentPage.Execute(w, map[string]any{"Client": printable(cr.Client.Name, 100), "Subject": cr.Subject, "Host": redirectHost(cr.Client),
+	_ = consentPage.Execute(w, map[string]any{"Client": printable(cr.Client.Name, 100), "Subject": cr.Subject, "Host": requestRedirect(cr).Host,
 		"Challenge": ch, "CSRF": s.Sealer.Token("csrf", cookie, ch), "Servers": servers, "Connections": conns})
 }
 
@@ -265,6 +313,11 @@ func (s *Server) consentSubmit(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		setCookie(w, csrfName(ch), "", -1)
 		plain(w, 400, "This consent link is not valid any more. Start again from the platform you are connecting.")
+		return
+	}
+	if !s.bound(r, cr) {
+		mConsent.WithLabelValues("not_bound").Inc()
+		plain(w, 403, "This page can be opened only in the browser where you signed in. Start again from the platform you are connecting.")
 		return
 	}
 	// The form's cookie ends with the decision: a form that is refused (a tool the person may not offer) can be sent again.
@@ -348,19 +401,19 @@ func (s *Server) consentSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setCookie(w, csrfName(ch), "", -1)
-	grant := "g-" + random(12)
-	host := ""
-	if u, err := url.Parse(firstOf(cr.Client.RedirectURIs)); err == nil {
-		host = u.Hostname()
+	if id, _ := cr.Context["bind"].(string); id != "" {
+		setCookie(w, bindName(id), "", -1)
 	}
-	platform := Platform(host)
+	grant := "g-" + random(12)
+	platform := Platform(requestRedirect(cr).Hostname())
 	agent, err := s.Backend.CreateAgent(r.Context(), AgentInput{Owner: cr.Subject, Platform: platform,
 		DisplayName: printable(cr.Client.Name, 60), Scope: scope, Connections: conns, GrantID: grant})
 	if err != nil {
 		var refused ErrRefused
 		if errors.As(err, &refused) {
 			mConsent.WithLabelValues("agent_refused").Inc()
-			s.rejectConsent(w, r, ch, "access_denied", refused.Msg)
+			s.log().Info("consent: the console refused the agent", "reason", refused.Msg)
+			s.rejectConsent(w, r, ch, "access_denied", "the connection could not be created")
 			return
 		}
 		s.log().Error("consent: the console did not create the agent", "err", err)
@@ -380,13 +433,6 @@ func (s *Server) consentSubmit(w http.ResponseWriter, r *http.Request) {
 	mConsent.WithLabelValues("allowed").Inc()
 	s.log().Info("connection allowed", "client_id", cr.Client.ID, "agent", agent, "grant", grant, "servers", len(scope))
 	redirect(w, r, to)
-}
-
-func firstOf(l []string) string {
-	if len(l) == 0 {
-		return ""
-	}
-	return l[0]
 }
 
 // touchClient writes "last used" into a dynamic client's metadata, at most once a day: the janitor deletes clients that

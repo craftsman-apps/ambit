@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ var formVal = regexp.MustCompile(`name="(challenge|csrf)" value="([^"]*)"`)
 // consentForm opens the consent page and returns the form fields the browser would send back.
 func consentForm(t *testing.T, b *browser, ch string) url.Values {
 	t.Helper()
+	b.e.bind(b, ch)
 	w := b.do("GET", "/consent?consent_challenge="+ch, nil, nil)
 	if w.Code != 200 {
 		t.Fatalf("consent page %s: %d %s", ch, w.Code, w.Body.String())
@@ -37,7 +39,9 @@ var origin = map[string]string{"Origin": pubURL}
 func TestConsentPageShowsNothingTicked(t *testing.T) {
 	e := newEnv(t)
 	e.hydra.addConsent("C1", "alice@acme.test", goodRequestURL(""))
-	w := e.browser().do("GET", "/consent?consent_challenge=C1", nil, nil)
+	b := e.browser()
+	e.bind(b, "C1")
+	w := b.do("GET", "/consent?consent_challenge=C1", nil, nil)
 	body := w.Body.String()
 	if regexp.MustCompile(`<input[^>]* checked`).MatchString(body) || !strings.Contains(body, `value="crm"`) || !strings.Contains(body, `value="wiki"`) || !strings.Contains(body, "wiki-login") {
 		t.Fatalf("page: %s", body)
@@ -199,7 +203,9 @@ func TestConsentBackendDown(t *testing.T) {
 	e := newEnv(t)
 	e.hydra.addConsent("C1", "alice@acme.test", goodRequestURL(""))
 	e.be.down = true
-	if w := e.browser().do("GET", "/consent?consent_challenge=C1", nil, nil); w.Code != 503 {
+	b := e.browser()
+	e.bind(b, "C1")
+	if w := b.do("GET", "/consent?consent_challenge=C1", nil, nil); w.Code != 503 {
 		t.Fatalf("%d", w.Code)
 	}
 }
@@ -208,7 +214,9 @@ func TestConsentPageEscapesTheClientName(t *testing.T) {
 	e := newEnv(t)
 	e.hydra.addConsent("C1", "alice@acme.test", goodRequestURL(""))
 	e.hydra.consents["C1"].Client.Name = `<script>alert(1)</script>"><img src=x>`
-	w := e.browser().do("GET", "/consent?consent_challenge=C1", nil, nil)
+	b := e.browser()
+	e.bind(b, "C1")
+	w := b.do("GET", "/consent?consent_challenge=C1", nil, nil)
 	if strings.Contains(w.Body.String(), "<script>") || strings.Contains(w.Body.String(), "<img") {
 		t.Fatalf("markup in the client name was not escaped: %s", w.Body.String())
 	}
@@ -818,5 +826,208 @@ func TestLoginChallengeIsDecidedOnce(t *testing.T) {
 	e.hydra.mu.Unlock()
 	if w := b.do("GET", cb, nil, nil); w.Code != 400 {
 		t.Fatalf("replay with the cookie: %d", w.Code)
+	}
+}
+
+// ---- findings of the security review
+
+func TestEmptyOrMadeUpVerifierDoesNotTurnTheChecksOff(t *testing.T) {
+	e := newEnv(t)
+	b := e.browser()
+	bad := "response_type=token&client_id=c1&redirect_uri=https%3A%2F%2Fchatgpt.com%2Fcb&state=state-0123"
+	for _, v := range []string{"login_verifier=", "login_verifier=abc", "consent_verifier=", "consent_verifier=x&login_verifier=y"} {
+		if w := b.do("GET", "/oauth2/auth?"+bad+"&"+v, nil, nil); w.Code != 400 {
+			t.Errorf("%s with a request that is not allowed: %d, want 400", v, w.Code)
+		}
+	}
+	// a real continuation carries the original parameters, and passes
+	if w := b.do("GET", validAuthPath("&login_verifier=v"), nil, nil); w.Code != 302 {
+		t.Errorf("a continuation: %d", w.Code)
+	}
+}
+
+func TestIssIsAddedToEveryResponseThatLeavesTheOwnPages(t *testing.T) {
+	e := newEnv(t)
+	b := e.browser()
+	q := validAuthPath("&login_verifier=v")
+	// a platform address on our own host name (not possible by registration, but never trusted): still gets iss
+	e.hydra.authLoc = pubURL + "/somewhere?code=abc&state=s"
+	if w := b.do("GET", q, nil, nil); !strings.Contains(loc(w), "iss=") {
+		t.Errorf("a response to an address on our own host: %q", loc(w))
+	}
+	e.hydra.authLoc = pubURL + "/consent?consent_challenge=x"
+	if w := b.do("GET", q, nil, nil); strings.Contains(loc(w), "iss=") {
+		t.Errorf("our own consent page must not get iss: %q", loc(w))
+	}
+}
+
+func TestRegisteredRedirectsMayNotCarryResponseParameters(t *testing.T) {
+	for _, k := range []string{"iss", "code", "state", "error", "error_description"} {
+		e := newEnv(t)
+		w, out := post(e.browser(), reg("https://chatgpt.com/cb?"+k+"=x"), nil)
+		if w.Code != 400 || out["error"] != "invalid_client_metadata" {
+			t.Errorf("%s in the query of a redirect address: %d", k, w.Code)
+		}
+	}
+	e := newEnv(t)
+	if w, _ := post(e.browser(), reg("https://chatgpt.com/cb?tenant=a"), nil); w.Code != 201 {
+		t.Errorf("another query parameter is fine: %d", w.Code)
+	}
+}
+
+func TestConsentOnlyInTheBrowserThatSignedIn(t *testing.T) {
+	e := newEnv(t)
+	e.hydra.addConsent("C1", "alice@acme.test", goodRequestURL(""))
+	other := e.browser() // someone who has the link
+	if w := other.do("GET", "/consent?consent_challenge=C1", nil, nil); w.Code != 403 || strings.Contains(w.Body.String(), "alice") || strings.Contains(w.Body.String(), "crm") {
+		t.Fatalf("the page in another browser: %d %s", w.Code, w.Body.String())
+	}
+	// the form of the right browser, sent from another one
+	b := e.browser()
+	f := consentForm(t, b, "C1")
+	f.Set("action", "allow")
+	f.Add("server", "crm")
+	thief := e.browser()
+	thief.cookies = map[string]string{}
+	for k, v := range b.cookies {
+		if !strings.HasPrefix(k, bindPrefix) { // everything but the bind cookie
+			thief.cookies[k] = v
+		}
+	}
+	if w := thief.do("POST", "/consent", f, origin); w.Code != 403 || len(e.be.created) != 0 {
+		t.Fatalf("the form without the bind cookie: %d, agents %d", w.Code, len(e.be.created))
+	}
+	// the callback gives the bind cookie to the browser that signed in
+	e.hydra.addLogin("A", goodRequestURL(""))
+	b2 := e.browser()
+	st := e.startLogin(t, b2, "A")
+	b2.do("GET", "/callback?code=alice|"+url.QueryEscape(st)+"&state="+url.QueryEscape(st), nil, nil)
+	has := false
+	for n := range b2.cookies {
+		has = has || strings.HasPrefix(n, bindPrefix)
+	}
+	id, _ := e.hydra.accepted["A"]["context"].(map[string]any)["bind"].(string)
+	if !has || id == "" {
+		t.Fatalf("the callback must set the bind cookie and put its id into the login context: %v %v", b2.cookies, e.hydra.accepted["A"])
+	}
+}
+
+func TestConsentPageNamesTheRedirectOfTheRequest(t *testing.T) {
+	e := newEnv(t)
+	other := "https://claude.ai/api/mcp/auth_callback"
+	e.hydra.addConsent("C1", "alice@acme.test", goodRequestURL("")+"&x=1")
+	e.hydra.consents["C1"].RequestURL = "https://auth.example.com/oauth2/auth?client_id=c1&response_type=code&redirect_uri=" + url.QueryEscape(other) + "&resource=" + url.QueryEscape(resource)
+	e.hydra.consents["C1"].Client.RedirectURIs = []string{"https://chatgpt.com/connector_platform_oauth_redirect", other} // first one is another
+	b := e.browser()
+	e.bind(b, "C1")
+	page := b.do("GET", "/consent?consent_challenge=C1", nil, nil).Body.String()
+	f := consentForm(t, b, "C1") // a second page: its form goes with its own cookie
+	if !strings.Contains(page, "claude.ai") || strings.Contains(page, "chatgpt.com") {
+		t.Fatalf("the page must show the address of this request: %s", page)
+	}
+	f.Set("action", "allow")
+	b.do("POST", "/consent", f, origin)
+	if len(e.be.created) != 1 || e.be.created[0].Platform != "claude-ai" {
+		t.Fatalf("the platform comes from the request's address: %+v", e.be.created)
+	}
+}
+
+func TestCallbackParameters(t *testing.T) {
+	e := newEnv(t)
+	e.hydra.addLogin("A", goodRequestURL(""))
+	b := e.browser()
+	st := e.startLogin(t, b, "A")
+	qs := url.QueryEscape(st)
+	if w := b.do("GET", "/callback?code=alice|"+qs+"&state="+qs+"&state=other", nil, nil); w.Code != 400 {
+		t.Errorf("state twice: %d", w.Code)
+	}
+	if w := b.do("GET", "/callback?state="+qs, nil, nil); w.Code != 302 || e.hydra.rejected["A"] != "access_denied" {
+		t.Errorf("no code and no error: %d, rejected %q", w.Code, e.hydra.rejected["A"])
+	}
+	e2 := newEnv(t)
+	e2.srv.IdP = issRequired{e2.idp}
+	e2.hydra.addLogin("A", goodRequestURL(""))
+	b2 := e2.browser()
+	st2 := e2.startLogin(t, b2, "A")
+	if w := b2.do("GET", "/callback?code=alice|"+url.QueryEscape(st2)+"&state="+url.QueryEscape(st2), nil, nil); w.Code != 302 || e2.hydra.rejected["A"] != "access_denied" {
+		t.Errorf("a provider that sends iss, without iss: %d, rejected %q", w.Code, e2.hydra.rejected["A"])
+	}
+}
+
+type issRequired struct{ *fakeIdP }
+
+func (issRequired) IssRequired() bool { return true }
+
+func TestHookRefusesIncompleteRequests(t *testing.T) {
+	e := newEnv(t)
+	for name, body := range map[string]string{
+		"no agent":       `{"session":{"subject":"a@b.c","extra":{"ambit_grant":"g","email":"a@b.c"}},"request":{"client_id":"c","grant_types":["refresh_token"]}}`,
+		"no grant":       `{"session":{"extra":{"ambit_agent":"a","email":"a@b.c"}},"request":{"grant_types":["refresh_token"]}}`,
+		"grant a number": `{"session":{"extra":{"ambit_agent":"a","ambit_grant":7,"email":"a@b.c"}},"request":{"grant_types":["refresh_token"]}}`,
+		"no email":       `{"session":{"extra":{"ambit_agent":"a","ambit_grant":"g"}},"request":{"grant_types":["refresh_token"]}}`,
+		"no grant type":  `{"session":{"extra":{"ambit_agent":"a","ambit_grant":"g","email":"a@b.c"}},"request":{}}`,
+	} {
+		w := httptest.NewRecorder()
+		e.srv.Internal().ServeHTTP(w, httptest.NewRequest("POST", "/hooks/token", strings.NewReader(body)))
+		if w.Code != 403 {
+			t.Errorf("%s: %d, want 403", name, w.Code)
+		}
+	}
+}
+
+func TestStopListWithAnUnreadableEntryIsAnError(t *testing.T) {
+	now := time.Now()
+	d := &ConfigDeny{MaxAge: time.Minute, Now: func() time.Time { return now }, Get: func(_ context.Context, n string) (map[string]string, error) {
+		if n == StopsConfigMap {
+			return map[string]string{"list.json": `{"entries":[{"kind":"agent","name":"a1"},{"kind":"banana","name":"x"}]}`}, nil
+		}
+		return nil, nil
+	}}
+	if err := d.Refresh(context.Background()); err == nil {
+		t.Fatal("an entry of an unknown kind must make the read fail")
+	}
+	d.Get = func(_ context.Context, n string) (map[string]string, error) {
+		if n == StopsConfigMap {
+			return map[string]string{"list.json": `{"entries":[{"kind":"agent","name":""}]}`}, nil
+		}
+		return nil, nil
+	}
+	if err := d.Refresh(context.Background()); err == nil {
+		t.Fatal("an entry without a name must make the read fail")
+	}
+}
+
+func TestErrorsNeverCarryTheRequestAddress(t *testing.T) {
+	h := &HydraAdmin{Base: "http://127.0.0.1:1"} // nothing listens
+	_, err := h.GetLogin(context.Background(), "secret-challenge-123")
+	if err == nil || strings.Contains(err.Error(), "secret-challenge-123") {
+		t.Fatalf("error: %v", err)
+	}
+	c := &ConsoleBackend{Base: "http://127.0.0.1:1", TokenFile: t.TempDir() + "/none"}
+	if err := os.WriteFile(c.TokenFile, []byte("t"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Servers(context.Background(), "person@example.com")
+	if err == nil || strings.Contains(err.Error(), "person@example.com") {
+		t.Fatalf("error: %v", err)
+	}
+}
+
+func TestLocalLimiterKeepsActiveWindowsWhenFull(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	l := &MemLimiter{Now: func() time.Time { return now }}
+	for i := 0; i < 50000; i++ {
+		l.Allow(context.Background(), "register", fmt.Sprint("addr-", i), 10, time.Hour)
+	}
+	ok, _ := l.Allow(context.Background(), "register", "newcomer", 10, time.Hour)
+	if ok {
+		t.Fatal("a full table must refuse a new caller, not forget the counters of the others")
+	}
+	if ok, _ := l.Allow(context.Background(), "register", "addr-1", 10, time.Hour); !ok {
+		t.Fatal("a known caller still counts")
+	}
+	now = now.Add(2 * time.Hour) // the windows ended
+	if ok, _ := l.Allow(context.Background(), "register", "newcomer", 10, time.Hour); !ok {
+		t.Fatal("old windows are dropped")
 	}
 }

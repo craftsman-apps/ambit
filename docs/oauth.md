@@ -95,8 +95,12 @@ provider whose certificate your cluster does not trust gets its CA in `oauth.sig
    redirect address, and the browser goes on to `/login`.
 4. `/login` sends the browser to **your identity provider** (code flow, PKCE, `state`, `nonce`). The person signs in there,
    with your MFA and your rules. Ambit never sees a password.
-5. `/callback`: Ambit checks `state`, the provider's `iss`, the ID token's signature, issuer, audience, expiry and nonce;
-   that the email is verified, is not a service account (`@svc.ambit.internal`) and is not offboarded.
+5. `/callback`: Ambit checks `state`, the provider's `iss` (required when the provider says it sends it), the ID token's
+   signature, issuer, audience (several audiences need `azp` equal to the client), expiry and nonce; that every address in
+   the provider's discovery document is https; that the email is verified, is not a service account
+   (`@svc.ambit.internal`) and is not offboarded. The person is identified by the **email address** (as everywhere in
+   Ambit); an identity provider that gives an old address to a new person gives that person the old person's
+   permissions, as it does for keys: change the person's address in the provider before you reuse it, and offboard the old one.
 6. `/consent`: a page that names the platform **as it declared itself** (Ambit has not checked the name), the address it
    returns to, and the person. It lists the MCP servers that the person's AccessRules allow **and** that the front door
    serves. **None is ticked.** The person ticks what the platform may use, and, for servers that need the person's own
@@ -121,9 +125,15 @@ sign-ins are kept per browser. One limit comes from Hydra: it keeps one CSRF coo
 the **same client** in the same browser makes the first one fail (the platform shows an error, and the person connects
 again). Different platforms do not disturb each other.
 
+**The consent page opens only in the browser that signed in.** The callback gives that browser a sealed cookie, and the consent
+page and its form ask for it. A consent link that is copied out of the browser (a message, a log) shows nothing about the
+person and creates no agent.
+
 **Each Hydra challenge is decided once.** Hydra v26.2.0 lets a rejected consent request be read and accepted again. Ambit
 marks a login or consent challenge as decided in Valkey, so a second decision (a replay, or two clicks at once) is refused
-and creates no agent.
+and creates no agent. The marks are kept in Valkey: the bundled Valkey has no persistence, so after a restart of Valkey a
+challenge that was decided less than 20 minutes ago could be decided again, but only in the browser that holds the
+cookies of that sign-in.
 
 ## Registering clients
 
@@ -134,9 +144,14 @@ are accepted:
   fragment), or for a native client `http` on `localhost`, `127.0.0.1` or `[::1]` with any port;
 - public clients only (`token_endpoint_auth_method: none`, PKCE), grants `authorization_code` and `refresh_token`,
   response type `code`, scopes `mcp` and `offline_access`;
-- `client_name` of at most 100 characters (control characters and angle brackets are removed).
+- `client_name` of at most 100 characters (control characters and angle brackets are removed);
+- no `iss`, `code`, `state`, `error` or `error_description` in the query of a redirect address (Ambit adds them).
 
-Each registration is limited per caller address (`perSourcePerHour`, 10 by default), and at most `maxClients` clients exist (500). A client
+A native client that needs a changing port registers `http://127.0.0.1` or `http://[::1]` (Hydra matches the port of
+loopback IP addresses only; for `http://localhost` the port must be exactly the registered one).
+
+The cap of `maxClients` is counted in Valkey and is approximate for up to ten minutes (the clean-up compares it with Hydra every
+ten minutes). Each registration is limited per caller address (`perSourcePerHour`, 10 by default), and at most `maxClients` clients exist (500). A client
 that nobody used for `unusedClientDays` (30) is deleted; every consent and every refresh counts as use, written at most
 once a day. Clients that an admin creates in Hydra by hand are never touched.
 
@@ -165,7 +180,8 @@ share a bucket; the sign-in bucket is large for that reason.
 The token hook of `ambit-auth` (Hydra calls it for every token request) refuses a **refresh** when the person is on the
 offboarding list (`ambit-offboarded`) or the agent or grant is on the stop list (`ambit-agent-stops`). Hydra then answers
 `access_denied` and does not use up the refresh token, so a restart of the agent works without a new consent. If the
-lists cannot be read for 45 seconds, or the console does not answer, the hook refuses (a refresh waits; tokens already
+lists cannot be read for 45 seconds, a list has an entry it cannot read, the request is incomplete (no agent, grant, email
+or grant type), or the console does not answer, the hook refuses (a refresh waits; tokens already
 issued are not affected). A refused sign-in at `/callback` for an offboarded person ends with `access_denied`.
 
 Stopping a token that was already issued is done at the gateway, by the stop list, and is added with the next change.

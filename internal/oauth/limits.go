@@ -103,8 +103,17 @@ func (l *MemLimiter) Allow(_ context.Context, bucket, key string, limit int, win
 	}
 	slot := now().Unix() / int64(window/time.Second)
 	k := bucket + ":" + key + ":" + itoa(slot)
-	if len(l.m) > 50000 { // a flood of distinct callers must not grow memory without bound: start over
-		l.m = map[string]int{}
+	if _, known := l.m[k]; !known && len(l.m) >= 50000 {
+		// A flood of distinct callers must not grow memory without bound, and must not erase the counters that are
+		// active: drop the windows that ended; if that frees nothing, a new caller is refused until a window ends.
+		for old := range l.m {
+			if !strings.HasSuffix(old, ":"+itoa(slot)) {
+				delete(l.m, old)
+			}
+		}
+		if len(l.m) >= 50000 {
+			return false, nil
+		}
 	}
 	l.m[k]++
 	return l.m[k] <= limit, nil

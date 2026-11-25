@@ -71,8 +71,8 @@ put() {
   local want; want=$(wc -c < "$W/put.$1" | tr -d ' ')
   local try
   for try in 1 2 3 4 5; do
-    in_pod sh -c "cat > /tmp/$1" < "$W/put.$1"
-    [[ $(in_pod sh -c "wc -c < /tmp/$1" </dev/null | tr -d ' ') == "$want" ]] && return 0
+    # in an if: a failed copy is tried again, set -e does not stop the script
+    if in_pod sh -c "cat > /tmp/$1" < "$W/put.$1" && [[ $(in_pod sh -c "wc -c < /tmp/$1" </dev/null | tr -d ' ') == "$want" ]]; then return 0; fi
     echo "  copy of $1 into the sender pod arrived with the wrong size (try $try of 5); copying again"
   done
   fail "0 could not copy $1 (${want} bytes) into the sender pod"
@@ -201,7 +201,8 @@ load() {
   local -a h=(); for x in "$@"; do h+=(-header "$x"); done
   local line
   # stderr of the load tool: why requests failed (status and body, or the transport error), kept in runs.log (#274)
-  line=$(in_pod /tmp/load -url "$u" -rate "$rate" -duration "$DURATION" -warmup "$WARMUP" -token-file "/tmp/$t" -body-file "/tmp/$b" ${h[@]+"${h[@]}"} 2>"$W/load.err")
+  line=$(in_pod /tmp/load -url "$u" -rate "$rate" -duration "$DURATION" -warmup "$WARMUP" -token-file "/tmp/$t" -body-file "/tmp/$b" ${h[@]+"${h[@]}"} 2>"$W/load.err") ||
+    line="the sender command failed: $(head -c 300 "$W/load.err")"
   echo "$c $rate $run $line" | tee -a "$OUT/runs.log"
   [[ ! -s "$W/load.err" ]] || { sed "s/^/  $c $rate $run /" "$W/load.err" | tee -a "$OUT/runs.log"; }
   [[ "$line" =~ ^p50=([0-9.]+)ms\ p95=([0-9.]+)ms\ p99=([0-9.]+)ms\ offered=[0-9]+\ completed=([0-9]+)\ errors=([0-9]+)$ ]] ||

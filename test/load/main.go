@@ -199,10 +199,14 @@ func main() {
 			ok := err == nil && resp.StatusCode == 200
 			var ms float64
 			var rest []byte
+			var readErr error
 			if ok { // time to first token: the first byte of the streamed body
 				one := make([]byte, 1)
 				n, rerr := resp.Body.Read(one)
 				ok = rerr == nil || (rerr == io.EOF && n == 1)
+				if !ok {
+					readErr = rerr // an empty or cut-off answer: say so in the failure cause, not just "status 200"
+				}
 				ms = float64(time.Since(sent).Microseconds()) / 1000
 				rest = one[:n]
 			}
@@ -226,6 +230,9 @@ func main() {
 				lat[cohort] = append(lat[cohort], ms)
 			} else {
 				errs[cohort]++
+				if err == nil && readErr != nil {
+					err = fmt.Errorf("reading the answer: %w", readErr)
+				}
 				causes[failure(err, status, rest)]++
 			}
 		}(now)

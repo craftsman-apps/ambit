@@ -742,3 +742,21 @@ func TestCompressionRecordsAreNotWrittenForAWithheldResult(t *testing.T) {
 		}
 	}
 }
+
+// In audit and reject mode a rule is found in a later text, however many matches the texts before it had.
+func TestFindingInALaterTextIsNotLostToDenseMatchesBefore(t *testing.T) {
+	for _, mode := range []string{"audit", "reject"} {
+		in, err := LoadInjector(`{"mode":"`+mode+`","builtins":false,"patterns":["x","needle"]}`, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		texts := make([]string, 0, 31)
+		for range 30 {
+			texts = append(texts, strings.Repeat("x", 6000))
+		}
+		texts = append(texts, "a needle")
+		if r := in.Check(t.Context(), texts, nil); !slices.Equal(r.Rules, []string{"pattern-1", "pattern-2"}) {
+			t.Errorf("%s: rules %v", mode, r.Rules)
+		}
+	}
+}

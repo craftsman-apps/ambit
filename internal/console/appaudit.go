@@ -10,30 +10,29 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/craftsman-apps/ambit/internal/apprecord"
 	"github.com/craftsman-apps/ambit/internal/otlplog"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
-	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 )
 
-// AppRecordKind marks the console's records of MCP app requests and decisions in otel_logs (LogAttributes['ambit.kind']).
-const AppRecordKind = "app-approval"
+// AppRecordKind marks the records of MCP app requests and decisions in otel_logs (LogAttributes['ambit.kind']).
+const AppRecordKind = apprecord.Kind
 
-// Actions of an AppEvent. A refused action is an attempt the console answered with an error: who tried, on what, and why.
+// Actions of an AppEvent (see apprecord).
 const (
-	AppRequested         = "requested"
-	AppApproved          = "approved"
-	AppPullRequestOpened = "pull-request-opened"
-	AppDenied            = "denied"
-	AppToolsApproved     = "tools-approved"
-	AppApproveRefused    = "approve-refused"
-	AppDenyRefused       = "deny-refused"
-	AppToolsRefused      = "tools-approve-refused"
+	AppRequested         = apprecord.Requested
+	AppApproved          = apprecord.Approved
+	AppPullRequestOpened = apprecord.PullRequestOpened
+	AppDenied            = apprecord.Denied
+	AppToolsApproved     = apprecord.ToolsApproved
+	AppApproveRefused    = apprecord.ApproveRefused
+	AppDenyRefused       = apprecord.DenyRefused
+	AppToolsRefused      = apprecord.ToolsRefused
 )
 
 // eventReason is the Kubernetes Event reason of each action.
@@ -43,24 +42,10 @@ var eventReason = map[string]string{
 	AppDenyRefused: "ServerRequestDenyRefused", AppToolsRefused: "ToolsApproveRefused",
 }
 
-func refusedAction(action string) bool { return strings.HasSuffix(action, "-refused") }
+func refusedAction(action string) bool { return apprecord.Refused(action) }
 
 // AppEvent is one step of an MCP app's request and approval, as the Audit page and otel_logs hold it.
-type AppEvent struct {
-	Time        time.Time `json:"time"`
-	Action      string    `json:"action"`
-	Actor       string    `json:"actor"` // email from the console sign-in
-	Role        string    `json:"role"`  // the actor's console role; empty for a GitOps approval seen at the merge
-	Server      string    `json:"server"`
-	Request     string    `json:"request"` // ServerRequest name; empty for tool approvals
-	RequestedBy string    `json:"requestedBy"`
-	Image       string    `json:"image"`
-	URL         string    `json:"url"`
-	Comment     string    `json:"comment"` // the request's reason, or the decision's comment
-	PullRequest string    `json:"pullRequest"`
-	Tools       []string  `json:"tools"`  // tools-approved: the tools whose new definitions were approved
-	Reason      string    `json:"reason"` // refused actions: why the console refused
-}
+type AppEvent = apprecord.Event
 
 // appSendFailures counts records not delivered to the collector, by reason (queue_full, send_failed).
 var appSendFailures = promauto.NewCounterVec(prometheus.CounterOpts{Name: "ambit_console_audit_send_failures_total",
@@ -81,35 +66,11 @@ func NewAppRecorder(endpoint string) (*AppRecorder, error) {
 	return &AppRecorder{exp: exp}, nil
 }
 
-func (r *AppRecorder) send(ev AppEvent) { r.exp.Send(appLogRecord(ev)) }
+func (r *AppRecorder) send(ev AppEvent) { r.exp.Send(apprecord.Record(ev)) }
 
 // Flush sends what is queued (tests); Close sends it and stops, within otlplog.Timeout.
 func (r *AppRecorder) Flush() { r.exp.Flush() }
 func (r *AppRecorder) Close() { r.exp.Close() }
-
-// appLogRecord is the OTLP record of ev. It never sets jwt.email, so no query of gateway calls counts it.
-func appLogRecord(ev AppEvent) *logspb.LogRecord {
-	tools := ""
-	if len(ev.Tools) > 0 {
-		b, _ := json.Marshal(ev.Tools)
-		tools = string(b)
-	}
-	attrs := []*commonpb.KeyValue{otlplog.Str("ambit.kind", AppRecordKind), otlplog.Str("ambit.app.action", ev.Action),
-		otlplog.Str("ambit.actor", ev.Actor), otlplog.Str("ambit.actor.role", ev.Role), otlplog.Str("mcp.target", ev.Server)}
-	for _, kv := range [][2]string{{"ambit.app.request", ev.Request}, {"ambit.app.requested_by", ev.RequestedBy},
-		{"ambit.app.image", ev.Image}, {"ambit.app.url", ev.URL}, {"ambit.app.comment", ev.Comment},
-		{"ambit.app.pull_request", ev.PullRequest}, {"ambit.app.tools", tools}, {"ambit.app.refused_reason", ev.Reason}} {
-		if kv[1] != "" {
-			attrs = append(attrs, otlplog.Str(kv[0], kv[1]))
-		}
-	}
-	rec := otlplog.Record(ev.Time, AppRecordKind, attrs...)
-	if refusedAction(ev.Action) {
-		rec.SeverityNumber, rec.SeverityText = logspb.SeverityNumber_SEVERITY_NUMBER_WARN, "WARN"
-	}
-	rec.ObservedTimeUnixNano = uint64(time.Now().UnixNano())
-	return rec
-}
 
 // recordApp keeps one step: a record in otel_logs (when evidence is on) and a Kubernetes Event on obj (the
 // ServerRequest or Server; nil when there is none, e.g. a refused attempt on a request that does not exist). A failure

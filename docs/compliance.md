@@ -44,9 +44,10 @@ The console writes one record for each step of an MCP app (an MCP server) reques
 | `pull-request-opened` | GitOps mode: an approver approved, and the console opened the pull request. |
 | `denied` | An approver denied it. |
 | `tools-approved` | An admin approved changed tool definitions (tool pinning, `protection.enabled`). |
+| `removed` | The `Server` object was deleted, by anyone: the console, `kubectl`, or Argo CD pruning a server that left your configuration repository (GitOps mode). Written by the controller. See [Removing an app](#removing-an-app). |
 | `approve-refused`, `deny-refused`, `tools-approve-refused` | The console refused the attempt. The reason says why: for example `role viewer may not decide on server requests`, `own request`, `already approved`, `the pull request is still open`, `no such request`. |
 
-Fields (`LogAttributes`): `ambit.kind` (`app-approval`), `ambit.app.action`, `ambit.actor` (the email from the console sign-in), `ambit.actor.role` (`admin`, `approver` or `viewer`; empty for a GitOps approval seen at the merge), `mcp.target` (the server name), `ambit.app.request` (the `ServerRequest` name), `ambit.app.requested_by`, `ambit.app.image` or `ambit.app.url`, `ambit.app.comment` (the reason of the request, or the comment of the decision), `ambit.app.pull_request`, `ambit.app.tools` (a JSON array, for `tools-approved`) and `ambit.app.refused_reason`. A refused attempt does not record the comment the person typed. These records have no `jwt.email`, so the Audit search for one person's calls, the Usage page and the Savings page do not count them as calls.
+Fields (`LogAttributes`): `ambit.kind` (`app-approval`), `ambit.app.action`, `ambit.actor` (the email from the console sign-in), `ambit.actor.role` (`admin`, `approver` or `viewer`; empty for a GitOps approval seen at the merge and for a removal outside the console), `mcp.target` (the server name), `ambit.app.request` (the `ServerRequest` name), `ambit.app.requested_by`, `ambit.app.image` or `ambit.app.url`, `ambit.app.comment` (the reason of the request, or the comment of the decision), `ambit.app.pull_request`, `ambit.app.tools` (a JSON array, for `tools-approved`) and `ambit.app.refused_reason`. A refused attempt does not record the comment the person typed. These records have no `jwt.email`, so the Audit search for one person's calls, the Usage page and the Savings page do not count them as calls.
 
 Example query: who approved which MCP servers in March 2026.
 
@@ -60,6 +61,15 @@ ORDER BY Timestamp
 ```
 
 If the console cannot send a record to the collector, the step still happens, the console logs an error, and the alert `AmbitConsoleAuditSendFailed` fires (with `alerts.enabled`). The `ServerRequest` object still holds the request and its decision.
+
+#### Removing an app
+
+When a `Server` object is deleted, the controller writes one `removed` record with the server name, the request it came from (`ambit.app.request`, `ambit.app.requested_by`) and its image or URL. This covers every way a server can go away:
+
+- **In the console** (removing an app from the Apps page, or removing an unfinished addition): the record names the signed-in person (`ambit.actor`) and their role (`ambit.actor.role`).
+- **With `kubectl delete`**, or by Argo CD pruning the server after your configuration repository changed (GitOps mode): Ambit sees the deletion but not who did it, so `ambit.actor` is empty. The Git history of your configuration repository (the merged pull request) or the Kubernetes audit log of your cluster names the person; use the time of the record to find it. In GitOps mode the console does not remove a `Server` itself (it opens pull requests), so the record is written when Argo CD applies the merge, not at the merge.
+
+Limits: the controller must be running when the `Server` is deleted. A deletion while the controller is down or restarting is not recorded; the Git history and the Kubernetes audit log still hold it. A removal record is not written as a Kubernetes Event (the object is gone). When the controller cannot send it, `ambit_controller_record_dropped_total` goes up and the alert `AmbitControllerRecordsDropped` fires, as for access snapshots. The person's name comes from an annotation the console sets just before the deletion; anyone who can edit `Server` objects with `kubectl` can write a different name there, as they can delete the server, so treat the actor of a console removal as the console's record, not as proof against a cluster administrator.
 
 ### Access snapshots
 
@@ -83,8 +93,6 @@ LIMIT 1
 ```
 
 Records start at the upgrade to 0.5.0; there are none for earlier dates. Sending is best effort: when the collector cannot be reached, or the AccessRules together are larger than 1 MiB, the record is dropped, `ambit_controller_record_dropped_total` goes up and the alert `AmbitControllerRecordsDropped` fires (with `alerts.enabled`). The rules still apply. A missing change shows as two records in a row with different `ambit.rulesHash` values.
-
-**Removing an app is not recorded here.** The console has no action that removes an approved MCP server. A `Server` is removed through your configuration repository in GitOps mode, where the Git history records it, or with `kubectl`, where the Kubernetes audit log of your cluster records it (if your cluster has audit logging on).
 
 **Audit-only mode.** With `access.mode: audit`, the records are of requests that were allowed. Each record carries the verdict of the access rules in force when it was served (`ambit.wouldRefuse` for a model request, `ambit.wouldRefuseTool` for an MCP tool call: `allow`, `refuse:model`, `refuse:router`, `refuse:tool`, `other-model` or `n/a`), the mode (`ambit.accessMode`) and the version of those rules (`ambit.rulesVersion`). The verdict is not recomputed later, so a rule written afterwards does not change an older record. A request refused for another reason (sign-in, a budget, an unpriced model) has its real status, 401, 403 or 429. See [Turn Ambit on without blocking anyone](guides/audit-only.md).
 

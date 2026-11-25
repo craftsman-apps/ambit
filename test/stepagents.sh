@@ -116,7 +116,7 @@ pass "6 itself-mode agent $NIGHTLY@svc.ambit.internal: only admins create it; it
 day=$(date -u +%Y-%m-%d); next=$(date -u -v+1d +%Y-%m-%d 2>/dev/null || date -u -d tomorrow +%Y-%m-%d)
 arecs() { [[ $(api GET "/api/audit?agent=$1&from=$day&to=$next") == 200 ]] && field 'len(d["calls"])'; }
 wait_for 120 '[[ $(arecs "$A1") -ge 3 ]]' || fail "7 no Audit records for agent $A1: $(head -c 800 "$W/api")"
-[[ $(field 'sum(1 for c in d["calls"] if c.get("agent")=="'"$A1"'" and c["agentMode"]=="person" and c["platformDeclared"]=="grok" and c["agentOwnerAtIssue"]=="user09@example.com" and c["ingress"]=="private" and c["keyId"]=="'"$K1ID"'" and c["identity"]=="key" and c["agentOwnerNow"]=="user09@example.com")') -ge 3 ]] || fail "7 agent fields: $(head -c 1200 "$W/api")"
+[[ $(field 'sum(1 for c in d["calls"] if c.get("agent")=="'"$A1"'" and c.get("agentMode")=="person" and c.get("platformDeclared")=="grok" and c.get("agentOwnerAtIssue")=="user09@example.com" and c.get("ingress","") in ("","private") and c["keyId"]=="'"$K1ID"'" and c["identity"]=="key" and c.get("agentOwnerNow")=="user09@example.com")') -ge 3 ]] || fail "7 agent fields: $(head -c 1200 "$W/api")"
 [[ $(field 'sum(1 for c in d["calls"] if c.get("agent","")!="'"$A1"'")') == 0 ]] || fail "7 the agent filter returned other calls"
 wait_for 60 '[[ $(api GET "/api/audit?platform_declared=agentcore&from=$day&to=$next") == 200 && $(field "sum(1 for c in d[\"calls\"] if c.get(\"agent\")==\"$NIGHTLY\" and c.get(\"agentMode\")==\"itself\")") -ge 1 ]]' || fail "7 platform filter: $(head -c 800 "$W/api")"
 [[ $(api GET "/api/audit?email=user09@example.com&from=$day&to=$next") == 200 ]] && [[ $(field 'sum(1 for c in d["calls"] if c.get("agent","")=="" and c["identity"]=="jwt")') -ge 1 ]] || fail "7 the owner's own token calls carry no agent: $(head -c 600 "$W/api")"
@@ -129,7 +129,7 @@ want = "time,email,what,target,outcome,status,error,input_tokens,output_tokens,m
 assert ",".join(h) == want, ",".join(h)
 i = {n: k for k, n in enumerate(h)}
 hit = [r for r in rows[1:] if r[i["agent"]] == os.environ["A1"] and r[i["agent_mode"]] == "person" and r[i["agent_owner_at_issue"]] == "user09@example.com"
-       and r[i["agent_owner_now"]] == "user09@example.com" and r[i["platform_declared"]] == "grok" and r[i["ingress"]] == "private"]
+       and r[i["agent_owner_now"]] == "user09@example.com" and r[i["platform_declared"]] == "grok" and r[i["ingress"]] in ("", "private")]
 assert hit, "no row of the agent"
 ' || fail "7 calls.csv: header or the agent's rows are wrong"
 pass "7 Audit: calls of $A1 (person, grok, owner at issue and now user09, private, key $K1ID); filters agent= and platform_declared= work; calls.csv has the 8 new columns after call_id"

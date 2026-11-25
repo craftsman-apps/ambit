@@ -21,6 +21,17 @@ attributes (`ambit.agent`, `ambit.agent_mode`, `ambit.agent_owner_at_issue`, `am
 - The access log gets seven more attributes. A custom access-log policy of your own is not changed.
 - With `--reuse-values` from an earlier release the new values are missing and the defaults apply.
 
+## To the release with the public front door (0.6.0)
+
+- **New and off by default (experimental).** `frontDoor.enabled: false` renders nothing new and changes nothing. With it
+  on, the chart adds a second Gateway `ambit-public` (its own pods, Service and load balancer), a route, three policies,
+  a ConfigMap `ambit-ratelimit-front-door` and an admission policy. Read [The public front door](front-door.md) first:
+  it needs a certificate Secret, `limits.enabled` and `evidence.enabled`.
+- **With the front door on**, the ratelimit service reads two ConfigMaps (the budgets' and the front door's), its network
+  policy admits the public gateway pods, the controller starts with `--public-gateway=ambit-public`, and the audit
+  records of both gateways carry `ambit.ingress` (`private` or `public`). Records written before the upgrade have none.
+- The front door is experimental: its values and objects may change in 0.7.0 with an upgrade note, never silently inside 0.6.x.
+
 ## To the release with service accounts (0.5.0)
 
 - **Compression records name the caller.** With `evidence.enabled` and a Server with `resultCompression`, the guard's

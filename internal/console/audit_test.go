@@ -205,6 +205,15 @@ func TestAuditSearchModes(t *testing.T) {
 		"/api/audit?email=user01%40example.com&invalidKey=true": http.StatusBadRequest,
 		"/api/audit?invalidKey=yes":                             http.StatusBadRequest,
 		"/api/audit?invalidKey=true":                            http.StatusBadGateway, // reaches the store
+		// Agents (experimental): an agent or a declared platform selects calls like an email does; ingress only narrows.
+		"/api/audit?agent=grok-y":                            http.StatusBadGateway,
+		"/api/audit?platform_declared=grok&ingress=public":   http.StatusBadGateway,
+		"/api/audit?email=user01%40example.com&agent=grok-y": http.StatusBadGateway,
+		"/api/audit?ingress=public":                          http.StatusBadRequest,
+		"/api/audit?agent=Grok%20Y":                          http.StatusBadRequest,
+		"/api/audit?agent=grok-y&ingress=both":               http.StatusBadRequest,
+		"/api/audit?invalidKey=true&agent=grok-y":            http.StatusBadRequest,
+		"/api/audit?approvals=true&agent=grok-y":             http.StatusBadRequest,
 	} {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest("GET", u, nil))
@@ -223,10 +232,11 @@ func TestCallsSelectPromptGuard(t *testing.T) {
 			t.Errorf("callsSQL lacks %s", want)
 		}
 	}
-	// The prompt guard and the call ID (#203) are the last two of the 24 fields Calls scans.
+	// The prompt guard and the call ID (#203) are fields 23 and 24 of the 31 Calls scans; the last seven are the agent
+	// attributes (docs/agents.md).
 	sel := callsSQL[strings.Index(callsSQL, "SELECT Timestamp"):strings.Index(callsSQL, "FROM otel_logs")]
-	if n := topLevelCommas(sel) + 1; n != 24 {
-		t.Errorf("callsSQL selects %d columns, Calls scans 24:\n%s", n, sel)
+	if n := topLevelCommas(sel) + 1; n != 31 {
+		t.Errorf("callsSQL selects %d columns, Calls scans 31:\n%s", n, sel)
 	}
 }
 

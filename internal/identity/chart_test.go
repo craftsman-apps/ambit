@@ -218,3 +218,49 @@ func TestConsoleCreatesModelsOnlyInDirectMode(t *testing.T) {
 		t.Error("GitOps mode: the console can create Models")
 	}
 }
+
+// Agents (docs/agents.md): the audit attributes and the source-range rule are the Go fragments, with and without an
+// agent token issuer; only the MCP route has the source-range rule, and only with keys on.
+func TestChartAgentFragments(t *testing.T) {
+	for _, issuer := range []string{"", "https://auth.example.com"} {
+		docs := render(t, "--set", "agents.tokenIssuer="+issuer)
+		for name, want := range map[string]string{
+			"ambit.agent":                AgentAttr("agent", "ambit_agent", issuer),
+			"ambit.agent_mode":           AgentAttr("agentMode", "ambit_agent_mode", issuer),
+			"ambit.agent_owner_at_issue": AgentAttr("agentOwnerAtIssue", "ambit_agent_owner_at_issue", issuer),
+			"ambit.platform_declared":    AgentAttr("platformDeclared", "ambit_platform_declared", issuer),
+			"ambit.grant_id":             AgentAttr("", "ambit_grant", issuer),
+			"ambit.token_issuer":         TokenIssuer,
+		} {
+			if got := attr(t, docs, name); got != want {
+				t.Errorf("issuer %q: %s = %s, want %s", issuer, name, got, want)
+			}
+		}
+		// ambit.ingress is written only with the public front door (frontDoor.enabled): the private Gateway then says "private"
+		for _, n := range []string{"ambit.ingress"} {
+			var spec doc
+			_ = yaml.Unmarshal([]byte(get(t, find(t, docs, "ConfigMap", "ambit-access-log-base"), "data", "spec.yaml").(string)), &spec)
+			for _, a := range get(t, spec, "frontend", "accessLog", "attributes", "add").([]any) {
+				if get(t, a, "name") == n {
+					t.Errorf("%s is written without the front door", n)
+				}
+			}
+		}
+		// the MCP policy must carry the same issuer in its scope clause only through the controller flag
+		args := get(t, find(t, docs, "Deployment", "ambit-controller"), "spec", "template", "spec", "containers").([]any)[0].(doc)["command"]
+		if has := contains(args, "--agent-token-issuer="+issuer); has != (issuer != "") {
+			t.Errorf("issuer %q: controller flag present = %v", issuer, has)
+		}
+	}
+	for _, keys := range []bool{true, false} {
+		docs := render(t, "--set", "apiKeys.enabled="+strconv.FormatBool(keys))
+		mcp := get(t, find(t, docs, "AgentgatewayPolicy", "ambit-mcp-auth"), "spec", "traffic", "authorization", "policy", "matchExpressions")
+		llm := get(t, find(t, docs, "AgentgatewayPolicy", "ambit-llm-auth"), "spec", "traffic", "authorization", "policy", "matchExpressions")
+		if contains(mcp, SourceRanges) != keys {
+			t.Errorf("apiKeys=%v: MCP matchExpressions %v", keys, mcp)
+		}
+		if contains(llm, SourceRanges) {
+			t.Errorf("apiKeys=%v: the LLM policy has the source-range rule: %v", keys, llm)
+		}
+	}
+}

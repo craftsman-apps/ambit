@@ -58,6 +58,7 @@ Ambit accepts three kinds of identity.
 | Ambit's own Dex | The bundled Dex with the bootstrap admin (`admin@ambit.local`). Set `llm.jwt.dex` and `mcp.jwt.dex` to `true`. | The quick start and first setup |
 | Personal API key | A person creates it in the console (**Keys**). It starts with `ambit_`. | Claude Code, Cursor, SDKs and MCP clients that cannot refresh a sign-in |
 | Service account key | An admin creates a [service account](service-accounts.md) (`<name>@svc.ambit.internal`, one group) and its keys in the console. | CI jobs and background agents |
+| Agent key (experimental) | A person, or an admin for an itself-mode agent, creates an [agent](agents.md) and its keys. The key carries a scope of servers and tools, optional source ranges, and the agent's name and declared platform for the audit. | Hosted assistants such as Grok Bot, Copilot Studio and AgentCore |
 
 A personal API key carries the access of its owner, never more: the same access rules, budgets, audit records and offboarding. See [Personal API keys](api-keys.md).
 

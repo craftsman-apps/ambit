@@ -41,6 +41,9 @@ type KeyView struct {
 	// Service account keys only: the admin who issued the key, and when the exposure rule lowered its end date.
 	IssuedBy string     `json:"issuedBy,omitempty"`
 	Exposed  *time.Time `json:"exposed,omitempty"`
+	// Agent keys only: the agent, and the CIDR ranges the key is accepted from (empty: from anywhere).
+	Agent        string   `json:"agent,omitempty"`
+	SourceRanges []string `json:"sourceRanges,omitempty"`
 }
 
 const stopsSoon = 7 * 24 * time.Hour
@@ -86,6 +89,7 @@ func (c *Catalog) registerKeys(mux *http.ServeMux, read func(func(http.ResponseW
 	mux.HandleFunc("DELETE /api/admin/keys/{id}", allow("only admins can revoke other people's keys",
 		func(w http.ResponseWriter, r *http.Request, s Session) { c.revokeKey(w, r, s, true) }, RoleAdmin))
 	c.registerServiceAccounts(mux, adminRead, allow)
+	c.registerAgents(mux, read, allow)
 	mux.HandleFunc("GET /api/admin/key-events", adminRead(func(w http.ResponseWriter, r *http.Request, _ Session) {
 		ev, err := c.Keys.Events(r.Context())
 		if err != nil {
@@ -122,11 +126,19 @@ func keyErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, ErrSignInAgain):
 		writeErr(w, http.StatusUnauthorized, err.Error())
-	case errors.Is(err, ErrKeysOff), errors.Is(err, ErrServicesOff), errors.Is(err, ErrNameTaken):
+	case errors.Is(err, ErrKeysOff), errors.Is(err, ErrServicesOff), errors.Is(err, ErrNameTaken), errors.Is(err, ErrAgentsOff),
+		errors.Is(err, ErrAgentLimit), errors.Is(err, ErrAgentNotActive):
 		writeErr(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrNoAgent):
+		writeErr(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, ErrNotAllowed):
+		writeErr(w, http.StatusForbidden, err.Error())
+	case errors.Is(err, ErrKeysBehind):
+		w.Header().Set("Retry-After", "5")
+		writeErr(w, http.StatusServiceUnavailable, err.Error())
 	case errors.Is(err, ErrNoAccount):
 		writeErr(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, ErrTooManyAccounts), errors.Is(err, ErrTooManyAccountKeys):
+	case errors.Is(err, ErrTooManyAccounts), errors.Is(err, ErrTooManyAccountKeys), errors.Is(err, ErrTooManyAgentKeys):
 		writeErr(w, http.StatusTooManyRequests, err.Error())
 	case errors.Is(err, ErrDeleteIncomplete):
 		w.Header().Set("Retry-After", "15")
@@ -169,6 +181,9 @@ func (c *Catalog) views(ctx context.Context, keys []Key, withOwner, lastUsed boo
 		v := KeyView{ID: k.ID, Name: k.Name, Prefix: k.Prefix, Scope: k.Scope, Created: k.Created, Expires: k.Expires, Until: k.Until, IssuedBy: k.IssuedBy}
 		if !k.Exposed.IsZero() {
 			v.Exposed = &k.Exposed
+		}
+		if k.Agent != nil {
+			v.Agent, v.SourceRanges = k.Agent.Name, k.Agent.SourceRanges
 		}
 		v.Status, v.StopsBecause = keyStatus(k, now)
 		if withOwner {

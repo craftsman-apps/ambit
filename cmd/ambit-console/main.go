@@ -72,6 +72,22 @@ func serviceSettingsFromEnv() (console.ServiceSettings, error) {
 	return s, nil
 }
 
+// agentSettingsFromEnv reads the agents.* values; values the service cannot work with stop the start.
+func agentSettingsFromEnv() (console.AgentSettings, error) {
+	a := console.AgentSettings{Enabled: os.Getenv("AMBIT_AGENTS_ENABLED") != "false", MaxTotal: envInt("AMBIT_AGENTS_MAX_TOTAL", 2000),
+		MaxPerPerson: envInt("AMBIT_AGENTS_MAX_PER_PERSON", 10), KeyMaxDays: envInt("AMBIT_AGENTS_KEY_MAX_DAYS", 90)}
+	if a.MaxTotal < 1 || a.MaxTotal > 2000 {
+		return a, fmt.Errorf("AMBIT_AGENTS_MAX_TOTAL is %d; it must be 1 to 2000", a.MaxTotal)
+	}
+	if a.MaxPerPerson < 1 || a.MaxPerPerson > 10 {
+		return a, fmt.Errorf("AMBIT_AGENTS_MAX_PER_PERSON is %d; it must be 1 to 10", a.MaxPerPerson)
+	}
+	if a.KeyMaxDays != 30 && a.KeyMaxDays != 90 && a.KeyMaxDays != 365 {
+		return a, fmt.Errorf("AMBIT_AGENTS_KEY_MAX_DAYS is %d; it must be 30, 90 or 365", a.KeyMaxDays)
+	}
+	return a, nil
+}
+
 // retry runs f until it succeeds or ctx ends. Dex may still be starting when the console starts.
 func retry(ctx context.Context, what string, f func() error) error {
 	for delay := time.Second; ; delay = min(delay*2, 15*time.Second) {
@@ -180,7 +196,12 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	keySvc := &console.KeyService{Client: objects, Namespace: ns, Now: time.Now, Settings: keySettings, Services: services}
+	agents, err := agentSettingsFromEnv()
+	if err != nil {
+		return err
+	}
+	keySvc := &console.KeyService{Client: objects, Namespace: ns, Now: time.Now, Settings: keySettings, Services: services, Agents: agents}
+	keySvc.RecordKey = console.AgentRecordKey(keys.SessionKey)
 	go console.RunLeader(ctx, kube, ns, podName, keySvc.StartTerm, keySvc.EndTerm)
 	go func() { // the hourly full repair bounds any stale write or interrupted refresh to one hour
 		t := time.NewTicker(time.Hour)
@@ -274,6 +295,7 @@ func run(ctx context.Context) error {
 		}
 		audit = console.OpenAudit(console.ClickHouse{Addr: addr, User: os.Getenv("AMBIT_CLICKHOUSE_USER"),
 			Database: os.Getenv("AMBIT_CLICKHOUSE_DATABASE"), Password: pw, TLS: tlsc})
+		audit.AgentOwners = keySvc.AgentOwners
 		audit.Prices = func(ctx context.Context) map[string]v1.ModelPrice { // by the model name clients send
 			var l v1.ModelList
 			if objects.List(ctx, &l, client.InNamespace(ns)) != nil {

@@ -125,6 +125,22 @@ serviceAccounts:
   # Days a service account key keeps working after the admin who issued it is offboarded (0-30; 0: it stops at once).
   exposureDays: 7
 
+agents:
+  # Agents (console: Agents): a hosted assistant that calls MCP tools with its own key, for one person (person mode) or
+  # on its own (itself mode: a service account with an owner). EXPERIMENTAL in 0.6.x: the API and the key fields may
+  # change in 0.7.0 with an upgrade note (docs/agents.md). false: creating agents and agent keys is refused; the keys
+  # that exist keep working until they end.
+  enabled: true
+  # At most this many agents in all (each is one small ConfigMap; at most 2000), and per person in person mode.
+  maxTotal: 2000
+  maxPerPerson: 10
+  # The longest end date of an agent key: 30, 90 or 365 (also limited by apiKeys.maxDays, and for itself mode by
+  # serviceAccounts.maxDays).
+  keyMaxDays: 90
+  # Reserved for OAuth (0.6.0, later): the issuer whose tokens may carry agent claims. Empty: no token is read as an
+  # agent's, and no token is limited by an agent scope.
+  tokenIssuer: ""
+
 routing:
   router:
     # ambit-router labels prompts for ModelRouters of type LLM. Installed but at 0 replicas until such a router

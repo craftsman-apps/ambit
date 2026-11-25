@@ -178,12 +178,15 @@ func TestOAuthAgentCreatedAndActive(t *testing.T) {
 		_ = json.Unmarshal(w.Body.Bytes(), &o)
 		return o.Active
 	}
-	active := func(agent, g string) bool { return activeWith(agent, g, nil) }
+	active := func(agent, g string) bool { return activeWith(agent, g, []string{}) }
 	if !active(out.Name, grant) {
 		t.Fatal("a new agent and its grant are active")
 	}
-	if !activeWith(out.Name, grant, []string{"crm"}) || activeWith(out.Name, grant, []string{"crm", "wiki"}) {
-		t.Fatal("a token whose scope is within the agent's refreshes; one with more does not")
+	if !activeWith(out.Name, grant, []string{"crm"}) || !activeWith(out.Name, grant, []string{"crm/read"}) || activeWith(out.Name, grant, []string{"crm", "wiki"}) {
+		t.Fatal("a token whose scope is within the agent's (also a tool of a server the agent has whole) refreshes; one with more does not")
+	}
+	if activeWith(out.Name, grant, nil) {
+		t.Fatal("a request without a scope list is never approved (an old ambit-auth, or damage)")
 	}
 	// the scope is narrowed after the consent: the refresh of the old token (scope "crm/read" is not in ["crm/list"]) is refused
 	if _, err := keys.UpdateAgent(context.Background(), Session{Email: "alice@acme.com", SignedIn: t0.Unix()}, out.Name, AgentPatch{Scope: &[]string{"crm/list"}}); err != nil {

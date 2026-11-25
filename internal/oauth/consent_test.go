@@ -1091,6 +1091,14 @@ func TestTokenHookSendsTheTokensScope(t *testing.T) {
 	if len(e.be.scopes) != 1 || !slices.Equal(e.be.scopes[0], []string{"time", "mail/send"}) {
 		t.Fatalf("the console was asked with %v", e.be.scopes)
 	}
+	// an empty consent is an empty list, not a missing one (the console refuses a missing list)
+	sess["extra"].(map[string]any)["ambit_scope"] = []string{}
+	if w := hook(e, sess); w.Code != 204 {
+		t.Fatalf("refresh of an empty consent: %d", w.Code)
+	}
+	if got := e.be.scopes[len(e.be.scopes)-1]; got == nil || len(got) != 0 {
+		t.Fatalf("an empty consent was sent as %#v", got)
+	}
 }
 
 // The consent writes the verified email into the token, as AccessRules by email need it, and the groups to the console.

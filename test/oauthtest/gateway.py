@@ -94,6 +94,7 @@ except Exception: prm = {}
 check("1 the resource metadata document: this MCP URL, Ambit's sign-in host as the authorization server", st == 200 and prm.get("resource") == MCP_URL and prm.get("authorization_servers") == [ISS], (st, body[:300]))
 cid1, tok1 = connect("alice", ("time",))
 claims1 = jwt_claims(tok1["access_token"])
+check("1 the token carries the verified email (AccessRules by email need it) and the person's agent and grant", claims1.get("email_verified") is True and claims1.get("email") == "alice@acme.test" and claims1.get("ambit_agent") and claims1.get("ambit_grant"), sorted(claims1))
 ok = accepted_everywhere(tok1["access_token"], 400)
 first_ok = time.time() - t0
 check("1 the first token is accepted on every public pod (the gateway has Hydra's key; no five-minute refusal)", ok and first_ok < 240, f"first success after {first_ok:.0f} s")

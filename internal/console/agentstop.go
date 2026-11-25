@@ -465,6 +465,9 @@ func (s *KeyService) StartAgent(ctx context.Context, by Session, name string) (A
 	}
 	a, err = s.changeAgent(ctx, name, func(cur *Agent) (bool, error) {
 		cur.State, cur.StoppedAt, cur.StopRequestedAt, cur.StopNotConfirmedAt, cur.StopUnlisted, cur.StopAcks = StateActive, nil, nil, nil, false, nil
+		if s.RevokeGrants != nil {
+			cur.Grants = nil // also grants of an agent that was stopped before OAuth sign-in was turned on: a start never brings an old grant back
+		}
 		return true, nil
 	})
 	if err == nil {

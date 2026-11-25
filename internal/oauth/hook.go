@@ -81,8 +81,9 @@ func (s *Server) tokenHook(w http.ResponseWriter, r *http.Request) {
 	}
 	// The agent must exist, be active and own this grant: deleting an agent (or ending its connection) ends its refresh for
 	// good, without Hydra's help and after the stop list entry is gone.
-	var scope []string
+	var scope []string // nil (no list in the token) is refused by the console; an empty consent is []
 	if l, ok := in.Session.Extra["ambit_scope"].([]any); ok {
+		scope = []string{}
 		for _, x := range l {
 			if v, ok := x.(string); ok {
 				scope = append(scope, v)

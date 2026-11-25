@@ -238,8 +238,11 @@ func (a *OAuthAPI) active(w http.ResponseWriter, r *http.Request) {
 		on := ag.State == StateActive && ag.Mode == ModePerson && containsStr(ag.Grants, in.Grant)
 		// The token's scope must still be within the agent's: a scope that was narrowed since the consent ends the refresh (the platform
 		// connects again, and the person sees what is offered). A token that was issued before stays as it is until it expires.
+		if in.Scope == nil { // no list at all (an old ambit-auth, or a damaged request): never approved; an empty consent sends []
+			on = false
+		}
 		for _, sc := range in.Scope {
-			on = on && containsStr(ag.Scope, sc)
+			on = on && scopeCovers(ag.Scope, sc)
 		}
 		if on {
 			// The owner must not be offboarded either: the sign-in is refused, and so is every refresh.

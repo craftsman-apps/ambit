@@ -29,7 +29,7 @@ while the entry is there), with 5 minutes to spare for clocks and for the policy
   "strategies" (dict "access_token" "jwt")
   "ttl" (dict "access_token" (printf "%dm" (int $o.accessTokenMinutes)) "refresh_token" (printf "%dh" (mul 24 (int $o.refreshTokenIdleDays))) "auth_code" "1m" "login_consent_request" "10m")
   "oauth2" (dict "pkce" (dict "enforced" true "enforced_for_public_clients" true) "expose_internal_errors" false "mirror_top_level_claims" false
-    "allowed_top_level_claims" (list "email" "groups" "ambit_agent" "ambit_agent_mode" "ambit_agent_owner_at_issue" "ambit_grant" "ambit_scope" "ambit_platform_declared")
+    "allowed_top_level_claims" (list "email" "email_verified" "groups" "ambit_agent" "ambit_agent_mode" "ambit_agent_owner_at_issue" "ambit_grant" "ambit_scope" "ambit_platform_declared")
     "token_hook" (dict "url" (printf "http://ambit-auth.%s.svc:8081/hooks/token" .Release.Namespace)))
   "oidc" (dict "dynamic_client_registration" (dict "enabled" false))
   "webfinger" (dict "jwks" (dict "broadcast_keys" (list "hydra.jwt.access-token")))

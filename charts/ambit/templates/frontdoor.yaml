@@ -55,13 +55,20 @@ spec:
         has(object.spec.rules[0].name) && object.spec.rules[0].name == "keys" &&
         has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) == 1 &&
         has(object.spec.rules[0].matches[0].path) && object.spec.rules[0].matches[0].path.type == "Exact" &&
-        object.spec.rules[0].matches[0].path.value == "/mcp")
+        object.spec.rules[0].matches[0].path.value == "/mcp" &&
+        !has(object.spec.rules[0].matches[0].method) && !has(object.spec.rules[0].matches[0].headers) && !has(object.spec.rules[0].matches[0].queryParams))
         ||
         (size(object.spec.rules) == 2 &&
         has(object.spec.rules[0].name) && object.spec.rules[0].name == "keys" && has(object.spec.rules[1].name) && object.spec.rules[1].name == "oauth" &&
-        object.spec.rules.all(r, has(r.matches) && size(r.matches) >= 1 && size(r.matches) <= 2 &&
-        r.matches.all(m, has(m.path) && m.path.type == "Exact" &&
-        ((m.path.value == "/mcp") || (m.path.value == "/.well-known/oauth-protected-resource/mcp" && has(m.method) && m.method == "GET"))))))
+        has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) == 2 &&
+        object.spec.rules[0].matches.all(m, has(m.path) && m.path.type == "Exact" && m.path.value == "/mcp" && !has(m.method) && !has(m.queryParams) &&
+        has(m.headers) && size(m.headers) == 1 && m.headers[0].type == "RegularExpression") &&
+        object.spec.rules[0].matches.exists(m, m.headers[0].name == "x-api-key" && m.headers[0].value == ".*") &&
+        object.spec.rules[0].matches.exists(m, m.headers[0].name == "Authorization" && m.headers[0].value == "^Bearer ambit_.*") &&
+        has(object.spec.rules[1].matches) && size(object.spec.rules[1].matches) == 2 &&
+        object.spec.rules[1].matches.all(m, has(m.path) && m.path.type == "Exact" && !has(m.headers) && !has(m.queryParams)) &&
+        object.spec.rules[1].matches.exists(m, m.path.value == "/mcp" && !has(m.method)) &&
+        object.spec.rules[1].matches.exists(m, m.path.value == "/.well-known/oauth-protected-resource/mcp" && has(m.method) && m.method == "GET")))
         && object.spec.rules.all(r,
         has(r.backendRefs) && size(r.backendRefs) == 1 && r.backendRefs[0].name == "ambit-mcp-public" &&
         has(r.backendRefs[0].kind) && r.backendRefs[0].kind == "AgentgatewayBackend" &&

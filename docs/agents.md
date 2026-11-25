@@ -99,6 +99,72 @@ agent key (503, "agents are not ready"). So a console that is upgraded before th
 agentgateway rejected (for example because it grew over the 16,384-character limit), never gives out a key that the
 gateway would not limit.
 
+## Stopping an agent
+
+Stop an agent when it misbehaves, when its platform is compromised, or when its owner leaves. **A stop is a state machine, not
+a switch**: Ambit reports an agent as stopped only after every Gateway has confirmed the stop. It never promises that no call
+is accepted after the request; it measures how many were.
+
+```sh
+curl -s -b "$COOKIES" -X POST "$CONSOLE/api/agents/grok-bot-for-sales-x7k2pq/stop" -H 'Content-Type: application/json' -d '{}'   # 202
+curl -s -b "$COOKIES" "$CONSOLE/api/agents/grok-bot-for-sales-x7k2pq"                                                       # "state": "stopped" when confirmed
+curl -s -b "$COOKIES" -X POST "$CONSOLE/api/agents/grok-bot-for-sales-x7k2pq/start" -H 'Content-Type: application/json' -d '{}' # a stopped agent gets new keys again
+```
+
+The owner (person mode) or an admin stops an agent; admins also stop itself-mode agents. Stopping works when `agents.enabled` is
+`false`.
+
+```
+ active --Stop--> stopping --S2, S3 done, every Gateway confirmed--> stopped --Start--> active
+                  |  ^
+                  |  +-- the steps are repeated every 2 s until they work
+                  +-- after 60 s without confirmation: event, alert "stop not confirmed on <Gateway>"
+```
+
+| Step | Who | What |
+|---|---|---|
+| S1 | console | Writes the agent to the stop list (ConfigMap `ambit-agent-stops`, a new list generation) and records state `stopping` |
+| S2 | console | Deletes every key of the agent (also a key made while it is stopping) |
+| S3 | console | Revokes the agent's OAuth grants (none before OAuth) |
+| S4 | controller | Renders the list into Require policies `ambit-agent-stops-<k>` on **every MCP and LLM route of every Gateway** (at most 150 agents per policy) |
+| S5 | controller | Reads each policy's status per route: a Gateway **acknowledges** the list generation when all its routes accepted every policy at its current generation (plus the settle time, `--activation-settle`). The answer is in ConfigMap `ambit-agent-stops-ack` |
+| S6 | console | State `stopped` when S2 and S3 are done and every Gateway acknowledged the entry's generation. Writes the History event |
+
+The **stop policy is the authoritative check for every credential the gateway accepts**: a key of a listed agent is refused
+(403) by the gateway even while its Secret still exists, and so is a token that names the agent or its grant. Deleting the keys
+(S2) is the second line.
+
+**Retention.** An entry stays in the list until the agent's credentials are gone, every Gateway acknowledged it, and
+`agents.stopRetentionMinutes` (25: the access token life of 15 minutes and 10 minutes of leeway) have passed. Then it is
+pruned; the agent record keeps `state: stopped`. Start removes the entry at once.
+
+**Fail closed.**
+- The controller never deletes a stop policy while an entry exists. If the list cannot be rendered (more than 1,000 entries, an unreadable list), it keeps the policies in force, writes `degraded` into the acknowledgment and sets the alert `AmbitStopPolicyDegraded`.
+- A partial rollout (one Gateway confirmed, another not) stays `stopping`, and the alert and the event name the Gateway that is late.
+- If the list is **full** (1,000 entries), the stop still runs S2 and S3, the agent is marked `stopUnlisted`, and it stays `stopping` until there is room (the console tries every 2 s). Keys are gone; tokens (with OAuth) expire within 15 minutes.
+
+**The limits, stated honestly.** What a stop can and cannot do depends on what is working:
+
+| Failure | Keys | Measured |
+|---|---|---|
+| none | refused after the proxies learn of the policy and the key deletion | MEASURED_NONE |
+| Ambit controller down | refused after S2 as usual; the stop is not confirmed (state stays `stopping`) until it is back | MEASURED_CONTROLLER |
+| agentgateway controller down | **not refused until it is back**: the proxies keep their last configuration | MEASURED_AGW |
+| console down | a stop cannot be requested. Emergency stops: the Helm values `apiKeys.enabled: false` (all keys) and `agents.enabled: false` | not applicable |
+
+An OAuth access token is checked offline by the gateway; once OAuth exists, a token stays valid until it expires (at most 15 minutes) when
+no stop policy applies.
+
+**Evidence.** `GET /api/evidence/agent-stop/<agent>.zip` (admins, needs `evidence.enabled`) holds `timeline.csv` (request, keys deleted,
+grants revoked, each Gateway's acknowledgment, stopped, with seconds from the request), `calls-after-request.csv` (every call that
+carries the agent's name from the request on, with its status) and `summary.csv`: **the measured number of accepted calls after the
+request, and the time to the first refused call**, per Gateway. There is no "expected 0" column. A call with a key that was already
+deleted is logged as an invalid key without the agent's name, so it is not in the file; a refusal by the stop policy is.
+
+**When the owner leaves.** [Offboarding](offboarding.md) stops all of the person's person-mode agents with this state machine.
+Their itself-mode agents are marked **orphaned**: they keep working for `agents.orphanDays` (7), with `orphanedAt` in the
+record, so that an admin can move them (`PUT /api/agents/{name}/owner`); then they are stopped.
+
 ## Audit
 
 Every record of a call made with an agent's key has these attributes in `otel_logs` (`LogAttributes`), taken only from
@@ -179,6 +245,7 @@ attributes above, and the columns appended to `calls.csv`.
 |---|---|
 | `GET /api/agents` (add `?all=true` for every agent) | The caller's agents; admins for all |
 | `POST /api/agents` | Any signed-in person (person mode); admins (itself mode) |
+| `POST /api/agents/{name}/stop`, `POST /api/agents/{name}/start`, `GET /api/evidence/agent-stop/{agent}.zip` | The owner (person mode) or an admin; admins for itself mode and the export |
 | `GET /api/agents/{name}`, `PATCH /api/agents/{name}`, `DELETE /api/agents/{name}` | The owner (person mode), admins (itself mode; and delete for any agent) |
 | `POST /api/agents/{name}/keys` | The owner (person mode), admins (itself mode) |
 | `PUT /api/agents/{name}/owner` | Admins, itself-mode agents |

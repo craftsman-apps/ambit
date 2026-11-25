@@ -30,7 +30,7 @@ const call = (time: string, extra: Record<string, unknown> = {}) => ({
 const agentCall = (time: string, extra: Record<string, unknown> = {}) => call(time, {
   agent: "grok-bot-x7k2pq", agentMode: "person", agentOwnerAtIssue: "user09@example.com", agentOwnerNow: "user09@example.com", platformDeclared: "grok", ingress: "private", ...extra });
 
-type Setup = { role?: "admin" | "viewer"; agents?: Agent[]; keys?: Key[]; enabled?: boolean; lastUsedAvailable?: boolean; calls?: object[]; auditError?: string;
+type Setup = { saMaxDays?: number; keyDelayMs?: number; maxDays?: number; role?: "admin" | "viewer"; agents?: Agent[]; keys?: Key[]; enabled?: boolean; lastUsedAvailable?: boolean; calls?: object[]; auditError?: string;
   seen?: { method: string; path: string; search: string; body?: unknown }[] };
 
 // A small stateful mock of the console: agents, their keys, the audit trail.
@@ -42,7 +42,7 @@ async function setup(page: Page, o: Setup = {}) {
   const keys = o.keys ?? [];
   const json = (route: Route, body: unknown, status = 200) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
   const settings = { enabled: o.enabled ?? true, maxTotal: 2000, maxPerPerson: 10, keyMaxDays: 90 };
-  const keySettings = { enabled: true, inactivityDays: 30, maxDays: 90, lastUsedAvailable: o.lastUsedAvailable ?? true };
+  const keySettings = { enabled: true, inactivityDays: 30, maxDays: o.maxDays ?? 90, lastUsedAvailable: o.lastUsedAvailable ?? true };
   await page.route("**/api/**", async (route) => {
     const req = route.request();
     const u = new URL(req.url());
@@ -51,6 +51,8 @@ async function setup(page: Page, o: Setup = {}) {
     o.seen?.push({ method: m, path: p, search: u.search, body: req.postDataJSON() });
     if (p === "/api/me") return json(route, { email, name: email.split("@")[0], role, groups: ["eng"], bootstrap: false });
     if (p === "/api/config") return json(route, { mode: "direct", accessMode: "enforce" });
+    if (p === "/api/settings/keys") return json(route, keySettings);
+    if (p === "/api/admin/service-accounts") return json(route, { settings: { enabled: true, maxDays: o.saMaxDays ?? 90 }, accounts: [], urls: {} });
     if (p === "/api/servers") return json(route, servers);
     if (p === "/api/groups") return json(route, [{ name: "ops", source: "rules" }]);
     if (p === "/api/keys" || p === "/api/admin/keys") return json(route, { settings: keySettings, keys, urls: { llm: "https://llm.example.com", mcp: "https://mcp.example.com/mcp" } });
@@ -73,6 +75,7 @@ async function setup(page: Page, o: Setup = {}) {
     const newKey = p.match(/^\/api\/agents\/([^/]+)\/keys$/);
     if (newKey && m === "POST") {
       const b = req.postDataJSON();
+      if (o.keyDelayMs) await new Promise((r) => setTimeout(r, o.keyDelayMs));
       const k = key({ id: `k${keys.length + 1}`, agent: newKey[1], name: b.name, sourceRanges: b.sourceRanges?.length ? b.sourceRanges : undefined });
       keys.push(k);
       return json(route, { key: "ambit_SECRETSECRETSECRETSECRETSECRETSECRETSECRET1", view: k, urls: { mcp: "https://mcp.example.com/mcp" } }, 201);
@@ -81,7 +84,10 @@ async function setup(page: Page, o: Setup = {}) {
     if (revoke && m === "DELETE") { keys.splice(keys.findIndex((k) => k.id === revoke[1]), 1); return route.fulfill({ status: 204 }); }
     if (p === "/api/audit") {
       if (o.auditError) return json(route, { error: o.auditError }, 502);
-      return json(route, { calls: o.calls ?? [], limited: false });
+      const q = u.searchParams;
+      const hit = (c: Record<string, unknown>) => (!q.get("email") || c.email === q.get("email")) && (!q.get("agent") || c.agent === q.get("agent"))
+        && (!q.get("platform_declared") || c.platformDeclared === q.get("platform_declared")) && (!q.get("ingress") || c.ingress === q.get("ingress"));
+      return json(route, { calls: (o.calls ?? []).filter((c) => hit(c as Record<string, unknown>)), limited: false });
     }
     return json(route, []);
   });
@@ -107,6 +113,11 @@ test.beforeEach(async ({ page }) => {
 });
 
 const lastAudit = (seen: NonNullable<Setup["seen"]>) => seen.filter((s) => s.path === "/api/audit").slice(-1)[0];
+const sent = async (seen: NonNullable<Setup["seen"]>, method: string, path: string) => {
+  const find = () => seen.find((s) => s.method === method && s.path === path)?.body;
+  await expect.poll(find).toBeTruthy();
+  return find();
+};
 const nav = (page: Page) => page.getByRole("navigation", { name: "Console" });
 
 test("empty states: no agents, agents switched off", async ({ page }) => {
@@ -186,8 +197,7 @@ test("create an agent, make a key: the key is shown once", async ({ page }) => {
   await snap(page, "agents-new");
   await form.getByRole("button", { name: "Create agent" }).click();
 
-  const create = seen.find((s) => s.method === "POST" && s.path === "/api/agents");
-  expect(create?.body).toEqual({ displayName: "Grok Bot for sales", platform: "grok", scope: ["crm", "wiki"] });
+  expect(await sent(seen, "POST", "/api/agents")).toEqual({ displayName: "Grok Bot for sales", platform: "grok", scope: ["crm", "wiki"] });
   const detail = page.getByTestId("agent-detail");
   await expect(page).toHaveURL(/\/agents\?agent=grok-bot-x7k2pq$/);
   await expect(detail).toContainText("Grok Bot for sales");
@@ -201,7 +211,7 @@ test("create an agent, make a key: the key is shown once", async ({ page }) => {
   await keyForm.getByLabel("End date").selectOption("30");
   await keyForm.getByLabel("Source address ranges (optional)").fill("203.0.113.0/24\n2001:db8::/32");
   await keyForm.getByRole("button", { name: "Create key" }).click();
-  expect(seen.find((s) => s.path === "/api/agents/grok-bot-x7k2pq/keys")?.body).toEqual({ name: "grok connector", days: 30, sourceRanges: ["203.0.113.0/24", "2001:db8::/32"] });
+  expect(await sent(seen, "POST", "/api/agents/grok-bot-x7k2pq/keys")).toEqual({ name: "grok connector", days: 30, sourceRanges: ["203.0.113.0/24", "2001:db8::/32"] });
   const shown = page.getByTestId("agent-key-created");
   await expect(shown).toContainText("This is the only time the key is shown");
   const plain = (await page.getByTestId("new-key").textContent())!;
@@ -263,7 +273,7 @@ test("admins make an itself-mode agent with an account name, group and owner", a
   await form.getByLabel("Owner (optional)").fill("group:platform");
   await form.getByLabel("All tools of wiki").check();
   await form.getByRole("button", { name: "Create agent" }).click();
-  expect(seen.find((s) => s.method === "POST" && s.path === "/api/agents")?.body).toEqual({
+  expect(await sent(seen, "POST", "/api/agents")).toEqual({
     mode: "itself", name: "nightly-report", displayName: "Nightly report", platform: "agentcore", scope: ["wiki"], group: "ops", owner: "group:platform" });
   await expect(page.getByTestId("agent-calls-as")).toHaveText("nightly-report@svc.ambit.internal");
   await expect(page.getByTestId("agent-kind")).toContainText("Itself (service account)");
@@ -271,14 +281,14 @@ test("admins make an itself-mode agent with an account name, group and owner", a
 
 test("change the scope of an agent; admins see the tools it used", async ({ page }) => {
   const seen: Setup["seen"] = [];
-  const a = agent({ name: "grok-bot-x7k2pq", displayName: "Grok Bot for sales", scope: ["crm/read_contact"] });
+  const a = agent({ name: "grok-bot-x7k2pq", displayName: "Grok Bot for sales", scope: ["crm/read_contact"], owner: "user10@example.com" }); // the admin's own agent: only an owner may change it
   await setup(page, { role: "admin", agents: [a], seen, calls: [agentCall("2026-11-24T08:30:00Z"), agentCall("2026-11-24T08:31:00Z"), agentCall("2026-11-24T08:32:00Z", { server: "wiki", tool: "search" }), agentCall("2026-11-24T08:29:00Z", { method: "tools/list", server: "", tool: "" })] });
   await page.goto("/agents?agent=grok-bot-x7k2pq");
   const detail = page.getByTestId("agent-detail");
   await expect(detail.getByTestId("tools-used")).toContainText("crm · read_contact × 2");
   await expect(detail.getByTestId("tools-used")).toContainText("wiki · search × 1");
   expect(seen.find((s) => s.path === "/api/audit")?.search).toContain("agent=grok-bot-x7k2pq");
-  await detail.getByRole("link", { name: "See every call of this agent in Audit" }).click();
+  await detail.getByRole("link", { name: "Search Audit for this agent" }).click();
   await expect(page).toHaveURL(/\/audit\?agent=grok-bot-x7k2pq$/);
   await page.goBack();
 
@@ -286,7 +296,7 @@ test("change the scope of an agent; admins see the tools it used", async ({ page
   const form = page.getByRole("form", { name: "Change the agent" });
   await form.getByLabel("All tools of wiki").check();
   await form.getByRole("button", { name: "Save" }).click();
-  expect(seen.find((s) => s.method === "PATCH")?.body).toEqual({ displayName: "Grok Bot for sales", platform: "grok", scope: ["crm/read_contact", "wiki"] });
+  expect(await sent(seen, "PATCH", "/api/agents/grok-bot-x7k2pq")).toEqual({ displayName: "Grok Bot for sales", platform: "grok", scope: ["crm/read_contact", "wiki"] });
   await expect(page.getByTestId("agent-scope")).toContainText("wiki (all tools)");
 });
 
@@ -316,38 +326,117 @@ test("Audit filters: agent, declared platform and entrance; the agent badge; own
     call("2026-11-25T07:00:00Z", { server: "wiki", tool: "search" }),
   ];
   await setup(page, { role: "admin", seen, calls });
+  const params = () => new URLSearchParams(lastAudit(seen).search);
+  const search = () => page.getByRole("button", { name: "Search" }).click();
   await page.goto("/audit");
-  await expect(page.locator("#audit-ingress")).toBeDisabled();
-  await page.locator("#audit-agent").fill("grok-bot-x7k2pq");
-  await expect(page.locator("#audit-email")).not.toHaveAttribute("required");
-  await page.locator("#audit-platform").fill("grok");
-  await expect(page.locator("#audit-ingress")).toBeEnabled();
-  await page.locator("#audit-ingress").selectOption("public");
-  await page.getByRole("button", { name: "Search" }).click();
-  const audit = lastAudit(seen);
-  const q = new URLSearchParams(audit.search);
-  expect([q.get("agent"), q.get("platform_declared"), q.get("ingress"), q.get("email")]).toEqual(["grok-bot-x7k2pq", "grok", "public", null]);
+  await expect(page.locator("#audit-ingress")).toBeDisabled(); // it only narrows another filter
 
+  // one person: their own call and the call their agent made
+  await page.locator("#audit-email").fill("user09@example.com");
+  await search();
   const first = page.getByRole("row", { name: /tools\/call · read_contact/ });
   await expect(first.getByTestId("agent-badge")).toHaveText("agent");
   await expect(first.getByTestId("ingress-badge")).toHaveText("public");
   await expect(first.getByTestId("agent-detail")).toContainText("grok-bot-x7k2pq (person mode)");
   await expect(first.getByTestId("agent-detail")).toContainText("declared platform: Grok Bot");
   await expect(first.getByTestId("agent-detail")).toContainText("owner at issue: user09@example.com · owner now: user02@example.com");
-  const second = page.getByRole("row", { name: /tools\/call · search/ }).first();
-  await expect(second.getByTestId("agent-detail")).toContainText("nightly-report (itself mode)");
-  await expect(second.getByTestId("agent-detail")).not.toContainText("owner now"); // unchanged: shown once
-  await expect(second.getByTestId("ingress-badge")).toHaveCount(0);
-  const plainRow = page.getByRole("row", { name: /wiki/ }).last();
+  const plainRow = page.getByRole("row", { name: /tools\/call · search/ });
+  await expect(plainRow).toHaveCount(1);
   await expect(plainRow.getByTestId("agent-badge")).toHaveCount(0);
   await snap(page, "audit-agent");
 
+  // one agent, without an email: an itself-mode agent; the owner is shown once when it did not change
+  await page.locator("#audit-email").fill("");
+  await expect(page.locator("#audit-email")).toHaveAttribute("required", "");
+  await page.locator("#audit-agent").fill("nightly-report");
+  await expect(page.locator("#audit-email")).not.toHaveAttribute("required");
+  await search();
+  const second = page.getByRole("row", { name: /tools\/call · search/ });
+  await expect(second).toHaveCount(1);
+  await expect(second.getByTestId("agent-detail")).toContainText("nightly-report (itself mode)");
+  await expect(second.getByTestId("agent-detail")).toContainText("declared platform: AWS AgentCore");
+  await expect(second.getByTestId("agent-detail")).not.toContainText("owner now");
+  await expect(second.getByTestId("ingress-badge")).toHaveCount(0);
+  expect(params().get("email")).toBeNull();
+
+  // a declared platform and the public entrance: the filters are ANDed by the console
+  await page.locator("#audit-agent").fill("");
+  await page.locator("#audit-platform").fill("grok");
+  await expect(page.locator("#audit-ingress")).toBeEnabled();
+  await page.locator("#audit-ingress").selectOption("public");
+  await search();
+  await expect(page.getByRole("row", { name: /tools\/call · read_contact/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /tools\/call/ })).toHaveCount(1);
+  expect([params().get("platform_declared"), params().get("ingress"), params().get("agent"), params().get("email")]).toEqual(["grok", "public", null, null]);
+  await page.locator("#audit-ingress").selectOption("private");
+  await search();
+  await expect(page.getByText("No calls with the declared platform grok, through the private entrance in this period.")).toBeVisible();
+
+  await page.locator("#audit-ingress").selectOption("public");
+  await search();
+  await expect(page.getByRole("row", { name: /tools\/call · read_contact/ })).toBeVisible();
   const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Export CSV" }).click()]);
-  expect(download.suggestedFilename()).toMatch(/^audit-grok-bot-x7k2pq-/);
+  expect(download.suggestedFilename()).toMatch(/^audit-grok-/);
   const text = (await (await import("node:fs/promises")).readFile((await download.path())!, "utf8"));
   const [head, row1] = text.split("\n");
   expect(head.endsWith(",agent,agent_mode,agent_owner_at_issue,agent_owner_now,platform_declared,grant_id,token_issuer,ingress")).toBe(true);
   expect(row1.endsWith('"grok-bot-x7k2pq","person","user09@example.com","user02@example.com","grok","","","public"')).toBe(true);
+});
+
+test("Audit: switching to another search sends only what applies to it", async ({ page }) => {
+  const seen: Setup["seen"] = [];
+  await setup(page, { role: "admin", seen, calls: [] });
+  await page.goto("/audit");
+  await page.locator("#audit-agent").fill("grok-bot-x7k2pq");
+  await page.locator("#audit-ingress").selectOption("public");
+  await page.locator("#audit-mode").selectOption("invalid");
+  await page.getByRole("button", { name: "Search" }).click();
+  const q = new URLSearchParams(lastAudit(seen).search);
+  expect([q.get("invalidKey"), q.get("agent"), q.get("ingress"), q.get("platform_declared")]).toEqual(["true", null, null, null]);
+});
+
+test("Audit: a bad value in the link is ignored, not sent", async ({ page }) => {
+  const seen: Setup["seen"] = [];
+  await setup(page, { role: "admin", seen, calls: [] });
+  await page.goto("/audit?agent=Bad%20Name&platform=grok");
+  await expect(page.locator("#audit-agent")).toHaveValue("");
+  await expect(page.locator("#audit-platform")).toHaveValue("grok");
+  const q = new URLSearchParams(lastAudit(seen).search);
+  expect([q.get("agent"), q.get("platform_declared")]).toEqual([null, "grok"]);
+});
+
+test("Agents: a key being made cannot be closed; the list of end dates follows the key limit; a stopped agent cannot change or get keys", async ({ page }) => {
+  const agents = [agent({ name: "grok-bot-x7k2pq", displayName: "Grok Bot for sales", owner: "user10@example.com" }),
+    agent({ name: "old-bot-aaaaaa", displayName: "Old bot", owner: "user10@example.com", state: "stopped" })];
+  await setup(page, { role: "admin", agents, keyDelayMs: 1500, maxDays: 30 });
+  await page.goto("/agents?agent=grok-bot-x7k2pq");
+  const detail = page.getByTestId("agent-detail");
+  await detail.getByRole("button", { name: "New key" }).click();
+  const form = detail.getByRole("form", { name: "New key for the agent" });
+  await expect(form.getByLabel("End date").locator("option")).toHaveText(["30 days from now"]); // apiKeys.maxDays is 30
+  await form.getByLabel("Key name").fill("slow");
+  await form.getByRole("button", { name: "Create key" }).click();
+  await expect(form.getByRole("button", { name: "Cancel" })).toBeDisabled();
+  await expect(detail.getByRole("button", { name: "Close" })).toBeDisabled();
+  await expect(page.getByTestId("new-key")).toBeVisible();
+  await page.getByRole("button", { name: "Done" }).click();
+  await expect(detail.getByRole("button", { name: "Close" })).toBeEnabled();
+
+  await page.goto("/agents?agent=old-bot-aaaaaa");
+  await expect(page.getByTestId("agent-state")).toHaveText("Stopped");
+  await expect(page.getByRole("button", { name: "Change" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "New key" })).toHaveCount(0);
+});
+
+test("an admin can revoke a key of another person's agent", async ({ page }) => {
+  const agents = [agent({ name: "theirs-bbbbbb", displayName: "Theirs", owner: "user02@example.com", manageable: false })];
+  await setup(page, { role: "admin", agents, keys: [key({ id: "k9", agent: "theirs-bbbbbb", name: "their key" })] });
+  await page.goto("/agents?agent=theirs-bbbbbb");
+  const row = page.getByRole("row", { name: /their key/ });
+  await row.getByRole("button", { name: "Revoke" }).click();
+  await row.getByRole("button", { name: "Revoke key" }).click();
+  await expect(page.getByRole("row", { name: /their key/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Change" })).toHaveCount(0); // only the owner changes a person-mode agent
 });
 
 test("Audit: a link from the Agents page searches at once; an empty answer names the filters; ingress alone is not sent", async ({ page }) => {

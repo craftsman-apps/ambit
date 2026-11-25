@@ -42,7 +42,7 @@ its state.
 
 - **Declared platform** is what the owner said the agent is. Ambit does not check it, and no rule, limit or bill uses it.
   The console and Audit always call it "declared".
-- **Last used** is the newest call made with any key of the agent. If the console has no audit trail (ClickHouse is not set
+- **Last used** is the newest call made with a key of the agent that still exists (a revoked key is not counted). If the console has no audit trail (ClickHouse is not set
   up), it says "unknown", and says why.
 - **Tools used** (the calls of the last 30 days, counted per tool) are on the agent's detail page, for admins, because
   they come from the audit trail, which only admins may read. A person sees a note that admins can look it up in Audit.
@@ -152,8 +152,8 @@ or public) next to **Email**. An agent or a declared platform alone selects call
 is optional; the entrance only narrows one of them, so it is off until one of them is filled in. A call made with an agent's
 key has an **agent** badge. Under it the row says which agent (and its mode), the declared platform, the owner when the key
 was issued and, if the agent was moved since, the owner now. A call that came in through the public entrance has a
-**public** badge. **Export CSV** has the same eight columns as `calls.csv`, after the columns it had before. **See every call of
-this agent in Audit** on the agent's page opens the search for it.
+**public** badge. **Export CSV** has the same eight columns as `calls.csv`, after the columns it had before. **Search Audit for
+this agent** on the agent's page opens the search for it.
 
 ![Audit, searched by declared platform and entrance: two calls of agents with the agent badge, the declared platform and the owner at issue and now.](assets/console/audit-agent.png)
 

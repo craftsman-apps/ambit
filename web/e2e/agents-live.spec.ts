@@ -3,6 +3,8 @@ import { expect, test, type Page } from "@playwright/test";
 // The Agents page against a real console (make test-ui): the bootstrap admin makes an agent for themselves, makes a key
 // (shown once), revokes it and deletes the agent. The mocked screens and filters are in agents.spec.ts.
 const password = process.env.AMBIT_ADMIN_PASSWORD ?? "";
+// No trace: it would hold the plain key (responses and page snapshots), and CI uploads traces.
+test.use({ trace: "off" });
 
 async function signInAsAdmin(page: Page) {
   test.skip(!password, "AMBIT_ADMIN_PASSWORD not set");

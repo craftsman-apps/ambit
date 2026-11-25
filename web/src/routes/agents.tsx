@@ -43,7 +43,7 @@ function ScopePicker({ value, onChange }: { value: string[]; onChange: (v: strin
   return (
     <fieldset className="space-y-2" aria-label="Tools the agent may use">
       <legend className="mb-1 text-muted">Tools it may use</legend>
-      <p className="text-small text-muted">The agent can use only what its owner's AccessRules allow <strong>and</strong> this list names. Nothing ticked means no tool. A scope never gives more than the owner has.</p>
+      <p className="text-small text-muted">The agent can use only what AccessRules allow for it (for an itself-mode agent, its service account's group) <strong>and</strong> this list names. In audit-only mode the AccessRules are not enforced, but this list is. Nothing ticked means no tool. A scope never gives more than the owner has.</p>
       {servers.isError && <p className="text-bad" role="alert">{servers.error.message}</p>}
       {servers.data && list.length === 0 && <p className="text-muted">There are no MCP servers yet.</p>}
       <div className="space-y-1">
@@ -168,7 +168,7 @@ function KeyShown({ created, admin, onDone }: { created: CreatedKey; admin: bool
   );
 }
 
-function NewKey({ a, maxDays, admin, onClose }: { a: AgentView; maxDays: number; admin: boolean; onClose: () => void }) {
+function NewKey({ a, maxDays, admin, onClose, onBusy }: { a: AgentView; maxDays: number; admin: boolean; onClose: () => void; onBusy: (b: boolean) => void }) {
   const qc = useQueryClient();
   const options = [30, 90, 365].filter((d) => d <= maxDays);
   const [name, setName] = useState("");
@@ -178,8 +178,11 @@ function NewKey({ a, maxDays, admin, onClose }: { a: AgentView; maxDays: number;
   const create = useMutation({
     gcTime: 0, // the plain key must not stay in the mutation cache after it is dismissed
     mutationFn: () => sendJSON("POST", `/api/agents/${encodeURIComponent(a.name)}/keys`, { name: name.trim(), days: Number(days), sourceRanges: parseRanges(ranges) }) as Promise<CreatedKey>,
+    onMutate: () => onBusy(true),
     onSuccess: (c) => { setCreated(c); qc.invalidateQueries({ queryKey: agentsKey }); },
+    onSettled: () => onBusy(false),
   });
+  // The key is shown only here: while it is being made, the form cannot be closed (the key would be lost).
   if (created) return <KeyShown created={created} admin={admin} onDone={() => { setCreated(null); create.reset(); onClose(); }} />;
   return (
     <form className="space-y-3 rounded-md border border-line p-4" aria-label="New key for the agent" onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>
@@ -197,7 +200,7 @@ function NewKey({ a, maxDays, admin, onClose }: { a: AgentView; maxDays: number;
       {create.isError && <p className="text-bad" role="alert">{create.error.message}</p>}
       <div className="flex gap-2">
         <Button type="submit" className="w-auto" disabled={create.isPending}>Create key</Button>
-        <Button type="button" variant="outline" className="w-auto" onClick={onClose}>Cancel</Button>
+        <Button type="button" variant="outline" className="w-auto" disabled={create.isPending} onClick={onClose}>Cancel</Button>
       </div>
     </form>
   );
@@ -219,7 +222,7 @@ function EditAgent({ a, onClose }: { a: AgentView; onClose: () => void }) {
         <input className={field} value={displayName} maxLength={100} onChange={(e) => setDisplayName(e.target.value)} required /></label>
       <PlatformField value={platform} onChange={setPlatform} />
       <ScopePicker value={scope} onChange={setScope} />
-      <p className="text-small text-muted">A new scope is written into the agent's keys. The gateway uses it about a second after it has read the changed keys. If a key cannot be changed, nothing is saved: send it again.</p>
+      <p className="text-small text-muted">A new scope is written into the agent's keys. The gateway uses it about a second after it has read the changed keys. If the answer is “try again”, the change may already be saved and a key may still carry the old scope: save again to finish it.</p>
       {save.isError && <p className="text-bad" role="alert">{save.error.message}</p>}
       <div className="flex gap-2">
         <Button type="submit" className="w-auto" disabled={save.isPending || !PLATFORM_RE.test(platform)}>Save</Button>
@@ -243,7 +246,7 @@ function ToolsUsed({ name }: { name: string }) {
       {q.data && used.length === 0 && <p className="text-muted">No tool call by this agent in the last 30 days.</p>}
       {used.length > 0 && <ul className="space-y-0.5">{used.map(([t, n]) => <li key={t}><span className="font-mono">{t}</span> <span className="text-muted">× {n}</span></li>)}</ul>}
       {q.data?.limited && <p className="text-small text-muted">Showing the newest 1,000 calls.</p>}
-      <p><Link to="/audit" search={{ agent: name }} className="text-accent underline">See every call of this agent in Audit</Link></p>
+      <p><Link to="/audit" search={{ agent: name }} className="text-accent underline">Search Audit for this agent</Link></p>
     </div>
   );
 }
@@ -257,6 +260,13 @@ function AgentDetail({ name, list, onClose }: { name: string; list: AgentList | 
   const [addingKey, setAddingKey] = useState(false);
   const [confirmKey, setConfirmKey] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [keyBusy, setKeyBusy] = useState(false);
+  const limits = useQuery({ queryKey: [...agentsKey, "key-limits", name], enabled: !!q.data,
+    queryFn: async () => {
+      const k = await getJSON<KeySettings>("/api/settings/keys");
+      const sa = admin && q.data?.mode === "itself" ? await getJSON<{ settings: { maxDays: number } }>("/api/admin/service-accounts") : null;
+      return Math.min(k.maxDays, sa?.settings.maxDays ?? Infinity);
+    } });
   const revoke = useMutation({
     mutationFn: (id: string) => sendJSON("DELETE", `${admin ? "/api/admin/keys/" : "/api/keys/"}${encodeURIComponent(id)}`),
     onSuccess: () => { setConfirmKey(null); qc.invalidateQueries({ queryKey: agentsKey }); },
@@ -270,7 +280,9 @@ function AgentDetail({ name, list, onClose }: { name: string; list: AgentList | 
   if (!a) return <p className="text-muted">Loading…</p>;
   const keys = a.keys ?? [];
   const live = keys.filter((k) => k.status !== "stopped");
-  const maxDays = list?.settings.keyMaxDays ?? 90;
+  // The longest end date: the smallest of agents.keyMaxDays, apiKeys.maxDays and (itself mode) serviceAccounts.maxDays.
+  const maxDays = Math.min(list?.settings.keyMaxDays ?? 90, limits.data ?? Infinity);
+  const usable = a.state === "active" && (list?.settings.enabled ?? true);
   const facts: [string, string][] = [
     ["Owner", a.owner], ["Kind", modeText(a.mode)], ["Declared platform", `${platformText(a.platform)} (declared, not proved)`], ["State", stateText[a.state] ?? a.state],
     ...(a.identity ? [["Calls as", a.identity] as [string, string]] : []), ...(a.group ? [["Group", a.group] as [string, string]] : []),
@@ -280,7 +292,7 @@ function AgentDetail({ name, list, onClose }: { name: string; list: AgentList | 
     <section aria-label={`Agent ${a.displayName}`} data-testid="agent-detail" className="space-y-3 rounded-md border border-line p-4">
       <div className="flex items-start justify-between gap-4">
         <h2 className="font-semibold">{a.displayName} <span className="font-mono text-small font-normal text-muted">{a.name}</span></h2>
-        <Button variant="outline" className="w-auto py-1" onClick={onClose}>Close</Button>
+        <Button variant="outline" className="w-auto py-1" disabled={keyBusy} onClick={onClose}>Close</Button>
       </div>
       <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
         {facts.map(([t, v]) => <div key={t} className="contents"><dt className="text-muted">{t}</dt>
@@ -289,7 +301,7 @@ function AgentDetail({ name, list, onClose }: { name: string; list: AgentList | 
       {a.state === "pending" && <p role="status" className="rounded-md bg-warn-soft px-2 py-1 text-warn">The service account of this agent is not ready yet. Keys can be made when the state is Active.</p>}
       <div className="space-y-1">
         <div className="flex items-center justify-between"><h3 className="text-muted">Tools it may use</h3>
-          {a.manageable && !editing && <Button variant="outline" className="w-auto py-1" onClick={() => setEditing(true)}>Change</Button>}</div>
+          {a.manageable && usable && !editing && <Button variant="outline" className="w-auto py-1" onClick={() => setEditing(true)}>Change</Button>}</div>
         {a.scope.length === 0
           ? <p data-testid="agent-scope">None. With an empty scope the agent can use no tool. Change it to add servers or tools.</p>
           : <ul data-testid="agent-scope" className="space-y-0.5">{a.scope.map((e) => <li key={e} className="font-mono text-small">{e.includes("/") ? e : `${e} (all tools)`}</li>)}</ul>}
@@ -297,8 +309,8 @@ function AgentDetail({ name, list, onClose }: { name: string; list: AgentList | 
       {editing && <EditAgent a={a} onClose={() => setEditing(false)} />}
       <div className="space-y-2">
         <div className="flex items-center justify-between"><h3 className="text-muted">Keys</h3>
-          {a.manageable && a.state === "active" && !addingKey && live.length < 2 && <Button variant="outline" className="w-auto py-1" onClick={() => setAddingKey(true)}>New key</Button>}</div>
-        {addingKey && <NewKey a={a} maxDays={maxDays} admin={admin} onClose={() => setAddingKey(false)} />}
+          {a.manageable && usable && !addingKey && live.length < 2 && <Button variant="outline" className="w-auto py-1" onClick={() => setAddingKey(true)}>New key</Button>}</div>
+        {addingKey && <NewKey a={a} maxDays={maxDays} admin={admin} onClose={() => setAddingKey(false)} onBusy={setKeyBusy} />}
         {revoke.isError && <p className="text-bad" role="alert">{revoke.error.message}</p>}
         {keys.length === 0 ? <p className="text-muted">No keys. The agent cannot call anything until it has a key.</p> : (
           <table className="w-full border-collapse text-left">
@@ -311,7 +323,7 @@ function AgentDetail({ name, list, onClose }: { name: string; list: AgentList | 
                   <td className="pr-3">{k.lastUsed ? day(k.lastUsed) : "not yet or unknown"}</td>
                   <td className="pr-3 font-mono text-small">{k.sourceRanges?.length ? k.sourceRanges.join(", ") : "any address"}</td>
                   <td className="text-right">
-                    {a.manageable && (confirmKey === k.id ? (
+                    {(a.manageable || admin) && (confirmKey === k.id ? (
                       <span className="inline-flex gap-2" role="alert">
                         <Button className="w-auto py-1" disabled={revoke.isPending} onClick={() => revoke.mutate(k.id)}>Revoke key</Button>
                         <Button variant="outline" className="w-auto py-1" onClick={() => setConfirmKey(null)}>Keep it</Button>
@@ -327,12 +339,12 @@ function AgentDetail({ name, list, onClose }: { name: string; list: AgentList | 
       {(a.manageable || admin) && (
         <div className="flex justify-end">
           {confirmDelete ? (
-            <div role="alertdialog" aria-label="Delete agent" className="space-y-2 rounded-md border border-bad p-3">
-              <p>Delete <strong>{a.displayName}</strong> and its {plural(live.length, "live key")}? Platforms that use them stop within a second. {a.mode === "itself" ? "Its service account is deleted too, and the name cannot be used again." : ""}</p>
+            <div role="alertdialog" aria-label="Delete agent" aria-describedby="delete-agent-text" className="space-y-2 rounded-md border border-bad p-3">
+              <p id="delete-agent-text">Delete <strong>{a.displayName}</strong> and its {plural(live.length, "live key")}? Platforms that use them stop within a second. {a.mode === "itself" ? "Its service account is deleted too, and the name cannot be used again." : ""}</p>
               {remove.isError && <p className="text-bad" role="alert">{remove.error.message}</p>}
               <div className="flex gap-2">
                 <Button className="w-auto py-1" disabled={remove.isPending} onClick={() => remove.mutate()}>Delete agent</Button>
-                <Button variant="outline" className="w-auto py-1" onClick={() => setConfirmDelete(false)}>Keep it</Button>
+                <Button variant="outline" className="w-auto py-1" autoFocus onClick={() => setConfirmDelete(false)}>Keep it</Button>
               </div>
             </div>
           ) : <Button variant="outline" className="w-auto py-1" onClick={() => setConfirmDelete(true)}>Delete agent</Button>}
@@ -361,7 +373,7 @@ export function AgentsPage() {
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1">
             <h1 className="text-h1 font-semibold tracking-tight">Agents<Experimental /></h1>
-            <p className="text-muted">An agent is a program or hosted assistant, such as Grok Bot, a Copilot Studio agent or AWS AgentCore, that calls MCP tools with a key of its own. Each agent has a scope: the servers and tools it may use. Every call it makes is recorded in Audit with the agent's name.{" "}
+            <p className="text-muted">An agent is a program or hosted assistant, such as Grok Bot, a Copilot Studio agent or AWS AgentCore, that calls MCP tools with a key of its own. Each agent has a scope: the servers and tools it may use. Calls it makes are recorded in Audit with the agent's name, when the audit trail is set up.{" "}
               <a className="underline" href="https://ambitproject.dev/docs/agents" target="_blank" rel="noreferrer">How agents work</a></p>
           </div>
           {s?.enabled && !creating && <Button className="w-auto shrink-0" onClick={() => { setCreating(true); show(); }}>New agent</Button>}
@@ -401,7 +413,7 @@ export function AgentsPage() {
           </div>
         )}
         {agents.length > 0 && auditTrail === false && <p className="text-muted" role="status" data-testid="no-audit-trail-note">The console has no audit trail (ClickHouse is not set up), so the last use of an agent is unknown and Audit has no calls to show.</p>}
-        {agents.length > 0 && <p className="text-small text-muted">Last used is the newest call made with any key of the agent. “Declared platform” is what the owner said; Ambit does not check it.</p>}
+        {agents.length > 0 && <p className="text-small text-muted">Last used is the newest call made with a key of the agent that still exists. A revoked key is not counted. “Declared platform” is what the owner said; Ambit does not check it.</p>}
       </section>
     </Shell>
   );

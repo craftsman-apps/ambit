@@ -102,7 +102,9 @@ function download(name: string, text: string) {
 // Audit (journey A5): every gateway call one person made in a period, refused ones included; or every request made
 // with an invalid key (wrong, revoked or expired), which has no person (issue #117).
 export function AuditPage() {
-  const arrived = useSearch({ from: "/audit" });
+  const given = useSearch({ from: "/audit" });
+  const okName = (v?: string) => (v && /^[a-z0-9._-]{1,64}$/.test(v) ? v : undefined); // the console's rule; a bad link value is ignored
+  const arrived = { agent: okName(given.agent), platform: okName(given.platform) };
   const [form, setForm] = useState({ invalidKey: false, approvals: false, email: "", agent: arrived.agent ?? "", platform: arrived.platform ?? "", ingress: "", from: monthAgo(), to: today() });
   const [q, setQ] = useState<typeof form | null>(arrived.agent || arrived.platform ? { ...form } : null); // a link from the Agents page searches at once
   const [protocol, setProtocol] = useState(false);
@@ -128,9 +130,11 @@ export function AuditPage() {
     .filter((c) => !onlyInjection || q?.invalidKey || c.injection);
   const search = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!narrowed && form.ingress) { setForm({ ...form, ingress: "" }); return; }
+    // Only what applies to the chosen search is sent: the agent, platform and entrance belong to the person search.
+    const f = form.invalidKey || form.approvals ? { ...form, agent: "", platform: "", ingress: "" } : narrowed ? form : { ...form, ingress: "" };
+    if (JSON.stringify(f) !== JSON.stringify(form)) setForm(f);
     // The same search again must ask again (after an error, or for new calls), not reuse the answer.
-    if (JSON.stringify(form) === JSON.stringify(q)) (q?.approvals ? apps : res).refetch(); else setQ({ ...form });
+    if (JSON.stringify(f) === JSON.stringify(q)) (q?.approvals ? apps : res).refetch(); else setQ({ ...f });
   };
   return (
     <Shell crumb="Evidence / Audit">
@@ -146,8 +150,8 @@ export function AuditPage() {
             </select></label>
           {!form.invalidKey && <label><span className="mb-1 block text-muted">{form.approvals || narrowed ? "Email (optional)" : "Email"}</span><input id="audit-email" className={field} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="user01@acme.com" required={!form.approvals && !narrowed} /></label>}
           {!form.invalidKey && !form.approvals && <>
-            <label><span className="mb-1 block text-muted">Agent (optional)</span><input id="audit-agent" className={field} value={form.agent} pattern="[a-z0-9._-]{0,64}" title="The agent's name: lower-case letters, digits and . _ -" onChange={(e) => setForm({ ...form, agent: e.target.value.trim() })} placeholder="grok-bot-for-sales-x7k2pq" /></label>
-            <label><span className="mb-1 block text-muted" title="What the agent's owner said it is. Ambit does not check it.">Declared platform (optional)</span><input id="audit-platform" className={field} value={form.platform} list="audit-platforms" pattern="[a-z0-9._-]{0,64}" title="A platform name: lower-case letters, digits and . _ -" onChange={(e) => setForm({ ...form, platform: e.target.value.trim() })} placeholder="grok" />
+            <label><span className="mb-1 block text-muted">Agent (optional)</span><input id="audit-agent" className={field} value={form.agent} pattern="[a-z0-9._\-]{0,64}" title="The agent's name: lower-case letters, digits and . _ -" onChange={(e) => setForm({ ...form, agent: e.target.value.trim() })} placeholder="grok-bot-for-sales-x7k2pq" /></label>
+            <label><span className="mb-1 block text-muted" title="What the agent's owner said it is. Ambit does not check it.">Declared platform (optional)</span><input id="audit-platform" className={field} value={form.platform} list="audit-platforms" pattern="[a-z0-9._\-]{0,64}" title="A platform name: lower-case letters, digits and . _ -" onChange={(e) => setForm({ ...form, platform: e.target.value.trim() })} placeholder="grok" />
               <datalist id="audit-platforms">{knownPlatforms.map(([v]) => <option key={v} value={v} />)}</datalist></label>
             <label><span className="mb-1 block text-muted">Entrance</span><select id="audit-ingress" className={field} value={form.ingress} disabled={!narrowed} title={narrowed ? "" : "Give an email, an agent or a platform first: the entrance only narrows one of them"} onChange={(e) => setForm({ ...form, ingress: e.target.value })}>
               <option value="">Any</option><option value="private">Private</option><option value="public">Public</option></select></label></>}

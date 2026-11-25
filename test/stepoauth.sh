@@ -138,7 +138,7 @@ c=$(auth "$PA" GET /.well-known/jwks.json -H 'Host: console.localtest.me'); [[ "
 pass "2 on the sign-in host: JWKS (GET), token and revoke (POST) reach Hydra; 70 other paths, methods and path variants and other host names are 404"
 
 # the admission policy: a change of the Hydra route that opens more than the chart wrote is refused (server-side dry run)
-for patch in '[{"op":"add","path":"/spec/rules/0/filters/-","value":{"type":"URLRewrite","urlRewrite":{"path":{"type":"ReplacePrefixMatch","replacePrefixMatch":"/admin"}}}}]' \
+for patch in '[{"op":"add","path":"/spec/rules/0/filters/-","value":{"type":"URLRewrite","urlRewrite":{"path":{"type":"ReplaceFullPath","replaceFullPath":"/admin/keys/hydra.jwt.access-token"}}}}]' \
   '[{"op":"replace","path":"/spec/rules/0/backendRefs/0/port","value":4445}]' \
   '[{"op":"replace","path":"/spec/rules/0/backendRefs/0/name","value":"ambit-hydra-admin"}]' \
   '[{"op":"add","path":"/spec/rules/0/matches/-","value":{"method":"GET","path":{"type":"Exact","value":"/oauth2/sessions/logout"}}}]' \

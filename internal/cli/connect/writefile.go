@@ -128,15 +128,19 @@ func writeOne(c FileChange) (FileResult, error) {
 		if !c.Delete { // a file that is deleted holds only what connect made; there is nothing to keep
 			r.Backup = c.Path + ".ambit.bak"
 			if _, err := os.Stat(r.Backup); !(c.KeepBackup && err == nil) {
-				// Check first: a file that changed since it was read must not get a backup of the old content.
-				checkOnly = true
-				err := unchanged()
-				checkOnly = false
-				if err != nil {
-					r.Backup = ""
-					return r, err
+				// The check runs just before the backup is published: a file that changed since it was read must not
+				// get a backup of the old content.
+				checkBackup := func() error {
+					checkOnly = true
+					defer func() { checkOnly = false }()
+					return unchanged()
 				}
-				if err := atomicWrite(r.Backup, c.Before, 0o600); err != nil {
+				if err := atomicWriteChecked(r.Backup, c.Before, 0o600, checkBackup); err != nil {
+					var oe *out.Error
+					if errors.As(err, &oe) {
+						r.Backup = ""
+						return r, err
+					}
 					return r, writeError(r.Backup, err)
 				}
 			}

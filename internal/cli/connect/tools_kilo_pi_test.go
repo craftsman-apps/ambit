@@ -220,8 +220,8 @@ func TestPiWindowsAndDir(t *testing.T) {
 	if _, err := PlanPiModels(in); err == nil || !strings.Contains(err.Error(), "cannot run a command") {
 		t.Fatalf("a $ in a Windows path must be refused: %v", err)
 	}
-	in.AmbitPath = `C:\Users\O'Brien\ambit.exe`
-	if got := piKeyCommand(in); got != `!"C:\Users\O'Brien\ambit.exe" key print --url "https://llm.example.com"` {
+	in.AmbitPath = `C:\Users\O’Brien\ambit.exe`
+	if got := piKeyCommand(in); got != `!"C:\Users\O’Brien\ambit.exe" key print --url "https://llm.example.com"` {
 		t.Fatalf("cmd.exe reads no single quotes: %q", got)
 	}
 	env := func(v string) func(string) string { return func(string) string { return v } }

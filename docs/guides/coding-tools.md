@@ -228,7 +228,7 @@ mcp_servers:
 Known limits:
 
 - `key_cmd` and the `providers:` section are in Hermes releases since September 2026. An older Hermes reads only the `custom_providers:` list (with `key_env`), which Ambit tested with v0.13.0 on 2026-10-14; `hermes update` moves that list into `providers:`.
-- On Windows, Hermes runs `key_cmd` with `cmd.exe`, so the path of `ambit` and the address are written in double quotes (`cmd.exe` does not read single quotes). If either has a `%`, `$`, backtick or double quote, connect stops, because no quoting is right for it: install `ambit` in another folder. This was not run on Windows.
+- On Windows, Hermes runs `key_cmd` with `cmd.exe`, so the path of `ambit` and the address are written in double quotes (`cmd.exe` does not read single quotes, which were used for a path with a `$` or a typographic quote). If either has a `%`, `$`, backtick or double quote, connect stops, because no quoting is right for it: install `ambit` in another folder. This was not run on Windows.
 - If the person's own `providers:` or `mcp_servers:` section is a list or a value on one line, connect stops and asks you to add the entries by hand.
 
 ## Kilo Code

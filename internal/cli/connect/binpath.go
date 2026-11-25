@@ -92,10 +92,14 @@ func CheckCmdSafe(goos, tool string, vals ...string) error {
 	if goos != "windows" {
 		return nil
 	}
-	for _, v := range vals {
+	for i, v := range vals {
 		if strings.ContainsAny(v, "\"$`%") {
-			return &out.Error{What: tool + " cannot run a command with this path or address", Why: fmt.Sprintf("%q has a %% $ ` or \" character, which cmd.exe and Git Bash read differently", v),
-				Next: "install ambit in a folder whose path has none of them (npm install -g @craftsman-apps/ambit), then run the command again", Code: out.ExitFailed}
+			what, next := "the path of ambit", "install ambit in a folder whose path has none of them (npm install -g @craftsman-apps/ambit), then run the command again"
+			if i > 0 {
+				what, next = "the address", "use an address without them, then run the command again"
+			}
+			return &out.Error{What: tool + " cannot run a command with " + what, Why: fmt.Sprintf("%q has a %% $ ` or \" character, which cmd.exe and Git Bash read differently", v),
+				Next: next, Code: out.ExitFailed}
 		}
 	}
 	return nil

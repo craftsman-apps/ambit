@@ -166,9 +166,9 @@ func TestHermesWindows(t *testing.T) {
 		t.Fatalf("key_cmd %q", kc)
 	}
 	// cmd.exe reads no single quotes: a path with ' or $ ... is double-quoted, or refused when no quoting is right.
-	in.AmbitPath = `C:\Users\O'Brien\ambit.exe`
+	in.AmbitPath = `C:\Users\O’Brien\ambit.exe`
 	got, _ = decodeYAML("x", mustHermes(t, in).After)
-	if kc := got["providers"].(map[string]any)["ambit"].(map[string]any)["key_cmd"]; kc != `"C:\Users\O'Brien\ambit.exe" key print --url "https://llm.example.com"` {
+	if kc := got["providers"].(map[string]any)["ambit"].(map[string]any)["key_cmd"]; kc != `"C:\Users\O’Brien\ambit.exe" key print --url "https://llm.example.com"` {
 		t.Fatalf("key_cmd %q", kc)
 	}
 	for _, bad := range []string{`C:\Users\a$b\ambit.exe`, `C:\Users\100%\ambit.exe`} {

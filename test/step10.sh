@@ -17,7 +17,7 @@ SOAK_SECONDS=${SOAK_SECONDS:-300}
 # client; the gateway drops them after 30 idle minutes, so a 24-hour soak samples from 3600 s on:
 #   SOAK_SECONDS=86400 SOAK_WARMUP=3600 test/step10.sh
 # The otel collector alone needs 45 to 60 s of traffic to reach its steady memory (34 to about 50 MiB, #362): a
-# warm-up under 60 s makes the growth check fail without a leak.
+# warm-up under 60 s can make the growth check fail without a leak.
 SOAK_WARMUP=${SOAK_WARMUP:-45}
 # Running gateway pods that are not shutting down: a pod replaced by a rollout stays Running while it terminates.
 gw_pods() { kubectl -n "$NS" get pods -l gateway.networking.k8s.io/gateway-name=ambit -o go-template='{{range .items}}{{if and (eq .status.phase "Running") (not .metadata.deletionTimestamp)}}pod/{{.metadata.name}}{{"\n"}}{{end}}{{end}}'; }

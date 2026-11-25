@@ -22,9 +22,11 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -76,8 +78,13 @@ type Reconciler struct {
 	AccessMode string
 	// Activation is the gate each step of a mode switch or rules change waits on; nil: no gate.
 	Activation *Activation
+	// PublicGateway is the name of the public Gateway (--public-gateway, frontDoor.enabled); empty: none. It gets its own
+	// access-log policy, and offboarded people are refused on its route as on the others.
+	PublicGateway string
 	// Snapshots records the AccessRules in force in otel_logs for evidence exports; nil: off (no evidence store).
 	Snapshots *Snapshots
+	// AppRemovals records each deleted Server (MCP app removal) in otel_logs; nil: off (no evidence store).
+	AppRemovals *AppRemovals
 
 	stalled   *stalledStep                // the step a change stopped at (single worker, no lock)
 	gateRetry time.Duration               // the last wait before trying a stopped change again
@@ -167,7 +174,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.ConfigMap{}, all, builder.WithPredicates(offboarded)).
 		// Only spec changes of Ambit objects: our own status writes must not trigger another pass.
 		Watches(&v1.Model{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Watches(&v1.Server{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Watches(&v1.Server{}, r.recordServerRemoval(all), builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1.AccessRule{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1.Budget{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1.ModelRouter{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
@@ -182,6 +189,20 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		b = b.Watches(u, all)
 	}
 	return b.Complete(r)
+}
+
+// recordServerRemoval is next with one more step: a deleted Server in our namespace is recorded (AppRemovals) first.
+// The event holds the Server as the cache last saw it, with the annotations the console set before it deleted it.
+func (r *Reconciler) recordServerRemoval(next handler.EventHandler) handler.EventHandler {
+	return handler.Funcs{
+		CreateFunc: next.Create, UpdateFunc: next.Update, GenericFunc: next.Generic,
+		DeleteFunc: func(ctx context.Context, e event.DeleteEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			if srv, ok := e.Object.(*v1.Server); ok && srv.Namespace == r.Namespace {
+				r.AppRemovals.Removed(srv)
+			}
+			next.Delete(ctx, e, q)
+		},
+	}
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconcile.Result, error) {
@@ -204,6 +225,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		return reconcile.Result{}, err
 	}
 	boundServers, refusedServers := BindServers(servers.Items, conns.Items)
+	boundServers, frontDoorRefused := GateFrontDoor(boundServers)
 	var routers v1.ModelRouterList
 	if err := r.Live.List(ctx, &routers, client.InNamespace(r.Namespace)); err != nil {
 		return reconcile.Result{}, err
@@ -218,6 +240,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		compiled, dropped = WithoutArgumentLimits(rules.Items)
 	}
 	res := Compile(models.Items, boundServers, compiled, r.Route, routerNames...)
+	// A server marked for the front door without being ready is not served, and its proxy pod must not keep the label
+	// that the public Gateway's network policy admits (it was labelled while it was acknowledged).
+	for _, s := range servers.Items {
+		if _, refused := frontDoorRefused[s.Name]; refused && s.Spec.URL == "" {
+			unmarked := s.DeepCopy()
+			unmarked.Spec.FrontDoor = nil
+			res.Objects = append(res.Objects, mcpServer(*unmarked))
+		}
+	}
 	SetBrokerPaths(res.Objects, boundServers, conns.Items)
 	ApplyDropped(&res, dropped)
 	var budgets v1.BudgetList
@@ -325,6 +356,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 				return err
 			}
 		}
+		for name := range frontDoorRefused {
+			if err := r.deleteGenerated(ctx, "AgentgatewayPolicy", "ambit-conn-"+name); err != nil {
+				return err
+			}
+		}
 		if len(servers.Items) > 0 { // every Server refused, or none running: no shared backend (or policy) either
 			for _, o := range [][2]string{{"AgentgatewayBackend", MCPBackendName}, {"AgentgatewayPolicy", MCPBackendName + "-access"}} {
 				if generates(res.Objects, o[0], o[1]) {
@@ -333,6 +369,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 				if err := r.deleteGenerated(ctx, o[0], o[1]); err != nil {
 					return err
 				}
+			}
+		}
+		// No server on the front door (or none acknowledged, or running): no public backend and no public policy. This
+		// runs with no Server at all too: the last front-door server may just have been deleted.
+		for _, o := range [][2]string{{"AgentgatewayBackend", PublicMCPBackendName}, {"AgentgatewayPolicy", PublicMCPBackendName + "-access"}} {
+			if generates(res.Objects, o[0], o[1]) {
+				continue
+			}
+			if err := r.deleteGenerated(ctx, o[0], o[1]); err != nil {
+				return err
 			}
 		}
 		// No budgets (or budgets off): stop asking the ratelimit service on every request. No Model with failover: stop
@@ -492,6 +538,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		}
 		if msg, ok := refusedServers[s.Name]; ok {
 			c = cond(metav1.ConditionFalse, "ConnectionBound", msg)
+		} else if fc, ok := frontDoorRefused[s.Name]; ok {
+			c = fc
 		}
 		// Ready means its tools are available: an image server ToolHive runs is listed only once it has answered.
 		if s.Spec.URL == "" && c.Status == metav1.ConditionTrue && !meta.IsStatusConditionTrue(s.Status.Conditions, "Serving") {
@@ -650,7 +698,11 @@ func (r *Reconciler) offboarding(ctx context.Context) (*unstructured.Unstructure
 	if len(rejected) > 0 {
 		log.FromContext(ctx).Error(nil, "offboarded list has entries that are not plain emails; they are not blocked", "entries", rejected)
 	}
-	return offboardedPolicy(&cm, emails, []string{"ambit-mcp", r.Route.Name}), nil
+	routes := []string{"ambit-mcp", r.Route.Name}
+	if r.PublicGateway != "" {
+		routes = append(routes, PublicMCPRoute)
+	}
+	return offboardedPolicy(&cm, emails, routes), nil
 }
 
 // applyAll applies every generated object. It returns the agentgateway Models and Policies it wrote, with the

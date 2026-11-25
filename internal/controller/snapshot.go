@@ -31,7 +31,7 @@ const dropTooLarge = "too_large"
 
 // RecordDropped counts the controller's records not delivered to the collector, on the controller's /metrics.
 var RecordDropped = promauto.With(metrics.Registry).NewCounterVec(prometheus.CounterOpts{Name: "ambit_controller_record_dropped_total",
-	Help: "Access snapshot records the controller did not deliver to the collector, by reason."}, []string{"reason"})
+	Help: "Records (access snapshots, MCP app removals) the controller did not deliver to the collector, by reason."}, []string{"reason"})
 
 // Snapshots writes an access snapshot record when the rules in force change and once a day at 00:05 UTC. The
 // reconciler calls Observe after each change is active; the manager runs Start (on the leader) for the daily record.

@@ -11,7 +11,7 @@ CRDS := charts/ambit-crds
 KIND_CLUSTER ?= ambit
 IMAGE ?= ambit-console:dev
 
-.PHONY: preset-live verify-upgrade restore-pins contracts kind-up kind-down deps lint web test-go envtest-assets argocd metrics-server proto image install install-crds test test-ui test-presidio generate vendor-crds
+.PHONY: argocd-images preset-live verify-upgrade restore-pins contracts kind-up kind-down deps lint web test-go envtest-assets argocd metrics-server proto image install install-crds test test-ui test-presidio generate vendor-crds
 
 # Browser tests (Playwright) against the running kind install; needs the LLM test catalog (make test STEPS=3).
 test-ui:
@@ -49,6 +49,12 @@ argocd:
 	  -n argocd --create-namespace -f deploy/argocd/values-kind.yaml \
 	  $(foreach k,Model Server AccessRule,--set-file 'configs.cm.resource\.customizations\.health\.ambitproject\.dev_$(k)=deploy/argocd/health.lua') \
 	  --wait --timeout 5m
+
+# The images of that Argo CD install, one per line (test/gitops/init-argocd.sh pulls them first, with retries).
+argocd-images:
+	@set -e; out=$$(helm template argocd argo-cd --repo https://argoproj.github.io/argo-helm --version $(ARGOCD_CHART_VERSION) \
+	  -n argocd -f deploy/argocd/values-kind.yaml); \
+	  echo "$$out" | sed -nE 's/^[[:space:]-]*image:[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p' | sort -u
 
 # metrics-server v0.9.0 (chart 3.14.0) for `kubectl top` in the step 10 soak. kind kubelets use
 # self-signed certificates, hence --kubelet-insecure-tls (kind only).
@@ -103,7 +109,7 @@ test-presidio:
 	  curl -sf http://127.0.0.1:$(PRESIDIO_PORT)/health >/dev/null && \
 	  AMBIT_PRESIDIO_TEST_URL=http://127.0.0.1:$(PRESIDIO_PORT) go test -count=1 -v -run TestPresidioRecall ./internal/guard'
 
-STEPS ?= 0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 8 9 10 12 keys ext args fallback compress savings guard sa evidence
+STEPS ?= 0 1 2 3 3b 3c 4a 4b 4c 4d 5 6 7 8 9 10 12 keys ext args fallback compress savings guard sa agents evidence fd
 # make test            -> every step; make test STEPS=3b -> one step (each sets up what it needs)
 test:
 	@for s in $(STEPS); do ./test/step$$s.sh $(NS) || exit 1; done

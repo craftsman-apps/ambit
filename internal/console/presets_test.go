@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/apprecord"
 	"github.com/craftsman-apps/ambit/internal/controller"
 	"github.com/craftsman-apps/ambit/internal/presets"
 	corev1 "k8s.io/api/core/v1"
@@ -505,5 +507,40 @@ func TestBindKeepsGrantsIssuedBeforeIt(t *testing.T) {
 	tok, g, err := conns.Token(t.Context(), "user01@example.com", "jira")
 	if err != nil || tok != "at-user01" || g.ServerURL != "https://mcp.jira.test/mcp" {
 		t.Fatalf("a grant from before the bind must keep working: token %q grant %+v err %v", tok, g, err)
+	}
+}
+
+// deleteSeen keeps the annotations of each Server at the moment it is deleted.
+type deleteSeen struct {
+	client.Client
+	servers map[string]map[string]string
+}
+
+func (d deleteSeen) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	if _, ok := obj.(*v1.Server); ok {
+		d.servers[obj.GetName()] = maps.Clone(obj.GetAnnotations())
+	}
+	return d.Client.Delete(ctx, obj, opts...)
+}
+
+// Removing an app (issue 332) names the signed-in person on the Server just before it is deleted, so the
+// controller's removal record has the actor and the role; the same for removing an unfinished addition.
+func TestServerIsDeletedWithTheActorNamed(t *testing.T) {
+	e := presetFixture(t, false)
+	seen := deleteSeen{Client: e.cl, servers: map[string]map[string]string{}}
+	e.cat.Client = seen
+	if rec := do(t, e.h, "POST", "/api/apps/from-preset", e.ck, addInput("opiiiiii")); rec.Code >= 300 {
+		t.Fatalf("add: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(t, e.h, "DELETE", "/api/apps/crm", e.ck, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("remove: %d %s", rec.Code, rec.Body)
+	}
+	if len(seen.servers) != 1 {
+		t.Fatalf("servers deleted: %v", seen.servers)
+	}
+	for name, ann := range seen.servers {
+		if ann[apprecord.AnnRemovedBy] == "" || ann[apprecord.AnnRemovedByRole] != RoleAdmin {
+			t.Errorf("server %s deleted with annotations %v: want the admin's email and role", name, ann)
+		}
 	}
 }

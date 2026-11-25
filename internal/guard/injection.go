@@ -51,6 +51,8 @@ var injectionFindings = promauto.NewCounterVec(prometheus.CounterOpts{Name: "amb
 type injRule struct {
 	name string
 	re   *regexp.Regexp
+	// must, when set, must also match the text that re matched: re finds the place (a comment), must says what is in it.
+	must *regexp.Regexp
 	// needles are lower-case words of which a text must hold one before re runs, and re runs only on the text around a hit.
 	// A regular expression is slow in Go (it reads every byte, with a large cost per byte for (?i)), and almost no result
 	// holds these words, so this keeps the cost of the guard small (see scan). nil: re runs on the whole text (your own
@@ -60,6 +62,7 @@ type injRule struct {
 	// every match of re holds a needle and a partner. nil: a needle is enough.
 	partners  []string
 	gap       int
+	back, fwd int  // bytes that re reads before the first and after the last word of a match (0: windowBack and windowFwd)
 	lineStart bool // re starts with ^ (multi-line): its text starts at the start of a line
 	invisible bool // a match is removed, not replaced by the placeholder (the text it hides is not text)
 }
@@ -77,7 +80,7 @@ func (r injRule) near(gap int, partners ...string) injRule {
 // injectionRules are the built-in rules, in the order they are checked. The names are part of the public API: the
 // values protection.injectionGuard.disabledBuiltins and the audit records use them. Add a rule at the end; do not rename.
 var injectionRules = []injRule{
-	rl("ignore-previous-instructions", []string{"ignore", "forget", "override", "bypass", "discard"},
+	rl("ignore-previous-instructions", []string{"ignore", "forget", "override", "bypass", "discard", "disregard"},
 		`(?i)\b(?:ignore|forget|override|bypass|discard)\s+(?:(?:all|any|every|the|of|your|my|these|those)\s+){0,3}(?:previous|prior|above|earlier|preceding|former|original|existing|all|any|every|your|my)\s+(?:\w+\s+)?(?:instructions?|prompts?|rules|directions|guidelines|commands)\b`+
 			`|(?i)\b(?:ignore|forget|disregard)\s+(?:everything|anything|all)\s+(?:above|before|prior|you\s+(?:were|have\s+been)\s+told)\b`).near(150, "instruction", "prompt", "rules", "directions", "guidelines", "commands", "above", "before", "prior", "told"),
 	rl("disregard-instructions", []string{"disregard"},
@@ -99,12 +102,29 @@ var injectionRules = []injRule{
 		`(?i)\byou\s+are\s+now\s+(?:in\s+)?(?:(?:a|an|the)\s+)?(?:DAN\b|developer\s+mode|jailbroken|unrestricted|unfiltered)|\b(?:enable|enter|activate|switch\s+to)\s+(?:DAN|developer|god|jailbreak)\s+mode\b`),
 	rl("addressed-to-ai", []string{"important to", "important for", "attention to", "attention for", "note to", "note for", "message to", "message for", "instruction to", "instructions to", "instruction for", "instructions for"},
 		`(?i)\b(?:important|attention|note|message|instructions?)\s+(?:to|for)\s+(?:the\s+|any\s+|all\s+)?(?:ai|assistants?|llms?|language\s+models?|agents?|models?)\b`).near(100, " ai", "assistant", "llm", "language model", "agent", "model"),
-	{name: "html-comment-instruction", needles: []string{"<!--"}, gap: 900,
+	// A comment with an instruction in it. re stops at the first "-->", so a comment is read alone.
+	{name: "html-comment-instruction", needles: []string{"<!--"}, gap: 800, back: 8, fwd: 800,
 		partners: []string{"ignore", "instruction", "system prompt", "assistant", "you must", "you should", "do not", "don't"},
-		re:       regexp.MustCompile(`(?is)<!--.{0,400}?(?:ignore|instruction|system prompt|assistant|you must|you should|do not|don't).{0,400}?-->`)},
+		re:       regexp.MustCompile(`(?s)<!--.{0,800}?-->`),
+		must:     regexp.MustCompile(`(?i)ignore|instruction|system prompt|assistant|you must|you should|do not|don't`)},
 	{name: "tag-characters", re: regexp.MustCompile(`[\x{E0000}-\x{E007F}]+`), needles: []string{"\xf3\xa0\x80", "\xf3\xa0\x81"}, invisible: true},
 	{name: "zero-width-run", re: regexp.MustCompile(`[\x{200B}\x{200C}\x{200D}\x{2060}\x{FEFF}]{2,}`),
 		needles: []string{"\u200b", "\u200c", "\u200d", "\u2060", "\ufeff"}, invisible: true},
+}
+
+// matches returns the places in t where the rule matches, at most n of them, as FindAllStringIndex does.
+func (r *injRule) matches(t string, n int) [][]int {
+	ms := r.re.FindAllStringIndex(t, n)
+	if r.must == nil {
+		return ms
+	}
+	out := ms[:0:0]
+	for _, m := range ms {
+		if r.must.MatchString(t[m[0]:m[1]]) {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // InjectionBuiltinNames lists the names of the built-in rules (the chart's values schema lists the same names).
@@ -154,7 +174,15 @@ func LoadInjector(s string, hc *http.Client) (*Injector, error) {
 	default:
 		return nil, fmt.Errorf("AMBIT_INJECTION_GUARD: mode %q is not audit, reject or mask", c.Mode)
 	}
-	in := &Injector{mode: c.Mode, HTTP: hc}
+	in := &Injector{mode: c.Mode}
+	// The webhook answers a POST with the text of a result: a redirect would send that text on to another address, or turn the
+	// POST into a request whose answer the guard would read as a verdict. Redirects are not followed.
+	client := http.Client{}
+	if hc != nil {
+		client = *hc
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	in.HTTP = &client
 	for _, d := range c.DisabledBuiltins {
 		if !slices.Contains(InjectionBuiltinNames(), d) {
 			return nil, fmt.Errorf("AMBIT_INJECTION_GUARD: unknown built-in rule %q", d)
@@ -169,6 +197,9 @@ func LoadInjector(s string, hc *http.Client) (*Injector, error) {
 		if err != nil {
 			return nil, fmt.Errorf("AMBIT_INJECTION_GUARD: pattern %d: %w", i+1, err)
 		}
+		if re.MatchString("") { // it would match everywhere, and an empty match is never a finding
+			return nil, fmt.Errorf("AMBIT_INJECTION_GUARD: pattern %d matches the empty text", i+1)
+		}
 		in.custom = append(in.custom, injRule{name: fmt.Sprintf("pattern-%d", i+1), re: re})
 	}
 	if w := c.Webhook; w != nil && w.URL != "" {
@@ -179,9 +210,6 @@ func LoadInjector(s string, hc *http.Client) (*Injector, error) {
 				return nil, fmt.Errorf("AMBIT_INJECTION_GUARD: webhook timeout %q is not a positive duration", w.Timeout)
 			}
 			in.timeout = d
-		}
-		if in.HTTP == nil {
-			in.HTTP = &http.Client{}
 		}
 	}
 	if !slices.Contains(in.enabled, true) && len(in.custom) == 0 && in.hookURL == "" {
@@ -202,13 +230,47 @@ type InjectionResult struct {
 	HookError error
 }
 
-// Check looks for injection text in texts. It never reads the matched text into a message or a log.
-func (in *Injector) Check(ctx context.Context, texts []string) InjectionResult {
-	res := InjectionResult{Texts: texts}
+// StripHidden removes hidden characters (the rules with invisible text) from texts, in mask mode, and returns the texts and
+// the names of the rules that found some. It runs before masking: the hidden characters can split a word or an email
+// address in two, and removing them after the masker (or the other rules) had read the text would put the pieces together
+// again. In the other modes it changes nothing.
+func (in *Injector) StripHidden(texts []string) (out []string, rules []string) {
+	if in.mode != InjectionMask {
+		return texts, nil
+	}
 	seen := map[string]bool{}
-	var out []string // copy of texts, made when a text changes
+	out = texts
 	for i, t := range texts {
-		spans := in.spans(t, seen)
+		spans, _ := in.spans(t, seen, true)
+		if len(spans) == 0 {
+			continue
+		}
+		if &out[0] == &texts[0] {
+			out = slices.Clone(texts)
+		}
+		out[i] = replaceSpans(t, spans)
+	}
+	for _, r := range injectionRules {
+		if seen[r.name] {
+			rules = append(rules, r.name)
+		}
+	}
+	return out, rules
+}
+
+// Check looks for injection text in texts, which are masked already. hidden are the rules that StripHidden found in the
+// texts before masking. It never reads the matched text into a message or a log.
+func (in *Injector) Check(ctx context.Context, texts []string, hidden []string) InjectionResult {
+	res := InjectionResult{Texts: texts, Changed: len(hidden) > 0}
+	seen := map[string]bool{}
+	for _, h := range hidden {
+		seen[h] = true
+	}
+	var out []string // copy of texts, made when a text changes
+	tooMany := false
+	for i, t := range texts {
+		spans, over := in.spans(t, seen, false)
+		tooMany = tooMany || over
 		if len(spans) == 0 || in.mode != InjectionMask {
 			continue
 		}
@@ -232,6 +294,12 @@ func (in *Injector) Check(ctx context.Context, texts []string) InjectionResult {
 	}
 	if len(res.Rules) > 0 {
 		res.Action = in.action(res.Changed)
+	}
+	if tooMany && in.mode != InjectionAudit {
+		// Not every match is masked or even counted: the result is not made safe, so it is withheld.
+		res.Action = ActionRejected
+		res.Withhold = "has too many matches for the prompt-injection check to handle, so it was withheld"
+		return res
 	}
 	if in.mode == InjectionReject && len(res.Rules) > 0 {
 		res.Withhold = "matched the prompt-injection check (" + strings.Join(res.Rules, ", ") + "), so it was withheld"
@@ -275,15 +343,27 @@ var injectionWords, injectionWordRule, injectionWordPartner = func() (words []st
 var injectionScanner = newMatcher(injectionWords)
 
 const (
-	windowBack = 32 // bytes read before and after the words of a rule: a match may start before its first word
+	windowBack = 64 // bytes read before and after the words of a rule: a match may start before its first word
 	windowFwd  = 32
+	// maxMatches is the most matches of one rule in one text that the guard keeps; with more, it does not try to mask (mask
+	// and reject mode withhold the result). A text that is all matches would otherwise need more memory than the text.
+	maxMatches = 10_000
+	// maxWordWalk is how far a window moves to leave a word whole. A longer word is cut: no rule word is that long.
+	maxWordWalk = 64
 )
 
 // window is the part of text that the rule r reads for the words [ws, we): it starts and ends between words and at a
 // character boundary, so it holds no half word or half character that could make a match that the whole text does not
 // have. ok is false when no match can hold the words.
 func window(text string, r *injRule, ws, we int) (lo, hi int, ok bool) {
-	lo, hi = max(0, ws-windowBack), min(len(text), we+windowFwd)
+	back, fwd := windowBack, windowFwd
+	if r.back > 0 {
+		back = r.back
+	}
+	if r.fwd > 0 {
+		fwd = r.fwd
+	}
+	lo, hi = max(0, ws-back), min(len(text), we+fwd)
 	if r.lineStart { // the match starts at the start of a line, at most 8 blanks before the word
 		from := max(0, ws-16)
 		if nl := strings.LastIndexByte(text[from:ws], '\n'); nl >= 0 {
@@ -294,11 +374,17 @@ func window(text string, r *injRule, ws, we int) (lo, hi int, ok bool) {
 			lo = 0
 		}
 	} else {
-		for lo < ws && lo > 0 && (isWordByte(text[lo-1]) && isWordByte(text[lo]) || !utf8.RuneStart(text[lo])) {
+		for n := 0; lo < ws && lo > 0 && n < maxWordWalk && (isWordByte(text[lo-1]) && isWordByte(text[lo]) || !utf8.RuneStart(text[lo])); n++ {
 			lo++
 		}
 	}
-	for hi < len(text) && (isWordByte(text[hi-1]) && isWordByte(text[hi]) || !utf8.RuneStart(text[hi])) {
+	for n := 0; hi < len(text) && n < maxWordWalk && (isWordByte(text[hi-1]) && isWordByte(text[hi]) || !utf8.RuneStart(text[hi])); n++ {
+		hi++
+	}
+	for lo < ws && !utf8.RuneStart(text[lo]) {
+		lo++
+	}
+	for hi < len(text) && !utf8.RuneStart(text[hi]) {
 		hi++
 	}
 	return lo, hi, true
@@ -306,20 +392,32 @@ func window(text string, r *injRule, ws, we int) (lo, hi int, ok bool) {
 
 // spans finds the matches of every rule in text and adds the names of the rules that matched to seen. A built-in rule
 // reads only the text around its words (one pass over the text finds all words); your own patterns read the whole text.
-func (in *Injector) spans(text string, seen map[string]bool) []injSpan {
-	var out []injSpan
+// Only in mask mode it returns the spans (the other modes need the names only, and stop at the first match of a rule);
+// over is true when a rule had more than maxMatches matches in one place, or the text had more than maxHits words.
+// hiddenOnly looks for the rules with invisible text only (StripHidden).
+func (in *Injector) spans(text string, seen map[string]bool, hiddenOnly bool) (out []injSpan, over bool) {
 	find := func(r *injRule, base int, t string) {
-		for _, m := range r.re.FindAllStringIndex(t, -1) {
+		if in.mode != InjectionMask && !hiddenOnly && r.must == nil {
+			if r.re.MatchString(t) {
+				seen[r.name] = true
+			}
+			return
+		}
+		ms := r.matches(t, maxMatches)
+		over = over || len(ms) >= maxMatches
+		for _, m := range ms {
 			if m[1] > m[0] {
 				seen[r.name] = true
 				out = append(out, injSpan{base + m[0], base + m[1], r.invisible})
 			}
 		}
 	}
-	if hits := injectionScanner.scan(text); hits != nil {
+	hits, overflow := injectionScanner.scan(text)
+	over = over || overflow
+	if hits != nil {
 		type pos struct{ start, end int }
 		wins := make([][][2]int, len(injectionRules))
-		last := make([][2]pos, len(injectionRules)) // the last needle and the last partner of each rule; start 0 and end 0 until seen
+		last := make([][2]pos, len(injectionRules)) // the last needle and the last partner of each rule
 		seenWord := make([][2]bool, len(injectionRules))
 		add := func(ri, start, end int) {
 			lo, hi, ok := window(text, &injectionRules[ri], start, end)
@@ -334,11 +432,11 @@ func (in *Injector) spans(text string, seen map[string]bool) []injSpan {
 		}
 		for _, h := range hits {
 			ri := injectionWordRule[h.word]
-			if !in.enabled[ri] {
+			if !in.enabled[ri] || hiddenOnly && !injectionRules[ri].invisible {
 				continue
 			}
 			r := &injectionRules[ri]
-			me := pos{h.end - len(injectionWords[h.word]), h.end}
+			me := pos{h.start, h.end}
 			if r.partners == nil {
 				add(ri, me.start, me.end)
 				continue
@@ -359,10 +457,12 @@ func (in *Injector) spans(text string, seen map[string]bool) []injSpan {
 			}
 		}
 	}
-	for i := range in.custom {
-		find(&in.custom[i], 0, text)
+	if !hiddenOnly {
+		for i := range in.custom {
+			find(&in.custom[i], 0, text)
+		}
 	}
-	return out
+	return out, over
 }
 
 // replaceSpans puts the placeholder in place of each span, and removes the spans of invisible text; overlapping spans
@@ -441,16 +541,22 @@ func (in *Injector) hook(ctx context.Context, texts []string) (answer string, ma
 	if resp.StatusCode != http.StatusOK {
 		return "", nil, fmt.Errorf("webhook answered HTTP %d", resp.StatusCode)
 	}
+	// The whole answer, and only the answer: an answer that is cut at the size limit, or has anything after the first JSON
+	// value, is not a guardrail response (it must not pass under FailClosed).
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxMessage+1))
+	if err != nil || len(raw) > maxMessage {
+		return "", nil, errors.New("webhook answer is too large or could not be read")
+	}
 	var a struct {
 		Action map[string]json.RawMessage `json:"action"`
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxMessage)).Decode(&a); err != nil || a.Action == nil {
+	if err := json.Unmarshal(raw, &a); err != nil || a.Action == nil {
 		return "", nil, errors.New("webhook answer is not a guardrail response")
 	}
 	if _, ok := a.Action["status_code"]; ok {
 		return "reject", nil, nil
 	}
-	raw, ok := a.Action["body"]
+	body2, ok := a.Action["body"]
 	if !ok {
 		return "pass", nil, nil
 	}
@@ -459,7 +565,7 @@ func (in *Injector) hook(ctx context.Context, texts []string) (answer string, ma
 			Content *string `json:"content"`
 		} `json:"messages"`
 	}
-	if json.Unmarshal(raw, &m) != nil || len(m.Messages) != len(texts) {
+	if json.Unmarshal(body2, &m) != nil || len(m.Messages) != len(texts) {
 		return "", nil, errors.New("webhook mask answer does not hold one message for each text")
 	}
 	masked = make([]string, len(texts))

@@ -332,17 +332,24 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 			walk(v, func(s any) { result[r.key] = s }, r.item, r.keys)
 		}
 	}
-	masked, total, maskErr := g.maskTexts(ctx, append(texts, keys...))
+	all := append(texts, keys...)
+	var hidden []string
+	if g.Injection != nil {
+		// Hidden characters come out before masking: they can split an email address or a rule's words in two.
+		all, hidden = g.Injection.StripHidden(all)
+	}
+	masked, total, maskErr := g.maskTexts(ctx, all)
 	if maskErr != nil {
 		slog.Error("guard: masking failed; result withheld", "server", strings.Join(resp.ServiceNames, ","), "err", maskErr)
 		return withhold("could not be checked for personal data, so it was withheld")
 	}
-	changed := total > 0 || compressed
+	changed := total > 0 || compressed || len(hidden) > 0
+	var inj InjectionResult
 	if g.Injection != nil {
 		// After masking: a webhook never receives personal data.
-		inj := g.Injection.Check(ctx, masked)
-		g.reportInjection(resp, inj)
+		inj = g.Injection.Check(ctx, masked, hidden)
 		if inj.Withhold != "" {
+			g.reportInjection(resp, inj)
 			return withhold(inj.Withhold)
 		}
 		if inj.Changed {
@@ -350,6 +357,7 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 		}
 	}
 	if !changed {
+		g.reportInjection(resp, inj) // findings of the audit mode, and a failed webhook
 		return passResp(), nil
 	}
 	for i := range texts {
@@ -358,9 +366,14 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 	for i, rename := range renames {
 		if !rename(masked[len(texts)+i]) {
 			slog.Error("guard: two keys mask to the same text; result withheld", "server", strings.Join(resp.ServiceNames, ","))
+			if inj.Action != "" {
+				inj.Action = ActionRejected // the client gets no masked result
+			}
+			g.reportInjection(resp, inj)
 			return withhold("has two keys that mask to the same text, so it was withheld")
 		}
 	}
+	g.reportInjection(resp, inj)
 	if total > 0 {
 		slog.Info("guard: masked personal data", "server", strings.Join(resp.ServiceNames, ","), "method", resp.Method, "count", total)
 	}
@@ -369,6 +382,9 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 
 // reportInjection counts and records the findings of the injection guard: the rule names, never the matched text.
 func (g *Guard) reportInjection(resp *extmcp.McpResponse, r InjectionResult) {
+	if g.Injection == nil {
+		return
+	}
 	server := strings.Join(resp.ServiceNames, ",")
 	if r.HookError != nil {
 		injectionFindings.WithLabelValues(server, ActionError).Inc()

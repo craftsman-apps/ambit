@@ -147,7 +147,7 @@ export function AuditPage() {
               </span>
               {(audit || hasVerdicts) && !q?.invalidKey && <label className="inline-flex items-center gap-1.5"><input id="audit-would-refuse" type="checkbox" checked={onlyWouldRefuse} onChange={(e) => setOnlyWouldRefuse(e.target.checked)} />
                 Only calls the rules would refuse</label>}
-              {hasInjection && <label className="inline-flex items-center gap-1.5"><input id="audit-injection" type="checkbox" checked={onlyInjection} onChange={(e) => setOnlyInjection(e.target.checked)} />
+              {(hasInjection || onlyInjection) && <label className="inline-flex items-center gap-1.5"><input id="audit-injection" type="checkbox" checked={onlyInjection} onChange={(e) => setOnlyInjection(e.target.checked)} />
                 Only results with an injection finding</label>}
               <label className="inline-flex items-center gap-1.5"><input id="audit-protocol" type="checkbox" checked={protocol} onChange={(e) => setProtocol(e.target.checked)} />
                 Show protocol messages ({all.length - all.filter(isCall).length})</label>

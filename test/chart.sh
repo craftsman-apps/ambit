@@ -241,10 +241,13 @@ assert json.loads(v)=={'mode':'mask','builtins':True,'disabledBuiltins':['role-p
 igd=$(ig --set protection.injectionGuard.enabled=true)
 grep -q 'AMBIT_INJECTION_GUARD' <<<"$igd" && grep -q 'mode.*audit' <<<"$igd" && grep -q 'builtins.*true' <<<"$igd" || { echo "FAIL chart: injectionGuard.enabled=true must give audit mode with the built-in rules"; exit 1; }
 longp=$(printf 'a%.0s' $(seq 1 1025))
+# every built-in rule switched off, and nothing else to check: refused (the names come from the schema)
+allrules=$(python3 -c "import json;print(' '.join('--set protection.injectionGuard.disabledBuiltins[%d]=%s'%(i,n) for i,n in enumerate(json.load(open('charts/ambit/values.schema.json'))['properties']['protection']['properties']['injectionGuard']['properties']['disabledBuiltins']['items']['enum'])))")
 for bad in "--set protection.injectionGuard.mode=block" "--set protection.injectionGuard.disabledBuiltins[0]=no-such-rule" "--set protection.injectionGuard.patterns[0]=$longp" \
     "--set protection.injectionGuard.patterns[0]=(?<=a)b" "--set protection.injectionGuard.patterns[0]=a(b" "--set protection.injectionGuard.builtins=false" \
     "--set protection.injectionGuard.webhook.timeout=soon" "--set protection.injectionGuard.webhook.failureMode=Open" "--set protection.injectionGuard.webhook.port=0" \
-    "--set protection.injectionGuard.webhook.service=Guard_Hook" "--set protection.injectionGuard.rules=x"; do
+    "--set protection.injectionGuard.webhook.service=Guard_Hook" "--set protection.injectionGuard.rules=x" "--set protection.injectionGuard.webhook.timeout=0s" \
+    "--set protection.injectionGuard.webhook.timeout=0.0ms" "--set protection.injectionGuard.patterns[0]=^" "--set protection.injectionGuard.patterns[0]=a*" "$allrules"; do
   # shellcheck disable=SC2086
   ! ig --set protection.injectionGuard.enabled=true $bad >/dev/null 2>&1 || { echo "FAIL chart: injection guard values must be refused: $bad"; exit 1; }
 done

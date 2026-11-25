@@ -22,15 +22,22 @@ type matcher struct {
 	out    [][]uint16
 }
 
+// lowerTab reads ASCII letters as lower case and every white space byte as a space.
 var lowerTab = func() (t [256]byte) {
 	for i := range t {
 		t[i] = byte(i)
-		if i >= 'A' && i <= 'Z' {
+		switch {
+		case i >= 'A' && i <= 'Z':
 			t[i] = byte(i) + 'a' - 'A'
+		case i == '\t' || i == '\n' || i == '\v' || i == '\f' || i == '\r':
+			t[i] = ' '
 		}
 	}
 	return
 }()
+
+// maxHits is the most words that scan keeps for one text. A text with more is made to hit the rules, not written.
+const maxHits = 200_000
 
 func newMatcher(words []string) *matcher {
 	next := [][256]int32{{}}
@@ -144,31 +151,46 @@ func (m *matcher) mark(a, b, c byte) {
 	m.start[p>>6] |= 1 << (p & 63)
 }
 
-// hit is a word found: its number and the offset of its last byte plus one.
-type hit struct{ word, end int }
+// hit is a word found: its number, and where it begins and ends in the text.
+type hit struct{ word, start, end int }
 
-// scan returns where the words end in s, by end offset. nil when there is none: a result without these words costs one pass.
-func (m *matcher) scan(s string) (hits []hit) {
+// scan returns the words found in s, by end offset. A run of white space of any kind is one space for the words, so
+// "from  now\ton" is the word "from now on". nil when there is none: a result without these words costs one pass.
+// overflow is true when there are more than maxHits words; the rest are not kept.
+func (m *matcher) scan(s string) (hits []hit, overflow bool) {
 	for i := 0; i+2 < len(s); i++ {
 		p := startHash(lowerTab[s[i]], lowerTab[s[i+1]], lowerTab[s[i+2]])
 		if m.start[p>>6]>>(p&63)&1 == 0 {
 			continue
 		}
-		st := uint16(0)
-		for j := i; j < len(s) && j-i < m.maxLen; j++ {
-			st = m.next[int(st)<<m.shift|int(m.class[lowerTab[s[j]]])]
+		st, consumed, space := uint16(0), 0, false
+		for j := i; j < len(s) && consumed < m.maxLen; j++ {
+			c := lowerTab[s[j]]
+			if c == ' ' {
+				if space {
+					continue
+				}
+				space = true
+			} else {
+				space = false
+			}
+			consumed++
+			st = m.next[int(st)<<m.shift|int(m.class[c])]
 			if st == 0 {
 				break
 			}
 			if st >= m.firstOut {
 				for _, w := range m.out[st] {
-					if j+1-len(m.words[w]) == i { // a word that begins here; the others begin at their own position
-						hits = append(hits, hit{int(w), j + 1})
+					if len(m.words[w]) == consumed { // a word that begins here; the others begin at their own position
+						if len(hits) >= maxHits {
+							return hits, true
+						}
+						hits = append(hits, hit{int(w), i, j + 1})
 					}
 				}
 			}
 		}
 	}
 	slices.SortFunc(hits, func(a, b hit) int { return a.end - b.end })
-	return hits
+	return hits, false
 }

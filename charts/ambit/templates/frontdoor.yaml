@@ -272,6 +272,10 @@ spec:
         has(object.spec.rules[0].backendRefs) && size(object.spec.rules[0].backendRefs) == 1 &&
         object.spec.rules[0].backendRefs[0].name == "ambit-auth" &&
         (!has(object.spec.rules[0].backendRefs[0].kind) || object.spec.rules[0].backendRefs[0].kind == "Service") &&
+        (!has(object.spec.rules[0].backendRefs[0].group) || object.spec.rules[0].backendRefs[0].group == "") &&
+        !has(object.spec.rules[0].backendRefs[0].namespace) && object.spec.rules[0].backendRefs[0].port == 8080 &&
+        (!has(object.spec.rules[0].backendRefs[0].filters) || size(object.spec.rules[0].backendRefs[0].filters) == 0) &&
+        !object.spec.hostnames[0].startsWith("*") && !has(object.spec.parentRefs[0].namespace) &&
         (!has(object.spec.rules[0].filters) || size(object.spec.rules[0].filters) == 0) &&
         !has(object.spec.rules[0].timeouts) && !has(object.spec.rules[0].sessionPersistence))
       message: "only the route ambit-mcp-public (and, with OAuth sign-in, ambit-auth-hydra and ambit-auth-app) may be attached to the public Gateway ambit-public, with the host, the exact paths and the backends that the chart sets"

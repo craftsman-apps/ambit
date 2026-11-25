@@ -26,6 +26,10 @@ case $(uname -m) in
   arm64 | aarch64) arch=arm64 ;;
   *) fail "there is no ambit build for the processor $(uname -m)" "build it from source: go install github.com/craftsman-apps/ambit/cmd/ambit@latest" ;;
 esac
+# A shell started under Rosetta says x86_64 on an Apple silicon Mac: take the native build.
+if [ "$os" = darwin ] && [ "$arch" = amd64 ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = 1 ]; then
+  arch=arm64
+fi
 archive="ambit_${os}_${arch}.tar.gz"
 
 # fetch URL FILE: downloads, and sets $status to the HTTP status (000 when there was no answer).
@@ -102,6 +106,8 @@ chmod 755 "$dir/ambit"
 printf '✓ installed ambit to %s\n' "$dir/ambit"
 case ":$PATH:" in
   *":$dir:"*) ;;
-  *) printf 'Add the directory to your PATH: export PATH="%s:$PATH"\n' "$dir" ;;
+  *) # single quotes: nothing in the directory name is read by the shell; a quote inside is closed, escaped, reopened
+    qdir=$(printf '%s' "$dir" | sed "s/'/'\\\\''/g")
+    printf 'Add the directory to your PATH: export PATH='"'"'%s'"'"':"$PATH"\n' "$qdir" ;;
 esac
 printf 'Next: ambit local up\n'

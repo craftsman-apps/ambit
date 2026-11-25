@@ -158,6 +158,35 @@ func TestInstallShPinnedVersion(t *testing.T) {
 	}
 }
 
+// The PATH hint stays one safe word when the directory has a quote, a space or a $ (#108).
+func TestInstallShPathHintQuotesTheDirectory(t *testing.T) {
+	base := release(t, map[string][]byte{unixArchive(): targz(t, "ambit", fakeBinary)}, false)
+	dir := filepath.Join(t.TempDir(), `it's $HOME dir`)
+	sh := need(t, "sh")
+	if runtime.GOOS == "windows" {
+		t.Skip("install.sh is for macOS and Linux")
+	}
+	cmd := exec.Command(sh, "../../site/static/install.sh")
+	cmd.Env = append(os.Environ(), "AMBIT_DOWNLOAD_BASE="+base, "AMBIT_INSTALL_DIR="+dir, "AMBIT_VERSION=v0.2.0")
+	out, err := cmd.CombinedOutput()
+	want := `export PATH='` + strings.ReplaceAll(dir, `'`, `'\''`) + `':"$PATH"`
+	if err != nil || !strings.Contains(string(out), want) {
+		t.Fatalf("err %v, want %q in:\n%s", err, want, out)
+	}
+}
+
+// Under Rosetta, uname says x86_64 on an Apple silicon Mac; the script takes the arm64 build.
+func TestInstallShRosettaTakesTheNativeBuild(t *testing.T) {
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "uname"), []byte("#!/bin/sh\ncase \"$1\" in -s) echo Darwin;; -m) echo x86_64;; esac\n"), 0o755)
+	os.WriteFile(filepath.Join(bin, "sysctl"), []byte("#!/bin/sh\necho 1\n"), 0o755)
+	base := release(t, map[string][]byte{"ambit_darwin_arm64.tar.gz": targz(t, "ambit", fakeBinary)}, false)
+	out, _, err := runSh(t, base, "AMBIT_VERSION=v0.2.0", "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err != nil || !strings.Contains(out, "✓ installed ambit") {
+		t.Fatalf("err %v, output:\n%s", err, out)
+	}
+}
+
 func TestInstallShLatest(t *testing.T) {
 	base := release(t, map[string][]byte{unixArchive(): targz(t, "ambit", fakeBinary)}, false)
 	if out, _, err := runSh(t, base); err != nil {

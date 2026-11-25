@@ -488,3 +488,165 @@ func TestConnectionPolicyNamesTheAgentFromTheCredential(t *testing.T) {
 	cases["a valid key and an agent token: the key decides"] = credential{map[string]any{"keyId": "k", "until": future}, map[string]any{"iss": issuer, "ambit_agent": "chatgpt-y"}, "-"}
 	run(issuer, cases)
 }
+
+func onDoor(s v1.Server) v1.Server {
+	s.Spec.FrontDoor = &v1.ServerFrontDoor{Enabled: true, AcceptUnmaskedServerMessages: true}
+	return s
+}
+
+func backendTargetNames(t *testing.T, b *unstructured.Unstructured) []string {
+	t.Helper()
+	ts, _, _ := unstructured.NestedSlice(b.Object, "spec", "mcp", "targets")
+	var out []string
+	for _, x := range ts {
+		out = append(out, x.(map[string]any)["name"].(string))
+	}
+	return out
+}
+
+func accessExpr(t *testing.T, r Result, policy string) string {
+	t.Helper()
+	e, _, _ := unstructured.NestedStringSlice(find(t, r.Objects, "AgentgatewayPolicy", policy).Object, "spec", "backend", "mcp", "authorization", "policy", "matchExpressions")
+	if len(e) != 1 {
+		t.Fatalf("%s: want exactly one match expression, got %v", policy, e)
+	}
+	return e[0]
+}
+
+// Public/private separation (design v2, "Public and private separation"): the public backend has only the servers an
+// admin put on the front door, and its access policy has only their clauses, although a rule grants both servers.
+func TestPublicBackendHasOnlyFrontDoorServers(t *testing.T) {
+	both := []v1.AccessRule{toolRule("all", nil, true, v1.ServerAccess{Name: "crm"}, v1.ServerAccess{Name: "wiki", Tools: []string{"search"}})}
+	r := Compile(nil, []v1.Server{onDoor(server("crm", "stdio")), server("wiki", "stdio")}, both, route)
+	if got := backendTargetNames(t, find(t, r.Objects, "AgentgatewayBackend", MCPBackendName)); strings.Join(got, ",") != "crm,wiki" {
+		t.Errorf("private targets %v", got)
+	}
+	pub := find(t, r.Objects, "AgentgatewayBackend", PublicMCPBackendName)
+	if got := backendTargetNames(t, pub); strings.Join(got, ",") != "crm" {
+		t.Errorf("public targets %v", got)
+	}
+	if e := accessExpr(t, r, PublicMCPBackendName+"-access"); !strings.Contains(e, `mcp.tool.target == "crm"`) || strings.Contains(e, "wiki") {
+		t.Errorf("public access %q", e)
+	}
+	if e := accessExpr(t, r, MCPBackendName+"-access"); !strings.Contains(e, `"crm"`) || !strings.Contains(e, `"wiki"`) {
+		t.Errorf("private access %q", e)
+	}
+	// Each policy names its own backend.
+	for name, backend := range map[string]string{MCPBackendName + "-access": MCPBackendName, PublicMCPBackendName + "-access": PublicMCPBackendName} {
+		refs, _, _ := unstructured.NestedSlice(find(t, r.Objects, "AgentgatewayPolicy", name).Object, "spec", "targetRefs")
+		if len(refs) != 1 || refs[0].(map[string]any)["name"] != backend {
+			t.Errorf("%s targets %v", name, refs)
+		}
+	}
+	// The public backend is owned by the public servers only, so it goes with the last one.
+	if refs := pub.GetOwnerReferences(); len(refs) != 1 || refs[0].Name != "crm" {
+		t.Errorf("public owners %v", refs)
+	}
+	// Its policy has no owner: garbage collection could delete it before the backend, and a backend without an
+	// authorization rule allows every call. The reconciler deletes the backend first.
+	if refs := find(t, r.Objects, "AgentgatewayPolicy", PublicMCPBackendName+"-access").GetOwnerReferences(); len(refs) != 0 {
+		t.Errorf("the public policy has owners %v", refs)
+	}
+}
+
+func TestNoFrontDoorServerGeneratesNoPublicObjects(t *testing.T) {
+	r := Compile(nil, []v1.Server{server("crm", "stdio")}, []v1.AccessRule{toolRule("all", nil, true, v1.ServerAccess{Name: "crm"})}, route)
+	for _, o := range r.Objects {
+		if strings.Contains(o.GetName(), "public") {
+			t.Errorf("unexpected %s %s", o.GetKind(), o.GetName())
+		}
+	}
+	// A server that is on the door but not acknowledged is never a public target, even when it reaches compile.
+	s := server("crm", "stdio")
+	s.Spec.FrontDoor = &v1.ServerFrontDoor{Enabled: true}
+	for _, o := range Compile(nil, []v1.Server{s}, nil, route).Objects {
+		if strings.Contains(o.GetName(), "public") {
+			t.Errorf("an unacknowledged server got %s %s", o.GetKind(), o.GetName())
+		}
+	}
+	// A server with a Connection is not either: a person's own app token is not handed to a hosted agent.
+	c := onDoor(server("crm", "stdio"))
+	c.Spec.Connection = "gh"
+	for _, o := range Compile(nil, []v1.Server{c}, nil, route).Objects {
+		if strings.Contains(o.GetName(), "public") {
+			t.Errorf("a server with a connection got %s %s", o.GetKind(), o.GetName())
+		}
+	}
+}
+
+// A public backend without a running target is not written (agentgateway refuses a backend without targets), but its
+// policy is, so the backend never exists before its authorization.
+func TestPublicBackendWaitsForAServingServer(t *testing.T) {
+	s := onDoor(server("crm", "stdio"))
+	s.Status.Conditions = []metav1.Condition{{Type: "Ready", Status: metav1.ConditionTrue, Reason: "Running"}} // not Serving yet
+	r := Compile(nil, []v1.Server{s}, nil, route)
+	find(t, r.Objects, "AgentgatewayPolicy", PublicMCPBackendName+"-access")
+	for _, o := range r.Objects {
+		if o.GetKind() == "AgentgatewayBackend" {
+			t.Errorf("a backend without targets: %s", o.GetName())
+		}
+	}
+}
+
+// The ToolHive proxy pod of a front-door image server carries the label the network policy admits the public Gateway by.
+func TestFrontDoorImageServerPodsAreLabelled(t *testing.T) {
+	r := Compile(nil, []v1.Server{onDoor(server("crm", "stdio")), server("wiki", "stdio")}, nil, route)
+	label := func(name string) any {
+		v, _, _ := unstructured.NestedFieldNoCopy(find(t, r.Objects, "MCPServer", name).Object, "spec", "resourceOverrides", "proxyDeployment", "podTemplateMetadataOverrides", "labels", FrontDoorLabel)
+		return v
+	}
+	if label("crm") != "true" || label("wiki") != nil {
+		t.Errorf("labels: crm %v, wiki %v", label("crm"), label("wiki"))
+	}
+}
+
+func TestGateFrontDoor(t *testing.T) {
+	plain := server("plain", "stdio")
+	open := onDoor(server("open", "stdio"))
+	unack := server("unack", "stdio")
+	unack.Spec.FrontDoor = &v1.ServerFrontDoor{Enabled: true}
+	conn := onDoor(server("conn", "stdio"))
+	conn.Spec.Connection = "gh"
+	ackOnly := server("ackonly", "stdio") // the acknowledgment without enabled changes nothing
+	ackOnly.Spec.FrontDoor = &v1.ServerFrontDoor{AcceptUnmaskedServerMessages: true}
+	kept, refused := GateFrontDoor([]v1.Server{plain, open, unack, conn, ackOnly})
+	var names []string
+	for _, s := range kept {
+		names = append(names, s.Name)
+	}
+	if strings.Join(names, ",") != "plain,open,ackonly" {
+		t.Errorf("kept %v", names)
+	}
+	if c := refused["unack"]; c.Status != metav1.ConditionFalse || c.Reason != "FrontDoorNotAcknowledged" || !strings.Contains(c.Message, "acceptUnmaskedServerMessages") || !strings.Contains(c.Message, "issue 333") {
+		t.Errorf("unack %+v", c)
+	}
+	if c := refused["conn"]; c.Status != metav1.ConditionFalse || c.Reason != "FrontDoorConnection" || !strings.Contains(c.Message, "gh") {
+		t.Errorf("conn %+v", c)
+	}
+	if len(refused) != 2 {
+		t.Errorf("refused %v", refused)
+	}
+}
+
+// The rules version covers the public policy: a change to it is a change of the rules in force.
+func TestRulesVersionCoversThePublicPolicy(t *testing.T) {
+	rule := []v1.AccessRule{toolRule("all", nil, true, v1.ServerAccess{Name: "crm"})}
+	with := RulesVersion(Compile(nil, []v1.Server{onDoor(server("crm", "stdio"))}, rule, route).Objects)
+	without := RulesVersion(Compile(nil, []v1.Server{server("crm", "stdio")}, rule, route).Objects)
+	if with == without {
+		t.Error("putting a server on the front door did not change the rules version")
+	}
+}
+
+// Audit-only mode relaxes the private rules only: nothing on the public Gateway is ever relaxed.
+func TestAuditModeNeverRelaxesThePublicPolicy(t *testing.T) {
+	r := Compile(nil, []v1.Server{onDoor(server("crm", "stdio"))}, []v1.AccessRule{toolRule("eng", []string{"eng"}, false, v1.ServerAccess{Name: "crm"})}, route)
+	before := accessExpr(t, r, PublicMCPBackendName+"-access")
+	relaxed := Result{Objects: RelaxForAudit(r, nil, func(*Result) {})}
+	if e := accessExpr(t, relaxed, MCPBackendName+"-access"); !strings.HasPrefix(e, "(true)") || strings.Contains(e, `"eng"`) {
+		t.Errorf("private policy not relaxed: %q", e)
+	}
+	if e := accessExpr(t, relaxed, PublicMCPBackendName+"-access"); e != before || !strings.Contains(e, `"eng"`) {
+		t.Errorf("public policy relaxed: %q (was %q)", e, before)
+	}
+}

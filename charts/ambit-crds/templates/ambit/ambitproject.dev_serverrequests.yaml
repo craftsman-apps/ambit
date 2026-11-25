@@ -132,6 +132,26 @@ spec:
                     x-kubernetes-list-map-keys:
                     - name
                     x-kubernetes-list-type: map
+                  frontDoor:
+                    description: 'FrontDoor makes this server reachable through the public front door (frontDoor.enabled in the Helm values), by
+
+                      hosted agents on the internet that present an API key. Experimental in 0.6.x. Off unless set.'
+                    properties:
+                      acceptUnmaskedServerMessages:
+                        description: 'AcceptUnmaskedServerMessages is the admin''s written acknowledgment that this server''s error messages and
+
+                          notifications reach the hosted agent without being masked: ambit-guard sees only the result of a tool call
+
+                          (issue 333). Set it only for a server that never puts personal data into an error or a notification.'
+                        type: boolean
+                      enabled:
+                        description: 'Enabled puts the server on the public front door. It takes effect only with acceptUnmaskedServerMessages: true;
+
+                          without it the server is not served at all (Ready is False, reason FrontDoorNotAcknowledged) until an admin
+
+                          sets one or the other. A server with a Connection cannot be on the front door yet.'
+                        type: boolean
+                    type: object
                   image:
                     description: 'Image pinned by digest, e.g. ghcr.io/org/server@sha256:<64 hex>. A tag can later point to
 

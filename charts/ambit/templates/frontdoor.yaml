@@ -6,6 +6,7 @@
 {{- if not .Values.mcp.enabled }}{{ fail "frontDoor.enabled=true needs mcp.enabled=true: the front door serves MCP only" }}{{ end }}
 {{- if not .Values.apiKeys.enabled }}{{ fail "frontDoor.enabled=true needs apiKeys.enabled=true: the front door accepts API keys only" }}{{ end }}
 {{- if not .Values.limits.enabled }}{{ fail "frontDoor.enabled=true needs limits.enabled=true: the front door's shared rate limits are counted by the ratelimit service" }}{{ end }}
+{{- if not .Values.protection.enabled }}{{ fail "frontDoor.enabled=true needs protection.enabled=true: the public route must go through ambit-guard (tool pinning, argument limits and masking, fail closed)" }}{{ end }}
 {{- if not .Values.evidence.enabled }}{{ fail "frontDoor.enabled=true needs evidence.enabled=true: every call through the public Gateway must be recorded" }}{{ end }}
 {{- range $other := list .Values.console.host .Values.llm.host .Values.mcp.host }}
 {{- if eq $other $fd.host }}{{ fail (printf "frontDoor.host %q is also a private host name: the public Gateway must not share a name with the console, the LLM host or the private MCP host" $fd.host) }}{{ end }}
@@ -116,6 +117,8 @@ spec:
       action: Require
       policy:
         matchExpressions:
+          # An agent key may name source ranges (at most 10 CIDRs): it is accepted only from them, as on the private route.
+          - {{ include "ambit.identity.sourceRanges" . | quote }}
           - {{ printf "(%s) && (%s)%s" (include "ambit.identity.presented" .) (include "ambit.identity.validKey" .) (ternary "" " && !apiKey.email.endsWith(\"@svc.ambit.internal\")" (ne (toString (.Values.serviceAccounts | default dict).enabled) "false")) | quote }}
     apiKeyAuthentication:
       mode: Permissive

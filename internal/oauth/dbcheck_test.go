@@ -88,7 +88,7 @@ func TestProblems(t *testing.T) {
 		"no TLS":                {Facts{VersionNum: 170012, ConnLimit: -1}, "does not use TLS"},
 		"superuser":             {Facts{VersionNum: 170012, TLS: true, Superuser: true, ConnLimit: -1, Role: "postgres"}, `"postgres" is a superuser`},
 		"limit":                 {Facts{VersionNum: 170012, TLS: true, ConnLimit: 16, Role: "hydra"}, "need 17"},
-		"session authorization": {Facts{VersionNum: 170012, TLS: true, ConnLimit: -1, Role: "hydra", Effective: "other"}, `runs as "other"`},
+		"session authorization": {Facts{VersionNum: 170012, TLS: true, ConnLimit: -1, Role: "hydra", Effective: "other"}, `not the role that the DSN names`},
 	} {
 		p := check(tc.f, 2)
 		if len(p) != 1 || !strings.Contains(p[0], tc.want) {
@@ -97,7 +97,7 @@ func TestProblems(t *testing.T) {
 	}
 	// the role that logged in is not the one the DSN names (a server-side default of SESSION AUTHORIZATION), both sessions alike
 	f := Facts{VersionNum: 170012, TLS: true, ConnLimit: -1, Role: "other", Effective: "other"}
-	if p := f.Problems(DSN{MaxConns: 8, User: "hydra"}, 2); len(p) != 1 || !strings.Contains(p[0], `names "hydra"`) {
+	if p := f.Problems(DSN{MaxConns: 8, User: "hydra"}, 2); len(p) != 1 || !strings.Contains(p[0], `not the role that the DSN names`) {
 		t.Errorf("another login than the DSN's: %v", p)
 	}
 	// a name from the server with odd characters is not repeated
@@ -141,7 +141,7 @@ func TestConnectErrorIsFixedText(t *testing.T) {
 	if got := ConnectError(&pq.Error{Code: "28P01"}).Error(); !strings.Contains(got, "SQLSTATE 28P01") {
 		t.Errorf("the SQLSTATE is the one useful fact: %s", got)
 	}
-	if got := ConnectError(&pq.Error{Code: pq.ErrorCode("x " + secret)}).Error(); strings.Contains(got, secret) || !strings.Contains(got, "SQLSTATE unknown") {
+	if got := ConnectError(&pq.Error{Code: pq.ErrorCode("XX000")}).Error(); !strings.Contains(got, "SQLSTATE other") || strings.Contains(got, "XX000") {
 		t.Errorf("a malformed SQLSTATE is repeated: %s", got)
 	}
 }

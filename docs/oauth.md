@@ -77,7 +77,7 @@ keys only needs no database.
 | One database and one owner role, **not a superuser** | The start check refuses a superuser role, and a session that runs as another role than the one that logged in. The role needs no other right. |
 | Connections: `max_conns` in the address, and `pods × max_conns + 1` within the role's `CONNECTION LIMIT` | The address must name `max_conns` (1 to 64; the chart's example uses 8); the start check compares the role's limit. |
 
-The address may carry only these parameters: `sslmode`, `sslrootcert`, `max_conns`, `max_idle_conns`, `max_conn_lifetime`, `max_idle_conn_time`, `connect_timeout` and `application_name`. Any other (a `host`, `options`, a startup setting) is refused, and its name is not printed. When the connection fails, the message holds a fixed text and, for a refusal by the server, the SQLSTATE code; it never holds the server's own words or the address.
+The address may carry only these parameters: `sslmode`, `sslrootcert`, `max_conns`, `max_idle_conns`, `max_conn_lifetime`, `max_idle_conn_time` and `connect_timeout`. Any other (a `host`, `options`, a startup setting) is refused, and its name is not printed. When the connection fails, the message holds a fixed text and, for a refusal by the server, the SQLSTATE code; it never holds the server's own words or the address.
 
 The check is the init container `check-database` of each Hydra pod (`ambit-auth check-database`). It changes nothing in
 the database and never prints the address or the password. If it fails, the pod does not start and its log names the fix:
@@ -91,7 +91,7 @@ kubectl -n ambit-system logs ambit-hydra-1 -c check-database
 | Tested on kind in CI | What it shows |
 |---|---|
 | PostgreSQL 17 and 15, TLS only (a `hostnossl` line that rejects plain connections) | Hydra starts, migrates and serves on both. |
-| The start check, 16 cases | The refusals above, a wrong CA, a name that is not in the certificate, too few connections and a wrong password; no log repeats a password. |
+| The start check, 16 cases | Every refused `sslmode`, a missing CA or `max_conns`, a wrong CA, a name that is not in the certificate, a superuser, too few connections and a wrong password; no log repeats a password. A login role that differs from the role in effect or from the user in the address is covered by unit tests only. |
 | Two migrations of an empty PostgreSQL 15 database started one after the other, and a repeat | Two that overlap can fail, one or both (Hydra v26.2.0 races on its first table; the test starts them at once but does not prove that they overlap); a run on its own succeeds. This is why Hydra's pods start one at a time. |
 | Changing the address from one database to another and back (a Secret change) | A new, empty database gets its own signing key; going back finds the first key again. |
 

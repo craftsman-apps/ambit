@@ -124,7 +124,8 @@ type Facts struct {
 	Effective  string // the role in effect (current_user); it differs from Role after SET SESSION AUTHORIZATION or SET ROLE
 }
 
-var sqlstate = regexp.MustCompile(`^[0-9A-Z]{5}$`)
+// The SQLSTATE codes of a refused login that an operator can act on.
+var knownSQLState = map[string]bool{"28P01": true, "28000": true, "3D000": true, "57P03": true, "53300": true, "08006": true, "08001": true, "08004": true}
 
 var plainName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,63}$`)
 
@@ -150,7 +151,7 @@ func (f Facts) Problems(d DSN, replicas int) []string {
 		p = append(p, "the session does not use TLS: the server must require TLS (hostssl in pg_hba.conf)")
 	}
 	if f.Effective != f.Role || f.Role != d.User {
-		p = append(p, fmt.Sprintf("the session runs as %q and logged in as %q, but the DSN names %q: all three must be one role (no SET SESSION AUTHORIZATION, no role in effect other than the login)", say(f.Effective), say(f.Role), say(d.User)))
+		p = append(p, "the session's login role or its role in effect is not the role that the DSN names: all three must be one role (no SET SESSION AUTHORIZATION, no other role in effect)")
 	}
 	if f.Superuser {
 		p = append(p, fmt.Sprintf("the role %q is a superuser: use an owner role of the Hydra database only, without CREATEROLE or SUPERUSER", say(d.User)))
@@ -221,8 +222,8 @@ func ConnectError(err error) error {
 	switch {
 	case errors.As(err, &pe):
 		code := string(pe.Code)
-		if !sqlstate.MatchString(code) {
-			code = "unknown"
+		if !knownSQLState[code] { // the text of an unknown code is not repeated: a server could put anything in it
+			code = "other"
 		}
 		return fmt.Errorf("connect to the database: the server refused the connection (SQLSTATE %s): check the user, the password and the database name", code)
 	case errors.Is(err, pq.ErrSSLNotSupported):

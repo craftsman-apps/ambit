@@ -141,8 +141,11 @@ func runSh(t *testing.T, base string, env ...string) (string, string, error) {
 		t.Skip("install.sh is for macOS and Linux")
 	}
 	dir := t.TempDir()
+	// A fake sysctl that reports no Rosetta, so a test run under Rosetta still asks for the build it serves.
+	stub := t.TempDir()
+	os.WriteFile(filepath.Join(stub, "sysctl"), []byte("#!/bin/sh\nexit 1\n"), 0o755)
 	cmd := exec.Command(sh, "../../site/static/install.sh")
-	cmd.Env = append(os.Environ(), append([]string{"AMBIT_DOWNLOAD_BASE=" + base, "AMBIT_INSTALL_DIR=" + dir}, env...)...)
+	cmd.Env = append(os.Environ(), append([]string{"PATH=" + stub + string(os.PathListSeparator) + os.Getenv("PATH"), "AMBIT_DOWNLOAD_BASE=" + base, "AMBIT_INSTALL_DIR=" + dir}, env...)...)
 	out, err := cmd.CombinedOutput()
 	return string(out), dir, err
 }

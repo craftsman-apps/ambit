@@ -27,7 +27,7 @@ case $(uname -m) in
   *) fail "there is no ambit build for the processor $(uname -m)" "build it from source: go install github.com/craftsman-apps/ambit/cmd/ambit@latest" ;;
 esac
 # A shell started under Rosetta says x86_64 on an Apple silicon Mac: take the native build.
-if [ "$os" = darwin ] && [ "$arch" = amd64 ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = 1 ]; then
+if [ "$os" = darwin ] && [ "$arch" = amd64 ] && [ "$(sysctl=$(command -v sysctl || echo /usr/sbin/sysctl); "$sysctl" -n sysctl.proc_translated 2>/dev/null)" = 1 ]; then
   arch=arm64
 fi
 archive="ambit_${os}_${arch}.tar.gz"

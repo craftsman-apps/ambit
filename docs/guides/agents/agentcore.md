@@ -17,7 +17,7 @@ An AgentCore Gateway runs in AWS, so it reaches Ambit through the [public front 
 
 ## Set it up
 
-1. An admin makes the agent and a key, platform `agentcore`, with an end date of 90 days or less ([Agents](../../agents.md#create-an-agent-and-a-key)).
+1. An admin makes the agent and a key, platform `agentcore`, with an end date of 90 days or less ([Agents](../../agents.md#create-an-agent-and-a-key-in-the-api)).
 2. Store the key in AgentCore as an **API key credential provider** (outbound authorization).
 3. Add a gateway target of the type **MCP server** with the endpoint `https://mcp-public.example.com/mcp`.
 4. For the outbound authorization of the target choose **API key**: credential location **Header**, parameter name `Authorization`, prefix `Bearer`. Set all three explicitly; AWS documents different defaults in different places.

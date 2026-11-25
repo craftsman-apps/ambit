@@ -17,7 +17,7 @@ An agent built with the Cloudflare Agents SDK runs on Cloudflare Workers, so it 
 
 ## Set it up
 
-1. Make the agent and a key, platform `cloudflare` ([Agents](../../agents.md#create-an-agent-and-a-key)).
+1. Make the agent and a key, platform `cloudflare` ([Agents](../../agents.md#create-an-agent-and-a-key-in-the-api)).
 2. Store the key as a **secret** of the worker (`wrangler secret put AMBIT_KEY`), never in the code.
 3. In the agent, connect with the key in the transport headers, with the transport type `streamable-http`:
 

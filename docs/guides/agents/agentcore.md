@@ -1,6 +1,6 @@
 ---
-title: AWS AgentCore Gateway with Ambit's MCP tools
-description: Add Ambit's public front door as an MCP server target of an Amazon Bedrock AgentCore Gateway, with an API key.
+title: "AWS AgentCore Gateway with Ambit's MCP tools"
+description: "Add Ambit's public front door as an MCP server target of an Amazon Bedrock AgentCore Gateway, with an API key."
 ---
 
 # AWS AgentCore Gateway with Ambit's MCP tools
@@ -11,7 +11,7 @@ An AgentCore Gateway runs in AWS, so it reaches Ambit through the [public front 
 
 ## Before you start
 
-1. The [public front door](../../front-door.md) is on (`frontDoor.enabled`), with its DNS name and certificate, and the servers this assistant needs are marked with `frontDoor` and acknowledged ([Choose the servers](../../front-door.md#choose-the-servers)). In this guide the MCP address is `https://mcp-public.example.com/mcp`.
+1. The [public front door](../../front-door.md) is on (`frontDoor.enabled`), with its DNS name and certificate, and the servers this assistant needs are marked with `frontDoor` and acknowledged ([Choose the servers](../../front-door.md#choose-the-servers)). In this guide the MCP address is `https://mcp-public.example.com/mcp`, on the HTTPS port 443. The gateway listens on `frontDoor.port` (8443 by default): your load balancer or tunnel must serve port 443 and forward it to that port, unless the platform lets you write the port in the address (`:8443`).
 2. An admin makes an agent in **itself mode** (platform `agentcore`): it is a [service account](../../service-accounts.md) with an owner (a person or a group). Give it the narrowest scope that the gateway's users need.
 3. The agent's **scope** lists only the servers or tools this assistant needs. A new agent has an empty scope, which means no tool. See [Agents](../../agents.md).
 
@@ -27,7 +27,7 @@ An AgentCore Gateway runs in AWS, so it reaches Ambit through the [public front 
 
 AgentCore adds the prefix and a space to the key and sends it in the header you named: with `Authorization` and `Bearer`, Ambit receives `Authorization: Bearer ambit_...`. A location of **Query parameter** does not work with Ambit.
 
-Check the key from your own computer before you enter it anywhere else:
+Check the key from your own computer before you enter it anywhere else (if the key has source ranges, make a second, short-lived key **without** ranges for this check and delete it afterwards: a key with ranges is refused from your computer):
 
 ```sh
 curl -si https://mcp-public.example.com/mcp -X POST \
@@ -40,13 +40,13 @@ A valid key answers `200` with a session id. A wrong key, an expired key and a k
 
 ## Keep the key safe
 
-- Give the key a **short end date** (30 days or less) and **source ranges** if AWS AgentCore publishes the addresses it calls from. A key with ranges works only from those addresses.
+- Give the key the **shortest end date** the console offers (30 days) and **source ranges** if AWS AgentCore publishes the addresses it calls from. A key with ranges works only from those addresses.
 - The key is shown once. To replace it, make a second key, enter it in AWS AgentCore, test, then delete the first key.
-- To stop the assistant at once, delete its key or the agent. Audit shows every call with the agent's name, the platform it declared (`agentcore`; declared, never a proof) and the owner at the time the key was made.
+- To stop the assistant, delete its key or the agent: the gateway refuses a deleted key within seconds (measured: under half a second for keys; see [Agents](../../agents.md)). If deleting the agent answers 503, send the request again. Audit shows every call with the agent's name, the platform it declared (`agentcore`; declared, never a proof) and the owner at the time the key was made.
 
 ## What is not verified
 
 - AWS's documentation ([Set up outbound authorization for your gateway](https://docs.aws.amazon.com/bedrock-agentcore/latest/devguide/gateway-outbound-auth.html)) is the reference; its defaults for the credential location and the prefix differ between pages, so this guide says to set them yourself.
 - Which target types and regions support API key outbound authorization for an MCP server target in your account.
 - The addresses AgentCore calls from. If AWS gives your gateway fixed addresses, enter them as the key's source ranges.
-- OAuth client credentials (the usual AgentCore option) are planned for 0.7.0. Until then, this guide's API key is the way.
+- OAuth client credentials (the usual AgentCore option) are not part of this release; they are planned for a later one. Until then, this guide's API key is the way.

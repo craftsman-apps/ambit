@@ -23,7 +23,7 @@ cleanup() {
   kubectl -n "$NS" delete "accessrules.$G" fp-time fp-ops --ignore-not-found >/dev/null 2>&1 || true
   local pw; pw=$(kubectl -n "$NS" get secret ambit-initial-admin -o jsonpath='{.data.password}' 2>/dev/null | base64 -d) || true
   if sign_in local admin@ambit.local "$pw" >/dev/null 2>&1; then
-    for n in ${AGENTS[@]+"${AGENTS[@]}"}; do api DELETE "/api/agents/$n" >/dev/null 2>&1 || true; done
+    for n in ${AGENTS[@]+"${AGENTS[@]}"}; do [[ $(api DELETE "/api/agents/$n" 2>/dev/null) =~ ^20 ]] || echo "cleanup: agent $n was not deleted" >&2; done
     for id in ${KEYIDS[@]+"${KEYIDS[@]}"}; do api DELETE "/api/admin/keys/$id" >/dev/null 2>&1 || true; done
   fi
 }
@@ -90,35 +90,42 @@ replay() {
   c=$(psend "$PA" '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"time_get_current_time","arguments":{"timezone":"UTC"}}}' "${KH[@]}" -H "MCP-Protocol-Version: $proto")
   [[ "$c" == 200 ]] && grep -q '"result"' "$W/pubj" && ! grep -q '"isError":true' "$W/pubj" || fail "$label: the allowed call: $c $(head -c 300 "$W/pub")"
   c=$(psend "$PA" '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"time_convert_time","arguments":{"source_timezone":"UTC","time":"12:00","target_timezone":"UTC"}}}' "${KH[@]}" -H "MCP-Protocol-Version: $proto")
-  ! grep -q '"result"' "$W/pubj" || grep -q '"isError":true' "$W/pubj" || fail "$label: a tool outside the scope returned a result: $(head -c 300 "$W/pub")"
-  c=$(pub "$PA" /mcp -X DELETE -H "Mcp-Session-Id: $PSID" "${KH[@]}"); [[ "$c" =~ ^(200|202|204|405)$ ]] || fail "$label: closing the session: $c"
+  [[ "$c" == 200 ]] && { grep -q '"error"' "$W/pubj" || grep -q '"isError":true' "$W/pubj"; } || fail "$label: a tool outside the scope was not refused with an error: HTTP $c $(head -c 300 "$W/pub")"
+  # a server may decline to end a session (405); agentgateway's answer is recorded in the pass line
+  c=$(pub "$PA" /mcp -X DELETE -H "Mcp-Session-Id: $PSID" -H "MCP-Protocol-Version: $proto" "${KH[@]}"); [[ "$c" =~ ^(200|202|204|405)$ ]] || fail "$label: closing the session: $c"
+  DELETE_CODE=$c
   [[ $(pub "$PA" /mcp -X POST "${MCPH[@]}" -d "$init" -H "$hname: ${prefix}ambit_wrongwrongwrongwrongwrongwrongwrongwrongwro") == 403 ]] || fail "$label: a wrong key was not refused"
   [[ $(pub "$PA" "/mcp?api_key=$KEY" -X POST "${MCPH[@]}" -d "$init") == 403 ]] || fail "$label: a key in the address was accepted"
   [[ $(pub "$PA" "/mcp?api_key=$KEY" -X POST "${MCPH[@]}" -d "$init" "${KH[@]}") == 200 ]] || fail "$label: an extra query parameter broke a valid request"
 }
+# audit_count AGENT MODE PLATFORM [STATUS]: how many public records name the agent, its mode and the declared platform
+audit_count() {
+  ch "SELECT count() FROM otel.otel_logs WHERE LogAttributes['ambit.agent'] = '$1' AND LogAttributes['ambit.agent_mode'] = '$2' AND LogAttributes['ambit.platform_declared'] = '$3' AND LogAttributes['ambit.ingress'] = 'public'"
+}
 # audited AGENT MODE PLATFORM: the access log names the agent, its mode, the declared platform and the public ingress
 audited() {
-  wait_for 120 '[[ $(ch "SELECT count() FROM otel.otel_logs WHERE LogAttributes['"'"'ambit.agent'"'"'] = '"'"'$1'"'"' AND LogAttributes['"'"'ambit.agent_mode'"'"'] = '"'"'$2'"'"' AND LogAttributes['"'"'ambit.platform_declared'"'"'] = '"'"'$3'"'"' AND LogAttributes['"'"'ambit.ingress'"'"'] = '"'"'public'"'"'") -ge 3 ]]' ||
-    fail "audit has no public records of agent $1 ($2, $3)"
+  A_AGENT=$1; A_MODE=$2; A_PLATFORM=$3
+  wait_for 120 '[[ $(audit_count "$A_AGENT" "$A_MODE" "$A_PLATFORM") -ge 3 ]]' || fail "audit has no public records of agent $1 ($2, $3)"
 }
 
 # --- 1 · Grok Bot: a person's own agent, Authorization: Bearer
 agent person grok "Grok Bot"; replay Authorization "Bearer " 2025-03-26 "grok"; audited "$AGENT" person grok
-pass "1 Grok Bot (docs/guides/agents/grok-bot.md): person agent $AGENT, Authorization: Bearer, protocol 2025-03-26: session, scoped tools, refused call, wrong key, key in the address; audited as agent/person/grok/public"
+pass "1 Grok Bot (docs/guides/agents/grok-bot.md): person agent $AGENT, Authorization: Bearer (the test sends protocol 2025-03-26): session, scoped tools, refused call, wrong key, key in the address; audited as agent/person/grok/public"
 # --- 2 · Copilot Studio: a person's own agent, the key alone in x-api-key
 agent person copilot-studio "Copilot Studio"; replay x-api-key "" 2025-06-18 "copilot-studio"; audited "$AGENT" person copilot-studio
-pass "2 Copilot Studio (docs/guides/agents/copilot-studio.md): person agent $AGENT, x-api-key with the key alone, protocol 2025-06-18; audited as copilot-studio"
+pass "2 Copilot Studio (docs/guides/agents/copilot-studio.md): person agent $AGENT, x-api-key with the key alone (the test sends protocol 2025-06-18); audited as copilot-studio"
 # --- 3 · AWS AgentCore: an itself-mode agent (a service account), Authorization: Bearer
 agent itself agentcore "AgentCore gateway"; replay Authorization "Bearer " 2025-06-18 "agentcore"; audited "$AGENT" itself agentcore
-pass "3 AWS AgentCore (docs/guides/agents/agentcore.md): itself-mode agent $AGENT, Authorization: Bearer, protocol 2025-06-18; audited as agent/itself/agentcore"
+pass "3 AWS AgentCore (docs/guides/agents/agentcore.md): itself-mode agent $AGENT, Authorization: Bearer (the test sends protocol 2025-06-18); audited as agent/itself/agentcore"
 # --- 4 · Cloudflare Agents: an itself-mode agent, Authorization: Bearer, MCP-Protocol-Version and Mcp-Session-Id on every request
 agent itself cloudflare "Cloudflare worker"; replay Authorization "Bearer " 2025-11-25 "cloudflare"; audited "$AGENT" itself cloudflare
-pass "4 Cloudflare Agents (docs/guides/agents/cloudflare.md): itself-mode agent $AGENT, Authorization: Bearer, protocol 2025-11-25 headers on every request, session closed with DELETE; audited as cloudflare"
+pass "4 Cloudflare Agents (docs/guides/agents/cloudflare.md): itself-mode agent $AGENT, Authorization: Bearer, MCP-Protocol-Version and Mcp-Session-Id on every request (the test sends protocol 2025-11-25), the session closed with DELETE (answered $DELETE_CODE); audited as cloudflare"
 # --- 5 · Claude.ai shared team setup (lower assurance): one itself-mode agent; source ranges decide who may use the key
-agent itself claude-ai "Claude.ai team" '["192.0.2.0/24"]'
-wait_for 60 '[[ $(pub "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "Authorization: Bearer $KEY") == 403 ]]' || fail "5 a key with other source ranges worked from this address: $(head -c 200 "$W/pub")"
-KEY_OTHER=$KEY
+agent itself claude-ai "Claude.ai team" '["192.0.2.0/24"]'; OTHER_AGENT=$AGENT; KEY_OTHER=$KEY
 agent itself claude-ai "Claude.ai team any" '["0.0.0.0/0","::/0"]'; replay Authorization "Bearer " 2025-11-25 "claude-ai"; audited "$AGENT" itself claude-ai
+# the key for other addresses is known to the gateway by now (the other key of the same minute works): it is refused because of its ranges
+[[ $(pub "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "Authorization: Bearer $KEY_OTHER") == 403 ]] || fail "5 a key with other source ranges worked from this address: $(head -c 200 "$W/pub")"
+wait_for 120 '[[ $(ch "SELECT count() FROM otel.otel_logs WHERE LogAttributes['"'"'ambit.agent'"'"'] = '"'"'$OTHER_AGENT'"'"' AND LogAttributes['"'"'ambit.ingress'"'"'] = '"'"'public'"'"'") -ge 1 ]]' || fail "5 the record of the refused key does not name its agent: the gateway did not know the key"
 who=$(ch "SELECT any(LogAttributes['jwt.email']) FROM otel.otel_logs WHERE LogAttributes['ambit.agent'] = '$AGENT'")
 [[ "$who" == *"@svc.ambit.internal" ]] || fail "5 the shared agent is not a service account in Audit: '$who'"
 pass "5 Claude.ai shared team setup (docs/guides/agents/claude-ai-shared-team.md): itself-mode agent; a key with other source ranges is refused (403) from this address, one that allows it works; Audit shows the service account $who, never a person"

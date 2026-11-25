@@ -1,0 +1,1 @@
+- The guard now masks personal data in the `_meta` object of a tool result (and of `resources/read` and `prompts/get` results), not only in the content.

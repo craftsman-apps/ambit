@@ -1,0 +1,1 @@
+- `install.sh` now installs the Apple silicon build when it runs in a terminal under Rosetta, and prints a PATH line that stays correct when the install folder has a quote, a space or a `$`.

@@ -165,6 +165,18 @@ func TestHermesWindows(t *testing.T) {
 	if kc := got["providers"].(map[string]any)["ambit"].(map[string]any)["key_cmd"]; kc != `"C:\Program Files\ambit\ambit.exe" key print --url "https://llm.example.com"` {
 		t.Fatalf("key_cmd %q", kc)
 	}
+	// cmd.exe reads no single quotes: a path with ' or $ ... is double-quoted, or refused when no quoting is right.
+	in.AmbitPath = `C:\Users\O'Brien\ambit.exe`
+	got, _ = decodeYAML("x", mustHermes(t, in).After)
+	if kc := got["providers"].(map[string]any)["ambit"].(map[string]any)["key_cmd"]; kc != `"C:\Users\O'Brien\ambit.exe" key print --url "https://llm.example.com"` {
+		t.Fatalf("key_cmd %q", kc)
+	}
+	for _, bad := range []string{`C:\Users\a$b\ambit.exe`, `C:\Users\100%\ambit.exe`} {
+		in.AmbitPath = bad
+		if _, err := PlanHermes(in, "h"); err == nil {
+			t.Fatalf("%q must be refused", bad)
+		}
+	}
 }
 
 // Files ambit cannot read or edit stop with an error and no plan.

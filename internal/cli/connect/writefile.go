@@ -99,6 +99,18 @@ func writeOne(c FileChange) (FileResult, error) {
 		}
 		r.Created, r.Dirs = true, dirs
 	}
+	var checkOnly bool // the check before the backup does not run the test hook
+	unchanged := func() error {
+		if writeHook != nil && !checkOnly {
+			writeHook()
+		}
+		now, err := os.ReadFile(target)
+		switch {
+		case !c.Exists && errors.Is(err, fs.ErrNotExist), c.Exists && err == nil && bytes.Equal(now, c.Before):
+			return nil
+		}
+		return &out.Error{What: "cannot write " + c.Path, Why: "the file changed while ambit worked on it", Next: "run the command again", Code: out.ExitFailed}
+	}
 	perm := os.FileMode(0o600)
 	if c.Exists {
 		fi, err := os.Stat(target)
@@ -116,22 +128,19 @@ func writeOne(c FileChange) (FileResult, error) {
 		if !c.Delete { // a file that is deleted holds only what connect made; there is nothing to keep
 			r.Backup = c.Path + ".ambit.bak"
 			if _, err := os.Stat(r.Backup); !(c.KeepBackup && err == nil) {
+				// Check first: a file that changed since it was read must not get a backup of the old content.
+				checkOnly = true
+				err := unchanged()
+				checkOnly = false
+				if err != nil {
+					r.Backup = ""
+					return r, err
+				}
 				if err := atomicWrite(r.Backup, c.Before, 0o600); err != nil {
 					return r, writeError(r.Backup, err)
 				}
 			}
 		}
-	}
-	unchanged := func() error {
-		if writeHook != nil {
-			writeHook()
-		}
-		now, err := os.ReadFile(target)
-		switch {
-		case !c.Exists && errors.Is(err, fs.ErrNotExist), c.Exists && err == nil && bytes.Equal(now, c.Before):
-			return nil
-		}
-		return &out.Error{What: "cannot write " + c.Path, Why: "the file changed while ambit worked on it", Next: "run the command again", Code: out.ExitFailed}
 	}
 	if c.Delete {
 		if err := unchanged(); err != nil {

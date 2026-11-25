@@ -228,7 +228,7 @@ mcp_servers:
 Known limits:
 
 - `key_cmd` and the `providers:` section are in Hermes releases since September 2026. An older Hermes reads only the `custom_providers:` list (with `key_env`), which Ambit tested with v0.13.0 on 2026-10-14; `hermes update` moves that list into `providers:`.
-- On Windows, Hermes runs `key_cmd` with `cmd.exe`. This was not tested.
+- On Windows, Hermes runs `key_cmd` with `cmd.exe`, so the path of `ambit` and the address are written in double quotes (`cmd.exe` does not read single quotes). If either has a `%`, `$`, backtick or double quote, connect stops, because no quoting is right for it: install `ambit` in another folder. This was not run on Windows.
 - If the person's own `providers:` or `mcp_servers:` section is a list or a value on one line, connect stops and asks you to add the entries by hand.
 
 ## Kilo Code
@@ -318,7 +318,7 @@ By hand, store the key with `ambit key set --url <llm>` (it asks for the key), a
 Known limits:
 
 - `auth` with a provider is in pi's source code (`mcp-servers.ts`) and is named in its MCP documentation, but the documentation has no section for it.
-- On Windows, pi runs a `!` command with Git Bash when it is installed, else with `cmd.exe`. This was not tested.
+- On Windows, pi runs a `!` command with Git Bash when it is installed, else with `cmd.exe`, so the path of `ambit` and the address are written in double quotes, which both read. If either has a `%`, `$`, backtick or double quote, connect stops: install `ambit` in another folder. This was not run on Windows.
 - An older report for pi (issue 3168 of the earlier `pi-mono` repository) says custom providers can stop responding. It was not checked with pi 1.5.2.
 
 ## Other agents

@@ -56,7 +56,7 @@ message McpRequestResult {
   // Honored on Pass and Mutated, ignored on Error and for stdio upstreams.
   HeaderMutation header_mutation = 4;
   // Arbitrary key/value bag stashed in request extensions and exposed to CEL as
-  // `extMcp.<key>`. Subsequent backend filters (e.g. `transformation`) can read
+  // `mcpGuardrails.<key>` (`extMcp.<key>` in agentgateway v1.5.0). Subsequent backend filters (e.g. `transformation`) can read
   // from it. Honored on Pass and Mutated; merged with later processors' metadata.
   google.protobuf.Struct metadata = 5;
 }

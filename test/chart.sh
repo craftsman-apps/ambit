@@ -165,7 +165,7 @@ assert m=={"tools/list":"Response","tools/call":"Full","resources/read":"Respons
 check_qs 'assert not [x for x in docs if x["kind"]=="AgentgatewayPolicy" and x["metadata"]["name"]=="ambit-access-log"]
 s=yaml.safe_load(one("ConfigMap","ambit-access-log-base")["data"]["spec.yaml"])
 assert s["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"Gateway","name":"ambit"}], s
-assert [x["name"] for x in s["frontend"]["accessLog"]["attributes"]["add"]]==["jwt.email","jwt.groups","jwt.sub","ambit.key_id","ambit.identity","ambit.router","ambit.route","ambit.routeReason","ambit.classifier.input_tokens","ambit.classifier.output_tokens"], s
+assert [x["name"] for x in s["frontend"]["accessLog"]["attributes"]["add"]]==["jwt.email","jwt.groups","jwt.sub","ambit.key_id","ambit.identity","ambit.agent","ambit.agent_mode","ambit.agent_owner_at_issue","ambit.platform_declared","ambit.grant_id","ambit.token_issuer","ambit.ingress","ambit.router","ambit.route","ambit.routeReason","ambit.classifier.input_tokens","ambit.classifier.output_tokens"], s
 assert s["frontend"]["accessLog"]["attributes"]["remove"]==["mcp.error.message"], s
 assert s["frontend"]["accessLog"]["otlp"]=={"protocol":"GRPC","backendRef":{"name":"ambit-otel-collector","port":4317}}, s' "access-log base ConfigMap, no chart AgentgatewayPolicy ambit-access-log"
 noev=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set evidence.enabled=false)

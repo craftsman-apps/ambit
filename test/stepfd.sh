@@ -372,4 +372,21 @@ g=$(pod_curl "gateway.networking.k8s.io/gateway-name=ambit" "http://mcp-everythi
 [[ "$g" != 000 ]] || fail "10 the private Gateway's own access to the private server was lost"
 pass "10 Ready is False with the reason (FrontDoorNotAcknowledged, FrontDoorConnection) and the server is a target of neither backend; a pod labelled as the public Gateway reaches the front-door server (HTTP $a) but not the private server or the token broker (000); the private Gateway still reaches it (HTTP $g)"
 
+# --- 11 · an agent key's source ranges apply on the public Gateway too (the Require rule of the private route is repeated there)
+agent_key() { # agent_key NAME RANGES-JSON: an agent for the signed-in admin and one key; sets AKEY
+  local c; c=$(api POST /api/agents "{\"displayName\":\"$1 $$\",\"platform\":\"other\",\"scope\":[\"time\"]}"); [[ "$c" == 201 ]] || fail "11 agent: HTTP $c $(cat "$W/api")"
+  AGENT=$("${PY[@]}" -c 'import json,sys;print(json.load(open(sys.argv[1]))["name"])' "$W/api"); AGENTS+=("$AGENT")
+  c=$(api POST "/api/agents/$AGENT/keys" "{\"name\":\"k\",\"days\":30,\"sourceRanges\":$2}"); [[ "$c" == 201 ]] || fail "11 agent key: HTTP $c $(cat "$W/api")"
+  AKEY=$("${PY[@]}" -c 'import json,sys;print(json.load(open(sys.argv[1]))["key"])' "$W/api")
+}
+AGENTS=()
+[[ $(api POST /api/test/keys/reset-limits '{}') == 204 ]] || fail "11 reset-limits hook"
+agent_key elsewhere '["192.0.2.0/24"]'; K_ELSE=$AKEY
+agent_key anywhere '["0.0.0.0/0","::/0"]'; K_ANY=$AKEY
+wait_for 60 '[[ $(pub "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K_ANY") == 200 ]]' || fail "11 an agent key that allows every address does not work: $(head -c 200 "$W/pub")"
+[[ $(pub "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K_ELSE") == 403 ]] || fail "11 an agent key for other addresses worked on the public Gateway: $(head -c 200 "$W/pub")"
+[[ $(command curl -s -o /dev/null -w '%{http_code}' -X POST "$MCP" "${MCPH[@]}" -H "x-api-key: $K_ELSE" -d "$INIT") == 403 ]] || fail "11 the same key worked on the private route"
+for a in "${AGENTS[@]}"; do api DELETE "/api/agents/$a" >/dev/null || true; done
+pass "11 an agent key with source ranges for other addresses is refused (403) on the public and the private Gateway; one that allows every address works"
+
 done_step fd

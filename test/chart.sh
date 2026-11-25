@@ -311,7 +311,7 @@ assert p["frontend"]["proxyProtocol"]=={"mode":"Strict","version":"All"}, p
 g=one("AgentgatewayPolicy","ambit-public-limits")["spec"]["traffic"]["rateLimit"]["global"]
 assert g["descriptors"][1]["entries"][0]["expression"]=="string(source.address)", g' "clientAddress proxyProtocol: the Gateway requires the PROXY protocol"
 # Refusals: each message names the value.
-refuse() { local why=$1; shift; ! fdt "$@" >/dev/null 2>"$W2" || { echo "FAIL chart: $why must be refused"; exit 1; }; grep -q "$MSG" "$W2" || { echo "FAIL chart: $why: wrong message: $(head -c 300 "$W2")"; exit 1; }; }
+refuse() { local why=$1; shift; ! ${RT:-fdt} "$@" >/dev/null 2>"$W2" || { echo "FAIL chart: $why must be refused"; exit 1; }; grep -q "$MSG" "$W2" || { echo "FAIL chart: $why: wrong message: $(head -c 300 "$W2")"; exit 1; }; }
 W2=$(mktemp)
 MSG='frontDoor.host' refuse "no host" --set frontDoor.host=
 MSG='certificateSecret' refuse "no certificate" --set frontDoor.tls.certificateSecret=
@@ -325,5 +325,80 @@ MSG='clientAddress' refuse "trusting X-Forwarded-For" --set frontDoor.clientAddr
 MSG='NodePort' refuse "the PROXY protocol on a node port" --set frontDoor.clientAddress=proxyProtocol --set frontDoor.service.type=NodePort
 MSG='failureMode' refuse "a bad failure mode" --set frontDoor.rateLimit.failureMode=Maybe
 MSG='perSourcePerMinute' refuse "a zero limit" --set frontDoor.rateLimit.perSourcePerMinute=0
+# OAuth sign-in (oauth.*): Hydra and its network. Off by default; when on, the routes are exact, no Secret is rendered,
+# and every refusal names its value.
+oav=("${fdv[@]}" -f test/oauth/values.yaml)
+oat() { helm template ambit charts/ambit -n ambit-system "${oav[@]}" "$@"; }
+! grep -q 'ambit-hydra\|https-auth\|ambit-auth-hydra' <<<"$fd" || { echo "FAIL chart: nothing of OAuth is rendered by default"; exit 1; }
+oa=$(oat) || { echo "FAIL chart: the OAuth values must render"; exit 1; }
+check_oa() { uv run --no-project --with pyyaml python -c "import sys,yaml,json
+docs=[d for d in yaml.safe_load_all(sys.stdin) if d]
+def one(kind,name): return [x for x in docs if x['kind']==kind and x['metadata']['name']==name][0]
+$1" <<<"$oa" || { echo "FAIL chart: $2"; exit 1; }; }
+check_oa 'l=one("Gateway","ambit-public")["spec"]["listeners"]
+assert [(x["name"],x["hostname"],x["protocol"]) for x in l]==[("https","mcp-public.localtest.me","HTTPS"),("https-auth","auth.localtest.me","HTTPS")], l
+assert all(x["tls"]["mode"]=="Terminate" and x["tls"]["certificateRefs"]==[{"name":"ambit-public-tls"}] for x in l), l' "public Gateway: a second HTTPS listener for the sign-in host, same certificate, no HTTP listener"
+check_oa 'on=sorted(x["metadata"]["name"] for x in docs if x["kind"] in ("HTTPRoute","GRPCRoute","TLSRoute","TCPRoute","UDPRoute") and any(p["name"]=="ambit-public" for p in x["spec"].get("parentRefs",[])))
+assert on==["ambit-auth-hydra","ambit-mcp-public"], on
+r=one("HTTPRoute","ambit-auth-hydra")["spec"]
+assert r["parentRefs"]==[{"name":"ambit-public","sectionName":"https-auth"}] and r["hostnames"]==["auth.localtest.me"], r
+assert len(r["rules"])==1, r
+m=sorted((x["method"],x["path"]["type"],x["path"]["value"]) for x in r["rules"][0]["matches"])
+assert m==[("GET","Exact","/.well-known/jwks.json"),("POST","Exact","/oauth2/revoke"),("POST","Exact","/oauth2/token")], m
+assert r["rules"][0]["backendRefs"]==[{"name":"ambit-hydra-public","port":4444}], r
+# Hydra'"'"'s registration, discovery, userinfo, admin and health paths have no route.
+backends=[b["name"] for x in docs if x["kind"]=="HTTPRoute" for ru in x["spec"]["rules"] for b in ru.get("backendRefs",[])]
+assert "ambit-hydra-admin" not in backends, backends' "exact routes to Hydra: token, revoke and JWKS only; the admin Service has no route"
+check_oa 'v=one("ValidatingAdmissionPolicy","ambit-public-routes")["spec"]["validations"][0]["expression"]
+assert "ambit-auth-hydra" in v and "auth.localtest.me" in v and "/oauth2/token" in v and "ambit-hydra-public" in v, v' "the route policy admits the Hydra route as the chart writes it, and no other"
+check_oa 's=one("StatefulSet","ambit-hydra")["spec"]; p=s["template"]["spec"]
+assert s["podManagementPolicy"]=="OrderedReady" and s["replicas"]==2, s
+assert [c["name"] for c in p["initContainers"]]==["check-database","migrate"] and [c["name"] for c in p["containers"]]==["hydra","hydra-keys"]
+for c in p["initContainers"]+p["containers"]:
+  assert c["securityContext"]=={"allowPrivilegeEscalation":False,"readOnlyRootFilesystem":True,"capabilities":{"drop":["ALL"]}}, c["name"]
+  if "hydra" in c["image"]: assert "@sha256:" in c["image"], c["image"]
+assert p["securityContext"]["runAsNonRoot"] is True and p["automountServiceAccountToken"] is False, p["securityContext"]
+# The DSN and the system secret come from Secrets only, never as a value.
+for c in p["initContainers"]+p["containers"]:
+  for e in c.get("env",[]): assert "valueFrom" in e and "secretKeyRef" in e["valueFrom"] and "value" not in e, (c["name"],e)
+hy=[c for c in p["containers"] if c["name"]=="hydra"][0]
+assert {e["name"] for e in hy["env"]}=={"DSN","SECRETS_SYSTEM"}, hy["env"]
+assert hy["readinessProbe"]["httpGet"]["port"]=="admin" and [c for c in p["containers"] if c["name"]=="hydra-keys"][0]["readinessProbe"]["httpGet"]["path"]=="/readyz"' "Hydra pods start one at a time, check the database first, migrate, run read-only and non-root, and take every secret from a Secret"
+check_oa 'import json
+cm=one("ConfigMap","ambit-hydra")["data"]["hydra.yml"]; c=yaml.safe_load(cm)
+low=cm.lower()
+assert "dsn" not in low and "secrets" not in low and "password" not in low, "the config holds no secret"
+assert c["strategies"]["access_token"]=="jwt" and c["ttl"]["access_token"]=="15m" and c["ttl"]["auth_code"]=="1m" and c["ttl"]["refresh_token"]=="720h", c["ttl"]
+assert c["oauth2"]["pkce"]=={"enforced":True,"enforced_for_public_clients":True}, c["oauth2"]
+assert c["oidc"]["dynamic_client_registration"]=={"enabled":False}, c["oidc"]
+assert c["webfinger"]["jwks"]["broadcast_keys"]==["hydra.jwt.access-token"], c["webfinger"]
+assert c["urls"]["self"]["issuer"]=="https://auth.localtest.me" and c["urls"]["login"]=="https://auth.localtest.me/login", c["urls"]
+assert c["log"]["leak_sensitive_values"] is False and c["oauth2"]["expose_internal_errors"] is False
+# a changed config rolls the pods
+assert len(one("StatefulSet","ambit-hydra")["spec"]["template"]["metadata"]["annotations"]["checksum/config"])==64' "Hydra's configuration: 15-minute JWT tokens, PKCE for everyone, no dynamic registration, one published key set, no secret in it"
+sec_off=$(sed -n '/^kind: Secret$/,/^---/p' <<<"$fd" | grep -c '^  name:' || true)
+sec_on=$(sed -n '/^kind: Secret$/,/^---/p' <<<"$oa" | grep -c '^  name:' || true)
+[[ "$sec_off" == "$sec_on" ]] || { echo "FAIL chart: OAuth must render no Secret (the chart holds no key, password or DSN): $sec_off before, $sec_on after"; exit 1; }
+check_oa 'for n in ("ambit-hydra-public","ambit-hydra-admin"):
+  s=one("Service",n)["spec"]; assert s.get("type","ClusterIP")=="ClusterIP" and len(s["ports"])==1, s
+n=one("NetworkPolicy","ambit-hydra")["spec"]
+assert n["policyTypes"]==["Ingress"] and n["podSelector"]=={"matchLabels":{"app.kubernetes.io/name":"ambit-hydra"}}, n
+pub=[i for i in n["ingress"] if i["ports"]==[{"port":4444}]][0]; adm=[i for i in n["ingress"] if i["ports"]==[{"port":4445}]][0]
+assert sorted(list(f["podSelector"]["matchLabels"].values())[0] for f in pub["from"])==["agentgateway","ambit-public"], pub
+assert sorted(list(f["podSelector"]["matchLabels"].values())[0] for f in adm["from"])==["ambit-auth","ambit-console"], adm
+assert len(n["ingress"])==2, n
+pdb=one("PodDisruptionBudget","ambit-hydra")["spec"]; assert pdb["minAvailable"]==1' "Hydra: ClusterIP Services, the admin port only for ambit-auth and the console, the public port only for the public Gateway and the controller"
+one_r=$(oat --set oauth.hydra.replicas=1)
+! grep -q 'name: ambit-hydra$' <(sed -n '/kind: PodDisruptionBudget/,/^---/p' <<<"$one_r") || { echo "FAIL chart: one Hydra pod needs no PodDisruptionBudget"; exit 1; }
+RT=oat; MSG='frontDoor.enabled' refuse "OAuth without the front door" --set frontDoor.enabled=false
+MSG='frontDoor.authHost' refuse "OAuth without a sign-in host" --set frontDoor.authHost=
+MSG='own' refuse "the sign-in host named like the MCP host" --set frontDoor.authHost=mcp-public.localtest.me
+MSG='own' refuse "the sign-in host named like the console" --set frontDoor.authHost=console.localtest.me
+MSG='oauth.database.dsnSecret' refuse "no DSN Secret" --set oauth.database.dsnSecret.name=
+MSG='oauth.database.caSecret' refuse "no CA Secret" --set oauth.database.caSecret.key=
+MSG='oauth.hydra.systemSecret' refuse "no system Secret" --set oauth.hydra.systemSecret.name=
+MSG='accessTokenMinutes' refuse "a token that lives two hours" --set oauth.accessTokenMinutes=120
+MSG='refreshTokenIdleDays' refuse "no refresh life" --set oauth.refreshTokenIdleDays=0
+MSG='oauth.hydra.replicas' refuse "no Hydra pod" --set oauth.hydra.replicas=0
 rm -f "$W2"
 echo "PASS chart"

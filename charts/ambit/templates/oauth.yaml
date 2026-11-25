@@ -1,0 +1,201 @@
+{{- $o := .Values.oauth | default dict }}
+{{- if $o.enabled }}
+{{- /* OAuth sign-in for hosted MCP clients (experimental in 0.6.x, docs/oauth.md): Ory Hydra on the customer's PostgreSQL.
+This file is Hydra and its network. Every refusal below names the value to set. No Secret is rendered: the chart holds
+no password, no key and no DSN (a render must give the same result every time, so GitOps tools see no drift). */ -}}
+{{- $fd := .Values.frontDoor | default dict }}
+{{- $h := $o.hydra | default dict }}
+{{- $db := $o.database | default dict }}
+{{- if not $fd.enabled }}{{ fail "oauth.enabled=true needs frontDoor.enabled=true: OAuth sign-in is served on the public Gateway (docs/front-door.md)" }}{{ end }}
+{{- if not $fd.authHost }}{{ fail "oauth.enabled=true needs frontDoor.authHost (the sign-in host name, for example auth.example.com; its certificate must be in frontDoor.tls.certificateSecret)" }}{{ end }}
+{{- range $other := list .Values.console.host .Values.llm.host .Values.mcp.host $fd.host }}
+{{- if eq $other $fd.authHost }}{{ fail (printf "frontDoor.authHost %q is also another host name of this install: the sign-in host must have a name of its own" $fd.authHost) }}{{ end }}
+{{- end }}
+{{- range $v := list (dict "k" "oauth.database.dsnSecret" "v" $db.dsnSecret) (dict "k" "oauth.database.caSecret" "v" $db.caSecret) (dict "k" "oauth.hydra.systemSecret" "v" $h.systemSecret) }}
+{{- if not (and $v.v $v.v.name $v.v.key) }}{{ fail (printf "oauth.enabled=true needs %s.name and %s.key: a Secret you create (docs/oauth.md, \"Before you turn it on\")" $v.k $v.k) }}{{ end }}
+{{- end }}
+{{- if lt (int $h.replicas) 1 }}{{ fail "oauth.hydra.replicas must be 1 or more" }}{{ end }}
+{{- if or (lt (int $o.accessTokenMinutes) 1) (gt (int $o.accessTokenMinutes) 60) }}{{ fail "oauth.accessTokenMinutes must be 1 to 60 (15 is the tested value)" }}{{ end }}
+{{- if or (lt (int $o.refreshTokenIdleDays) 1) (gt (int $o.refreshTokenIdleDays) 365) }}{{ fail "oauth.refreshTokenIdleDays must be 1 to 365" }}{{ end }}
+{{- $issuer := printf "https://%s" $fd.authHost }}
+{{- $img := printf "%s:%s" .Values.console.image.repository (.Values.console.image.tag | default .Chart.AppVersion) }}
+{{- $hydraConfig := dict
+  "serve" (dict "public" (dict "port" 4444) "admin" (dict "port" 4445) "cookies" (dict "same_site_mode" "Lax"))
+  "urls" (dict "self" (dict "issuer" $issuer "public" $issuer) "login" (printf "%s/login" $issuer) "consent" (printf "%s/consent" $issuer) "error" (printf "%s/error" $issuer))
+  "strategies" (dict "access_token" "jwt")
+  "ttl" (dict "access_token" (printf "%dm" (int $o.accessTokenMinutes)) "refresh_token" (printf "%dh" (mul 24 (int $o.refreshTokenIdleDays))) "auth_code" "1m" "login_consent_request" "10m")
+  "oauth2" (dict "pkce" (dict "enforced" true "enforced_for_public_clients" true) "expose_internal_errors" false "mirror_top_level_claims" false
+    "allowed_top_level_claims" (list "email" "groups" "ambit_agent" "ambit_agent_mode" "ambit_agent_owner_at_issue" "ambit_grant" "ambit_scope" "ambit_platform_declared")
+    "token_hook" (dict "url" (printf "http://ambit-auth.%s.svc:8081/hooks/token" .Release.Namespace)))
+  "oidc" (dict "dynamic_client_registration" (dict "enabled" false))
+  "webfinger" (dict "jwks" (dict "broadcast_keys" (list "hydra.jwt.access-token")))
+  "log" (dict "level" "info" "format" "json" "leak_sensitive_values" false) }}
+{{- $hydraConfigYaml := toYaml $hydraConfig }}
+{{- $sc := dict "allowPrivilegeEscalation" false "readOnlyRootFilesystem" true "capabilities" (dict "drop" (list "ALL")) | toJson }}
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: ambit-hydra }
+automountServiceAccountToken: false
+---
+# No password, key or DSN here: those are in the Secrets named by oauth.database and oauth.hydra.
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: ambit-hydra }
+data:
+  hydra.yml: |
+    {{- $hydraConfigYaml | nindent 4 }}
+---
+# Hydra's pods start one at a time (OrderedReady): the first pod finds an empty database, creates the one signing key of
+# each set (container hydra-keys) and only then becomes Ready; the next pod starts after that. Two pods that started
+# together on an empty database would each create a key, and half of the tokens would name the wrong key
+# (docs/oauth.md, "Signing keys"). No Helm hook and no Job: Argo CD and `helm template` give the same result.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ambit-hydra
+  labels: { app.kubernetes.io/name: ambit-hydra }
+spec:
+  serviceName: ambit-hydra-public
+  podManagementPolicy: OrderedReady
+  replicas: {{ int $h.replicas }}
+  updateStrategy: { type: RollingUpdate }
+  selector:
+    matchLabels: { app.kubernetes.io/name: ambit-hydra }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: ambit-hydra }
+      annotations:
+        checksum/config: {{ $hydraConfigYaml | sha256sum }}
+    spec:
+      serviceAccountName: ambit-hydra
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: { type: RuntimeDefault } }
+      topologySpreadConstraints:
+        - { maxSkew: 1, topologyKey: kubernetes.io/hostname, whenUnsatisfiable: ScheduleAnyway, labelSelector: { matchLabels: { app.kubernetes.io/name: ambit-hydra } } }
+      initContainers:
+        # Refuses a database that is not usable (no TLS verification, PostgreSQL outside 15 to 17, a superuser role,
+        # too few connections) with a message that names the fix. Nothing is changed in the database.
+        - name: check-database
+          image: {{ $img | quote }}
+          imagePullPolicy: {{ .Values.console.image.pullPolicy }}
+          command: [/ambit-auth, check-database, --replicas={{ int $h.replicas }}]
+          env:
+            - name: DSN
+              valueFrom: { secretKeyRef: { name: {{ $db.dsnSecret.name | quote }}, key: {{ $db.dsnSecret.key | quote }} } }
+          volumeMounts: [{ name: ca, mountPath: /ca, readOnly: true }]
+          securityContext: {{ $sc }}
+          resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 64Mi } }
+        # Schema migrations: idempotent, and safe if two pods run them together. Back up the database before an upgrade.
+        - name: migrate
+          image: {{ $h.image | quote }}
+          args: [migrate, sql, up, -e, --yes]
+          env:
+            - name: DSN
+              valueFrom: { secretKeyRef: { name: {{ $db.dsnSecret.name | quote }}, key: {{ $db.dsnSecret.key | quote }} } }
+          volumeMounts: [{ name: ca, mountPath: /ca, readOnly: true }, { name: tmp, mountPath: /tmp }]
+          securityContext: {{ $sc }}
+          resources: {{- toYaml $h.resources | nindent 12 }}
+      containers:
+        - name: hydra
+          image: {{ $h.image | quote }}
+          args: [serve, all, --config, /etc/hydra/hydra.yml]
+          env:
+            - name: DSN
+              valueFrom: { secretKeyRef: { name: {{ $db.dsnSecret.name | quote }}, key: {{ $db.dsnSecret.key | quote }} } }
+            - name: SECRETS_SYSTEM
+              valueFrom: { secretKeyRef: { name: {{ $h.systemSecret.name | quote }}, key: {{ $h.systemSecret.key | quote }} } }
+          ports: [{ name: public, containerPort: 4444 }, { name: admin, containerPort: 4445 }]
+          # Hydra's readiness includes the database: with the database down, no pod is Ready and the gateway answers 503.
+          readinessProbe: { httpGet: { path: /health/ready, port: admin }, periodSeconds: 3 }
+          livenessProbe: { httpGet: { path: /health/alive, port: admin }, periodSeconds: 10, failureThreshold: 6 }
+          # Removed from the Services at deletion; this wait lets the gateways see that before SIGTERM.
+          lifecycle: { preStop: { sleep: { seconds: 5 } } }
+          volumeMounts: [{ name: config, mountPath: /etc/hydra, readOnly: true }, { name: ca, mountPath: /ca, readOnly: true }, { name: tmp, mountPath: /tmp }]
+          securityContext: {{ $sc }}
+          resources: {{- toYaml $h.resources | nindent 12 }}
+        # Keeps the signing key sets at exactly one key (creates the first key) and is the pod's readiness: a pod
+        # whose key set is missing or holds two keys is not Ready, so it receives no token request.
+        - name: hydra-keys
+          image: {{ $img | quote }}
+          imagePullPolicy: {{ .Values.console.image.pullPolicy }}
+          command: [/ambit-auth, hydra-keys]
+          ports: [{ name: keys, containerPort: 8082 }]
+          readinessProbe: { httpGet: { path: /readyz, port: keys }, periodSeconds: 3 }
+          securityContext: {{ $sc }}
+          resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 64Mi } }
+      volumes:
+        - name: config
+          configMap: { name: ambit-hydra }
+        - name: ca
+          secret:
+            secretName: {{ $db.caSecret.name | quote }}
+            items: [{ key: {{ $db.caSecret.key | quote }}, path: ca.crt }]
+        - name: tmp
+          emptyDir: { medium: Memory, sizeLimit: 16Mi }
+---
+# ClusterIP only: nothing but the public Gateway's two routes and in-cluster callers reach Hydra (NetworkPolicy below).
+apiVersion: v1
+kind: Service
+metadata: { name: ambit-hydra-public }
+spec:
+  selector: { app.kubernetes.io/name: ambit-hydra }
+  ports: [{ name: public, port: 4444, targetPort: public }]
+---
+# The admin API can read Hydra's private keys: it is never routed, and only ambit-auth and the console may call it.
+apiVersion: v1
+kind: Service
+metadata: { name: ambit-hydra-admin }
+spec:
+  selector: { app.kubernetes.io/name: ambit-hydra }
+  ports: [{ name: admin, port: 4445, targetPort: admin }]
+{{- if gt (int $h.replicas) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: ambit-hydra }
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: ambit-hydra }
+{{- end }}
+---
+# Who may reach Hydra. Public port 4444: the public Gateway's pods (token, revoke, JWKS) and agentgateway's controller
+# (it fetches the JWKS). Admin port 4445: ambit-auth and the console only. Every other pod is refused.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: ambit-hydra }
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: ambit-hydra }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit-public } }
+        - podSelector: { matchLabels: { app.kubernetes.io/name: agentgateway } }
+      ports: [{ port: 4444 }]
+    - from:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-auth } }
+        - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-console } }
+      ports: [{ port: 4445 }]
+---
+# The sign-in host's routes to Hydra: three exact paths with their methods. Everything else of Hydra (registration,
+# discovery, userinfo, the admin API, health) has no route and answers 404. The sign-in pages are routes of ambit-auth.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: ambit-auth-hydra }
+spec:
+  parentRefs: [{ name: ambit-public, sectionName: https-auth }]
+  hostnames: [{{ $fd.authHost | quote }}]
+  rules:
+    - name: token
+      matches:
+        - { method: POST, path: { type: Exact, value: /oauth2/token } }
+        - { method: POST, path: { type: Exact, value: /oauth2/revoke } }
+        - { method: GET, path: { type: Exact, value: /.well-known/jwks.json } }
+      # The gateway ends TLS: Hydra must know the request came in over HTTPS.
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier: { set: [{ name: X-Forwarded-Proto, value: https }] }
+      backendRefs: [{ name: ambit-hydra-public, port: 4444 }]
+{{- end }}

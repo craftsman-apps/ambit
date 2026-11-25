@@ -84,6 +84,20 @@ spec:
         namespaces:
           from: Same
         kinds: [{ group: gateway.networking.k8s.io, kind: HTTPRoute }]
+{{- if (.Values.oauth | default dict).enabled }}
+    # OAuth: the sign-in host, a second name on the same port and certificate. A request for any other name is refused.
+    - name: https-auth
+      protocol: HTTPS
+      port: {{ $port }}
+      hostname: {{ $fd.authHost | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs: [{ name: {{ $fd.tls.certificateSecret | quote }} }]
+      allowedRoutes:
+        namespaces:
+          from: Same
+        kinds: [{ group: gateway.networking.k8s.io, kind: HTTPRoute }]
+{{- end }}
 ---
 # The one route of 0.6.0's key-only front door: exact path /mcp on the one host. Anything else is 404.
 # The backend ambit-mcp-public holds only the servers an admin marked for the front door (Server spec.frontDoor); it is
@@ -206,7 +220,19 @@ spec:
         has(object.spec.rules[0].backendRefs) && size(object.spec.rules[0].backendRefs) == 1 &&
         object.spec.rules[0].backendRefs[0].name == "ambit-mcp-public" &&
         has(object.spec.rules[0].backendRefs[0].kind) && object.spec.rules[0].backendRefs[0].kind == "AgentgatewayBackend")
-      message: "only the route ambit-mcp-public may be attached to the public Gateway ambit-public, with the host, the exact path /mcp and the backend ambit-mcp-public that the chart sets"
+{{- if (.Values.oauth | default dict).enabled }}
+        || (object.kind == "HTTPRoute" && object.metadata.name == "ambit-auth-hydra" &&
+        size(object.spec.parentRefs) == 1 &&
+        has(object.spec.hostnames) && object.spec.hostnames == [{{ $fd.authHost | quote }}] &&
+        has(object.spec.rules) && size(object.spec.rules) == 1 &&
+        has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) == 3 &&
+        object.spec.rules[0].matches.all(m, has(m.path) && m.path.type == "Exact" && has(m.method) &&
+        ((m.method == "POST" && m.path.value in ["/oauth2/token", "/oauth2/revoke"]) || (m.method == "GET" && m.path.value == "/.well-known/jwks.json"))) &&
+        has(object.spec.rules[0].backendRefs) && size(object.spec.rules[0].backendRefs) == 1 &&
+        object.spec.rules[0].backendRefs[0].name == "ambit-hydra-public" &&
+        (!has(object.spec.rules[0].backendRefs[0].kind) || object.spec.rules[0].backendRefs[0].kind == "Service"))
+{{- end }}
+      message: "only the routes that the chart sets may be attached to the public Gateway ambit-public (ambit-mcp-public{{ if (.Values.oauth | default dict).enabled }}, ambit-auth-hydra{{ end }}), each with its host, exact paths and backend"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

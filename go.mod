@@ -11,6 +11,7 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.9
 	github.com/google/cel-go v0.30.0
 	github.com/google/jsonschema-go v0.4.3
+	github.com/lib/pq v1.12.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/pkoukk/tiktoken-go v0.1.8
 	github.com/pkoukk/tiktoken-go-loader v0.0.2
@@ -114,7 +115,6 @@ require (
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/lann/builder v0.0.0-20180802200727-47ae307949d0 // indirect
 	github.com/lann/ps v0.0.0-20150810152359-62de8c46ede0 // indirect
-	github.com/lib/pq v1.12.3 // indirect
 	github.com/liggitt/tabwriter v0.0.0-20181228230101-89fcab3d43de // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect

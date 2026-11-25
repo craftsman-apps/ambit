@@ -90,7 +90,7 @@ func RulesVersion(objs []*unstructured.Unstructured) string {
 			path = []string{"spec", "virtualModel"}
 		case o.GetKind() == "AgentgatewayModel":
 			path = []string{"spec", "policies", "authorization"}
-		case o.GetKind() == "AgentgatewayPolicy" && o.GetName() == MCPBackendName+"-access":
+		case o.GetKind() == "AgentgatewayPolicy" && (o.GetName() == MCPBackendName+"-access" || o.GetName() == PublicMCPBackendName+"-access"):
 			path = []string{"spec", "backend", "mcp", "authorization"}
 		default:
 			continue

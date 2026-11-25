@@ -37,8 +37,12 @@ rules:
     verbs: [create]
   - apiGroups: [""]
     resources: [configmaps]
-    resourceNames: [ambit-ratelimit-config, ambit-router-config, ambit-access-mode]
+    resourceNames: [ambit-ratelimit-config, ambit-router-config, ambit-access-mode, ambit-agent-stops-ack]
     verbs: [update, patch]
+  # The stop policies are attached to the Gateways' routes: the controller reads which Gateway each route belongs to.
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [httproutes]
+    verbs: [get, list]
   # agentgateway's xDS certificate: when it was not renewed, an annotation makes agentgateway renew it.
   - apiGroups: [""]
     resources: [secrets]

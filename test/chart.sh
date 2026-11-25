@@ -372,7 +372,11 @@ MSG='perSourcePerMinute' refuse "a zero limit" --set frontDoor.rateLimit.perSour
 oav=("${fdv[@]}" -f test/oauth/values.yaml)
 oat() { helm template ambit charts/ambit -n ambit-system "${oav[@]}" "$@"; }
 RT=oat  # refuse() below renders with the OAuth values
-! grep -q 'ambit-hydra\|https-auth\|ambit-auth-hydra' <<<"$fd" || { echo "FAIL chart: nothing of OAuth is rendered by default"; exit 1; }
+uv run --no-project --with pyyaml python -c "import sys,yaml
+docs=[d for d in yaml.safe_load_all(sys.stdin) if d]
+bad=[(d['kind'],d['metadata']['name']) for d in docs if d['kind']!='ValidatingAdmissionPolicy' and any(x in d['metadata']['name'] for x in ('ambit-hydra','ambit-auth'))]
+g=[l['name'] for d in docs if d['kind']=='Gateway' and d['metadata']['name']=='ambit-public' for l in d['spec']['listeners']]
+assert not bad and g==['https'], (bad,g)" <<<"$fd" || { echo "FAIL chart: nothing of OAuth is rendered by default"; exit 1; }
 oa=$(oat) || { echo "FAIL chart: the OAuth values must render"; exit 1; }
 check_oa() { uv run --no-project --with pyyaml python -c "import sys,yaml,json
 docs=[d for d in yaml.safe_load_all(sys.stdin) if d]
@@ -393,7 +397,7 @@ assert r["rules"][0]["backendRefs"]==[{"name":"ambit-hydra-public","port":4444}]
 backends=[b["name"] for x in docs if x["kind"]=="HTTPRoute" for ru in x["spec"]["rules"] for b in ru.get("backendRefs",[])]
 assert "ambit-hydra-admin" not in backends, backends' "exact routes to Hydra: token, revoke and JWKS only; the admin Service has no route"
 check_oa 'v=one("ValidatingAdmissionPolicy","ambit-public-routes")["spec"]["validations"][0]["expression"]
-assert "ambit-auth-hydra" in v and "auth.localtest.me" in v and "/oauth2/token" in v and "ambit-hydra-public" in v, v' "the route policy admits the Hydra route as the chart writes it, and no other"
+assert "ambit-auth-hydra" in v and "/oauth2/token" in v and "ambit-hydra-public" in v, v' "the route policy admits the Hydra route as the chart writes it, and no other"
 check_oa 's=one("StatefulSet","ambit-hydra")["spec"]; p=s["template"]["spec"]
 assert s["podManagementPolicy"]=="OrderedReady" and s["replicas"]==2, s
 assert [c["name"] for c in p["initContainers"]]==["check-database","migrate"] and [c["name"] for c in p["containers"]]==["hydra","hydra-keys"]

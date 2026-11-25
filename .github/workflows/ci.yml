@@ -34,8 +34,9 @@ jobs:
       - name: Which jobs does the change need?
         id: changes
         env:
-          BASE: "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
+          BASE: "${{ github.event.pull_request.base.sha }}"
           HEAD: "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}"
+          MERGE_GROUP_BASE_REF: "${{ github.event.merge_group.base_ref }}"
         run: .github/scripts/changed-files.sh | .github/scripts/changes.sh | tee -a "$GITHUB_OUTPUT"
 
   # Its own job: a failure here must not skip the jobs that need `changes` (a skipped required job reports success).
@@ -598,7 +599,9 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions: { contents: read, actions: read }
     env:
+      GH_TOKEN: ${{ github.token }}
       R_CHANGES: ${{ needs.changes.result }}
       R_CHANGES_TEST: ${{ needs.changes-test.result }}
       R_BUILD: ${{ needs.build.result }}
@@ -623,5 +626,10 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { sparse-checkout: .github/scripts }
+      # GitHub has reported a matrix job as passed when one leg was cancelled before it got a runner. The gate therefore
+      # also reads the legs themselves.
+      - name: The jobs of this run, leg by leg
+        run: gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --paginate --jq '.jobs[] | "\(.name)|\(.conclusion)"' > "$RUNNER_TEMP/jobs.txt"
       - name: Every job that must run ran and passed
+        env: { JOBS_FILE: "${{ runner.temp }}/jobs.txt" }
         run: .github/scripts/merge-gate.sh

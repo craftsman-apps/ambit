@@ -36,5 +36,20 @@ run 1 "changes-test skipped" R_CHANGES_TEST=skipped
 run 1 "a result that is missing" R_CLI_PARTIAL=
 run 1 "an unknown wanted value counts as needed" R_E2E=skipped W_E2E=
 
+# Matrix legs: a matrix that reports success is checked leg by leg (GitHub has reported success for a cancelled leg).
+JOBS=$(mktemp); trap 'rm -f "$JOBS"' EXIT
+all_legs() { printf '%s\n' "cli-unit (ubuntu-latest)|success" "cli-unit (macos-latest)|success" "cli-unit (windows-latest)|success" \
+  "e2e (a)|success" "e2e (b)|success" "e2e (c)|success" "e2e (d)|success" "e2e (e)|success"; }
+all_legs > "$JOBS";                                                     run 0 "every leg succeeded" JOBS_FILE="$JOBS"
+all_legs | grep -v "e2e (c)" > "$JOBS";                                  run 1 "a leg of e2e is missing although e2e reports success" JOBS_FILE="$JOBS"
+all_legs | sed 's/e2e (e)|success/e2e (e)|cancelled/' > "$JOBS";         run 1 "a leg of e2e was cancelled" JOBS_FILE="$JOBS"
+all_legs | grep -v "windows" > "$JOBS";                                  run 1 "a leg of cli-unit is missing" JOBS_FILE="$JOBS"
+all_legs | grep -v "e2e" > "$JOBS";                                      run 0 "e2e skipped on purpose: its legs are not looked for" JOBS_FILE="$JOBS" R_E2E=skipped W_E2E=false
+run 1 "the list of jobs cannot be read" JOBS_FILE=/nonexistent
+# the e2e parts the gate expects are the parts of the matrix in ci.yml
+parts=$(sed -n 's/^ *- { name: \([a-e]\), steps:.*/\1/p' ../workflows/ci.yml | tr '\n' ' ')
+gate=$(grep -o 'e2e ([a-e])' merge-gate.sh | sed 's/e2e (\(.\))/\1/' | tr '\n' ' ')
+if [ -n "$parts" ] && [ "$parts" = "$gate" ]; then echo "ok   the e2e parts of the gate are the parts of ci.yml ($parts)"; else echo "FAIL gate parts '$gate', ci.yml parts '$parts'"; fails=$((fails + 1)); fi
+
 [ "$fails" -eq 0 ] || { echo "$fails failed"; exit 1; }
 echo "all passed"

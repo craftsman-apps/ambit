@@ -27,7 +27,7 @@ need to update your branch from `main` any more, and you do not need to wait for
    gh pr merge <number> --merge --auto --match-head-commit <the head commit you reviewed>
    ```
 
-   `--merge` is the only merge method (a merge commit). `--auto` means "merge when the queue says the checks passed".
+   The merge method is the one in the queue settings (a merge commit); `--merge` says the same. `--auto` means "merge when the queue says the checks passed".
 5. Watch the pull request. GitHub builds the queue branch (`gh-readonly-queue/main/pr-<number>-...`) and runs the `ci`
    workflow on it. It looks the same as a pull request run, with the event `merge_group`. When the checks pass, GitHub
    merges and closes the pull request. Then remove your worktree.
@@ -61,10 +61,17 @@ Why not require `e2e (a)` to `e2e (e)` by name: when e2e is skipped on purpose, 
 queue for ever. `merge-gate` always arrives.
 
 How the same jobs run for a queue branch: `ci.yml` also listens for `merge_group`. The job `changes` compares the
-queue branch with the branch it merges into (`.github/scripts/changed-files.sh`), so the path filters work the same as
-for a pull request, and a filter never skips a job by mistake: when the comparison fails, every job runs.
+queue branch with the point where it left the branch it merges into (`.github/scripts/changed-files.sh`), so the path
+filters work the same as for a pull request. It does not use the `base_sha` of the event: with several entries in the
+queue it can be the commit of the entry ahead, and then a documentation-only entry behind a Go entry would skip the jobs
+the Go change needs. A moved file counts with both paths. When the comparison fails, every job runs.
 `.github/scripts/changed-files_test.sh` checks this on real commits: a pull request and a merge group for the same
-change run the same jobs, also when `main` moved in between.
+change run the same jobs, also when `main` moved in between, and for a second entry in the queue.
+The gate also reads every leg of `cli-unit` and `e2e` from the list of jobs of the run, because GitHub has reported a
+matrix as passed when one leg was cancelled before it got a runner.
+
+A known gap: the check "preset versions bumped" runs on the pull request only. Two pull requests that change the same
+preset in the same way can pass it each and still change it twice without a second bump. The queue does not catch that.
 
 ## Settings for the queue
 
@@ -72,14 +79,18 @@ Only the owner changes the repository rules. The recommended values:
 
 | Setting | Value | Why |
 |---|---|---|
-| Required checks | `merge-gate`, `build`, `cli-unit (ubuntu-latest)`, `cli-unit (macos-latest)`, `cli-unit (windows-latest)`, `cli-local`, `cli-partial` | `merge-gate` covers quickstart and e2e. The other six are required today. Do not add the names `e2e (a)` to `e2e (e)`. |
+| Required status check | `merge-gate` (only this one) | It covers every job, quickstart and e2e included, and every leg of the matrix jobs (`cli-unit`, `e2e`). Do not require `e2e (a)` to `e2e (e)` by name. |
+| Branch rule "Require branches to be up to date before merging" | Off | The queue builds on the current `main` itself. With the rule on, every merge of another pull request would mark the others out of date. |
 | Merge method | Merge commit | The merge rule for this repository. |
 | Maximum pull requests to build | 3 | Up to three queue branches are tested at the same time; each one includes the ones ahead of it. |
-| Maximum group size | 3 | Up to three pull requests are merged by one run. One e2e run takes about 50 minutes of Actions time, so grouping saves minutes. |
-| Minimum group size | 1 | A single pull request does not wait for others. |
-| Wait time to meet the minimum group size | 5 minutes | A short wait lets pull requests that are ready together share a run. |
+| Maximum pull requests to merge | 3 | Up to three pull requests can be merged by one run. One e2e run takes about 50 minutes of Actions time, so grouping saves minutes. |
+| Minimum pull requests to merge | 1 | A single pull request does not wait for others. (The setting "wait time to meet the minimum" then does nothing.) |
 | Status check timeout | 120 minutes | The e2e parts take 15 to 20 minutes when a runner is free. The runner pool is shared, and jobs have waited more than an hour for a runner. |
-| Pull requests that fail in a group | Require all entries to pass (the default) | A group that fails is split, and its pull requests are tested again without the failing one. |
+| Required checks of a group | Every entry must pass (the default) | The combined commit of every entry is tested; a group that fails is split and its pull requests are tested again without the failing one. |
+
+If the owner prefers to keep the six checks that are required today (`build`, `cli-unit (ubuntu-latest)`,
+`cli-unit (macos-latest)`, `cli-unit (windows-latest)`, `cli-local`, `cli-partial`) next to `merge-gate`, that works too:
+`merge-gate` already contains them.
 
 One cost to know: the required checks apply to the pull request too, so e2e runs once on the pull request (when it is
 marked ready) and once more in the queue. That is the price of testing together with the current `main`. To avoid the

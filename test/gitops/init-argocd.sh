@@ -12,6 +12,7 @@ cd "$(dirname "$0")/../.."
 PREV=${CLI_PREVIOUS:-0.4.0}
 NAME=${CLI_KIND_NAME:-ambit-gitops}
 [[ $NAME != ambit ]] || { echo "the kind cluster ambit is shared" >&2; exit 2; }
+NODE=$NAME-control-plane
 W=$(mktemp -d)
 GS=""
 fail() {
@@ -20,6 +21,12 @@ fail() {
   # Why an Application is not Synced: its last operation and the resources that differ.
   kubectl -n argocd get applications -o go-template='{{range .items}}{{.metadata.name}}: {{with .status.operationState}}{{.phase}} {{.message}}{{end}}{{"\n"}}{{range .status.resources}}{{if ne .status "Synced"}}  {{.kind}} {{.name}}: {{.status}} {{with .health}}{{.status}} {{.message}}{{end}}{{"\n"}}{{end}}{{end}}{{end}}' >&2 2>/dev/null || true
   kubectl -n ambit-system get pods >&2 2>/dev/null || true
+  # Why a pod is not ready (#363): the state and events of the Argo CD pods (an image that cannot be pulled shows
+  # here), and the newest events of both namespaces.
+  kubectl -n argocd get pods -o wide >&2 2>/dev/null || true
+  kubectl -n argocd describe pods 2>/dev/null | grep -E '^(Name:|Events:|  (Warning|Normal) )|State:|Reason:|Message:|Ready:' >&2 || true
+  kubectl -n argocd get events --sort-by=.lastTimestamp 2>/dev/null | tail -30 >&2 || true
+  kubectl -n ambit-system get events --sort-by=.lastTimestamp 2>/dev/null | tail -30 >&2 || true
   exit 1
 }
 pass() { echo "PASS: $*"; }
@@ -53,6 +60,16 @@ go run test/gitops/gitserve.go "$W/serve" "0.0.0.0:18418" & GS=$!
 REPO=http://$HOST:18418/ambit-config.git
 for _ in $(seq 1 30); do git ls-remote "http://127.0.0.1:18418/ambit-config.git" >/dev/null 2>&1 && break; sleep 1; done
 git ls-remote "http://127.0.0.1:18418/ambit-config.git" >/dev/null || fail "2 the git server does not answer"
+# The Argo CD images first, each pull tried 4 times with the registry's error printed: inside `helm --wait` a pull that
+# fails shows nothing for 5 minutes (#363, argocd-redis Available 0/1 with no pod events in the log).
+for img in $(make -s argocd-images); do
+  for try in 1 2 3 4; do
+    if err=$(timeout 180 docker exec "$NODE" crictl pull "$img" 2>&1); then echo "pulled $img"; break; fi
+    echo "pull of $img failed (try $try of 4): $(echo "$err" | tail -1)" >&2
+    [[ $try -lt 4 ]] || fail "2 the node cannot pull $img"
+    sleep $((try * 10))
+  done
+done
 make -s argocd >/dev/null || fail "2 Argo CD install"
 pass "2 Argo CD on kind; the repository is $REPO"
 

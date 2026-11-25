@@ -225,6 +225,30 @@ for bad in "--set llm.promptGuard.mode=block" "--set-json llm.promptGuard.builti
   ! pg --set llm.promptGuard.enabled=true $bad >/dev/null 2>&1 || { echo "FAIL chart: prompt guard values must be refused: $bad"; exit 1; }
 done
 echo "PASS prompt guard: bad mode, built-in, long or invalid pattern, unknown key, failure mode, port, Service name, and nothing to check are refused"
+# Injection guard (protection.injectionGuard, #82): off by default; the guard gets the whole value in AMBIT_INJECTION_GUARD.
+ig() { helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set protection.enabled=true "$@"; }
+! grep -q AMBIT_INJECTION_GUARD <<<"$(ig)" || { echo "FAIL chart: the injection guard must be off by default"; exit 1; }
+! grep -q AMBIT_INJECTION_GUARD <<<"$(ig --set protection.injectionGuard.enabled=false --set protection.injectionGuard.mode=reject)" || { echo "FAIL chart: enabled=false renders the injection guard"; exit 1; }
+igv=$(ig --set protection.injectionGuard.enabled=true --set protection.injectionGuard.mode=mask --set 'protection.injectionGuard.disabledBuiltins[0]=role-prefix' \
+  --set 'protection.injectionGuard.patterns[0]=(?i)secret handshake' --set protection.injectionGuard.webhook.service=inj-hook --set protection.injectionGuard.webhook.namespace=guards \
+  --set protection.injectionGuard.webhook.port=9000 --set protection.injectionGuard.webhook.timeout=500ms --set protection.injectionGuard.webhook.failureMode=FailOpen)
+IGV="$igv" uv run --no-project --with pyyaml python -c "import os,json,yaml
+docs=[d for d in yaml.safe_load_all(os.environ['IGV']) if d]
+d=[x for x in docs if x['kind']=='Deployment' and x['metadata']['name']=='ambit-guard'][0]
+v=[e['value'] for e in d['spec']['template']['spec']['containers'][0]['env'] if e['name']=='AMBIT_INJECTION_GUARD'][0]
+assert json.loads(v)=={'mode':'mask','builtins':True,'disabledBuiltins':['role-prefix'],'patterns':['(?i)secret handshake'],
+  'webhook':{'url':'http://inj-hook.guards.svc:9000/request','timeout':'500ms','failureMode':'FailOpen'}}, v" || { echo "FAIL chart: the guard's AMBIT_INJECTION_GUARD value"; exit 1; }
+igd=$(ig --set protection.injectionGuard.enabled=true)
+grep -q 'AMBIT_INJECTION_GUARD' <<<"$igd" && grep -q 'mode.*audit' <<<"$igd" && grep -q 'builtins.*true' <<<"$igd" || { echo "FAIL chart: injectionGuard.enabled=true must give audit mode with the built-in rules"; exit 1; }
+longp=$(printf 'a%.0s' $(seq 1 1025))
+for bad in "--set protection.injectionGuard.mode=block" "--set protection.injectionGuard.disabledBuiltins[0]=no-such-rule" "--set protection.injectionGuard.patterns[0]=$longp" \
+    "--set protection.injectionGuard.patterns[0]=(?<=a)b" "--set protection.injectionGuard.patterns[0]=a(b" "--set protection.injectionGuard.builtins=false" \
+    "--set protection.injectionGuard.webhook.timeout=soon" "--set protection.injectionGuard.webhook.failureMode=Open" "--set protection.injectionGuard.webhook.port=0" \
+    "--set protection.injectionGuard.webhook.service=Guard_Hook" "--set protection.injectionGuard.rules=x"; do
+  # shellcheck disable=SC2086
+  ! ig --set protection.injectionGuard.enabled=true $bad >/dev/null 2>&1 || { echo "FAIL chart: injection guard values must be refused: $bad"; exit 1; }
+done
+echo "PASS injection guard: off by default; the value reaches the guard; bad mode, rule name, long or invalid pattern, nothing to check, webhook timeout, failure mode, port and Service name are refused"
 # helm upgrade --reuse-values from 0.1.0 (#81): the old release's values replace the chart's defaults, so every key
 # added since 0.1.0 is missing. Render every template with the chart's own values.yaml swapped for 0.1.0's.
 old=$(mktemp -d); trap 'rm -rf "$old"' EXIT

@@ -319,7 +319,8 @@ func (in *Injector) spans(text string, seen map[string]bool) []injSpan {
 	if hits := injectionScanner.scan(text); hits != nil {
 		type pos struct{ start, end int }
 		wins := make([][][2]int, len(injectionRules))
-		lastNeedle, lastPartner := make([]*pos, len(injectionRules)), make([]*pos, len(injectionRules))
+		last := make([][2]pos, len(injectionRules)) // the last needle and the last partner of each rule; start 0 and end 0 until seen
+		seenWord := make([][2]bool, len(injectionRules))
 		add := func(ri, start, end int) {
 			lo, hi, ok := window(text, &injectionRules[ri], start, end)
 			if !ok {
@@ -343,12 +344,12 @@ func (in *Injector) spans(text string, seen map[string]bool) []injSpan {
 				continue
 			}
 			// Needle and partner: a window from the one to the other, when they are near.
-			mine, other := &lastNeedle[ri], &lastPartner[ri]
+			mine, other := 0, 1
 			if injectionWordPartner[h.word] {
-				mine, other = other, mine
+				mine, other = 1, 0
 			}
-			*mine = &me
-			if o := *other; o != nil && me.start-o.end <= r.gap {
+			last[ri][mine], seenWord[ri][mine] = me, true
+			if o := last[ri][other]; seenWord[ri][other] && me.start-o.end <= r.gap {
 				add(ri, min(o.start, me.start), me.end)
 			}
 		}

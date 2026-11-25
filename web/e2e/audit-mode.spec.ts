@@ -208,7 +208,7 @@ test("CSV has the outcome, the mark and the rules version", async ({ page }) => 
   await search(page);
   const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Export CSV" }).click()]);
   const lines = readFileSync(await download.path(), "utf8").trim().split("\n");
-  expect(lines[0]).toBe("time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version,result_bytes_in,result_bytes_out,compression");
+  expect(lines[0]).toBe("time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version,result_bytes_in,result_bytes_out,compression,injection");
   expect(lines[1]).toContain('"Would be refused","200"');
   expect(lines[1]).toContain('"refuse:model","3f9a1c2b7d10"');
   expect(lines.find((l) => l.includes("authorization failed"))).toContain('"Refused","403"');
@@ -423,8 +423,55 @@ test("CSV has the compression columns at the end", async ({ page }) => {
   await search(page);
   const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Export CSV" }).click()]);
   const lines = readFileSync(await download.path(), "utf8").trim().split("\n");
-  expect(lines[0]).toBe("time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version,result_bytes_in,result_bytes_out,compression");
-  expect(lines[1]).toMatch(/"38093","10035","shorten logs 14"$/);
-  expect(lines[2]).toMatch(/"","",""$/);
-  expect(lines[3]).toMatch(/"3000","1800","lossless json 0; lossless yaml 0"$/);
+  expect(lines[0]).toBe("time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version,result_bytes_in,result_bytes_out,compression,injection");
+  expect(lines[1]).toMatch(/"38093","10035","shorten logs 14",""$/);
+  expect(lines[2]).toMatch(/"","","",""$/);
+  expect(lines[3]).toMatch(/"3000","1800","lossless json 0; lossless yaml 0",""$/);
+});
+
+// #82: what the injection guard found in a tool result is tagged on the row of its call (rule names, never the text),
+// can be filtered, and is exported.
+const injected = [
+  call("2026-10-15T09:58:00Z", { method: "tools/call", server: "web", tool: "fetch_page", model: "", route: "ambit/mcp", accessMode: "enforce", mark: "", outcome: "n/a", inputTokens: 0, outputTokens: 0,
+    injection: { action: "masked", mode: "mask", rules: ["chatml-marker", "ignore-previous-instructions"] } }),
+  call("2026-10-15T09:57:00Z", { method: "tools/call", server: "web", tool: "fetch_page", model: "", route: "ambit/mcp", accessMode: "enforce", mark: "", outcome: "n/a", inputTokens: 0, outputTokens: 0 }),
+  call("2026-10-15T09:56:00Z", { method: "tools/call", server: "web", tool: "read_file", model: "", route: "ambit/mcp", accessMode: "enforce", mark: "", outcome: "n/a", inputTokens: 0, outputTokens: 0,
+    injection: { action: "rejected", mode: "reject", rules: ["hide-from-user"] } }),
+];
+
+test("an injection finding is tagged on its own row, with the rule names", async ({ page }) => {
+  await setup(page, { config: enforce, calls: injected });
+  await search(page);
+  const masked = page.getByRole("row", { name: /tools\/call · fetch_page/ }).first();
+  await expect(masked.getByTestId("injection-tag")).toHaveText("injection masked");
+  await expect(masked.getByTestId("injection-rules")).toHaveText("Rules: chatml-marker, ignore-previous-instructions");
+  await expect(page.getByRole("row", { name: /tools\/call · fetch_page/ }).nth(1).getByTestId("injection-tag")).toHaveCount(0);
+  await expect(page.getByRole("row", { name: /tools\/call · read_file/ }).getByTestId("injection-tag")).toHaveText("injection refused");
+  await expect(page.getByText("a tripwire")).toBeVisible();
+  await snap(page, "audit-injection");
+});
+
+test("the injection filter keeps only the results with a finding", async ({ page }) => {
+  await setup(page, { config: enforce, calls: injected });
+  await search(page);
+  await expect(page.getByRole("row", { name: /tools\/call/ })).toHaveCount(3);
+  await page.getByLabel("Only results with an injection finding").check();
+  await expect(page.getByRole("row", { name: /tools\/call/ })).toHaveCount(2);
+  await expect(page.getByTestId("injection-tag")).toHaveCount(2);
+});
+
+test("calls without a finding show no injection filter", async ({ page }) => {
+  await setup(page, { config: enforce, calls: compressed });
+  await search(page);
+  await expect(page.getByLabel("Only results with an injection finding")).toHaveCount(0);
+});
+
+test("CSV has the injection column at the end", async ({ page }) => {
+  await setup(page, { config: enforce, calls: injected });
+  await search(page);
+  const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Export CSV" }).click()]);
+  const lines = readFileSync(await download.path(), "utf8").trim().split("\n");
+  expect(lines[1]).toMatch(/"masked: chatml-marker; ignore-previous-instructions"$/);
+  expect(lines[2]).toMatch(/""$/);
+  expect(lines[3]).toMatch(/"rejected: hide-from-user"$/);
 });

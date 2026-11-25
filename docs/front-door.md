@@ -41,6 +41,7 @@ The chart refuses `frontDoor.enabled: true` unless each of these is set, and the
 | `apiKeys.enabled: true` | Keys are the only credential. |
 | `limits.enabled: true` | The shared rate limits are counted by the ratelimit service and Valkey. |
 | `evidence.enabled: true` | Every call through the public gateway must be recorded. |
+| `protection.enabled: true` | The public backend has the guard (tool pinning, argument limits, masking), which fails closed. |
 
 ## Install
 
@@ -165,11 +166,16 @@ is not served at all, on either gateway**: `Ready` is `False`, reason `FrontDoor
 to set. A half-written decision must not leave a server open anywhere.
 
 A server with a `connection` (a person's own app account) cannot be on the front door yet: `Ready` is `False`, reason
-`FrontDoorConnection`. A hosted agent would otherwise receive the person's own app token. The front door will carry it only
+`FrontDoorConnection` (a server whose connection is bound to another address says `ConnectionBound` first). A hosted agent would otherwise receive the person's own app token. The front door will carry it only
 when the person has agreed for that agent and that app, in a later change of this release series.
 
 The `frontDoor` setting of a server request is never used: an approved request creates a server that is not on the front
 door. Only an admin, with `kubectl`, in GitOps, or in the console later, puts a running server there.
+
+**Taking a server off the front door** (remove `frontDoor`, or remove the acknowledgment) removes it from the public backend at
+once and the public access policy refuses its tools from then on. A public session that is already open can still send the
+server the messages that open a session (the server is contacted when the session was made), until the session ends; no tool call
+passes. The server's proxy pod loses the label that admits the public gateway.
 
 ### How the separation works
 
@@ -183,8 +189,8 @@ access policy `ambit-mcp-public-access`. The public route names that backend. Th
 | `tools/call`, `resources/read`, `prompts/get` or `completion/complete` for a private server (with or without its name prefix) | refused: the server is not a target |
 | Access rules | the same rules as on the private route, restricted to the servers on the front door. Audit-only mode relaxes the private route only, never the public one. |
 | The guard (tool pinning, argument limits, masking) | the same guard, `FailClosed` |
-| Network | the public gateway pods reach only the pods of front-door servers (network policy `ambit-mcp-servers-front-door`, pod label `ambitproject.dev/front-door`), and not the console, Dex or any other server |
-| The console's token broker, and Dex | not reachable from the public gateway pods |
+| Network | of the MCP server pods, the public gateway pods reach only the pods of front-door servers (network policy `ambit-mcp-servers-front-door`, pod label `ambitproject.dev/front-door`) |
+| The console's token broker (port 8082) | closed to the public gateway pods. Other ports of the console and Dex keep the network policies they had; they are not routes of `ambit-public`, but they are not closed to a pod in the cluster. Add a network policy of your own if you need that. |
 | A header such as `x-ambit-ingress`, `X-Ambit-User` or `x-ambit-agent` sent by a client | no effect; the gateway removes `X-Ambit-User`, and nothing reads the others |
 | An MCP session id from the private gateway | unknown on the public gateway |
 

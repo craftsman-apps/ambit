@@ -359,13 +359,15 @@ func (s *AccessLogStartup) ensure(ctx context.Context) error {
 			live = append(live, &models.Items[i])
 		}
 	}
-	mcp := &unstructured.Unstructured{}
-	mcp.SetGroupVersionKind(AgentgatewayPolicyGVK)
-	switch err := s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: MCPBackendName + "-access"}, mcp); {
-	case err == nil && ownedByAmbit(mcp):
-		live = append(live, mcp)
-	case err != nil && !apierrors.IsNotFound(err):
-		return err
+	for _, name := range []string{MCPBackendName + "-access", PublicMCPBackendName + "-access"} {
+		mcp := &unstructured.Unstructured{}
+		mcp.SetGroupVersionKind(AgentgatewayPolicyGVK)
+		switch err := s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: name}, mcp); {
+		case err == nil && ownedByAmbit(mcp):
+			live = append(live, mcp)
+		case err != nil && !apierrors.IsNotFound(err):
+			return err
+		}
 	}
 	policies, err := accessLogPolicies(&base, "enforce", RulesVersion(live), nil, s.PublicGateway)
 	if err != nil {

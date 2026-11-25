@@ -132,8 +132,13 @@ func mcpBackend(name string, servers []v1.Server, access map[string]*serverAcces
 	if len(targets) > 0 {
 		owners = append(owners, backend)
 	}
+	// Not controller refs: garbage-collected only when the last Server is gone. The public backend's policy has none: the
+	// garbage collector could delete it before the backend, and an MCP backend without an authorization rule allows every
+	// call (agentgateway). The reconciler deletes the backend first, then the policy.
 	for _, o := range owners {
-		o.SetOwnerReferences(refs) // not controller refs: garbage-collected only when the last Server is gone
+		if o.GetKind() == "AgentgatewayBackend" || name == MCPBackendName {
+			o.SetOwnerReferences(refs)
+		}
 	}
 	return owners
 }

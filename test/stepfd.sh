@@ -44,7 +44,10 @@ kind: AccessRule
 metadata: { name: fd-time }
 spec: { allSignedIn: true, servers: [{ name: time }, { name: everything }] }
 EOF
+kubectl -n "$NS" rollout status deploy/ambit-guard --timeout=300s >/dev/null || fail "0 ambit-guard is not running"
 kubectl -n "$NS" wait "servers.$G" time everything --for=condition=Ready --timeout=300s >/dev/null || fail "0 servers not Ready"
+# the guard hides and refuses a shared server's tools until they are read and pinned
+kubectl -n "$NS" wait "servers.$G" time everything --for=condition=ToolsPinned --timeout=300s >/dev/null || fail "0 tools not pinned: $(kubectl -n "$NS" get "servers.$G" time everything -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[*].reason} {end}')"
 # time is on the front door, with the acknowledgment; everything is not
 kubectl -n "$NS" patch "servers.$G" time --type merge -p '{"spec":{"frontDoor":{"enabled":true,"acceptUnmaskedServerMessages":true}}}' >/dev/null
 wait_for 120 "kubectl -n '$NS' get agentgatewaybackend ambit-mcp-public >/dev/null && kubectl -n '$NS' get agentgatewaypolicy ambit-mcp-public-access >/dev/null" || fail "0 no public backend for the front-door server"
@@ -269,7 +272,7 @@ priv() { # priv JSON [curl args]: one request in the private session $PRSID; the
 mkkey fd-mcp-4 mcp; K5=$KEY
 wait_for 60 '[[ $(ptools "$PA" -H "x-api-key: $K5") == *time_get_current_time* ]]' || fail "9 the key of this step does not work"
 HK=(-H "x-api-key: $K5")
-c=$(pinit "$PA" "${HK[@]}"); [[ "$c" == 200 && -n "$PSID" ]] || fail "9 initialize: $c"
+pinit "$PA" "${HK[@]}"; [[ "$PCODE" == 200 && -n "$PSID" ]] || fail "9 initialize: $PCODE"
 pm() { psend "$PA" "$1" "${HK[@]}" "${@:2}"; }   # a request in the public session; prints the status; JSON in $W/pubj
 c=$(pm '{"jsonrpc":"2.0","method":"notifications/initialized"}'); [[ "$c" == 202 || "$c" == 200 ]] || fail "9 notifications/initialized: $c"
 c=$(pm '{"jsonrpc":"2.0","id":2,"method":"ping"}'); [[ "$c" == 200 ]] || fail "9 ping: $c"
@@ -286,7 +289,9 @@ ET=$(tr ' ' '\n' <<<"$PRIVTOOLS" | grep '^everything_echo' | head -1)   # a tool
 [[ -n "$ET" ]] || fail "9 the private server has no echo tool: $PRIVTOOLS"
 leak() { grep -qi 'everything\|resource 1\|simple_prompt\|"echo' "$W/pub"; }
 refused_not_leaking() { # refused_not_leaking WHAT JSON: a request the public route must not serve from the private server
-  local c; c=$(pm "$2"); if leak; then fail "9 $1: the private server answered through the public route: $c $(head -c 300 "$W/pub")"; fi
+  local c; c=$(pm "$2")
+  [[ "$c" != 000 ]] || fail "9 $1: no answer (a transport failure proves nothing)"
+  if leak; then fail "9 $1: the private server answered through the public route: $c $(head -c 300 "$W/pub")"; fi
   echo "$1=$c"
 }
 R=""
@@ -333,9 +338,12 @@ spec: { url: "https://fd-conn.invalid/mcp", transport: streamable-http, connecti
 EOF
 ready() { kubectl -n "$NS" get "servers.$G" "$1" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status} {.status.conditions[?(@.type=="Ready")].reason}'; }
 wait_for 60 '[[ "$(ready fd-unack)" == "False FrontDoorNotAcknowledged" && "$(ready fd-conn)" == "False FrontDoorConnection" ]]' || fail "10 Ready: fd-unack '$(ready fd-unack)', fd-conn '$(ready fd-conn)'"
+PRIV_TARGETS=$(kubectl -n "$NS" get agentgatewaybackend ambit-mcp -o jsonpath='{.spec.mcp.targets[*].name}') || fail "10 cannot read the private backend"
+PUB_TARGETS=$(kubectl -n "$NS" get agentgatewaybackend ambit-mcp-public -o jsonpath='{.spec.mcp.targets[*].name}') || fail "10 cannot read the public backend"
+[[ " $PRIV_TARGETS " == *" time "* && " $PUB_TARGETS " == *" time "* ]] || fail "10 the servers are missing from a backend (private: $PRIV_TARGETS, public: $PUB_TARGETS)"
 for n in fd-unack fd-conn; do
-  ! kubectl -n "$NS" get agentgatewaybackend ambit-mcp -o jsonpath='{.spec.mcp.targets[*].name}' | grep -qw "$n" || fail "10 $n is a target of the private backend"
-  ! kubectl -n "$NS" get agentgatewaybackend ambit-mcp-public -o jsonpath='{.spec.mcp.targets[*].name}' | grep -qw "$n" || fail "10 $n is a target of the public backend"
+  [[ " $PRIV_TARGETS " != *" $n "* ]] || fail "10 $n is a target of the private backend"
+  [[ " $PUB_TARGETS " != *" $n "* ]] || fail "10 $n is a target of the public backend"
 done
 kubectl -n "$NS" delete "servers.$G" fd-unack fd-conn >/dev/null
 CURL_IMAGE=curlimages/curl:8.20.0@sha256:b3f1fb2a51d923260350d21b8654bbc607164a987e2f7c84a0ac199a67df812a

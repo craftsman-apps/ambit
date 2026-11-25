@@ -972,3 +972,46 @@ func TestPublicBackendFollowsTheFrontDoorMark(t *testing.T) {
 		t.Fatalf("private targets after: %s", got)
 	}
 }
+
+// An image server that was acknowledged and then marked without the acknowledgment is served nowhere, and its proxy pod
+// loses the label that the public Gateway's network policy admits.
+func TestUnacknowledgedImageServerLosesTheFrontDoorLabel(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-frontdoor-label"
+	namespace(t, ns)
+	ctx := t.Context()
+	srv := &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "crm", Namespace: ns},
+		Spec: v1.ServerSpec{Image: digestImage, Transport: "stdio", FrontDoor: &v1.ServerFrontDoor{Enabled: true, AcceptUnmaskedServerMessages: true}}}
+	if err := envClient.Create(ctx, srv); err != nil {
+		t.Fatal(err)
+	}
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}}
+	label := func() string {
+		var u unstructured.Unstructured
+		u.SetGroupVersionKind(MCPServerGVK)
+		if err := envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "crm"}, &u); err != nil {
+			return "<" + err.Error() + ">"
+		}
+		v, _, _ := unstructured.NestedString(u.Object, "spec", "resourceOverrides", "proxyDeployment", "podTemplateMetadataOverrides", "labels", FrontDoorLabel)
+		return v
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := label(); got != "true" {
+		t.Skipf("the MCPServer CRD is not installed in this environment: %s", got)
+	}
+	if err := envClient.Get(ctx, client.ObjectKeyFromObject(srv), srv); err != nil {
+		t.Fatal(err)
+	}
+	srv.Spec.FrontDoor.AcceptUnmaskedServerMessages = false
+	if err := envClient.Update(ctx, srv); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := label(); got != "" {
+		t.Fatalf("the proxy pod keeps the front-door label: %q", got)
+	}
+}

@@ -67,13 +67,13 @@ func TestListHidesChangedAndNewToolsOfPinnedServers(t *testing.T) {
 // empty, or whose tools are all approved, still passes.
 func TestToolListThatIsNotAnObjectWithToolsIsWithheld(t *testing.T) {
 	g := &Guard{Pins: pins, Masker: Builtin{}}
-	for _, body := range []string{`["crm_get_customer"]`, `"tools"`, `42`, `{"tools":`, `{}`, `{"tools":"crm_evil"}`, `{"tools":{"name":"crm_evil"}}`, `null`} {
+	for _, body := range []string{`["crm_get_customer"]`, `"tools"`, `42`, `{"tools":`, `{}`, `{"tools":"crm_evil"}`, `{"tools":{"name":"crm_evil"}}`, `{"tools":null}`, `null`} {
 		res, err := g.CheckResponse(t.Context(), &extmcp.McpResponse{ServiceNames: []string{"crm"}, Method: "tools/list", McpResponse: []byte(body)})
 		if err != nil || res.GetError() == nil || !strings.Contains(res.GetError().Reason, "withheld") {
 			t.Errorf("%s: want the list withheld, got %v (%v)", body, res, err)
 		}
 	}
-	for _, body := range []string{`{"tools":[]}`, `{"tools":null}`, `{"tools":[],"nextCursor":"x"}`} {
+	for _, body := range []string{`{"tools":[]}`, `{"tools":[],"nextCursor":"x"}`} {
 		res, _ := g.CheckResponse(t.Context(), &extmcp.McpResponse{ServiceNames: []string{"crm"}, Method: "tools/list", McpResponse: []byte(body)})
 		if res.GetPass() == nil {
 			t.Errorf("%s: want pass, got %v", body, res)

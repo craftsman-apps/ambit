@@ -222,6 +222,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		compiled, dropped = WithoutArgumentLimits(rules.Items)
 	}
 	res := Compile(models.Items, boundServers, compiled, r.Route, routerNames...)
+	// A server marked for the front door without being ready is not served, and its proxy pod must not keep the label
+	// that the public Gateway's network policy admits (it was labelled while it was acknowledged).
+	for _, s := range servers.Items {
+		if _, refused := frontDoorRefused[s.Name]; refused && s.Spec.URL == "" {
+			unmarked := s.DeepCopy()
+			unmarked.Spec.FrontDoor = nil
+			res.Objects = append(res.Objects, mcpServer(*unmarked))
+		}
+	}
 	SetBrokerPaths(res.Objects, boundServers, conns.Items)
 	ApplyDropped(&res, dropped)
 	var budgets v1.BudgetList

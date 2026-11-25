@@ -452,6 +452,11 @@ func TestPublicBackendHasOnlyFrontDoorServers(t *testing.T) {
 	if refs := pub.GetOwnerReferences(); len(refs) != 1 || refs[0].Name != "crm" {
 		t.Errorf("public owners %v", refs)
 	}
+	// Its policy has no owner: garbage collection could delete it before the backend, and a backend without an
+	// authorization rule allows every call. The reconciler deletes the backend first.
+	if refs := find(t, r.Objects, "AgentgatewayPolicy", PublicMCPBackendName+"-access").GetOwnerReferences(); len(refs) != 0 {
+		t.Errorf("the public policy has owners %v", refs)
+	}
 }
 
 func TestNoFrontDoorServerGeneratesNoPublicObjects(t *testing.T) {

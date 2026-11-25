@@ -230,7 +230,7 @@ func (g *Guard) filterList(ctx context.Context, resp *extmcp.McpResponse) (*extm
 		return withhold()
 	}
 	var tools []map[string]json.RawMessage
-	if err := json.Unmarshal(result["tools"], &tools); err != nil {
+	if err := json.Unmarshal(result["tools"], &tools); err != nil || bytes.Equal(bytes.TrimSpace(result["tools"]), []byte("null")) {
 		return withhold()
 	}
 	keep := tools[:0:0]

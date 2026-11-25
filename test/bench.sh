@@ -69,9 +69,11 @@ in_pod() { kubectl -n "$NS" exec -i "$POD" -- "$@"; }
 put() {
   cat > "$W/put.$1"
   local want; want=$(wc -c < "$W/put.$1" | tr -d ' ')
-  for _ in 1 2 3 4 5; do
+  local try
+  for try in 1 2 3 4 5; do
     in_pod sh -c "cat > /tmp/$1" < "$W/put.$1"
     [[ $(in_pod sh -c "wc -c < /tmp/$1" </dev/null | tr -d ' ') == "$want" ]] && return 0
+    echo "  copy of $1 into the sender pod arrived with the wrong size (try $try of 5); copying again"
   done
   fail "0 could not copy $1 (${want} bytes) into the sender pod"
 }

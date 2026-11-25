@@ -14,9 +14,17 @@ type Call = { time: string; email: string; route: string; method: string; server
   // What the prompt guard did: reject, audit (would refuse), mask, allow, or empty.
   promptGuard?: string;
   // What the guard did to the tool result (#203); absent when it did not compress it or its record did not arrive.
-  compression?: Compression };
+  compression?: Compression;
+  // What the injection guard found in the tool result (protection.injectionGuard): the strongest action and the rule names; never the text.
+  injection?: Injection };
+type Injection = { action: "found" | "masked" | "rejected"; mode: string; rules: string[] };
 type Compression = { mode: string; bytesIn: number; bytesOut: number; match: string;
   parts: { part: number; type: string; bytesIn: number; bytesOut: number; omitted: number }[] };
+const injectionTag: Record<Injection["action"], { text: string; help: string; tone: string }> = {
+  found: { text: "injection found", help: "Prompt-injection text was found in the result (audit mode: the result was not changed)", tone: "text-warn" },
+  masked: { text: "injection masked", help: "Prompt-injection text was replaced or removed before the client got the result", tone: "text-warn" },
+  rejected: { text: "injection refused", help: "The result was withheld because it held prompt-injection text", tone: "text-bad" },
+};
 const kb = (n: number) => n < 1024 ? `${n} bytes` : `${(n / 1024).toFixed(1)} KB`;
 const modeHelp: Record<string, string> = { shorten: "shorten: parts were left out", lossless: "lossless: same information, fewer bytes" };
 // "Result shortened: 37.2 KB → 9.8 KB (shorten, logs, 14 parts left out)", one line per compressed text.
@@ -67,8 +75,9 @@ const outcome = (c: Call) => {
 function csv(calls: Call[]) {
   // The compression columns are at the end, so existing spreadsheets keep their positions (#203).
   const rows = calls.map((c) => csvRow([utc(c.time), c.email || "no person", what(c), target(c), outcome(c), c.status, c.error, c.inputTokens, c.outputTokens, c.mark ?? "", c.rulesVersion ?? "",
-    c.compression?.bytesIn ?? "", c.compression?.bytesOut ?? "", c.compression?.parts.map((p) => `${c.compression!.mode} ${p.type} ${p.omitted}`).join("; ") ?? ""]));
-  return ["time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version,result_bytes_in,result_bytes_out,compression", ...rows].join("\n") + "\n";
+    c.compression?.bytesIn ?? "", c.compression?.bytesOut ?? "", c.compression?.parts.map((p) => `${c.compression!.mode} ${p.type} ${p.omitted}`).join("; ") ?? "",
+    c.injection ? `${c.injection.action}: ${c.injection.rules.join("; ")}` : ""]));
+  return ["time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version,result_bytes_in,result_bytes_out,compression,injection", ...rows].join("\n") + "\n";
 }
 function download(name: string, text: string) {
   const a = document.createElement("a");
@@ -85,6 +94,7 @@ export function AuditPage() {
   const [q, setQ] = useState<typeof form | null>(null);
   const [protocol, setProtocol] = useState(false);
   const [onlyWouldRefuse, setOnlyWouldRefuse] = useState(false);
+  const [onlyInjection, setOnlyInjection] = useState(false);
   const audit = useConfig().data?.accessMode === "audit";
   const res = useQuery({
     queryKey: ["audit", q], enabled: !!q && !q.approvals, retry: false,
@@ -96,9 +106,11 @@ export function AuditPage() {
     queryFn: () => get<{ events: AppEvent[]; limited: boolean }>(`/api/audit?${new URLSearchParams({ approvals: "true", email: q!.email, from: q!.from, to: nextDay(q!.to) })}`),
   });
   const all = res.data?.calls ?? [];
+  const hasInjection = all.some((c) => c.injection);
   const hasVerdicts = all.some((c) => c.outcome === "would-refuse" || c.outcome === "other-model" || c.outcome === "mark-missing");
   // Audit-only verdicts belong to people's calls; requests with an invalid key have none, so that filter is off there.
-  const shown = (protocol ? all : all.filter(isCall)).filter((c) => !onlyWouldRefuse || q?.invalidKey || c.outcome === "would-refuse");
+  const shown = (protocol ? all : all.filter(isCall)).filter((c) => !onlyWouldRefuse || q?.invalidKey || c.outcome === "would-refuse")
+    .filter((c) => !onlyInjection || q?.invalidKey || c.injection);
   const search = (e: React.FormEvent) => {
     e.preventDefault();
     // The same search again must ask again (after an error, or for new calls), not reuse the answer.
@@ -135,6 +147,8 @@ export function AuditPage() {
               </span>
               {(audit || hasVerdicts) && !q?.invalidKey && <label className="inline-flex items-center gap-1.5"><input id="audit-would-refuse" type="checkbox" checked={onlyWouldRefuse} onChange={(e) => setOnlyWouldRefuse(e.target.checked)} />
                 Only calls the rules would refuse</label>}
+              {(hasInjection || onlyInjection) && <label className="inline-flex items-center gap-1.5"><input id="audit-injection" type="checkbox" checked={onlyInjection} onChange={(e) => setOnlyInjection(e.target.checked)} />
+                Only results with an injection finding</label>}
               <label className="inline-flex items-center gap-1.5"><input id="audit-protocol" type="checkbox" checked={protocol} onChange={(e) => setProtocol(e.target.checked)} />
                 Show protocol messages ({all.length - all.filter(isCall).length})</label>
               <Button variant="outline" className="ml-auto w-auto" disabled={all.length === 0}
@@ -149,6 +163,10 @@ export function AuditPage() {
                       <td className="whitespace-nowrap px-3 py-2 font-mono text-small">{utc(c.time)}</td>
                       <td className="px-3 py-2 font-mono">{what(c)}{c.identity === "service account" && (
                         <span data-testid="sa-badge" className="ml-1.5 whitespace-nowrap rounded border border-line px-1 font-sans text-small text-muted" title={`Called with the service account key ${c.keyId ?? ""}`}>service account</span>)}
+                        {c.injection && <>
+                          <span data-testid="injection-tag" className={`ml-1.5 whitespace-nowrap rounded border border-line px-1 font-sans text-small ${injectionTag[c.injection.action].tone}`} title={injectionTag[c.injection.action].help}>{injectionTag[c.injection.action].text}</span>
+                          <span data-testid="injection-rules" className="block font-sans text-small text-muted">Rules: {c.injection.rules.join(", ")}</span>
+                        </>}
                         {c.compression && <>
                           <span data-testid="compression-tag" className="ml-1.5 whitespace-nowrap rounded border border-line px-1 font-sans text-small text-muted" title={modeHelp[c.compression.mode]}>{c.compression.mode === "shorten" ? "shortened" : "compressed"}</span>
                           {compressionLines(c.compression).map((l, j) => <span key={j} className="block font-sans text-small text-muted">{l}</span>)}
@@ -163,6 +181,7 @@ export function AuditPage() {
                 </tbody>
               </table>
             </div>
+            {all.some((c) => c.method === "tools/call") && <p className="text-small text-muted">The injection guard is a tripwire: a result without an "injection" tag may still hold wording the rules do not know. Records name the rules and never hold the text of a result.</p>}
             {shown.some((c) => c.method === "tools/call") && <p className="text-small text-muted">A tool call without a "shortened" or "compressed" tag has no compression record. Records are best effort: if the server compresses results, check <code>ambit_guard_record_dropped_total</code>. Ambit never stores the content of a result.</p>}
           </>
         )}

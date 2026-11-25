@@ -1,0 +1,220 @@
+{{- $fd := .Values.frontDoor | default dict }}
+{{- if $fd.enabled }}
+{{- /* The public front door (experimental in 0.6.x, docs/front-door.md). Every refusal below names the value to set. */ -}}
+{{- if not $fd.host }}{{ fail "frontDoor.enabled=true needs frontDoor.host (the public MCP host name, for example mcp.example.com)" }}{{ end }}
+{{- if not ($fd.tls | default dict).certificateSecret }}{{ fail "frontDoor.enabled=true needs frontDoor.tls.certificateSecret: the front door serves HTTPS only (a kubernetes.io/tls Secret whose certificate covers frontDoor.host)" }}{{ end }}
+{{- if not .Values.mcp.enabled }}{{ fail "frontDoor.enabled=true needs mcp.enabled=true: the front door serves MCP only" }}{{ end }}
+{{- if not .Values.apiKeys.enabled }}{{ fail "frontDoor.enabled=true needs apiKeys.enabled=true: the front door accepts API keys only" }}{{ end }}
+{{- if not .Values.limits.enabled }}{{ fail "frontDoor.enabled=true needs limits.enabled=true: the front door's shared rate limits are counted by the ratelimit service" }}{{ end }}
+{{- if not .Values.evidence.enabled }}{{ fail "frontDoor.enabled=true needs evidence.enabled=true: every call through the public Gateway must be recorded" }}{{ end }}
+{{- range $other := list .Values.console.host .Values.llm.host .Values.mcp.host }}
+{{- if eq $other $fd.host }}{{ fail (printf "frontDoor.host %q is also a private host name: the public Gateway must not share a name with the console, the LLM host or the private MCP host" $fd.host) }}{{ end }}
+{{- end }}
+{{- if not (has ($fd.clientAddress | default "direct") (list "direct" "proxyProtocol")) }}{{ fail "frontDoor.clientAddress must be direct or proxyProtocol (X-Forwarded-For is never trusted)" }}{{ end }}
+{{- if and (eq ($fd.clientAddress | default "direct") "proxyProtocol") (eq (($fd.service | default dict).type | default "LoadBalancer") "NodePort") }}{{ fail "frontDoor.clientAddress=proxyProtocol cannot be used with frontDoor.service.type=NodePort: anyone who can reach the node port could write its own client address in the PROXY header. Only your load balancer may reach the gateway pods (docs/front-door.md, \"Load balancers and the client address\")" }}{{ end }}
+{{- $rl := $fd.rateLimit | default dict }}
+{{- if not (has ($rl.failureMode | default "FailOpen") (list "FailOpen" "FailClosed")) }}{{ fail "frontDoor.rateLimit.failureMode must be FailOpen or FailClosed" }}{{ end }}
+{{- range $k := list "perCredentialPerMinute" "perSourcePerMinute" "perPodPerSecond" }}
+{{- if lt (int (index $rl $k)) 1 }}{{ fail (printf "frontDoor.rateLimit.%s must be 1 or more" $k) }}{{ end }}
+{{- end }}
+{{- if lt (int $fd.replicas) 1 }}{{ fail "frontDoor.replicas must be 1 or more" }}{{ end }}
+{{- $svc := $fd.service | default dict }}
+{{- $port := int ($fd.port | default 8443) }}
+# The public Gateway: its own pods, Service and load balancer, so the console, Dex and the LLM host are never reachable
+# on it. HTTPS only (there is no HTTP listener), one listener bound to one host name, and only the routes named below.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayParameters
+metadata:
+  name: ambit-public
+spec:
+  deployment:
+    spec:
+      replicas: {{ $fd.replicas }}
+      strategy:
+        type: RollingUpdate
+        rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  {{- with .Values.gateway.resources }}
+  resources: {{ toJson . }}
+  {{- end }}
+  {{- if gt (int $fd.replicas) 1 }}
+  podDisruptionBudget:
+    spec:
+      minAvailable: 1
+  {{- end }}
+  service:
+    {{- with $svc.annotations }}
+    metadata:
+      annotations: {{ toJson . }}
+    {{- end }}
+    spec:
+      type: {{ $svc.type | default "LoadBalancer" }}
+      {{- if ne ($svc.type | default "LoadBalancer") "ClusterIP" }}
+      # Local keeps the client's address: the per-source limit and the audit log need it (docs/front-door.md).
+      externalTrafficPolicy: {{ $svc.externalTrafficPolicy | default "Local" }}
+      {{- end }}
+      {{- with $svc.loadBalancerSourceRanges }}
+      loadBalancerSourceRanges: {{ toJson . }}
+      {{- end }}
+      {{- if $svc.nodePort }}
+      ports:
+        - port: {{ $port }}
+          nodePort: {{ $svc.nodePort }}
+      {{- end }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ambit-public
+spec:
+  gatewayClassName: agentgateway
+  infrastructure:
+    parametersRef:
+      group: agentgateway.dev
+      kind: AgentgatewayParameters
+      name: ambit-public
+  listeners:
+    - name: https
+      protocol: HTTPS
+      port: {{ $port }}
+      hostname: {{ $fd.host | quote }}
+      tls:
+        mode: Terminate
+        certificateRefs: [{ name: {{ $fd.tls.certificateSecret | quote }} }]
+      allowedRoutes:
+        namespaces:
+          from: Same
+        kinds: [{ group: gateway.networking.k8s.io, kind: HTTPRoute }]
+---
+# The one route of 0.6.0's key-only front door: exact path /mcp on the one host. Anything else is 404.
+# The backend ambit-mcp-public holds only the servers an admin marked for the front door (Server spec.frontDoor); it is
+# generated by ambit-controller, and without such a server the route has no backend and answers with an error.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ambit-mcp-public
+spec:
+  parentRefs: [{ name: ambit-public, sectionName: https }]
+  hostnames: [{{ $fd.host | quote }}]
+  rules:
+    - name: keys
+      matches: [{ path: { type: Exact, value: /mcp } }]
+      # The key must never reach an MCP server, and the token broker trusts X-Ambit-User from gateway pods only.
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier: { remove: [X-Ambit-User, x-api-key, authorization] }
+      backendRefs: [{ group: agentgateway.dev, kind: AgentgatewayBackend, name: ambit-mcp-public }]
+---
+# Keys only: a request without a valid MCP key gets 403. No JWT is accepted on this Gateway.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: ambit-mcp-public-auth
+spec:
+  targetRefs: [{ group: gateway.networking.k8s.io, kind: HTTPRoute, name: ambit-mcp-public }]
+  traffic:
+    authorization:
+      action: Require
+      policy:
+        matchExpressions:
+          - {{ printf "(%s) && (%s)%s" (include "ambit.identity.presented" .) (include "ambit.identity.validKey" .) (ternary "" " && !apiKey.email.endsWith(\"@svc.ambit.internal\")" (ne (toString (.Values.serviceAccounts | default dict).enabled) "false")) | quote }}
+    apiKeyAuthentication:
+      mode: Permissive
+      secretSelector:
+        matchLabels: { ambitproject.dev/key: "true", ambitproject.dev/key-mcp: "true" }
+      location:
+        expression: '"x-api-key" in request.headers ? request.headers["x-api-key"] : request.headers["authorization"].replace("Bearer ", "")'
+---
+# Two limits on every request of the public Gateway: shared by all gateway pods (the ratelimit service counts in Valkey;
+# its limits are in ConfigMap ambit-ratelimit-front-door), and per pod as a second line if that service is down.
+# The shared limit counts per key and per source address; the source limit counts every request, refused ones included.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: ambit-public-limits
+spec:
+  targetRefs: [{ group: gateway.networking.k8s.io, kind: Gateway, name: ambit-public }]
+  traffic:
+    rateLimit:
+      global:
+        domain: ambit-public
+        backendRef: { name: ambit-ratelimit, port: 8081 }
+        failureMode: {{ $rl.failureMode | default "FailOpen" }}
+        descriptors:
+          # "" for a request without a valid key: all of those share one counter, capped like a key.
+          - unit: Requests
+            entries: [{ name: fd_credential, expression: 'has(apiKey.keyId) ? apiKey.keyId : ""' }]
+          - unit: Requests
+            entries: [{ name: fd_source, expression: "string(source.address)" }]
+      local:
+        - requests: {{ $rl.perPodPerSecond }}
+          unit: Seconds
+{{- if eq ($fd.clientAddress | default "direct") "proxyProtocol" }}
+---
+# The load balancer sends the PROXY protocol: the client's address is in the header, not in the connection.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: ambit-public-proxy-protocol
+spec:
+  targetRefs: [{ group: gateway.networking.k8s.io, kind: Gateway, name: ambit-public }]
+  frontend:
+    proxyProtocol: { mode: Strict, version: All }
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ambit-ratelimit-front-door
+data:
+  front-door.yaml: |
+    domain: ambit-public
+    descriptors:
+      - key: fd_credential
+        rate_limit: { unit: minute, requests_per_unit: {{ $rl.perCredentialPerMinute }} }
+      - key: fd_source
+        rate_limit: { unit: minute, requests_per_unit: {{ $rl.perSourcePerMinute }} }
+---
+# Only the public route may be attached to ambit-public, and only as this chart writes it: the name, the host, one rule with
+# the exact path /mcp, one backend (the public backend), and no other Gateway. A route of another name that names the
+# Gateway, or a change of the right route (another path, host or backend), is refused. A route that already names
+# ambit-public before the front door is turned on is not checked: see docs/front-door.md ("Before you turn it on").
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: ambit-public-routes
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [gateway.networking.k8s.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [httproutes, grpcroutes, tlsroutes, tcproutes, udproutes]
+  variables:
+    - name: onPublic
+      expression: >-
+        has(object.spec.parentRefs) && object.spec.parentRefs.exists(p, p.name == "ambit-public")
+  validations:
+    - expression: >-
+        !variables.onPublic || (object.kind == "HTTPRoute" && object.metadata.name == "ambit-mcp-public" &&
+        size(object.spec.parentRefs) == 1 &&
+        has(object.spec.hostnames) && object.spec.hostnames == [{{ $fd.host | quote }}] &&
+        has(object.spec.rules) && size(object.spec.rules) == 1 &&
+        has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) == 1 &&
+        has(object.spec.rules[0].matches[0].path) && object.spec.rules[0].matches[0].path.type == "Exact" &&
+        object.spec.rules[0].matches[0].path.value == "/mcp" &&
+        has(object.spec.rules[0].backendRefs) && size(object.spec.rules[0].backendRefs) == 1 &&
+        object.spec.rules[0].backendRefs[0].name == "ambit-mcp-public" &&
+        has(object.spec.rules[0].backendRefs[0].kind) && object.spec.rules[0].backendRefs[0].kind == "AgentgatewayBackend")
+      message: "only the route ambit-mcp-public may be attached to the public Gateway ambit-public, with the host, the exact path /mcp and the backend ambit-mcp-public that the chart sets"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ambit-public-routes
+spec:
+  policyName: ambit-public-routes
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Release.Namespace }} } }
+{{- end }}

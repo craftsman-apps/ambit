@@ -41,6 +41,7 @@ func main() {
 	accessMode := flag.String("access-mode", "enforce", "enforce: AccessRules decide; audit: every signed-in request is allowed and its record says whether the rules would have refused it")
 	activationTimeout := flag.Duration("activation-timeout", 2*time.Minute, "how long a mode switch or rules change waits for agentgateway to apply one step")
 	activationSettle := flag.Duration("activation-settle", 3*time.Second, "wait after agentgateway accepted a step, for the change to reach every gateway pod")
+	publicGateway := flag.String("public-gateway", "", "the public Gateway (frontDoor.enabled): it gets its own access-log policy, and offboarded people are refused on its route; empty: none")
 	flag.Parse()
 	controller.RequireEmail = *requireEmail
 	controller.UsersRequireVerifiedEmail = *usersVerified
@@ -106,7 +107,7 @@ func main() {
 	if err := (&controller.Reconciler{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), ListTools: listTools, Namespace: ns, Route: controller.RouteRef{Name: *route},
 		RateLimit: controller.RateLimit{Service: *rlService, Port: *rlPort, FailureMode: *rlFailure}, ToolsRefresh: *toolsRefresh, ArgumentLimits: *argLimits,
 		Classifier: controller.Classifier{Deployment: *routerDep, Replicas: int32(*routerReplicas)}, AccessMode: *accessMode,
-		Activation: activation, Snapshots: snapshots, AppRemovals: appRemovals}).SetupWithManager(mgr); err != nil {
+		Activation: activation, Snapshots: snapshots, AppRemovals: appRemovals, PublicGateway: *publicGateway}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "set up controller")
 		os.Exit(1)
 	}
@@ -117,7 +118,7 @@ func main() {
 		}
 	}
 	// Ready only once ambit-access-log exists: an upgrade from a chart that rendered it leaves no gap unnoticed.
-	accessLog := &controller.AccessLogStartup{Client: mgr.GetClient(), Namespace: ns}
+	accessLog := &controller.AccessLogStartup{Client: mgr.GetClient(), Namespace: ns, PublicGateway: *publicGateway}
 	if err := mgr.Add(accessLog); err != nil {
 		log.Error(err, "add access-log start")
 		os.Exit(1)

@@ -15,6 +15,9 @@ import (
 // RecordKind marks a guard record in otel_logs. The savings summary view filters on it.
 const RecordKind = "compression"
 
+// InjectionKind marks a record of the injection guard in otel_logs.
+const InjectionKind = "injection"
+
 // Drop reason of ambit_guard_record_dropped_total beside otlplog's queue_full and send_failed.
 const dropNoGroups = "no_groups"
 
@@ -39,6 +42,25 @@ type CompressionRecord struct {
 	CallID   string   // the call, as the access log writes ambit.call_id; empty from an older gateway policy
 }
 
+// InjectionRecord is what the guard writes for one finding of the injection guard in one result: names only, never the
+// matched text. A rule that matches in several texts of one result is one finding.
+type InjectionRecord struct {
+	Server string
+	Tool   string // the tool's own name, as in the gateway's record
+	Mode   string // audit, reject or mask
+	Action string // found, rejected or masked
+	Rule   string // the name of the rule; pattern-N for your own pattern, webhook for the webhook
+	Groups []string
+	Email  string // the caller, as the access log writes jwt.email; empty with compressionAudit.caller false
+	KeyID  string
+	CallID string
+}
+
+// InjectionSink receives injection records; a RecordSink may also be one (the Recorder is).
+type InjectionSink interface {
+	RecordInjection(InjectionRecord)
+}
+
 // RecordSink receives compression records. Record never blocks and never fails: a record that cannot be kept is dropped and counted.
 type RecordSink interface {
 	Record(CompressionRecord)
@@ -60,6 +82,11 @@ func NewRecorder(endpoint string) (*Recorder, error) {
 
 // Record queues r for sending. It returns at once.
 func (r *Recorder) Record(rec CompressionRecord) { r.exp.Send(logRecord(rec, time.Now())) }
+
+// RecordInjection queues r for sending. It returns at once.
+func (r *Recorder) RecordInjection(rec InjectionRecord) {
+	r.exp.Send(injectionLogRecord(rec, time.Now()))
+}
 
 // Close sends what is queued and stops, within otlplog.Timeout.
 func (r *Recorder) Close() { r.exp.Close() }
@@ -86,3 +113,20 @@ func logRecord(b CompressionRecord, now time.Time) *logspb.LogRecord {
 }
 
 var str = otlplog.Str
+
+// injectionLogRecord is the OTLP record of one injection finding. It has no text of the result.
+func injectionLogRecord(b InjectionRecord, now time.Time) *logspb.LogRecord {
+	groups := b.Groups
+	if groups == nil {
+		groups = []string{}
+	}
+	gj, _ := json.Marshal(groups)
+	attrs := []*commonpb.KeyValue{str("ambit.kind", InjectionKind), str("mcp.target", b.Server),
+		str("ambit.injection.mode", b.Mode), str("ambit.injection.action", b.Action), str("ambit.injection.rule", b.Rule), str("jwt.groups", string(gj))}
+	for _, kv := range [][2]string{{"gen_ai.tool.name", b.Tool}, {"jwt.email", b.Email}, {"ambit.key_id", b.KeyID}, {"ambit.call_id", b.CallID}} {
+		if kv[1] != "" {
+			attrs = append(attrs, str(kv[0], kv[1]))
+		}
+	}
+	return otlplog.Record(now, InjectionKind, attrs...)
+}

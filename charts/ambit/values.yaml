@@ -175,6 +175,41 @@ mcp:
     # Refuse gateway JWTs without a usable email claim. Offboarding, per-person budgets and audit are keyed by email; with false, such tokens are identified by their subject and offboarding cannot block them before they expire.
     requireEmail: true
 
+frontDoor:
+  # EXPERIMENTAL in 0.6.x (docs/front-door.md): a second, public Gateway (ambit-public) for hosted agents. HTTPS only, one
+  # host, one route (/mcp), API keys only. The console, Dex and the LLM host are never reachable on it. Off by default.
+  # Needs mcp.enabled, apiKeys.enabled, limits.enabled (shared rate limits), evidence.enabled (audit) and a certificate.
+  enabled: false
+  # Public MCP host name, for example mcp-public.example.com. It must differ from console.host, llm.host and mcp.host.
+  host: ""
+  tls:
+    # A kubernetes.io/tls Secret in this namespace whose certificate covers frontDoor.host.
+    certificateSecret: ""
+  # Listener and Service port of the public Gateway (HTTPS).
+  port: 8443
+  replicas: 2
+  service:
+    # LoadBalancer in the cloud. ClusterIP or NodePort for a load balancer or tunnel you run yourself.
+    type: LoadBalancer
+    annotations: {}
+    # Local keeps the client's address (the source limit and the audit log use it). Cluster hides it behind a node.
+    externalTrafficPolicy: Local
+    # Cloud firewall: only these source ranges reach the load balancer. [] allows every address.
+    loadBalancerSourceRanges: []
+    nodePort: null
+  # How the gateway learns the client's address. direct: from the connection (externalTrafficPolicy Local, or a load
+  # balancer that keeps the address). proxyProtocol: the load balancer sends the PROXY protocol (AWS NLB with proxy
+  # protocol v2 enabled, and others); the gateway then refuses connections without it. X-Forwarded-For is never trusted.
+  clientAddress: direct
+  rateLimit:
+    # Shared by all gateway pods (the ratelimit service counts in Valkey). Per valid key, and per source address.
+    perCredentialPerMinute: 600
+    perSourcePerMinute: 120
+    # A second line in each gateway pod, for all requests, if the ratelimit service is down.
+    perPodPerSecond: 200
+    # FailOpen: if the ratelimit service is down, the per-pod limit still applies. FailClosed: requests are refused.
+    failureMode: FailOpen
+
 access:
   # enforce: AccessRules decide (default).
   # audit: every signed-in request to a model or MCP tool is allowed; each record says whether the
@@ -265,6 +300,34 @@ protection:
     # The time limit for all analyzer calls of one tool result (a Go duration). If it is exceeded, the result
     # is withheld.
     timeout: 10s
+  # Injection guard: looks for prompt-injection text in the results of tool calls, resources/read and prompts/get, after
+  # masking (so a webhook never gets personal data). OFF by default. It is a tripwire, not a detector: it finds only the
+  # wording its rules describe, and new wording passes. The rule names are in docs/concepts.md (Injection guard).
+  injectionGuard:
+    enabled: false
+    # audit: record each finding and let the result through unchanged (start here).
+    # reject: withhold a result with a finding; the call fails with an error that names the rules (never the text).
+    # mask: replace each match with <PROMPT_INJECTION> and remove hidden characters; the rest of the result passes.
+    mode: audit
+    # The built-in rules (13, each with a name). false: only your patterns and the webhook.
+    builtins: true
+    # Built-in rules to switch off, by name, for example [role-prefix] when your tools print log lines that start with
+    # "system:". The chart refuses a name it does not know.
+    disabledBuiltins: []
+    # Your own regular expressions (Go RE2 syntax: no look-around, no back-references), at most 1,024 characters each. A
+    # match is a finding named pattern-1, pattern-2, ... in list order. Example: ['(?i)send the (data|file) to https?://']
+    patterns: []
+    # An optional classifier of your own, in the cluster: POST /request on this Service, with the request and answer
+    # format of the prompt guard webhook (llm.promptGuard.webhook). Empty service: no webhook. The webhook adds up to
+    # its timeout to every tool call.
+    webhook:
+      service: ""
+      namespace: ""     # empty: the release namespace
+      port: 8000
+      timeout: 2s
+      # FailClosed withholds the result when the webhook does not answer (modes reject and mask); FailOpen lets it through.
+      # In mode audit a webhook that fails never blocks.
+      failureMode: FailClosed
 
 limits:
   # Budgets: daily LLM request limits per group and per user (Budget objects), shared by every replica.

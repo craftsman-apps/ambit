@@ -75,7 +75,8 @@ func serviceSettingsFromEnv() (console.ServiceSettings, error) {
 // agentSettingsFromEnv reads the agents.* values; values the service cannot work with stop the start.
 func agentSettingsFromEnv() (console.AgentSettings, error) {
 	a := console.AgentSettings{Enabled: os.Getenv("AMBIT_AGENTS_ENABLED") != "false", MaxTotal: envInt("AMBIT_AGENTS_MAX_TOTAL", 2000),
-		MaxPerPerson: envInt("AMBIT_AGENTS_MAX_PER_PERSON", 10), KeyMaxDays: envInt("AMBIT_AGENTS_KEY_MAX_DAYS", 90)}
+		MaxPerPerson: envInt("AMBIT_AGENTS_MAX_PER_PERSON", 10), KeyMaxDays: envInt("AMBIT_AGENTS_KEY_MAX_DAYS", 90),
+		OrphanDays: envInt("AMBIT_AGENTS_ORPHAN_DAYS", 7), StopRetention: time.Duration(envInt("AMBIT_AGENTS_STOP_RETENTION_MINUTES", 25)) * time.Minute}
 	if a.MaxTotal < 1 || a.MaxTotal > 2000 {
 		return a, fmt.Errorf("AMBIT_AGENTS_MAX_TOTAL is %d; it must be 1 to 2000", a.MaxTotal)
 	}
@@ -84,6 +85,12 @@ func agentSettingsFromEnv() (console.AgentSettings, error) {
 	}
 	if a.KeyMaxDays != 30 && a.KeyMaxDays != 90 && a.KeyMaxDays != 365 {
 		return a, fmt.Errorf("AMBIT_AGENTS_KEY_MAX_DAYS is %d; it must be 30, 90 or 365", a.KeyMaxDays)
+	}
+	if a.OrphanDays < 1 || a.OrphanDays > 90 {
+		return a, fmt.Errorf("AMBIT_AGENTS_ORPHAN_DAYS is %d; it must be 1 to 90", a.OrphanDays)
+	}
+	if a.StopRetention < 10*time.Minute || a.StopRetention > 24*time.Hour {
+		return a, fmt.Errorf("AMBIT_AGENTS_STOP_RETENTION_MINUTES is %d; it must be 10 to 1440", int(a.StopRetention.Minutes()))
 	}
 	return a, nil
 }
@@ -203,6 +210,34 @@ func run(ctx context.Context) error {
 	keySvc := &console.KeyService{Client: objects, Namespace: ns, Now: time.Now, Settings: keySettings, Services: services, Agents: agents}
 	keySvc.RecordKey = console.AgentRecordKey(keys.SessionKey)
 	go console.RunLeader(ctx, kube, ns, podName, keySvc.StartTerm, keySvc.EndTerm)
+	go func() { // stops: S2, S3 and the confirmation (S6) of every stopping agent, the orphan clock, pruning of stop entries
+		t := time.NewTicker(2 * time.Second)
+		defer t.Stop()
+		var n int
+		more := true
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				// every 2 s while a stop is open or entries wait; otherwise once a minute (restart, orphans)
+				if n++; keySvc.TakeStopWork() {
+					more = true
+				} else if !more && n%30 != 0 {
+					continue
+				}
+				switch m, err := keySvc.AdvanceStops(ctx); {
+				case errors.Is(err, console.ErrNotLeader):
+					more = true
+				case err != nil:
+					slog.Error("agent stops", "err", err)
+					more = true
+				default:
+					more = m
+				}
+			}
+		}
+	}()
 	go func() { // the hourly full repair bounds any stale write or interrupted refresh to one hour
 		t := time.NewTicker(time.Hour)
 		defer t.Stop()
@@ -252,7 +287,7 @@ func run(ctx context.Context) error {
 			Store: &console.GrantStore{Client: objects, Namespace: gns, Key: keys.GrantKey}}
 		go conns.RunChecks(ctx)
 		{
-			broker := &console.Broker{Conns: conns}
+			broker := &console.Broker{Conns: conns, Agents: keySvc}
 			bsrv := &http.Server{Addr: ":8082", Handler: broker.Handler(), ReadHeaderTimeout: 10 * time.Second}
 			go func() {
 				if err := bsrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {

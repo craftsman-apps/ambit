@@ -108,7 +108,11 @@ kind: Service
 metadata: { name: ambit-ratelimit }
 spec:
   selector: { app.kubernetes.io/name: ambit-ratelimit }
-  ports: [{ name: grpc, port: 8081, appProtocol: grpc }]
+  ports:
+    - { name: grpc, port: 8081, appProtocol: grpc }
+    {{- if (.Values.frontDoor | default dict).enabled }}
+    - { name: http, port: 8080 }  # /json: the public front door's pre-authentication source limit (docs/front-door.md)
+    {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

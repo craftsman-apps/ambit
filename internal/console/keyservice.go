@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/craftsman-apps/ambit/internal/identity"
@@ -61,6 +62,9 @@ type KeyService struct {
 	Settings  KeySettings
 	Services  ServiceSettings
 	Agents    AgentSettings
+	// RevokeGrants is step S3 of a stop: it revokes the agent's OAuth grants. nil: none exist (before OAuth).
+	RevokeGrants func(ctx context.Context, a Agent) error
+	stopWork     atomic.Bool // set when a stop was requested: the stop loop looks at once instead of in a minute
 	// RecordKey signs agent records (AgentRecordKey); without it no record is trusted.
 	RecordKey []byte
 	Now       func() time.Time

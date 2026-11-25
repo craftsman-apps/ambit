@@ -164,6 +164,95 @@ agent key (503, "agents are not ready"). So a console that is upgraded before th
 agentgateway rejected (for example because it grew over the 16,384-character limit), never gives out a key that the
 gateway would not limit.
 
+## Stopping an agent
+
+Stop an agent when it misbehaves, when its platform is compromised, or when its owner leaves. **A stop is a state machine, not
+a switch**: Ambit reports an agent as stopped only after every Gateway has confirmed the stop. It never promises that no call
+is accepted after the request; it measures how many were.
+
+```sh
+curl -s -b "$COOKIES" -X POST "$CONSOLE/api/agents/grok-bot-for-sales-x7k2pq/stop" -H 'Content-Type: application/json' -d '{}'   # 202
+curl -s -b "$COOKIES" "$CONSOLE/api/agents/grok-bot-for-sales-x7k2pq"                                                       # "state": "stopped" when confirmed
+curl -s -b "$COOKIES" -X POST "$CONSOLE/api/agents/grok-bot-for-sales-x7k2pq/start" -H 'Content-Type: application/json' -d '{}' # a stopped agent gets new keys again
+```
+
+The owner (person mode) or an admin stops an agent; admins also stop itself-mode agents. Stopping works when `agents.enabled` is
+`false`.
+
+```
+ active --Stop--> stopping --S2, S3 done, every Gateway confirmed--> stopped --Start--> active
+                  |  ^
+                  |  +-- the steps are repeated every 2 s until they work
+                  +-- after 60 s without confirmation: event, alert "stop not confirmed on <Gateway>"
+```
+
+| Step | Who | What |
+|---|---|---|
+| S1 | console | Writes the agent to the stop list (ConfigMap `ambit-agent-stops`, a new list generation) and records state `stopping` |
+| S2 | console | Deletes every key of the agent (also a key made while it is stopping) |
+| S3 | console | Revokes the agent's OAuth grants (none before OAuth) |
+| S4 | controller | Renders the list into Require policies `ambit-agent-stops-<k>` on **every MCP and LLM route of every Gateway** (at most 150 agents per policy) |
+| S5 | controller | Reads each policy's status per route: a Gateway **acknowledges** the list generation when all its routes accepted every policy at its current generation (plus the settle time, `--activation-settle`). The answer is in ConfigMap `ambit-agent-stops-ack` |
+| S6 | console | State `stopped` when S2 and S3 are done and every Gateway acknowledged the entry's generation. Writes the History event |
+
+The **stop policy is the authoritative check for every credential the gateway accepts**: a key of a listed agent is refused
+(403) by the gateway even while its Secret still exists, and so is a token that names the agent or its grant. Deleting the keys
+(S2) is the second line.
+
+**Where the acknowledgment comes from.** Each policy is attached to routes, and agentgateway reports per route whether it accepted
+and attached the policy at its current generation. A Gateway is **ready** only while every policy of the list's current generation
+is accepted on its routes, has not been rejected by a proxy since it was written (the Gateway's NACK events) and has
+settled (`--activation-settle`, 3 s: agentgateway v1.7.0 has no acknowledgment from the proxies that a controller can read).
+If a stop policy is edited, deleted or rejected afterwards, the Gateway is no longer ready, and the console neither completes nor
+prunes a stop until it is. The answer is bound to the stop list it was made for (its UID) and only the controller may write it
+(admission policy `ambit-agent-ack-writer`). A route that is attached to more than one Gateway counts for each of them.
+
+The controller renews its answer every 30 s while the list has entries; the console treats an answer older than two minutes as no
+answer, so a controller that is down cannot leave an old "ready" in force (the agent stays `stopping`). Both stop ConfigMaps
+(`ambit-agent-stops`, `ambit-agent-stops-ack`) are fenced by name: only the console writes the list and only the controller the answer, labelled or
+not. The names `stops` and `stops-ack` are reserved and cannot be the name of an itself-mode agent (their records would be these ConfigMaps).
+
+**The list is stable.** An entry has a fixed slot (0 to 999) and is in policy slot ÷ 150; adding or removing an entry never moves
+another one to another policy, so a change of one policy never takes a still-listed agent out of the block.
+
+**Start.** `start` removes the entry. It is refused (409) for one minute after the keys were deleted, so that the proxies have dropped
+them; with OAuth it waits for the whole retention, because an access token already issued stays valid until it expires.
+
+**Retention.** An entry stays in the list until the agent's credentials are gone, every Gateway acknowledged it, and
+`agents.stopRetentionMinutes` (25: the access token life of 15 minutes and 10 minutes of leeway) have passed. Then it is
+pruned; the agent record keeps `state: stopped`. Start removes the entry at once.
+
+**Fail closed.**
+- The controller never deletes a stop policy while an entry exists. If the list cannot be rendered (more than 1,000 entries, an unreadable list), it keeps the policies in force, writes `degraded` into the acknowledgment and sets the alert `AmbitStopPolicyDegraded`.
+- A partial rollout (one Gateway confirmed, another not) stays `stopping`, and the alert and the event name the Gateway that is late.
+- If the list is **full** (1,000 entries), the stop still runs S2 and S3, the agent is marked `stopUnlisted`, and it stays `stopping` until there is room (the console tries every 2 s). Keys are gone; tokens (with OAuth) expire within 15 minutes.
+
+**The limits, stated honestly.** What a stop can and cannot do depends on what is working:
+
+| Failure | Keys | Measured |
+|---|---|---|
+| none | refused after the proxies learn of the policy and the key deletion | refused **0.92 s** after the request (p50; p95 0.94 s, p99 0.94 s, max 0.94 s in 20 runs); a client calling every 25 ms had 36 calls accepted after the request (max 37); reported `stopped` after 8.3 s |
+| Ambit controller down | refused after S2 as usual; the stop is not confirmed (state stays `stopping`) until it is back | key refused after 0.73 s (29 accepted calls in between); the agent stayed `stopping` and was reported "not confirmed" after 60 s; confirmed after the controller was back |
+| agentgateway controller down | **not refused until it is back**: the proxies keep their last configuration | in the first 20 s **874 calls with the deleted key were accepted** (none refused); the first refusal came 30.7 s after the request, when the control plane was back |
+| console down | a stop cannot be requested. Emergency stops: the Helm values `apiKeys.enabled: false` (all keys) and `agents.enabled: false` | not applicable |
+
+Measured on kind with agentgateway v1.7.0, one gateway pod, a polling client with the key (`test/stepagents.sh`, 2026-11-25). Real clusters
+with more proxy pods, a network and a load balancer will differ; run the test on yours before you rely on a number. A controller restart during
+a stop delayed the confirmation to 26.4 s. A partial rollout across two Gateways is covered by the controller's tests (one Gateway ready, the other not: the agent stays `stopping`).
+
+An OAuth access token is checked offline by the gateway; once OAuth exists, a token stays valid until it expires (at most 15 minutes) when
+no stop policy applies.
+
+**Evidence.** `GET /api/evidence/agent-stop/<agent>.zip` (admins, needs `evidence.enabled`) holds `timeline.csv` (request, keys deleted,
+grants revoked, each Gateway's acknowledgment, stopped, with seconds from the request), `calls-after-request.csv` (every call that
+carries the agent's name from the request on, with its status) and `summary.csv`: **the measured number of accepted calls after the
+request, and the time to the first refused call**, per Gateway. There is no "expected 0" column. A call with a key that was already
+deleted is logged as an invalid key without the agent's name, so it is not in the file; a refusal by the stop policy is.
+
+**When the owner leaves.** [Offboarding](offboarding.md) stops all of the person's person-mode agents with this state machine.
+Their itself-mode agents are marked **orphaned**: they keep working for `agents.orphanDays` (7), with `orphanedAt` in the
+record, so that an admin can move them (`PUT /api/agents/{name}/owner`); then they are stopped.
+
 ## Audit
 
 Every record of a call made with an agent's key has these attributes in `otel_logs` (`LogAttributes`), taken only from
@@ -205,11 +294,32 @@ token_issuer, ingress` after `call_id`. The columns before them keep their place
 
 ## Apps with a person's own sign-in
 
-A [Connection](presets.md) lets a person use an MCP app with their own login to that app. A person-mode agent may use
-a person's connection only for the apps that the person ticked for the agent (`connectionConsent`, a list of Connection
-names; empty by default). The records and the API accept the list in 0.6.0; the token broker starts to check it in the
-next 0.6.0 change. Until then, do not give an agent a scope on a server that has a Connection unless you accept that the
-agent uses the owner's connection.
+A [Connection](presets.md) lets a person use an MCP app with their own login to that app. A person-mode agent may use the
+person's connection **only for the apps the person ticked for that agent**. The list is the agent's `connectionConsent`
+(names of Connections; empty by default), set with `PATCH /api/agents/{name}`:
+
+```sh
+curl -s -b "$COOKIES" -X PATCH "$CONSOLE/api/agents/grok-bot-for-sales-x7k2pq" -H 'Content-Type: application/json' \
+  -d '{"connectionConsent":["slack"]}'
+```
+
+How it is checked, on every request that needs a connection token:
+
+1. The gateway names the calling agent to the token broker in the header `x-ambit-agent`. The gateway computes it from the
+   **verified key** (or token), never from a header of the client: a client's own `x-ambit-agent` has no effect. A person's
+   own key or token gets the value `-`.
+2. The broker reads the agent's record each time (no cache). It gives the owner's token only when the record is readable and
+   signed by the console, the agent is active and in person mode, the agent's owner is the person the gateway named, and the
+   connection is in `connectionConsent`.
+3. In every other case (no header, an unknown or unreadable record, a stopped agent, an itself-mode agent, no consent) the
+   broker gives **no token**. The app then decides what to do with a request that has no token: it normally refuses, and the
+   gateway leaves that server out of the agent's session. If every server of a session refuses, the session itself can fail
+   to open (agentgateway v1.7.0 opens a session only when at least one server answers).
+
+Consent alone gives nothing: the person must have connected the app themselves (**My connections**), and the agent still
+needs the server in its scope and in the owner's AccessRules. An itself-mode agent gets no app connections in 0.6.0. The
+gateway's policy that sends the header is generated by the Ambit controller; until the controller of this version has written it,
+no connection token is given to anyone (the broker refuses a request without the header).
 
 ## Limits that apply
 
@@ -254,6 +364,7 @@ attributes above, and the columns appended to `calls.csv`.
 |---|---|
 | `GET /api/agents` (add `?all=true` for every agent) | The caller's agents; admins for all |
 | `POST /api/agents` | Any signed-in person (person mode); admins (itself mode) |
+| `POST /api/agents/{name}/stop`, `POST /api/agents/{name}/start`, `GET /api/evidence/agent-stop/{agent}.zip` | The owner (person mode) or an admin; admins for itself mode and the export |
 | `GET /api/agents/{name}`, `PATCH /api/agents/{name}`, `DELETE /api/agents/{name}` | The owner (person mode), admins (itself mode; and delete for any agent) |
 | `POST /api/agents/{name}/keys` | The owner (person mode), admins (itself mode) |
 | `PUT /api/agents/{name}/owner` | Admins, itself-mode agents |

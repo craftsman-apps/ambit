@@ -195,6 +195,7 @@ func TestCallbackRefusesAForeignState(t *testing.T) {
 // brokerCall is the gateway's extAuth request: the user named by the validated jwt.email claim.
 func brokerCall(t *testing.T, b *Broker, email string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest("POST", "/v1/connection/jira", nil)
+	req.Header.Set(agentHeader, "-") // the gateway always names the agent; "-": a person's own key or token
 	if email != "" {
 		req.Header.Set(userHeader, email)
 	}

@@ -204,7 +204,7 @@ The gateway then serves HTTPS on `gateway.tls.port` (default 8443), and plain HT
 
 ## Let hosted agents in: the public front door (experimental)
 
-Agents that run on the internet (Grok Bot, Copilot Studio, AWS AgentCore, Cloudflare Agents) cannot reach a gateway on your company network. `frontDoor.enabled: true` adds a second, public gateway that serves HTTPS only, one host name and one route (`/mcp`), with personal and service account API keys only. The console, Dex and the LLM host are never reachable on it. It is off by default. See [The public front door](front-door.md).
+Agents that run on the internet (Grok Bot, Copilot Studio, AWS AgentCore, Cloudflare Agents) cannot reach a gateway on your company network. `frontDoor.enabled: true` adds a second, public gateway that serves HTTPS only, one host name and one route (`/mcp`), with personal and service account API keys only. The console, Dex and the LLM host are never reachable on it. It is off by default. See [The public front door](front-door.md). For platforms that sign people in instead of sending a key, `oauth.enabled: true` adds Ory Hydra on a PostgreSQL database that you run (experimental, off by default): see [OAuth sign-in](oauth.md).
 
 ## Upgrade and uninstall
 

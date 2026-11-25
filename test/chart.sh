@@ -79,7 +79,7 @@ noemail=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.
 grep -q -- '--require-email=false' <<<"$noemail" || { echo "FAIL chart: controller flag"; exit 1; }
 check_qs "pols={x['metadata']['name']:x['spec'] for x in docs if x['kind']=='ValidatingAdmissionPolicy'}
 # No Lease-holder check in admission: the API server's parameter cache can go stale and lock out every key write.
-assert set(pols)=={'ambit-keys-writer','ambit-key-lease'}, list(pols)
+assert set(pols)=={'ambit-keys-writer','ambit-key-lease','ambit-agent-ack-writer'}, list(pols)
 assert all('paramKind' not in p for p in pols.values()), pols
 w=pols['ambit-keys-writer']
 assert w['failurePolicy']=='Fail', w
@@ -91,16 +91,16 @@ for s in ['system:serviceaccount:ambit-system:ambit-console','authentication.kub
   assert s in we, s
 assert [v['expression'] for v in w['validations']]==['variables.console || variables.cleanup'], w['validations']
 assert w['validations'][0]['message']=='only the Ambit console may write personal API key objects', w
-sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event','ambitproject.dev/agent']
+sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event','ambitproject.dev/agent','ambitproject.dev/agent-stops']
 bs={x['metadata']['name']:x['spec'] for x in docs if x['kind']=='ValidatingAdmissionPolicyBinding'}
-assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(4)}|{'ambit-key-lease'}, list(bs)
+assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(5)}|{'ambit-key-lease','ambit-agent-ack-writer','ambit-keys-writer-stops-name'}, list(bs)
 assert all('paramRef' not in b for b in bs.values()), bs
-bs.pop('ambit-key-lease')
+bs.pop('ambit-key-lease'); bs.pop('ambit-agent-ack-writer'); bs.pop('ambit-keys-writer-stops-name')
 for n,b in bs.items():
   i=int(n[-1])
   assert b['policyName']=='ambit-keys-writer' and b['validationActions']==['Deny'], b
   assert b['matchResources']['namespaceSelector']=={'matchLabels':{'kubernetes.io/metadata.name':'ambit-system'}}, b
-  assert b['matchResources']['objectSelector']=={'matchExpressions':[{'key':sel[i],'operator':'Exists'}]}, b" "admission: console-only writes to key objects (four label bindings), cleanup exempt, no Lease-holder check"
+  assert b['matchResources']['objectSelector']=={'matchExpressions':[{'key':sel[i],'operator':'Exists'}]}, b" "admission: console-only writes to key objects (five label bindings), cleanup exempt, no Lease-holder check"
 check_qs "p=one('ValidatingAdmissionPolicy','ambit-key-lease')['spec']
 assert p['failurePolicy']=='Fail' and 'paramKind' not in p, p
 r=p['matchConstraints']['resourceRules'][0]
@@ -267,6 +267,7 @@ grep -q 'AMBIT_INJECTION_GUARD' <<<"$igold" && grep -q 'mode.*audit' <<<"$igold"
 fdv=(-f deploy/quickstart.yaml -f test/frontdoor/values.yaml)
 fdt() { helm template ambit charts/ambit -n ambit-system "${fdv[@]}" "$@"; }
 dflt=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set limits.enabled=true)
+! grep -q '/json: the public front door' <<<"$dflt" || { echo "FAIL chart: the ratelimit Service publishes port 8080 only with the front door"; exit 1; }
 ! grep -q 'ambit-public' <<<"$dflt" || { echo "FAIL chart: nothing of the front door is rendered by default"; exit 1; }
 ! grep -q 'ambit.ingress' <<<"$dflt" || { echo "FAIL chart: no ambit.ingress attribute without the front door"; exit 1; }
 ! grep -q -- '--public-gateway' <<<"$dflt" || { echo "FAIL chart: no controller flag without the front door"; exit 1; }
@@ -304,15 +305,25 @@ check_fd 'p=one("AgentgatewayPolicy","ambit-public-limits")["spec"]
 assert p["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"Gateway","name":"ambit-public"}], p
 g=p["traffic"]["rateLimit"]["global"]
 assert g["domain"]=="ambit-public" and g["backendRef"]=={"name":"ambit-ratelimit","port":8081} and g["failureMode"]=="FailOpen", g
-assert [d["entries"][0]["name"] for d in g["descriptors"]]==["fd_credential","fd_source"], g
-assert "source.address" in g["descriptors"][1]["entries"][0]["expression"] and "x-forwarded" not in json.dumps(g).lower(), g
+assert [d["entries"][0]["name"] for d in g["descriptors"]]==["fd_credential"], g  # the source limit is counted before authentication (below)
+assert "x-forwarded" not in json.dumps(g).lower(), g
+s=one("AgentgatewayPolicy","ambit-public-source-limit")["spec"]
+assert s["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"Gateway","name":"ambit-public"}], s
+e=s["traffic"]["extAuth"]
+assert s["traffic"]["phase"]=="PreRouting" and set(s["traffic"])=={"phase","extAuth"}, s
+assert e["backendRef"]=={"name":"ambit-ratelimit","port":8080} and e["failureMode"]=="FailOpen", e
+assert e["http"]["path"]=="\"/json\"" and "string(source.address)" in e["http"]["body"] and "fd_source" in e["http"]["body"] and "\"domain\": \"ambit-public\"" in e["http"]["body"], e
+assert e["http"]["allowedRequestHeaders"]==["user-agent"], e  # never the Authorization header: it holds the key of the caller
+assert "x-forwarded" not in json.dumps(e).lower(), e
+svc=[p["port"] for p in one("Service","ambit-ratelimit")["spec"]["ports"]]
+assert svc==[8081,8080], svc  # port 8080 (/json) is published only with the front door
 assert p["traffic"]["rateLimit"]["local"]==[{"requests":200,"unit":"Seconds"}], p
 c=yaml.safe_load(one("ConfigMap","ambit-ratelimit-front-door")["data"]["front-door.yaml"])
 assert c=={"domain":"ambit-public","descriptors":[{"key":"fd_credential","rate_limit":{"unit":"minute","requests_per_unit":600}},{"key":"fd_source","rate_limit":{"unit":"minute","requests_per_unit":120}}]}, c
 v=one("Deployment","ambit-ratelimit")["spec"]["template"]["spec"]["volumes"][0]
 assert [s["configMap"]["name"] for s in v["projected"]["sources"]]==["ambit-ratelimit-config","ambit-ratelimit-front-door"], v
 n=one("NetworkPolicy","ambit-ratelimit")["spec"]["ingress"][0]["from"]
-assert {"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"ambit-public"}}} in n, n' "limits: per key and per source address shared through the ratelimit service, plus a per-pod limit; the ratelimit service admits the public gateway pods"
+assert {"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"ambit-public"}}} in n, n' "limits: per key (after authentication) and per source address (before authentication, every request) shared through the ratelimit service, plus a per-pod limit; the ratelimit service admits the public gateway pods"
 check_fd 'v=one("ValidatingAdmissionPolicy","ambit-public-routes")["spec"]
 assert v["failurePolicy"]=="Fail" and set(v["matchConstraints"]["resourceRules"][0]["resources"])=={"httproutes","grpcroutes","tlsroutes","tcproutes","udproutes"}, v
 e=v["validations"][0]["expression"]
@@ -329,7 +340,7 @@ assert {"name":"ambit.ingress","expression":"\"private\""} in s, s
 assert all(x["spec"].get("type","ClusterIP")=="ClusterIP" for x in docs if x["kind"]=="Service"), [x["metadata"]["name"] for x in docs if x["kind"]=="Service" and x["spec"].get("type","ClusterIP")!="ClusterIP"]
 # The only policies aimed at the public Gateway or its route are the chart'"'"'s three; the controller adds its access-log and offboarding policies.
 t=sorted(x["metadata"]["name"] for x in docs if x["kind"]=="AgentgatewayPolicy" and any(r["kind"] in ("Gateway","HTTPRoute") and r["name"] in ("ambit-public","ambit-mcp-public") for r in x["spec"].get("targetRefs",[])))
-assert t==["ambit-mcp-public-auth","ambit-public-limits"], t' "public gateway: ClusterIP in the test values, controller flag, ambit.ingress in the access-log base, only two chart policies target it"
+assert t==["ambit-mcp-public-auth","ambit-public-limits","ambit-public-source-limit"], t' "public gateway: ClusterIP in the test values, controller flag, ambit.ingress in the access-log base, only three chart policies target it"
 check_fd 'g=one("AgentgatewayPolicy","ambit-mcp-guard")["spec"]["targetRefs"]
 assert [t["name"] for t in g]==["ambit-mcp","ambit-mcp-public"], g
 n=one("NetworkPolicy","ambit-mcp-servers-front-door")["spec"]
@@ -349,10 +360,10 @@ assert a["metadata"]["annotations"]=={"service.beta.kubernetes.io/aws-load-balan
 pp=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml -f test/frontdoor/values.yaml --set frontDoor.clientAddress=proxyProtocol)
 fd=$pp check_fd 'p=one("AgentgatewayPolicy","ambit-public-proxy-protocol")["spec"]
 assert p["frontend"]["proxyProtocol"]=={"mode":"Strict","version":"All"}, p
-g=one("AgentgatewayPolicy","ambit-public-limits")["spec"]["traffic"]["rateLimit"]["global"]
-assert g["descriptors"][1]["entries"][0]["expression"]=="string(source.address)", g' "clientAddress proxyProtocol: the Gateway requires the PROXY protocol"
+e=one("AgentgatewayPolicy","ambit-public-source-limit")["spec"]["traffic"]["extAuth"]["http"]
+assert "string(source.address)" in e["body"], e' "clientAddress proxyProtocol: the Gateway requires the PROXY protocol"
 # Refusals: each message names the value.
-refuse() { local why=$1; shift; ! fdt "$@" >/dev/null 2>"$W2" || { echo "FAIL chart: $why must be refused"; exit 1; }; grep -q "$MSG" "$W2" || { echo "FAIL chart: $why: wrong message: $(head -c 300 "$W2")"; exit 1; }; }
+refuse() { local why=$1; shift; ! ${RT:-fdt} "$@" >/dev/null 2>"$W2" || { echo "FAIL chart: $why must be refused"; exit 1; }; grep -q "$MSG" "$W2" || { echo "FAIL chart: $why: wrong message: $(head -c 300 "$W2")"; exit 1; }; }
 W2=$(mktemp)
 MSG='frontDoor.host' refuse "no host" --set frontDoor.host=
 MSG='certificateSecret' refuse "no certificate" --set frontDoor.tls.certificateSecret=
@@ -367,5 +378,84 @@ MSG='clientAddress' refuse "trusting X-Forwarded-For" --set frontDoor.clientAddr
 MSG='NodePort' refuse "the PROXY protocol on a node port" --set frontDoor.clientAddress=proxyProtocol --set frontDoor.service.type=NodePort
 MSG='failureMode' refuse "a bad failure mode" --set frontDoor.rateLimit.failureMode=Maybe
 MSG='perSourcePerMinute' refuse "a zero limit" --set frontDoor.rateLimit.perSourcePerMinute=0
+# OAuth sign-in (oauth.*): Hydra and its network. Off by default; when on, the routes are exact, no Secret is rendered,
+# and every refusal names its value.
+oav=("${fdv[@]}" -f test/oauth/values.yaml)
+oat() { helm template ambit charts/ambit -n ambit-system "${oav[@]}" "$@"; }
+uv run --no-project --with pyyaml python -c "import sys,yaml
+docs=[d for d in yaml.safe_load_all(sys.stdin) if d]
+bad=[(d['kind'],d['metadata']['name']) for d in docs if d['kind']!='ValidatingAdmissionPolicy' and any(x in d['metadata']['name'] for x in ('ambit-hydra','ambit-auth'))]
+g=[l['name'] for d in docs if d['kind']=='Gateway' and d['metadata']['name']=='ambit-public' for l in d['spec']['listeners']]
+assert not bad and g==['https'], (bad,g)" <<<"$fd" || { echo "FAIL chart: nothing of OAuth is rendered by default"; exit 1; }
+oa=$(oat) || { echo "FAIL chart: the OAuth values must render"; exit 1; }
+check_oa() { uv run --no-project --with pyyaml python -c "import sys,yaml,json
+docs=[d for d in yaml.safe_load_all(sys.stdin) if d]
+def one(kind,name): return [x for x in docs if x['kind']==kind and x['metadata']['name']==name][0]
+$1" <<<"$oa" || { echo "FAIL chart: $2"; exit 1; }; }
+check_oa 'l=one("Gateway","ambit-public")["spec"]["listeners"]
+assert [(x["name"],x["hostname"],x["protocol"]) for x in l]==[("https","mcp-public.localtest.me","HTTPS"),("https-auth","auth.localtest.me","HTTPS")], l
+assert all(x["tls"]["mode"]=="Terminate" and x["tls"]["certificateRefs"]==[{"name":"ambit-public-tls"}] for x in l), l' "public Gateway: a second HTTPS listener for the sign-in host, same certificate, no HTTP listener"
+check_oa 'on=sorted(x["metadata"]["name"] for x in docs if x["kind"] in ("HTTPRoute","GRPCRoute","TLSRoute","TCPRoute","UDPRoute") and any(p["name"]=="ambit-public" for p in x["spec"].get("parentRefs",[])))
+assert on==["ambit-auth-hydra","ambit-mcp-public"], on
+r=one("HTTPRoute","ambit-auth-hydra")["spec"]
+assert r["parentRefs"]==[{"name":"ambit-public","sectionName":"https-auth"}] and r["hostnames"]==["auth.localtest.me"], r
+assert len(r["rules"])==1, r
+m=sorted((x["method"],x["path"]["type"],x["path"]["value"]) for x in r["rules"][0]["matches"])
+assert m==[("GET","Exact","/.well-known/jwks.json"),("POST","Exact","/oauth2/revoke"),("POST","Exact","/oauth2/token")], m
+assert r["rules"][0]["backendRefs"]==[{"name":"ambit-hydra-public","port":4444}], r
+# Hydra'"'"'s registration, discovery, userinfo, admin and health paths have no route.
+backends=[b["name"] for x in docs if x["kind"]=="HTTPRoute" for ru in x["spec"]["rules"] for b in ru.get("backendRefs",[])]
+assert "ambit-hydra-admin" not in backends, backends' "exact routes to Hydra: token, revoke and JWKS only; the admin Service has no route"
+check_oa 'v=one("ValidatingAdmissionPolicy","ambit-public-routes")["spec"]["validations"][0]["expression"]
+assert "ambit-auth-hydra" in v and "/oauth2/token" in v and "ambit-hydra-public" in v, v' "the route policy admits the Hydra route as the chart writes it, and no other"
+check_oa 's=one("StatefulSet","ambit-hydra")["spec"]; p=s["template"]["spec"]
+assert s["podManagementPolicy"]=="OrderedReady" and s["replicas"]==2, s
+assert [c["name"] for c in p["initContainers"]]==["check-database","migrate"] and [c["name"] for c in p["containers"]]==["hydra","hydra-keys"]
+for c in p["initContainers"]+p["containers"]:
+  assert c["securityContext"]=={"allowPrivilegeEscalation":False,"readOnlyRootFilesystem":True,"capabilities":{"drop":["ALL"]}}, c["name"]
+  if "hydra" in c["image"]: assert "@sha256:" in c["image"], c["image"]
+assert p["securityContext"]["runAsNonRoot"] is True and p["automountServiceAccountToken"] is False, p["securityContext"]
+# The DSN and the system secret come from Secrets only, never as a value.
+for c in p["initContainers"]+p["containers"]:
+  for e in c.get("env",[]): assert "valueFrom" in e and "secretKeyRef" in e["valueFrom"] and "value" not in e, (c["name"],e)
+hy=[c for c in p["containers"] if c["name"]=="hydra"][0]
+assert {e["name"] for e in hy["env"]}=={"DSN","SECRETS_SYSTEM"}, hy["env"]
+assert hy["readinessProbe"]["httpGet"]["port"]=="admin" and [c for c in p["containers"] if c["name"]=="hydra-keys"][0]["readinessProbe"]["httpGet"]["path"]=="/readyz"' "Hydra pods start one at a time, check the database first, migrate, run read-only and non-root, and take every secret from a Secret"
+check_oa 'import json
+cm=one("ConfigMap","ambit-hydra")["data"]["hydra.yml"]; c=yaml.safe_load(cm)
+low=cm.lower()
+assert "dsn" not in low and "secrets" not in low and "password" not in low, "the config holds no secret"
+assert c["strategies"]["access_token"]=="jwt" and c["ttl"]["access_token"]=="15m" and c["ttl"]["auth_code"]=="1m" and c["ttl"]["refresh_token"]=="720h", c["ttl"]
+assert c["oauth2"]["pkce"]=={"enforced":True,"enforced_for_public_clients":True}, c["oauth2"]
+assert c["oidc"]["dynamic_client_registration"]=={"enabled":False}, c["oidc"]
+assert c["webfinger"]["jwks"]["broadcast_keys"]==["hydra.jwt.access-token"], c["webfinger"]
+assert c["urls"]["self"]["issuer"]=="https://auth.localtest.me" and c["urls"]["login"]=="https://auth.localtest.me/login", c["urls"]
+assert c["log"]["leak_sensitive_values"] is False and c["oauth2"]["expose_internal_errors"] is False
+# a changed config rolls the pods
+assert len(one("StatefulSet","ambit-hydra")["spec"]["template"]["metadata"]["annotations"]["checksum/config"])==64' "Hydra's configuration: 15-minute JWT tokens, PKCE for everyone, no dynamic registration, one published key set, no secret in it"
+sec_off=$(sed -n '/^kind: Secret$/,/^---/p' <<<"$fd" | grep -c '^  name:' || true)
+sec_on=$(sed -n '/^kind: Secret$/,/^---/p' <<<"$oa" | grep -c '^  name:' || true)
+[[ "$sec_off" == "$sec_on" ]] || { echo "FAIL chart: OAuth must render no Secret (the chart holds no key, password or DSN): $sec_off before, $sec_on after"; exit 1; }
+check_oa 'for n in ("ambit-hydra-public","ambit-hydra-admin"):
+  s=one("Service",n)["spec"]; assert s.get("type","ClusterIP")=="ClusterIP" and len(s["ports"])==1, s
+n=one("NetworkPolicy","ambit-hydra")["spec"]
+assert n["policyTypes"]==["Ingress"] and n["podSelector"]=={"matchLabels":{"app.kubernetes.io/name":"ambit-hydra"}}, n
+pub=[i for i in n["ingress"] if i["ports"]==[{"port":4444}]][0]; adm=[i for i in n["ingress"] if i["ports"]==[{"port":4445}]][0]
+assert sorted(list(f["podSelector"]["matchLabels"].values())[0] for f in pub["from"])==["agentgateway","ambit-auth","ambit-public"], pub
+assert sorted(list(f["podSelector"]["matchLabels"].values())[0] for f in adm["from"])==["ambit-auth","ambit-console"], adm
+assert len(n["ingress"])==2, n
+pdb=one("PodDisruptionBudget","ambit-hydra")["spec"]; assert pdb["minAvailable"]==1' "Hydra: ClusterIP Services, the admin port only for ambit-auth and the console, the public port only for the public Gateway and the controller"
+one_r=$(oat --set oauth.hydra.replicas=1)
+! grep -q 'name: ambit-hydra$' <(sed -n '/kind: PodDisruptionBudget/,/^---/p' <<<"$one_r") || { echo "FAIL chart: one Hydra pod needs no PodDisruptionBudget"; exit 1; }
+RT=oat; MSG='frontDoor.enabled' refuse "OAuth without the front door" --set frontDoor.enabled=false
+MSG='frontDoor.authHost' refuse "OAuth without a sign-in host" --set frontDoor.authHost=
+MSG='own' refuse "the sign-in host named like the MCP host" --set frontDoor.authHost=mcp-public.localtest.me
+MSG='own' refuse "the sign-in host named like the console" --set frontDoor.authHost=console.localtest.me
+MSG='oauth.database.dsnSecret' refuse "no DSN Secret" --set oauth.database.dsnSecret.name=
+MSG='oauth.database.caSecret' refuse "no CA Secret" --set oauth.database.caSecret.key=
+MSG='oauth.hydra.systemSecret' refuse "no system Secret" --set oauth.hydra.systemSecret.name=
+MSG='accessTokenMinutes' refuse "a token that lives two hours" --set oauth.accessTokenMinutes=120
+MSG='refreshTokenIdleDays' refuse "no refresh life" --set oauth.refreshTokenIdleDays=0
+MSG='oauth.hydra.replicas' refuse "no Hydra pod" --set oauth.hydra.replicas=0
 rm -f "$W2"
 echo "PASS chart"

@@ -245,8 +245,11 @@ func connectionPolicy(s v1.Server) *unstructured.Unstructured {
 			"backendRef":  map[string]any{"name": BrokerService, "port": int64(BrokerPort)},
 			"failureMode": "FailOpen",
 			"http": map[string]any{
-				"path":                   strconv.Quote("/v1/connection/" + s.Spec.Connection), // a CEL string literal
-				"addRequestHeaders":      map[string]any{"x-ambit-user": principal()},
+				"path": strconv.Quote("/v1/connection/" + s.Spec.Connection), // a CEL string literal
+				// x-ambit-agent comes from the verified credential, never from the client (allowedRequestHeaders is empty, and a
+				// client's own header is not copied): the agent's name, or "-" for a person's own key or token. The broker refuses
+				// a request without it, so a gateway of an older version gives no connection token to anyone.
+				"addRequestHeaders":      map[string]any{"x-ambit-user": principal(), "x-ambit-agent": agentHeader()},
 				"allowedRequestHeaders":  []any{},
 				"allowedResponseHeaders": []any{"authorization"},
 			},

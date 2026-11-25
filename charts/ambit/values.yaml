@@ -137,6 +137,12 @@ agents:
   # The longest end date of an agent key: 30, 90 or 365 (also limited by apiKeys.maxDays, and for itself mode by
   # serviceAccounts.maxDays).
   keyMaxDays: 90
+  # An itself-mode agent whose person owner was offboarded keeps working this many days (1-90); an admin moves it to a
+  # new owner, or it is stopped.
+  orphanDays: 7
+  # A stop entry stays in the stop list this many minutes after the agent's credentials are gone and every Gateway
+  # acknowledged it (10-1440): 15 minutes of access token life plus 10 minutes of leeway.
+  stopRetentionMinutes: 25
   # Reserved for OAuth (0.6.0, later): the issuer whose tokens may carry agent claims. Empty: no token is read as an
   # agent's, and no token is limited by an agent scope.
   tokenIssuer: ""
@@ -198,8 +204,11 @@ frontDoor:
   enabled: false
   # Public MCP host name, for example mcp-public.example.com. It must differ from console.host, llm.host and mcp.host.
   host: ""
+  # The sign-in host of OAuth (oauth.enabled), for example auth.example.com: where hosted AI platforms send people to sign
+  # in and fetch tokens. It is a second name on the same public Gateway and must differ from every other host name.
+  authHost: ""
   tls:
-    # A kubernetes.io/tls Secret in this namespace whose certificate covers frontDoor.host.
+    # A kubernetes.io/tls Secret in this namespace whose certificate covers frontDoor.host (and frontDoor.authHost, with OAuth).
     certificateSecret: ""
   # Listener and Service port of the public Gateway (HTTPS).
   port: 8443
@@ -218,13 +227,44 @@ frontDoor:
   # protocol v2 enabled, and others); the gateway then refuses connections without it. X-Forwarded-For is never trusted.
   clientAddress: direct
   rateLimit:
-    # Shared by all gateway pods (the ratelimit service counts in Valkey). Per valid key, and per source address.
+    # Shared by all gateway pods (the ratelimit service counts in Valkey). Per valid key; and per source address, counting
+    # every request of the address, refused ones included (a wrong key, an unknown path), before authentication.
     perCredentialPerMinute: 600
     perSourcePerMinute: 120
     # A second line in each gateway pod, for all requests, if the ratelimit service is down.
     perPodPerSecond: 200
     # FailOpen: if the ratelimit service is down, the per-pod limit still applies. FailClosed: requests are refused.
     failureMode: FailOpen
+
+oauth:
+  # EXPERIMENTAL in 0.6.x (docs/oauth.md): sign in with the company account from hosted AI platforms, with standards-based
+  # OAuth for MCP clients. Ory Hydra issues the tokens; it needs a PostgreSQL database that you run (15 to 17, TLS, backups).
+  # Off by default. Needs frontDoor.enabled, frontDoor.authHost, oauth.database and oauth.hydra.systemSecret.
+  enabled: false
+  # How long an access token lives, in minutes. The gateways will refuse a stopped or offboarded person's token at once (a later change of
+  # this release series); this only bounds the rare cases where that cannot happen (docs/oauth.md, "Stopping a connection").
+  accessTokenMinutes: 15
+  # A refresh token not used for this many days stops working.
+  refreshTokenIdleDays: 30
+  database:
+    # A Secret with the PostgreSQL address of Hydra's database, as a URL under the key:
+    #   postgres://hydra:PASSWORD@db.example.com:5432/hydra?sslmode=verify-full&sslrootcert=/ca/ca.crt&max_conns=8&max_idle_conns=4
+    # The check at start refuses anything but sslmode=verify-full, a server that is not PostgreSQL 15 to 17, and a role
+    # that is a superuser. PASSWORD must be URL-safe (letters and digits).
+    dsnSecret: { name: "", key: dsn }
+    # A Secret with the CA that signed the database server's certificate, mounted at /ca/ca.crt.
+    caSecret: { name: "", key: ca.crt }
+  hydra:
+    # Pinned by digest. A new Hydra version is a reviewed change of Ambit (docs/oauth.md, "Upgrading Hydra").
+    image: oryd/hydra:v26.2.0@sha256:ff67c7fb5f95074fa53374d41151713554960504b340cd3f95b09e65deaea2a9
+    # Hydra pods. They start one at a time, so the first pod creates the signing key alone.
+    replicas: 2
+    # A Secret with a random string of 32 or more characters under the key: encrypts Hydra's keys and tokens in the
+    # database. Create it once and keep it with your backups: without it the database cannot be read.
+    systemSecret: { name: "", key: system }
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 256Mi }
 
 access:
   # enforce: AccessRules decide (default).

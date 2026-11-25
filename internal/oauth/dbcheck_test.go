@@ -1,8 +1,14 @@
 package oauth
 
 import (
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"net"
 	"strings"
 	"testing"
+
+	"github.com/lib/pq"
 )
 
 const goodDSN = "postgres://hydra:s3cr3t-pw@postgres.example.svc:5432/hydra?sslmode=verify-full&sslrootcert=/ca/ca.crt&max_conns=8&max_idle_conns=4"
@@ -29,6 +35,18 @@ func TestParseDSN(t *testing.T) {
 		"no host":                {"postgres://hydra:s3cr3t-pw@/hydra?sslmode=verify-full", "no host"},
 		"no database":            {"postgres://hydra:s3cr3t-pw@db:5432/?sslmode=verify-full", "no database"},
 		"broken URL with secret": {"postgres://hydra:s3cr3t-pw@db:port/hydra", "postgres://"},
+		// names that would change what the check connects to, or that may hold a secret
+		"host parameter":            {goodDSN + "&host=evil.example", "does not accept"},
+		"hostaddr parameter":        {goodDSN + "&hostaddr=10.0.0.1", "does not accept"},
+		"port parameter":            {goodDSN + "&port=1", "does not accept"},
+		"options parameter":         {goodDSN + "&options=-c%20role%3Dpostgres", "does not accept"},
+		"session_authorization":     {goodDSN + "&session_authorization=postgres", "does not accept"},
+		"sslcert":                   {goodDSN + "&sslcert=/x", "does not accept"},
+		"service":                   {goodDSN + "&service=x", "does not accept"},
+		"encoded name that repacks": {goodDSN + "&x%3Dy%26host=evil.example", "does not accept"},
+		"malformed pair":            {goodDSN + "&a=%zz", "malformed"},
+		"semicolon":                 {goodDSN + ";host=evil.example", "malformed"},
+		"secret as a name":          {goodDSN + "&s3cr3t-in-a-name=1", "does not accept"},
 	} {
 		_, err := ParseDSN(tc.dsn)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
@@ -56,11 +74,12 @@ func TestProblems(t *testing.T) {
 		f    Facts
 		want string
 	}{
-		"14":        {Facts{VersionNum: 140012, TLS: true, ConnLimit: -1}, "PostgreSQL 14 is not supported"},
-		"18":        {Facts{VersionNum: 180001, TLS: true, ConnLimit: -1}, "PostgreSQL 18 is not supported"},
-		"no TLS":    {Facts{VersionNum: 170012, ConnLimit: -1}, "does not use TLS"},
-		"superuser": {Facts{VersionNum: 170012, TLS: true, Superuser: true, ConnLimit: -1, Role: "postgres"}, `"postgres" is a superuser`},
-		"limit":     {Facts{VersionNum: 170012, TLS: true, ConnLimit: 16, Role: "hydra"}, "need 17"},
+		"14":         {Facts{VersionNum: 140012, TLS: true, ConnLimit: -1}, "PostgreSQL 14 is not supported"},
+		"18":         {Facts{VersionNum: 180001, TLS: true, ConnLimit: -1}, "PostgreSQL 18 is not supported"},
+		"no TLS":     {Facts{VersionNum: 170012, ConnLimit: -1}, "does not use TLS"},
+		"superuser":  {Facts{VersionNum: 170012, TLS: true, Superuser: true, ConnLimit: -1, Role: "postgres"}, `"postgres" is a superuser`},
+		"limit":      {Facts{VersionNum: 170012, TLS: true, ConnLimit: 16, Role: "hydra"}, "need 17"},
+		"other role": {Facts{VersionNum: 170012, TLS: true, ConnLimit: -1, Role: "hydra", Effective: "other"}, `runs as "other"`},
 	} {
 		p := tc.f.Problems(d, 2)
 		if len(p) != 1 || !strings.Contains(p[0], tc.want) {
@@ -78,5 +97,29 @@ func TestCheckDatabaseRefusesBeforeConnecting(t *testing.T) {
 	p, _, err := CheckDatabase(t.Context(), strings.Replace(goodDSN, "verify-full", "require", 1), 2)
 	if err != nil || len(p) != 1 || strings.Contains(p[0], "s3cr3t-pw") {
 		t.Fatalf("got %v, %v", p, err)
+	}
+}
+
+func TestConnectErrorIsFixedText(t *testing.T) {
+	const secret = "s3cr3t-in-a-name"
+	for name, err := range map[string]error{
+		"server error":  &pq.Error{Code: "08P01", Message: `unrecognized configuration parameter "` + secret + `"`},
+		"wrapped":       fmt.Errorf("x: %w", &pq.Error{Code: "28P01", Message: "password " + secret}),
+		"no tls":        pq.ErrSSLNotSupported,
+		"unknown CA":    x509.UnknownAuthorityError{},
+		"wrong name":    x509.HostnameError{Host: secret + ".example"},
+		"network":       &net.OpError{Op: "dial", Err: errors.New("refused " + secret)},
+		"anything else": errors.New("boom " + secret),
+	} {
+		got := ConnectError(err).Error()
+		if strings.Contains(got, secret) || strings.Contains(got, "example") {
+			t.Errorf("%s: the message repeats the input: %s", name, got)
+		}
+		if !strings.HasPrefix(got, "connect to the database:") {
+			t.Errorf("%s: unexpected message %q", name, got)
+		}
+	}
+	if got := ConnectError(&pq.Error{Code: "28P01"}).Error(); !strings.Contains(got, "SQLSTATE 28P01") {
+		t.Errorf("the SQLSTATE is the one useful fact: %s", got)
 	}
 }

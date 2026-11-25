@@ -5,21 +5,36 @@ package oauth
 
 import (
 	"context"
+	"crypto/x509"
 	"database/sql"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
-	_ "github.com/lib/pq" // the PostgreSQL driver of the database check
+	"github.com/lib/pq" // the PostgreSQL driver of the database check
 )
 
 // Supported PostgreSQL major versions (docs/oauth.md, "PostgreSQL"). CI runs the first and the last.
 const (
 	MinPostgres = 15
 	MaxPostgres = 17
+)
+
+// The query parameters of the DSN that the check accepts: the TLS rule, Hydra's own pool limits, and two harmless driver options.
+// Anything else (host, options, a startup parameter such as session_authorization, a secret in the wrong place) is refused.
+var (
+	dsnParamList = []string{"sslmode", "sslrootcert", "max_conns", "max_idle_conns", "max_conn_lifetime", "max_idle_conn_time", "connect_timeout", "application_name"}
+	dsnParams    = func() map[string]bool {
+		m := map[string]bool{}
+		for _, k := range dsnParamList {
+			m[k] = true
+		}
+		return m
+	}()
 )
 
 // DSN is the part of Hydra's database address the check needs. The password is never kept or printed.
@@ -44,15 +59,24 @@ func ParseDSN(raw string) (DSN, error) {
 	if db == "" {
 		return DSN{}, errors.New("the DSN names no database")
 	}
-	q := u.Query()
-	// The driver reads the last value of a repeated parameter, a reader may read the first: one value only.
-	for _, v := range q {
+	// u.Query() drops a malformed pair without a word, and the driver writes the decoded names back without escaping them: a
+	// name such as "x=y&host" could then change the server the check connects to. So: a strict parse, and only names that this
+	// check knows. A name that is not known is not repeated in the message: it may be a secret in the wrong place.
+	q, err := url.ParseQuery(u.RawQuery)
+	if err != nil {
+		return DSN{}, errors.New("the DSN has a malformed parameter list")
+	}
+	for k, v := range q {
+		if !dsnParams[k] {
+			return DSN{}, errors.New("the DSN has a parameter that Ambit does not accept (accepted: " + strings.Join(dsnParamList, ", ") + ")")
+		}
+		// The driver reads the last value of a repeated parameter, a reader may read the first: one value only.
 		if len(v) != 1 {
-			return DSN{}, errors.New("the DSN repeats a parameter (each may appear once)") // the name is not repeated: it may be a secret in the wrong place
+			return DSN{}, errors.New("the DSN repeats a parameter (each may appear once)")
 		}
 	}
-	if strings.Contains(u.Host, ",") || q.Has("host") || q.Has("hostaddr") || q.Has("port") {
-		return DSN{}, errors.New("the DSN must name one server in its address (no host list, no host= or port= parameter)")
+	if strings.Contains(u.Host, ",") {
+		return DSN{}, errors.New("the DSN must name one server in its address (no host list)")
 	}
 	if m := q.Get("sslmode"); m != "verify-full" {
 		switch m { // only a known mode is repeated
@@ -67,15 +91,12 @@ func ParseDSN(raw string) (DSN, error) {
 	if q.Get("sslrootcert") != "/ca/ca.crt" {
 		return DSN{}, errors.New("the DSN must name the CA file with sslrootcert=/ca/ca.crt (the chart mounts oauth.database.caSecret there)")
 	}
-	if q.Has("sslcert") || q.Has("sslkey") || q.Has("sslpassword") || q.Has("service") || q.Has("options") {
-		return DSN{}, errors.New("the DSN may not use sslcert, sslkey, sslpassword, service or options")
-	}
 	n, err := strconv.Atoi(q.Get("max_conns"))
 	if err != nil || n < 1 || n > 64 {
 		return DSN{}, errors.New("the DSN must limit the connections of each Hydra pod with max_conns=<1 to 64>, for example max_conns=8&max_idle_conns=4")
 	}
 	// Hydra's own pool parameters are not the driver's: it refuses them.
-	for _, k := range []string{"max_conns", "max_idle_conns", "max_conn_lifetime", "max_idle_conn_time"} {
+	for _, k := range []string{"max_conns", "max_idle_conns", "max_conn_lifetime", "max_idle_conn_time"} { // (all in the allowlist)
 		q.Del(k)
 	}
 	u.RawQuery = q.Encode()
@@ -89,6 +110,7 @@ type Facts struct {
 	Superuser  bool
 	ConnLimit  int // the role's connection limit; -1: none
 	Role       string
+	Effective  string // the role in effect (current_user); it differs from Role after SET SESSION AUTHORIZATION or SET ROLE
 }
 
 // Major is the major version: 170012 -> 17.
@@ -103,6 +125,9 @@ func (f Facts) Problems(d DSN, replicas int) []string {
 	}
 	if !f.TLS {
 		p = append(p, "the session does not use TLS: the server must require TLS (hostssl in pg_hba.conf)")
+	}
+	if f.Effective != "" && f.Effective != f.Role {
+		p = append(p, fmt.Sprintf("the session runs as %q, but the login role is %q: Hydra's role must be the role that logs in", f.Effective, f.Role))
 	}
 	if f.Superuser {
 		p = append(p, fmt.Sprintf("the role %q is a superuser: use an owner role of the Hydra database only, without CREATEROLE or SUPERUSER", f.Role))
@@ -130,8 +155,8 @@ func ReadFacts(ctx context.Context, db *sql.DB) (Facts, error) {
 	}
 	// The role that logged in (session_user) and the role in effect (current_user): either may not be a superuser, and the
 	// connection limit that counts is the login role's.
-	if err := db.QueryRowContext(ctx, `SELECT l.rolname, l.rolsuper OR e.rolsuper, l.rolconnlimit
-		FROM pg_catalog.pg_roles l, pg_catalog.pg_roles e WHERE l.rolname = session_user AND e.rolname = current_user`).Scan(&f.Role, &f.Superuser, &f.ConnLimit); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT l.rolname, e.rolname, l.rolsuper OR e.rolsuper, l.rolconnlimit
+		FROM pg_catalog.pg_roles l, pg_catalog.pg_roles e WHERE l.rolname = session_user AND e.rolname = current_user`).Scan(&f.Role, &f.Effective, &f.Superuser, &f.ConnLimit); err != nil {
 		return f, errors.New("read the role: the server's answer could not be read")
 	}
 	return f, nil
@@ -153,12 +178,34 @@ func CheckDatabase(ctx context.Context, raw string, replicas int) ([]string, Fac
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	if err := db.PingContext(ctx); err != nil {
-		// lib/pq's errors name the host and the reason, never the password.
-		return nil, Facts{}, fmt.Errorf("connect to %s: %w", d.Host, err)
+		return nil, Facts{}, ConnectError(err)
 	}
 	f, err := ReadFacts(ctx, db)
 	if err != nil {
 		return nil, f, err
 	}
 	return f.Problems(d, replicas), f, nil
+}
+
+// ConnectError turns a failure to connect into a fixed message. The server's own text is never used: PostgreSQL can echo the name
+// of an unknown startup parameter, and a secret may have been written there. The message names no host either.
+func ConnectError(err error) error {
+	var pe *pq.Error
+	var ua x509.UnknownAuthorityError
+	var he x509.HostnameError
+	var ci x509.CertificateInvalidError
+	var ne net.Error
+	switch {
+	case errors.As(err, &pe):
+		return fmt.Errorf("connect to the database: the server refused the connection (SQLSTATE %s): check the user, the password and the database name", pe.Code)
+	case errors.Is(err, pq.ErrSSLNotSupported):
+		return errors.New("connect to the database: the server does not offer TLS")
+	case errors.As(err, &ua), errors.As(err, &he), errors.As(err, &ci):
+		return errors.New("connect to the database: the server's certificate was not accepted (not signed by the CA file, wrong name, or expired)")
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &ne) && ne.Timeout():
+		return errors.New("connect to the database: no answer in time")
+	case errors.As(err, &ne):
+		return errors.New("connect to the database: the server could not be reached (name, address or port)")
+	}
+	return errors.New("connect to the database: the connection failed")
 }

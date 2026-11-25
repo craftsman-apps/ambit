@@ -52,9 +52,9 @@ argocd:
 
 # The images of that Argo CD install, one per line (test/gitops/init-argocd.sh pulls them first, with retries).
 argocd-images:
-	@helm template argocd argo-cd --repo https://argoproj.github.io/argo-helm --version $(ARGOCD_CHART_VERSION) \
-	  -n argocd -f deploy/argocd/values-kind.yaml \
-	  | sed -nE 's/^[[:space:]-]*image:[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p' | sort -u
+	@set -e; out=$$(helm template argocd argo-cd --repo https://argoproj.github.io/argo-helm --version $(ARGOCD_CHART_VERSION) \
+	  -n argocd -f deploy/argocd/values-kind.yaml); \
+	  echo "$$out" | sed -nE 's/^[[:space:]-]*image:[[:space:]]*"?([^"[:space:]]+)"?.*/\1/p' | sort -u
 
 # metrics-server v0.9.0 (chart 3.14.0) for `kubectl top` in the step 10 soak. kind kubelets use
 # self-signed certificates, hence --kubelet-insecure-tls (kind only).

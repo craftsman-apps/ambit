@@ -62,7 +62,9 @@ for _ in $(seq 1 30); do git ls-remote "http://127.0.0.1:18418/ambit-config.git"
 git ls-remote "http://127.0.0.1:18418/ambit-config.git" >/dev/null || fail "2 the git server does not answer"
 # The Argo CD images first, each pull tried 4 times with the registry's error printed: inside `helm --wait` a pull that
 # fails shows nothing for 5 minutes (#363, argocd-redis Available 0/1 with no pod events in the log).
-for img in $(make -s argocd-images); do
+images=$(make -s argocd-images) || fail "2 could not list the Argo CD images (helm template failed)"
+[[ -n $images ]] || fail "2 the list of Argo CD images is empty"
+for img in $images; do
   for try in 1 2 3 4; do
     if err=$(timeout 180 docker exec "$NODE" crictl pull "$img" 2>&1); then echo "pulled $img"; break; fi
     echo "pull of $img failed (try $try of 4): $(echo "$err" | tail -1)" >&2

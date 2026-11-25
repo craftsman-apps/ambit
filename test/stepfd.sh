@@ -30,7 +30,7 @@ cleanup() {
 }
 trap 'rc=$?; cleanup; on_exit "$rc"' EXIT
 
-# --- 0 · setup: certificate, install, test servers, a test copy of the backend, keys
+# --- 0 · setup: certificate, install, test servers (one on the front door), keys
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=$PUB" -addext "subjectAltName=DNS:$PUB" -keyout "$W/tls.key" -out "$W/ca.pem" >/dev/null 2>&1
 kubectl -n "$NS" create secret tls ambit-public-tls --cert="$W/ca.pem" --key="$W/tls.key" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 rm -f "$W/tls.key"

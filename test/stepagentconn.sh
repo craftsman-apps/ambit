@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Connection consent (docs/agents.md, experimental): an agent gets its owner's connection token only for the apps the owner
 # ticked for it, checked on every request by the token broker from the agent the gateway names; a client's own
-# x-ambit-agent header has no effect. The SaaS side is the test realm of step 5. Run after `make install`.
+# x-ambit-agent header has no effect. The SaaS side is the test realm of step 5 (users user09 and user01). Run after `make install`.
 set -euo pipefail
 NS=${1:-ambit-system}
 cd "$(dirname "$0")/.."

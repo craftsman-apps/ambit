@@ -32,7 +32,7 @@ function lastQuarter(now = new Date()): { from: string; to: string } {
 }
 
 const what: Record<ExportInfo["name"], { title: string; proves: string }> = {
-  access: { title: "Access review", proves: "Which groups and people the access rules allowed to use which models, MCP servers and tools at the end of a date, which keys were alive, and who was seen using each group. Group membership comes from your identity provider: add its dated member list." },
+  access: { title: "Access review", proves: "Which groups and people the access rules allowed to use which models, MCP servers and tools at the end of a date (or at the time of one of that day's snapshots), which keys were alive, and who was seen using each group. Group membership comes from your identity provider: add its dated member list." },
   offboarding: { title: "Offboarding", proves: "Whether people who left lost access, and when: each offboarding record, the calls the gateway accepted after it (should be none), the app grants revoked and the key history." },
   audit: { title: "Audit log", proves: "Every call through the gateway in a period, by whom, with what result, refused calls and wrong keys included, with the records per day and the MCP app requests and decisions." },
 };

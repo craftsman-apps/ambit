@@ -53,7 +53,7 @@ func TestLargeNumbersAreMaskedFromTheirExactText(t *testing.T) {
 			`{"content":[],"structuredContent":{"rows":[{"a":1},{"card":` + number + `,"b":2.5}]}}`,
 		} {
 			got, withheld := respond(t, g, "tools/call", body)
-			if withheld || !strings.Contains(got, "<CARD_NUMBER>") || strings.Contains(got, card19[:8]) {
+			if withheld || !strings.Contains(got, "<CARD_NUMBER>") || strings.Contains(got, number) {
 				t.Errorf("%s: card number not masked: %s", name, got)
 			}
 		}

@@ -9,7 +9,8 @@ import (
 )
 
 // maxExpandExponent is the largest exponent expandExponent writes out. A larger one would make a long text for a
-// short number.
+// short number, and it cannot hide a card number: a card number is at most 19 digits, and the zeros that a larger
+// exponent adds make one digit group of more than 64 digits (or one that starts with 0), which is never a card number.
 const maxExpandExponent = 64
 
 // hasLongNumber reports whether raw may hold a number that a float64 cannot keep exactly: a run of 16 or more digits,

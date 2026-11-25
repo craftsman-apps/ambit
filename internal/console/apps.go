@@ -1,6 +1,7 @@
 package console
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"strings"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/apprecord"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -242,7 +244,7 @@ func (c *Catalog) deleteApp(w http.ResponseWriter, r *http.Request, s Session) {
 			if srv.Annotations[operationKey] != op {
 				continue
 			}
-			if err := c.Client.Delete(r.Context(), srv, client.Preconditions{UID: ptrUID(srv.UID)}); err != nil && !apierrors.IsNotFound(err) {
+			if err := c.deleteServer(r.Context(), srv, s); err != nil && !apierrors.IsNotFound(err) {
 				apiErr(w, err)
 				return
 			}
@@ -258,6 +260,21 @@ func (c *Catalog) deleteApp(w http.ResponseWriter, r *http.Request, s Session) {
 	}
 	slog.Info("app removed", "connection", conn.Name, "by", s.Email)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteServer deletes srv on behalf of s. It first names s in annotations of the Server, so the controller's removal
+// record (apprecord.Removed) has the actor and the role. If the annotation cannot be written, the Server is still
+// deleted and the record has no actor.
+func (c *Catalog) deleteServer(ctx context.Context, srv *v1.Server, s Session) error {
+	before := srv.DeepCopy()
+	if srv.Annotations == nil {
+		srv.Annotations = map[string]string{}
+	}
+	srv.Annotations[apprecord.AnnRemovedBy], srv.Annotations[apprecord.AnnRemovedByRole] = s.Email, s.Role
+	if err := c.Client.Patch(ctx, srv, client.MergeFrom(before)); err != nil {
+		slog.Warn("server removal: the actor could not be written; the removal record will have none", "server", srv.Name, "by", s.Email, "err", err)
+	}
+	return c.Client.Delete(ctx, srv, client.Preconditions{UID: ptrUID(srv.UID)})
 }
 
 func testHost(rawURL string) bool {

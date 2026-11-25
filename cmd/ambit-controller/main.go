@@ -85,6 +85,7 @@ func main() {
 	}
 	// Access snapshots (evidence exports) go to the collector, like the gateway's records; no endpoint: off.
 	var snapshots *controller.Snapshots
+	var appRemovals *controller.AppRemovals
 	if ep := os.Getenv("AMBIT_OTLP_ENDPOINT"); ep != "" {
 		exp, err := otlplog.New(ep, "ambit-controller", controller.RecordDropped)
 		if err != nil {
@@ -93,6 +94,7 @@ func main() {
 		}
 		defer exp.Close()
 		snapshots = &controller.Snapshots{Send: exp.Send}
+		appRemovals = &controller.AppRemovals{Send: exp.Send}
 		if err := mgr.Add(snapshots); err != nil { // the daily record, on the leader
 			log.Error(err, "add access snapshots")
 			os.Exit(1)
@@ -105,7 +107,7 @@ func main() {
 	if err := (&controller.Reconciler{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), ListTools: listTools, Namespace: ns, Route: controller.RouteRef{Name: *route},
 		RateLimit: controller.RateLimit{Service: *rlService, Port: *rlPort, FailureMode: *rlFailure}, ToolsRefresh: *toolsRefresh, ArgumentLimits: *argLimits,
 		Classifier: controller.Classifier{Deployment: *routerDep, Replicas: int32(*routerReplicas)}, AccessMode: *accessMode,
-		Activation: activation, Snapshots: snapshots, PublicGateway: *publicGateway}).SetupWithManager(mgr); err != nil {
+		Activation: activation, Snapshots: snapshots, AppRemovals: appRemovals, PublicGateway: *publicGateway}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "set up controller")
 		os.Exit(1)
 	}

@@ -35,7 +35,7 @@ const target = (c: Call) => c.identity === "invalid key" ? `from ${c.clientAddre
 type AppEvent = { time: string; action: string; actor: string; role: string; server: string; request: string; requestedBy: string;
   image: string; url: string; comment: string; pullRequest: string; tools: string[]; reason: string };
 const actionLabel: Record<string, string> = { requested: "Requested", approved: "Approved", denied: "Denied", "pull-request-opened": "Approved; pull request opened",
-  "tools-approved": "Changed tools approved", "approve-refused": "Approve refused", "deny-refused": "Deny refused", "tools-approve-refused": "Tool approval refused" };
+  "tools-approved": "Changed tools approved", removed: "Removed", "approve-refused": "Approve refused", "deny-refused": "Deny refused", "tools-approve-refused": "Tool approval refused" };
 const appWhat = (e: AppEvent) => e.image || e.url || (e.tools.length ? e.tools.join(", ") : "");
 function appCsv(events: AppEvent[]) {
   const rows = events.map((e) => csvRow([utc(e.time), e.action, e.actor, e.role, e.server, e.request, e.requestedBy, appWhat(e), e.comment, e.reason, e.pullRequest]));
@@ -206,7 +206,7 @@ function AppEvents({ events, limited, onExport }: { events: AppEvent[]; limited:
               <td className="whitespace-nowrap px-3 py-2 font-mono text-small">{utc(e.time)}</td>
               <td className="px-3 py-2">{e.action.endsWith("-refused") ? <Status ready="False" text={actionLabel[e.action] ?? e.action} /> : (actionLabel[e.action] ?? e.action)}
                 {e.pullRequest && <a className="block text-small text-accent underline" href={e.pullRequest} target="_blank" rel="noreferrer">pull request</a>}</td>
-              <td className="px-3 py-2 font-mono text-small">{e.actor}{e.role && <span className="block text-muted">{e.role}</span>}</td>
+              <td className="px-3 py-2 font-mono text-small">{e.actor || (e.action === "removed" ? <span className="text-muted">not known</span> : "")}{e.role && <span className="block text-muted">{e.role}</span>}</td>
               <td className="px-3 py-2 font-mono text-small">{e.server}{e.request && <span className="block text-muted">{e.request}</span>}</td>
               <td className="px-3 py-2 font-mono text-small">{e.requestedBy}</td>
               <td className="break-all px-3 py-2 font-mono text-small">{appWhat(e)}</td>

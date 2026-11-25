@@ -111,7 +111,7 @@ With `protection.enabled`, `ambit-guard` masks personal data in the results of M
 
   | What a server sends | Masked? | Why |
   |---|---|---|
-  | The result of `tools/call`, `resources/read` and `prompts/get`: text, structured content, object keys, numbers, links, and the `_meta` of each content item | Yes | The gateway sends the result to the guard. |
+  | The result of `tools/call`, `resources/read` and `prompts/get`: text, structured content, object keys, numbers, links, the `_meta` of each content item, and the `_meta` object of the result itself (its values; its keys stay as they are) | Yes | The gateway sends the result to the guard. |
   | A tool failure that the server reports **as a result** (`isError: true`, which is what the MCP specification asks a tool to do) | Yes | It is a result. Tested on kind. |
   | A JSON-RPC **error** (`error.message`, `error.data`) | **No** | The gateway does not send errors to the guard. |
   | Log notifications (`notifications/message`) and progress notifications (`notifications/progress`, its `message`) | **No** | The gateway does not send notifications to the guard. |

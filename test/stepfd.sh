@@ -19,7 +19,7 @@ fdset() { helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.y
   --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 \
   "$@" --wait --timeout 5m >/dev/null; }
 cleanup() {
-  for p in ${PIDS[@]+"${PIDS[@]}"}; do kill "$p" 2>/dev/null || true; done
+  stop_forwards
   kubectl -n "$NS" delete configmap ambit-offboarded --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" patch "servers.$G" time --type json -p '[{"op":"remove","path":"/spec/frontDoor"}]' >/dev/null 2>&1 || true
   kubectl -n "$NS" delete "servers.$G" fd-unack fd-conn --ignore-not-found >/dev/null 2>&1 || true
@@ -54,16 +54,26 @@ wait_for 120 "kubectl -n '$NS' get agentgatewaybackend ambit-mcp-public >/dev/nu
 kubectl -n "$NS" wait agentgatewaybackend/ambit-mcp-public --for=condition=Accepted --timeout=120s >/dev/null || fail "0 public backend not accepted"
 PW=$(kubectl -n "$NS" get secret ambit-initial-admin -o jsonpath='{.data.password}' | base64 -d)
 sign_in local admin@ambit.local "$PW"
+[[ $(api POST /api/test/keys/reset-limits '{}') == 204 ]] || fail "0 reset-limits hook: $(cat "$W/api")"
 mkkey fd-mcp mcp; K=$KEY; KID_K=$KID
 mkkey fd-llm llm; LK=$KEY
 mkkey fd-mcp-2 mcp; K2=$KEY; KID_K2=$KID
-PODS=($(kubectl -n "$NS" get pods -l gateway.networking.k8s.io/gateway-name=ambit-public --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}'))
+public_pods
 [[ ${#PODS[@]} -eq 2 ]] || fail "0 want 2 public gateway pods, have: ${PODS[*]}"
 PA=$(forward "${PODS[0]}"); PB=$(forward "${PODS[1]}")
 KH=(-H "x-api-key: $K")
+# the private route lists the time server's tool for this key before the public route is asked (the policy copy is then settled)
+privtools() { # the tool names the key sees on the private route
+  local sid; command curl -s -D "$W/ph" -o /dev/null -X POST "$MCP" "${MCPH[@]}" -H "x-api-key: $K" -d "$INIT"
+  sid=$(awk 'tolower($1)=="mcp-session-id:"{print $2}' "$W/ph" | tr -d '\r')
+  command curl -s -o /dev/null -X POST "$MCP" "${MCPH[@]}" -H "x-api-key: $K" -H "Mcp-Session-Id: $sid" -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+  command curl -s -X POST "$MCP" "${MCPH[@]}" -H "x-api-key: $K" -H "Mcp-Session-Id: $sid" -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' | awk '/^data: /{print substr($0, 7); next} /^\{/{print}' |
+    "${PY[@]}" -c 'import json,sys;print(" ".join(sorted(t["name"] for t in json.loads(sys.stdin.read())["result"]["tools"])))'
+}
+wait_for 120 '[[ "$(privtools)" == *time_get_current_time* ]]' || fail "0 the private route does not list the time server's tool for the key: '$(privtools 2>&1)'"
 # a new key is accepted within seconds; the public Gateway needs the same time
-wait_for 120 '[[ $(ptools $PA "${KH[@]}") == *time_get_current_time* ]]' || fail "0 a valid key does not reach the public backend: $(ptools "$PA" "${KH[@]}")"
-pass "0 installed; two public gateway pods (${PODS[*]}); a new key lists the test server's tools through the public Gateway"
+wait_for 120 '[[ $(ptools $PA "${KH[@]}") == *time_get_current_time* ]]' || { pinit "$PA" "${KH[@]}"; fail "0 a valid key does not reach the public backend: status '$PCODE', port '$PA', curl: $(tail -c 300 "$W/pub.err"); a tool list: $(ptools "$PA" "${KH[@]}" 2>&1 | head -c 300) $(head -c 300 "$W/pubj")"; }
+pass "0 installed; two public gateway pods (${PODS[*]}); a new key lists the front-door server's tools through the public Gateway"
 
 # --- 1 · what is not served: every private path and host is 404 (or no answer) on the public port
 not_served() { # not_served PORT PATH [curl args]
@@ -174,30 +184,29 @@ PSID=$S1; c=$(psend "$PB" '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' -H "x
 [[ "$c" == 200 ]] && grep -q time_get_current_time "$W/pubj" || fail "6 pod B does not know the session of pod A: $c $(head -c 200 "$W/pub")"
 kubectl -n "$NS" rollout restart deploy/ambit-public >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-public --timeout=300s >/dev/null
-for p in ${PIDS[@]+"${PIDS[@]}"}; do kill "$p" 2>/dev/null || true; done; PIDS=()
-PODS=($(kubectl -n "$NS" get pods -l gateway.networking.k8s.io/gateway-name=ambit-public --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}'))
-PA=$(forward "${PODS[0]}"); PB=$(forward "${PODS[1]}")
+reforward
 PSID=$S1; wait_for 60 'c=$(psend "$PA" "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\"}" -H "x-api-key: $K2"); [[ "$c" == 200 ]]' || fail "6 the session did not survive the restart of the public pods: $c $(head -c 200 "$W/pub")"
 pass "6 an MCP session opened on one public pod is answered by the other and by the new pods after a rollout restart (session secrets: $SESSKEY)"
 
 # --- 7 · limits: per key, per source, per pod, and the limiter down
 next_window() { local s; s=$(date +%S); s=$((10#$s)); (( s < 35 )) || sleep $((62 - s)); } # leave 25 s or more in this minute
 burst() { # burst N PORT [curl args]: N MCP initialize requests in a row; prints "<ok> <limited> <refused> <other>"
-  local n=$1 port=$2; shift 2; local ok=0 lim=0 den=0 other=0 r
+  local n=$1 port=$2; shift 2; local ok=0 lim=0 den=0 other=0 r last=-
   for _ in $(seq 1 "$n"); do
     r=$(pubk "$port" /mcp -X POST "${MCPH[@]}" -d "$INIT" "$@")
-    case $r in ok) ok=$((ok+1));; limited) lim=$((lim+1));; refused) den=$((den+1));; *) other=$((other+1));; esac
+    case $r in ok) ok=$((ok+1));; limited) lim=$((lim+1));; refused) den=$((den+1));; *) other=$((other+1)); last=$r;; esac
   done
-  echo "$ok $lim $den $other"
+  echo "$ok $lim $den $other $last"
 }
+new_window() { local s; s=$(date +%S); s=$((10#$s)); sleep $((62 - s)); } # the start of the next minute (the limits count in fixed minutes)
 mkkey fd-mcp-burst mcp; K4=$KEY
 mkkey fd-mcp-3 mcp; K3=$KEY
 for k in "$K4" "$K3"; do wait_for 60 '[[ $(ptools "$PA" -H "x-api-key: $k") == *time_get_current_time* ]]' || fail "7 a key of this check does not work"; done
 fdset --set frontDoor.rateLimit.perCredentialPerMinute=20 >/dev/null
 wait_for 150 'rlconfig "$NS" | grep -q "fd_credential.*requests_per_unit=20"' || fail "7 the ratelimit service did not load the key limit 20: $(rlconfig "$NS" | grep ambit-public)"
 next_window
-read -r ok lim den other <<<"$(burst 30 "$PA" -H "x-api-key: $K4")"
-(( lim >= 1 && ok >= 1 && ok <= 20 && other == 0 && den == 0 )) || fail "7 per key (limit 20 a minute): $ok ok, $lim limited, $den refused, $other other"
+read -r ok lim den other LASTOTHER <<<"$(burst 30 "$PA" -H "x-api-key: $K4")"
+(( lim >= 1 && ok >= 1 && ok <= 20 && other == 0 && den == 0 )) || fail "7 per key (limit 20 a minute): $ok ok, $lim limited, $den refused, $other other (${LASTOTHER:-}; curl: $(tail -c 200 "$W/pub.err" 2>/dev/null))"
 KEY1_OK=$ok; KEY1_LIM=$lim
 [[ $(pubk "$PB" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K3") == ok ]] || fail "7 a second key was limited by the first key's counter"
 [[ $(pubk "$PB" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K4") == limited ]] || fail "7 the limited key passed on the other pod (the counter is shared)"
@@ -209,10 +218,11 @@ wait_for 150 'rlconfig "$NS" | grep -q "fd_credential.*requests_per_unit=600"' |
 # not counted: agentgateway runs rate limits after authorization (docs/front-door.md says so).
 fdset --set frontDoor.rateLimit.perSourcePerMinute=30 >/dev/null
 wait_for 150 'rlconfig "$NS" | grep -q "fd_source.*requests_per_unit=30"' || fail "7 the ratelimit service did not load the source limit 30: $(rlconfig "$NS" | grep ambit-public)"
-next_window
-read -r nok nlim nden nother <<<"$(burst 40 "$PA")"       # no key: every answer is 403, none is counted
-(( nden == 40 && nlim == 0 )) || fail "7 requests without a key: $nok ok, $nlim limited, $nden refused, $nother other (want 40 refused and none limited: refused requests are not counted)"
-read -r ok lim den other <<<"$(burst 40 "$PA" -H "x-api-key: $K3")"   # valid key: counted per source
+reforward  # a port-forward that sat idle may be gone
+new_window  # the source counter of this minute holds every request of the checks before: start in a new minute
+read -r nok nlim nden nother LASTOTHER <<<"$(burst 40 "$PA")"       # no key: every answer is 403, none is counted
+(( nden == 40 && nlim == 0 )) || fail "7 requests without a key: $nok ok, $nlim limited, $nden refused, $nother other (${LASTOTHER:-}; want 40 refused and none limited: refused requests are not counted)"
+read -r ok lim den other LASTOTHER <<<"$(burst 40 "$PA" -H "x-api-key: $K3")"   # valid key: counted per source
 (( lim >= 1 && ok >= 1 && ok <= 30 && other == 0 )) || fail "7 per source, valid key (limit 30): $ok ok, $lim limited, $den refused, $other other"
 SRC_OK=$ok; SRC_LIM=$lim
 [[ $(pubk "$PB" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K4") == limited ]] || fail "7 another key from the limited source was not limited (the source counter is shared by all keys and pods)"
@@ -231,8 +241,12 @@ for i in $(seq 1 40); do ( pubk "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x
 pp=$(cat "$W"/burst.* | sort | uniq -c | tr '\n' ' ')
 grep -q limited "$W"/burst.* || fail "7 the per-pod limit (3 a second) did not apply with the ratelimit service down: $pp"
 pass "7 per pod: with the ratelimit service down (FailOpen) a single request passes and 40 at once are limited by the pod: $pp"
+# helm upgrade brings the ratelimit Deployment back to 1 replica: change the setting first, then stop the service again
 fdset --set frontDoor.rateLimit.perPodPerSecond=200 --set frontDoor.rateLimit.failureMode=FailClosed >/dev/null
-sleep 5
+kubectl -n "$NS" scale deploy/ambit-ratelimit --replicas=0 >/dev/null
+kubectl -n "$NS" wait --for=delete pod -l app.kubernetes.io/name=ambit-ratelimit --timeout=60s >/dev/null
+wait_for 90 '[[ $(pubk "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K3") != ok ]]' ||
+  fail "7 FailClosed: with the ratelimit service down a request still passed (policy failureMode: $(kubectl -n "$NS" get agentgatewaypolicy ambit-public-limits -o jsonpath='{.spec.traffic.rateLimit.global.failureMode}'))"
 FC=$(pubk "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K3")
 [[ "$FC" == limited || "$FC" == other:5* ]] || fail "7 FailClosed: with the ratelimit service down a request got '$FC'"
 kubectl -n "$NS" scale deploy/ambit-ratelimit --replicas=1 >/dev/null
@@ -246,20 +260,19 @@ REQ=(uv run --no-project python -I test/frontdoor/request.py)
 c=$("${REQ[@]}" "$PA" "$W/ca.pem" "$PUB" /nothing); [[ "$c" == 404 ]] || fail "8 direct: no PROXY header, GET /nothing: $c"
 fdset --set frontDoor.clientAddress=proxyProtocol --set frontDoor.rateLimit.perSourcePerMinute=30 >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-public --timeout=300s >/dev/null
-for p in ${PIDS[@]+"${PIDS[@]}"}; do kill "$p" 2>/dev/null || true; done; PIDS=()
-PODS=($(kubectl -n "$NS" get pods -l gateway.networking.k8s.io/gateway-name=ambit-public --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}'))
-PA=$(forward "${PODS[0]}"); PB=$(forward "${PODS[1]}")
+reforward
 wait_for 60 '[[ $("${REQ[@]}" "$PA" "$W/ca.pem" "$PUB" /nothing --proxy 203.0.113.7) == 404 ]]' || fail "8 a request with a PROXY header is not answered: $("${REQ[@]}" "$PA" "$W/ca.pem" "$PUB" /nothing --proxy 203.0.113.7)"
-[[ $("${REQ[@]}" "$PA" "$W/ca.pem" "$PUB" /nothing) == refused ]] || fail "8 a connection without a PROXY header was served (a caller could choose its own address)"
 wait_for 90 'rlconfig "$NS" | grep -q "fd_source.*requests_per_unit=30"' || fail "8 source limit 30 not loaded"
 next_window
-a=0; b=0
-for _ in $(seq 1 40); do c=$("${REQ[@]}" "$PA" "$W/ca.pem" "$PUB" /mcp --proxy 203.0.113.7 --header "x-api-key: $K3"); [[ "$c" == 429 ]] && a=$((a+1)); done
-c8=$("${REQ[@]}" "$PA" "$W/ca.pem" "$PUB" /mcp --proxy 203.0.113.8 --header "x-api-key: $K3")
-(( a >= 1 )) || fail "8 203.0.113.7 was never limited ($a of 40)"
-[[ "$c8" != 429 ]] || fail "8 203.0.113.8 was limited like 203.0.113.7: the limit does not use the address in the PROXY header"
-addr=$(ch "SELECT anyLast(LogAttributes['src.addr']) FROM otel.otel_logs WHERE LogAttributes['ambit.ingress'] = 'public' AND Timestamp >= now() - INTERVAL 5 MINUTE AND LogAttributes['src.addr'] LIKE '203.0.113.%'")
-pass "8 PROXY protocol: no header: refused; 203.0.113.7 was limited ($a of 40 requests, limit 30) while 203.0.113.8 was not (HTTP $c8); the audit record's address: ${addr:-none}"
+a=0
+for _ in $(seq 1 40); do c=$("${REQ[@]}" "$PA" "$W/ca.pem" "$PUB" /mcp --proxy 203.0.113.7 --header "x-api-key: $K3" --post "$INIT"); [[ "$c" == 429 || "$c" == error200 ]] && a=$((a+1)); done
+c8=$("${REQ[@]}" "$PA" "$W/ca.pem" "$PUB" /mcp --proxy 203.0.113.8 --header "x-api-key: $K3" --post "$INIT")
+(( a >= 1 )) || fail "8 203.0.113.7 was never limited ($a of 40; the last answer of 203.0.113.8: $c8)"
+[[ "$c8" == 200 ]] || fail "8 203.0.113.8 got '$c8' while 203.0.113.7 was limited: the limit does not use the address in the PROXY header"
+wait_for 120 '[[ $(ch "SELECT count() FROM otel.otel_logs WHERE LogAttributes['"'"'ambit.ingress'"'"'] = '"'"'public'"'"' AND Timestamp >= now() - INTERVAL 5 MINUTE AND LogAttributes['"'"'client.address'"'"'] = '"'"'203.0.113.7'"'"'") -ge 1 ]]' || fail "8 the audit record does not carry the proxied client address"
+# last: a connection that the gateway refuses can end kubectl's port-forward
+[[ $("${REQ[@]}" "$PA" "$W/ca.pem" "$PUB" /nothing) == refused ]] || fail "8 a connection without a PROXY header was served (a caller could choose its own address)"
+pass "8 PROXY protocol: no header: refused; 203.0.113.7 was limited ($a of 40 requests, limit 30) while 203.0.113.8 was not (HTTP $c8); the audit record (client.address) has 203.0.113.7"
 fdset >/dev/null
 
 # --- 9 · public/private separation: every MCP method on the public route (a front-door server `time`, a private server

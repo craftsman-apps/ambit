@@ -200,6 +200,20 @@ func TestAccessEvidenceOnClickHouse(t *testing.T) {
 	if strings.Join(seen, ", ") != "eng ana@example.com 2, ml ana@example.com 1" {
 		t.Errorf("people-seen.csv %v", seen)
 	}
+	// at=T: the newest snapshot at or before T (also one from an earlier day); a snapshot at exactly T counts.
+	for at, want := range map[string]string{"2026-12-31T09:00:00Z": "old000000000", "2026-12-31T10:00:00Z": "ten000000000", "2026-12-31T14:59:59.999999999Z": "ten000000000", "2026-12-31T15:00:00Z": "fif000000000"} {
+		resp, body, err := e.get(t, t.Context(), "/api/evidence/access.zip?date=2026-12-31&at="+at, e.admin)
+		if err != nil || resp.StatusCode != 200 {
+			t.Fatalf("at=%s: %v %v %s", at, resp.StatusCode, err, body)
+		}
+		if files, _ := csvFiles(t, body); len(files["grants.csv"]) != 2 || files["grants.csv"][1][1] != want {
+			t.Errorf("at=%s: grants.csv %v, want %s", at, files["grants.csv"], want)
+		}
+	}
+	_, body, _ = e.get(t, t.Context(), "/api/evidence/access/snapshots?date=2026-12-31", e.admin)
+	if !strings.Contains(string(body), `"rulesVersion":"ten000000000"`) || !strings.Contains(string(body), `"rulesVersion":"fif000000000"`) || strings.Contains(string(body), "old0") || strings.Contains(string(body), "next0") {
+		t.Errorf("snapshots of the day %s", body)
+	}
 	resp, body, _ = e.get(t, t.Context(), "/api/evidence/access.zip?date=2026-12-01", e.admin)
 	if resp.StatusCode != 404 || !strings.Contains(string(body), "Snapshots exist from 2026-12-28") {
 		t.Errorf("before the first snapshot: %d %s", resp.StatusCode, body)

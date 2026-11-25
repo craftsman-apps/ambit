@@ -111,7 +111,7 @@ Not supported in this release: a layer-7 load balancer or a CDN that ends TLS an
 Ambit does not test cloud load balancers in CI. What is tested on kind: a connection with no PROXY header (`direct`), and
 a connection that sends a made-up client address in a PROXY header (`proxyProtocol`). On your cloud, check the address
 once after install: call the front door from a machine whose address you know, then read the record in Audit or in
-ClickHouse (`LogAttributes['src.addr']`).
+ClickHouse (`LogAttributes['client.address']`).
 
 ## Rate limits
 
@@ -129,7 +129,7 @@ an MCP request that way). The first two limits are per minute (a fixed window th
 - **Refused requests are not counted.** agentgateway v1.7.0 checks the rate limits **after** it matches the route and checks
   the credential. A request for another path (404), or with no key, a wrong key, an expired key or an offboarded owner (403),
   is answered first and counts against no limit. These answers are cheap, but a flood of them is not slowed by Ambit.
-  Limit that traffic at the edge (cloud firewall, WAF, load balancer), where you can see the source.
+  Limit that traffic at the edge (cloud firewall, WAF, load balancer), where you can see the source. Ambit tracks this in [issue #390](https://github.com/craftsman-apps/ambit/issues/390).
 - **Cheap and expensive calls.** In this release there is only one kind of public call (`/mcp`), so there is one source
   limit. When sign-in endpoints are added later, they get their own, lower limit, so that a flood of sign-in attempts
   cannot use up the limit of MCP calls from the same address.

@@ -5,6 +5,8 @@
 # 2 · reject: a matching prompt gets 403 with rejectMessage and never reaches the model; also as a stream, on
 #     /v1/messages and /v1/responses; a prompt that does not match passes; embeddings are not checked; the webhook
 #     (the mock's POST /request) refuses its own prompts
+# 2b · the webhook Service in another namespace: the gateway and ambit-router both call it (with a ReferenceGrant; agentgateway
+#      v1.7.0 also works without one, the step prints what it saw)
 # 3 · a refused prompt is not charged to the daily request and dollar budgets, and it is counted by the per-minute limit
 # 4 · the access rule is checked before the guard: user01's matching prompt to a model she may not use is refused by
 #     the access rule, not by the guard
@@ -24,6 +26,7 @@ G=ambitproject.dev
 LLM=http://llm.localtest.me:8080/v1
 MSG="Refused by the Ambit prompt guard (test)."
 cleanup() {
+  [[ -z "${HNS_CREATED:-}" ]] || kubectl delete namespace "$HNS_CREATED" --ignore-not-found --wait=false >/dev/null 2>&1 || true
   kubectl -n "$NS" delete "budgets.$G" guard-ml --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" delete -f test/llm/router-llm.yaml --ignore-not-found >/dev/null 2>&1 || true
   helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/keycloak/values-sso.yaml --wait --timeout 5m >/dev/null 2>&1 || true
@@ -134,6 +137,53 @@ c=$(smart "$M" "card 4111 1111 1111 1111 in my python code")
 [[ $(smart "$M" "fix my python code") == "200 mock/echo" && $(classifier) == $((n + 1)) ]] || fail "2 router, no match after the refusals: $(cat "$W/llm")"
 pass "2 router: a prompt the guard refuses (pattern, built-in, webhook) never reaches the classifier ($n requests before and after); the person gets the guard's JSON refusal; a prompt that does not match is classified and routed"
 pass "2 reject: 403 with the message, also streamed and on /v1/messages and /v1/responses; the model got none ($before -> $after); others pass; embeddings not checked; the webhook refuses its own"
+
+# 2b · issue #319: the webhook Service in another namespace (llm.promptGuard.webhook.namespace). The gateway calls it
+#      through the policy's backendRef, which Gateway API allows across namespaces only with a ReferenceGrant; ambit-router
+#      calls http://SERVICE.NAMESPACE.svc:PORT/request directly. Both must refuse the webhook's prompt.
+HNS=guard-hook-$$ # a name of this run: the cleanup deletes only a namespace this run created
+kubectl create namespace "$HNS" >/dev/null || fail "2b cannot create namespace $HNS"
+HNS_CREATED=$HNS
+kubectl -n "$HNS" apply -f test/llm/mock.yaml >/dev/null
+kubectl -n "$HNS" rollout status deploy/mock-llm --timeout=180s >/dev/null || fail "2b mock webhook in $HNS not ready"
+hookhits() { kubectl -n "$HNS" exec deploy/mock-llm -- python -c 'import urllib.request,json;print(json.load(urllib.request.urlopen("http://localhost:8080/"))["webhook"])'; }
+guard "    enabled: true
+    mode: reject
+$PATTERNS
+    rejectMessage: '$MSG'
+    webhook: { service: mock-llm, namespace: $HNS, port: 8080 }"
+fresh
+# Without a ReferenceGrant: not asserted (agentgateway decides); the result is printed. In CI (agentgateway v1.7.0) the policy
+# was accepted and the gateway still called the webhook without a grant.
+sleep 20
+nogrant="policy accepted: $(accepted agentgatewaypolicy ambit-llm-guard && echo yes || echo no); WEBHOOK-REJECT prompt: $(chat "$M" 'WEBHOOK-REJECT this'); webhook calls: $(hookhits)"
+echo "2b without a ReferenceGrant: $nogrant"
+kubectl apply -f - >/dev/null <<EOF2
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata: { name: ambit-guard-webhook, namespace: $HNS }
+spec:
+  from: [{ group: agentgateway.dev, kind: AgentgatewayPolicy, namespace: $NS }]
+  to: [{ group: "", kind: Service }]
+EOF2
+w=$(hookhits)
+wait_for 120 "accepted agentgatewaypolicy ambit-llm-guard && [[ \$(chat '$M' 'WEBHOOK-REJECT this') == 403 ]] && grep -q 'Refused by the test webhook' '$W/llm' && (( \$(hookhits) > $w ))" ||
+  fail "2b the webhook in $HNS did not refuse its prompt through the gateway (with a ReferenceGrant): $(kubectl -n "$NS" get agentgatewaypolicy ambit-llm-guard -o jsonpath='{.status}') $(cat "$W/llm")"
+c=$(chat "$M" "What is the capital of France?")
+[[ "$c" == 200 ]] || fail "2b a prompt that does not match, webhook in $HNS: $c $(cat "$W/llm")"
+wait_for 120 "[[ \$(smart '$M' 'fix my python code') == '200 mock/echo' ]]" || fail "2b router, no match: $(cat "$W/llm")"
+w=$(hookhits)
+c=$(smart "$M" "WEBHOOK-REJECT my python code")
+[[ "$c" == "403 " ]] && grep -q 'Refused by the test webhook' "$W/llm" && (( $(hookhits) > w )) || fail "2b router: the webhook in $HNS did not refuse: $c $(cat "$W/llm") (calls $w -> $(hookhits))"
+pass "2b webhook in namespace $HNS: with a ReferenceGrant the gateway and ambit-router both call it and refuse its prompt (without it: $nogrant)"
+# back to the step 2 configuration for the steps below
+guard "    enabled: true
+    mode: reject
+$PATTERNS
+    rejectMessage: '$MSG'
+    webhook: { service: mock-llm, port: 8080 }"
+fresh
+wait_for 90 "accepted agentgatewaypolicy ambit-llm-guard && [[ \$(chat '$M' 'GUARD-TEST-2') == 403 ]]" || fail "2b back to the release namespace webhook: $(cat "$W/llm")"
 
 # 3 · budgets: daily request and dollar limits are charged after the answer, so a refused prompt costs nothing; the
 #     per-minute limit counts a request when it arrives

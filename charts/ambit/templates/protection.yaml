@@ -55,6 +55,30 @@ spec:
             - { name: AMBIT_PRESIDIO_LANGUAGE, value: {{ .language | quote }} }
             - { name: AMBIT_PRESIDIO_TIMEOUT, value: {{ .timeout | default "10s" | quote }} }
             {{- end }}{{ end }}
+            {{- with .Values.protection.injectionGuard }}{{ if .enabled }}
+            {{- /* helm upgrade --reuse-values from an older release has none of the keys under injectionGuard: use the defaults */}}
+            {{- $w := .webhook | default dict }}
+            {{- $builtins := ternary .builtins true (hasKey . "builtins") }}
+            {{- /* 13: the number of built-in rules (internal/guard/injection.go; the schema lists their names) */}}
+            {{- if not (or (and $builtins (lt (len (.disabledBuiltins | default list)) 13)) .patterns $w.service) }}
+            {{- fail "protection.injectionGuard.enabled=true needs a built-in rule that is not switched off, a pattern or webhook.service: a guard with nothing to check would only look like protection" }}
+            {{- end }}
+            {{- if and $w.timeout (regexMatch "^0+(\\.0*)?(ms|s|m)$" $w.timeout) }}
+            {{- fail "protection.injectionGuard.webhook.timeout must be longer than zero" }}
+            {{- end }}
+            {{- range .patterns }}
+            {{- /* Go's own parser: the guard compiles the pattern with it. A pattern it refuses fails here, at install. */}}
+            {{- if mustRegexMatch . "" }}
+            {{- fail (printf "protection.injectionGuard.patterns: %q matches the empty text, so it would match everywhere" .) }}
+            {{- end }}
+            {{- end }}
+            {{- $hook := dict }}
+            {{- if $w.service }}
+            {{- $hook = dict "url" (printf "http://%s.%s.svc:%v/request" $w.service ($w.namespace | default $.Release.Namespace) ($w.port | default 8000)) "timeout" ($w.timeout | default "2s") "failureMode" ($w.failureMode | default "FailClosed") }}
+            {{- end }}
+            - name: AMBIT_INJECTION_GUARD
+              value: {{ dict "mode" (.mode | default "audit") "builtins" $builtins "disabledBuiltins" (.disabledBuiltins | default list) "patterns" (.patterns | default list) "webhook" $hook | toJson | quote }}
+            {{- end }}{{ end }}
           ports: [{ name: grpc, containerPort: 9090 }, { name: health, containerPort: 8081 }]
           readinessProbe: { httpGet: { path: /, port: health } }
           securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }

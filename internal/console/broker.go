@@ -85,9 +85,12 @@ func (b *Broker) agentAllowed(r *http.Request, email, connName string) (bool, st
 	if !present || len(vals) != 1 {
 		return false, "the gateway did not say which agent is calling, so no token is given"
 	}
-	name := strings.TrimSpace(vals[0])
+	name := vals[0] // exactly as the gateway sent it: no trimming, so that a padded marker is not the marker
 	if name == "-" {
 		return true, ""
+	}
+	if !accountNamePattern.MatchString(name) {
+		return false, "the gateway sent an agent name that is not valid, so no token is given"
 	}
 	if b.Agents == nil {
 		return false, "agents cannot use connections here"

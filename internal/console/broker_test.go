@@ -154,7 +154,7 @@ func TestBrokerChecksAgentConsent(t *testing.T) {
 	put(Agent{Name: "itself", Mode: ModeItself, ConnectionConsent: []string{"jira"}})
 	put(Agent{Name: "theirs", Owner: "user02@example.com", ConnectionConsent: []string{"jira"}})
 	for name, want := range map[string]string{"-": "Bearer at-user01", "allowed": "Bearer at-user01", "nothing": "", "othermcp": "", "stopped": "", "stopping": "",
-		"itself": "", "theirs": "", "unknown": "", "": "", "ALLOWED": "", "allowed ": "Bearer at-user01"} {
+		"itself": "", "theirs": "", "unknown": "", "": "", "ALLOWED": "", "allowed ": "", " - ": "", "-\u00a0": "", "?": "", "--": "", "allowed,-": "", "-,allowed": ""} {
 		if got := askAs(b, path, name); got != want {
 			t.Errorf("agent %q: %q, want %q", name, got, want)
 		}

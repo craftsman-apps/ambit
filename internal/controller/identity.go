@@ -1,6 +1,10 @@
 package controller
 
-import "github.com/craftsman-apps/ambit/internal/identity"
+import (
+	"strconv"
+
+	"github.com/craftsman-apps/ambit/internal/identity"
+)
 
 // RequireEmail mirrors llm/mcp.jwt.requireEmail (flag --require-email). When false, a JWT without an email is
 // identified by its subject.
@@ -27,8 +31,19 @@ var AgentTokenIssuer = ""
 // credential allows. It does not depend on the number of agents.
 func agentScope() string { return identity.AgentScope(AgentTokenIssuer) }
 
-// agentHeader is the value of x-ambit-agent that the gateway sends to the token broker: the calling agent's name from the
-// verified key (or token), "-" when the credential is not an agent's. "-" is never an agent name.
+// agentHeader is the value of x-ambit-agent that the gateway sends to the token broker, from the verified credential only:
+//   - a valid key: the key's agent name, or "-" when the key is not an agent's;
+//   - with an agent token issuer, a token of that issuer: the claim ambit_agent;
+//   - anything else (a person's token): "-".
+//
+// A name is accepted only in the shape of an agent name; one that is not (an empty or missing claim, "-", odd characters)
+// becomes "?", which no agent has, so the broker gives no token. "-" therefore comes only from a credential that is a
+// person's own.
 func agentHeader() string {
-	return `(` + identity.AgentAttr("agent", "ambit_agent", AgentTokenIssuer) + `) == "" ? "-" : (` + identity.AgentAttr("agent", "ambit_agent", AgentTokenIssuer) + `)`
+	const name = `^[a-z0-9]([-a-z0-9]{0,38}[a-z0-9])?$`
+	key := `(` + identity.ValidKey + `) ? (has(apiKey.agent) ? (type(apiKey.agent) == string && apiKey.agent.matches('` + name + `') ? apiKey.agent : "?") : "-") : `
+	if AgentTokenIssuer == "" {
+		return key + `"-"`
+	}
+	return key + `((has(jwt.iss) && jwt.iss == ` + strconv.Quote(AgentTokenIssuer) + `) ? (has(jwt.ambit_agent) && type(jwt.ambit_agent) == string && jwt.ambit_agent.matches('` + name + `') ? jwt.ambit_agent : "?") : "-")`
 }

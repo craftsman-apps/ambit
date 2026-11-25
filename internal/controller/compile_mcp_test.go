@@ -448,24 +448,43 @@ func TestConnectionPolicyNamesTheAgentFromTheCredential(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ast, iss := env.Compile(agentHeader())
-	if iss.Err() != nil {
-		t.Fatal(iss.Err())
-	}
-	prog, _ := env.Program(ast)
 	future := "2027-01-01T00:00:00Z"
-	for name, c := range map[string]struct {
+	const issuer = "https://auth.example.com"
+	type credential struct {
 		key, jwt map[string]any
 		want     string
-	}{
-		"agent key":            {map[string]any{"keyId": "k", "until": future, "agent": "grok-y"}, map[string]any{}, "grok-y"},
-		"a person's key":       {map[string]any{"keyId": "k", "until": future}, map[string]any{}, "-"},
-		"a person's token":     {map[string]any{}, map[string]any{"iss": "https://dex", "email": "a@b.co"}, "-"},
-		"an expired agent key": {map[string]any{"keyId": "k", "until": "2020-01-01T00:00:00Z", "agent": "grok-y"}, map[string]any{}, "-"},
-	} {
-		v, _, err := prog.Eval(map[string]any{"jwt": c.jwt, "apiKey": c.key, "request": map[string]any{"startTime": celtypes.Timestamp{Time: time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)}}})
-		if err != nil || v.Value() != c.want {
-			t.Errorf("%s: %v %v, want %q", name, v, err, c.want)
+	}
+	cases := map[string]credential{
+		"agent key":                         {map[string]any{"keyId": "k", "until": future, "agent": "grok-y"}, map[string]any{}, "grok-y"},
+		"a person's key":                    {map[string]any{"keyId": "k", "until": future}, map[string]any{}, "-"},
+		"a person's token":                  {map[string]any{}, map[string]any{"iss": "https://dex", "email": "a@b.co"}, "-"},
+		"an expired agent key":              {map[string]any{"keyId": "k", "until": "2020-01-01T00:00:00Z", "agent": "grok-y"}, map[string]any{}, "-"},
+		"an agent key with an odd name":     {map[string]any{"keyId": "k", "until": future, "agent": "-"}, map[string]any{}, "?"},
+		"an agent key with a name too long": {map[string]any{"keyId": "k", "until": future, "agent": "a" + strings.Repeat("b", 60)}, map[string]any{}, "?"},
+	}
+	run := func(issuer string, cases map[string]credential) {
+		AgentTokenIssuer = issuer
+		defer func() { AgentTokenIssuer = "" }()
+		ast, iss := env.Compile(agentHeader())
+		if iss.Err() != nil {
+			t.Fatal(iss.Err())
+		}
+		prog, _ := env.Program(ast)
+		for name, c := range cases {
+			v, _, err := prog.Eval(map[string]any{"jwt": c.jwt, "apiKey": c.key, "request": map[string]any{"startTime": celtypes.Timestamp{Time: time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)}}})
+			if err != nil || v.Value() != c.want {
+				t.Errorf("issuer %q, %s: %v %v, want %q", issuer, name, v, err, c.want)
+			}
 		}
 	}
+	run("", cases)
+	// With an agent issuer: a token of that issuer is an agent's, and a doubtful claim is never the person's marker.
+	cases["an agent token"] = credential{map[string]any{}, map[string]any{"iss": issuer, "ambit_agent": "chatgpt-y"}, "chatgpt-y"}
+	cases["an agent token without the claim"] = credential{map[string]any{}, map[string]any{"iss": issuer}, "?"}
+	cases["an agent token with an empty claim"] = credential{map[string]any{}, map[string]any{"iss": issuer, "ambit_agent": ""}, "?"}
+	cases["an agent token whose claim is the marker"] = credential{map[string]any{}, map[string]any{"iss": issuer, "ambit_agent": "-"}, "?"}
+	cases["an agent token whose claim is not a string"] = credential{map[string]any{}, map[string]any{"iss": issuer, "ambit_agent": 7}, "?"}
+	cases["a token of another issuer naming an agent"] = credential{map[string]any{}, map[string]any{"iss": "https://dex", "ambit_agent": "chatgpt-y"}, "-"}
+	cases["a valid key and an agent token: the key decides"] = credential{map[string]any{"keyId": "k", "until": future}, map[string]any{"iss": issuer, "ambit_agent": "chatgpt-y"}, "-"}
+	run(issuer, cases)
 }

@@ -42,11 +42,21 @@ func TestChartsDepsBuilt(t *testing.T) {
 	c := Charts{Dir: dir}
 	deps := filepath.Join(dir, "ambit", "charts")
 	os.MkdirAll(deps, 0o755)
+	os.WriteFile(filepath.Join(dir, "ambit", "Chart.yaml"), []byte("name: ambit\ndependencies:\n  - name: agentgateway\n  - name: toolhive-operator\n"), 0o644)
 	if c.DepsBuilt() {
 		t.Fatal("an empty dependency folder is not built")
 	}
-	os.WriteFile(filepath.Join(deps, "agentgateway-v2.45.1.tgz"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(deps, "toolhive-operator-0.51.4.tgz"), []byte("x"), 0o644)
+	if c.DepsBuilt() {
+		t.Fatal("one of two dependencies is not built")
+	}
+	os.WriteFile(filepath.Join(deps, "agentgateway-v1.7.0.tgz"), []byte("x"), 0o644)
 	if !c.DepsBuilt() {
-		t.Fatal("a packed dependency was not found")
+		t.Fatal("both packed dependencies were not found")
+	}
+	os.Remove(filepath.Join(deps, "agentgateway-v1.7.0.tgz"))
+	os.Mkdir(filepath.Join(deps, "agentgateway"), 0o755) // an unpacked chart is as good
+	if !c.DepsBuilt() {
+		t.Fatal("an unpacked dependency was not found")
 	}
 }

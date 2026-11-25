@@ -140,6 +140,9 @@ func Up(ctx context.Context, p *out.Printer, e *Env, o UpOptions) error {
 		if docker, err = e.ReadyDocker(); err != nil {
 			return err
 		}
+		if err := ctx.Err(); err != nil { // Ctrl+C during a slow docker info: do not go on to create a cluster
+			return err
+		}
 		if own, err = e.Owner(ctx, o.Name); err != nil {
 			return err
 		}

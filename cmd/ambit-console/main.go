@@ -252,7 +252,7 @@ func run(ctx context.Context) error {
 			Store: &console.GrantStore{Client: objects, Namespace: gns, Key: keys.GrantKey}}
 		go conns.RunChecks(ctx)
 		{
-			broker := &console.Broker{Conns: conns}
+			broker := &console.Broker{Conns: conns, Agents: keySvc}
 			bsrv := &http.Server{Addr: ":8082", Handler: broker.Handler(), ReadHeaderTimeout: 10 * time.Second}
 			go func() {
 				if err := bsrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {

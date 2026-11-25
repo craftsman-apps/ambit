@@ -1,9 +1,11 @@
 package console
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
@@ -24,9 +26,16 @@ import (
 // on "My connections".
 type Broker struct {
 	Conns *Connections
+	// Agents reads agent records. nil: no agent gets a token.
+	Agents interface {
+		GetAgent(ctx context.Context, name string) (Agent, error)
+	}
 }
 
-const userHeader = "X-Ambit-User"
+const (
+	userHeader  = "X-Ambit-User"
+	agentHeader = "X-Ambit-Agent" // the agent's name from the verified credential; "-" for a person's own key or token
+)
 
 func (b *Broker) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -66,11 +75,46 @@ func (b *Broker) bound(w http.ResponseWriter, r *http.Request) {
 	b.token(w, r, connName)
 }
 
+// agentAllowed decides, on every request, whether the caller may use email's connection connName. The gateway names the
+// calling agent in X-Ambit-Agent, from the verified key or token (a header of the client is never copied); "-" is a
+// person's own key or token. A request without the header is refused (a gateway of an older version, or something
+// that is not the gateway). An agent gets a token only when its record is readable and active, is a person-mode agent
+// of this very person, and lists the connection (the person's consent). Every other case gives no token (fail closed).
+func (b *Broker) agentAllowed(r *http.Request, email, connName string) (bool, string) {
+	vals, present := r.Header[http.CanonicalHeaderKey(agentHeader)]
+	if !present || len(vals) != 1 {
+		return false, "the gateway did not say which agent is calling, so no token is given"
+	}
+	name := strings.TrimSpace(vals[0])
+	if name == "-" {
+		return true, ""
+	}
+	if b.Agents == nil {
+		return false, "agents cannot use connections here"
+	}
+	a, err := b.Agents.GetAgent(r.Context(), name)
+	switch {
+	case err != nil:
+		slog.Warn("broker: agent record not readable; no token", "agent", name, "err", err)
+		return false, "the agent's record could not be read, so no token is given"
+	case a.State != StateActive || a.Mode != ModePerson || a.Owner != email:
+		return false, "this agent may not use a person's connection"
+	case !slices.Contains(a.ConnectionConsent, connName):
+		return false, fmt.Sprintf("the owner has not allowed the agent %s to use %s: allow it in the agent's settings", name, connName)
+	}
+	return true, ""
+}
+
 func (b *Broker) token(w http.ResponseWriter, r *http.Request, connName string) {
 	email := strings.TrimSpace(r.Header.Get(userHeader))
 	link := b.Conns.connectURL(connName)
 	if email == "" {
 		w.Header().Set("X-Ambit-Connect", "the gateway token has no email claim, which Ambit uses to find your connections")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if ok, why := b.agentAllowed(r, email, connName); !ok {
+		w.Header().Set("X-Ambit-Connect", why)
 		w.WriteHeader(http.StatusOK)
 		return
 	}

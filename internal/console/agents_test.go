@@ -714,7 +714,10 @@ func TestItselfAgentIsBoundToItsAccount(t *testing.T) {
 	}
 	active := pending
 	active.State, active.AccountUID = StateActive, "not-the-uid-of-the-account"
-	if _, err := s.changeAgent(ctx, "ci", func(a *Agent) (bool, error) { *a = Agent{Name: "ci", DisplayName: "x", Owner: a.Owner, Mode: ModeItself, Group: "eng", State: StateActive, AccountUID: active.AccountUID, Rev: 1, Created: a.Created, UID: a.UID, ResourceVersion: a.ResourceVersion}; return true, nil }); err != nil {
+	if _, err := s.changeAgent(ctx, "ci", func(a *Agent) (bool, error) {
+		*a = Agent{Name: "ci", DisplayName: "x", Owner: a.Owner, Mode: ModeItself, Group: "eng", State: StateActive, AccountUID: active.AccountUID, Rev: 1, Created: a.Created, UID: a.UID, ResourceVersion: a.ResourceVersion}
+		return true, nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := s.CreateAgentKey(ctx, adminA, "ci", "k", 30, nil); !errors.Is(err, ErrBadInput) { // the account is not an agent's

@@ -226,3 +226,8 @@ Box, Webex and ServiceNow are in the catalog but not in the initial list (phase 
 - Box: the MCP server integration is configured in the Box Admin Console, which needs a Business plan or above.
 - Webex: a Control Hub admin must turn on the Messaging MCP server; free Webex accounts have no Control Hub.
 - ServiceNow: needs an instance with the MCP Server Console; free developer instances were unavailable (waitlist).
+
+## Agents and connections (experimental)
+
+A person-mode [agent](agents.md#apps-with-a-persons-own-sign-in) gets the person's token for an app only when the person ticked that
+connection for the agent. Without it the server is left out of the agent's session, as for a person who has not connected the app.

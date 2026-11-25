@@ -130,11 +130,29 @@ token_issuer, ingress` after `call_id`. The columns before them keep their place
 
 ## Apps with a person's own sign-in
 
-A [Connection](presets.md) lets a person use an MCP app with their own login to that app. A person-mode agent may use
-a person's connection only for the apps that the person ticked for the agent (`connectionConsent`, a list of Connection
-names; empty by default). The records and the API accept the list in 0.6.0; the token broker starts to check it in the
-next 0.6.0 change. Until then, do not give an agent a scope on a server that has a Connection unless you accept that the
-agent uses the owner's connection.
+A [Connection](presets.md) lets a person use an MCP app with their own login to that app. A person-mode agent may use the
+person's connection **only for the apps the person ticked for that agent**. The list is the agent's `connectionConsent`
+(names of Connections; empty by default), set with `PATCH /api/agents/{name}`:
+
+```sh
+curl -s -b "$COOKIES" -X PATCH "$CONSOLE/api/agents/grok-bot-for-sales-x7k2pq" -H 'Content-Type: application/json' \
+  -d '{"connectionConsent":["slack"]}'
+```
+
+How it is checked, on every request that needs a connection token:
+
+1. The gateway names the calling agent to the token broker in the header `x-ambit-agent`. The gateway computes it from the
+   **verified key** (or token), never from a header of the client: a client's own `x-ambit-agent` has no effect. A person's
+   own key or token gets the value `-`.
+2. The broker reads the agent's record each time (no cache). It gives the owner's token only when the record is readable and
+   signed by the console, the agent is active and in person mode, the agent's owner is the person the gateway named, and the
+   connection is in `connectionConsent`.
+3. In every other case (no header, an unknown or unreadable record, a stopped agent, an itself-mode agent, no consent) the
+   broker gives **no token**. The app then refuses, and only that server is left out of the agent's session.
+
+Consent alone gives nothing: the person must have connected the app themselves (**My connections**), and the agent still
+needs the server in its scope and in the owner's AccessRules. An itself-mode agent gets no app connections in 0.6.0. A
+gateway of an older version does not send the header, so it gives no connection token to anyone until it is updated.
 
 ## Limits that apply
 

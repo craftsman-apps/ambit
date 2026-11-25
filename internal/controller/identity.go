@@ -26,3 +26,9 @@ var AgentTokenIssuer = ""
 // agentScope is the clause every MCP access rule is combined with (docs/agents.md): what the calling agent's
 // credential allows. It does not depend on the number of agents.
 func agentScope() string { return identity.AgentScope(AgentTokenIssuer) }
+
+// agentHeader is the value of x-ambit-agent that the gateway sends to the token broker: the calling agent's name from the
+// verified key (or token), "-" when the credential is not an agent's. "-" is never an agent name.
+func agentHeader() string {
+	return `(` + identity.AgentAttr("agent", "ambit_agent", AgentTokenIssuer) + `) == "" ? "-" : (` + identity.AgentAttr("agent", "ambit_agent", AgentTokenIssuer) + `)`
+}

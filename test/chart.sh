@@ -285,7 +285,8 @@ n=one("NetworkPolicy","ambit-ratelimit")["spec"]["ingress"][0]["from"]
 assert {"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"ambit-public"}}} in n, n' "limits: per key and per source address shared through the ratelimit service, plus a per-pod limit; the ratelimit service admits the public gateway pods"
 check_fd 'v=one("ValidatingAdmissionPolicy","ambit-public-routes")["spec"]
 assert v["failurePolicy"]=="Fail" and set(v["matchConstraints"]["resourceRules"][0]["resources"])=={"httproutes","grpcroutes","tlsroutes","tcproutes","udproutes"}, v
-assert "ambit-mcp-public" in v["validations"][0]["expression"] and "mcp-public.localtest.me" in v["validations"][0]["expression"], v
+e=v["validations"][0]["expression"]
+for part in ["ambit-mcp-public","mcp-public.localtest.me","size(object.spec.rules) == 1","path.type == \"Exact\"","path.value == \"/mcp\"","backendRefs[0].name == \"ambit-mcp-public\"","size(object.spec.parentRefs) == 1"]: assert part in e, (part, e)
 b=one("ValidatingAdmissionPolicyBinding","ambit-public-routes")["spec"]
 assert b["policyName"]=="ambit-public-routes" and b["validationActions"]==["Deny"], b' "admission policy: no other route may name the public Gateway"
 check_fd 'a=one("AgentgatewayParameters","ambit-public")["spec"]["service"]["spec"]
@@ -321,6 +322,7 @@ MSG='evidence.enabled' refuse "no audit" --set evidence.enabled=false
 MSG='apiKeys.enabled' refuse "no API keys" --set apiKeys.enabled=false
 MSG='mcp.enabled' refuse "no MCP" --set mcp.enabled=false
 MSG='clientAddress' refuse "trusting X-Forwarded-For" --set frontDoor.clientAddress=xForwardedFor
+MSG='NodePort' refuse "the PROXY protocol on a node port" --set frontDoor.clientAddress=proxyProtocol --set frontDoor.service.type=NodePort
 MSG='failureMode' refuse "a bad failure mode" --set frontDoor.rateLimit.failureMode=Maybe
 MSG='perSourcePerMinute' refuse "a zero limit" --set frontDoor.rateLimit.perSourcePerMinute=0
 rm -f "$W2"

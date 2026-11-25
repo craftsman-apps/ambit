@@ -113,7 +113,9 @@ func (r *Reconciler) nacks(ctx context.Context) ([]corev1.Event, error) {
 	}
 	var out []corev1.Event
 	for _, e := range events.Items {
-		if e.Type == corev1.EventTypeWarning && e.Reason == nackReason && e.InvolvedObject.Kind == "Gateway" && e.InvolvedObject.Name == gw {
+		// The public Gateway (frontDoor.enabled) has proxies of its own; one of them can reject what the other accepted.
+		if e.Type == corev1.EventTypeWarning && e.Reason == nackReason && e.InvolvedObject.Kind == "Gateway" &&
+			(e.InvolvedObject.Name == gw || (r.PublicGateway != "" && e.InvolvedObject.Name == r.PublicGateway)) {
 			out = append(out, e)
 		}
 	}

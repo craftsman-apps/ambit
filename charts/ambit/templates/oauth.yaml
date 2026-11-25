@@ -160,8 +160,8 @@ spec:
     matchLabels: { app.kubernetes.io/name: ambit-hydra }
 {{- end }}
 ---
-# Who may reach Hydra. Public port 4444: the public Gateway's pods (token, revoke, JWKS) and agentgateway's controller
-# (it fetches the JWKS). Admin port 4445: ambit-auth and the console only. Every other pod is refused.
+# Who may reach Hydra. Public port 4444: the public Gateway's pods (token, revoke, JWKS), agentgateway's controller
+# (it fetches the JWKS) and ambit-auth (the authorize front). Admin port 4445: ambit-auth and the console only. Every other pod is refused.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: { name: ambit-hydra }
@@ -173,6 +173,8 @@ spec:
     - from:
         - podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit-public } }
         - podSelector: { matchLabels: { app.kubernetes.io/name: agentgateway } }
+        # ambit-auth's authorize front passes /oauth2/auth to Hydra's public port (it checks the request first).
+        - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-auth } }
       ports: [{ port: 4444 }]
     - from:
         - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-auth } }

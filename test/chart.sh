@@ -385,7 +385,7 @@ check_oa 'for n in ("ambit-hydra-public","ambit-hydra-admin"):
 n=one("NetworkPolicy","ambit-hydra")["spec"]
 assert n["policyTypes"]==["Ingress"] and n["podSelector"]=={"matchLabels":{"app.kubernetes.io/name":"ambit-hydra"}}, n
 pub=[i for i in n["ingress"] if i["ports"]==[{"port":4444}]][0]; adm=[i for i in n["ingress"] if i["ports"]==[{"port":4445}]][0]
-assert sorted(list(f["podSelector"]["matchLabels"].values())[0] for f in pub["from"])==["agentgateway","ambit-public"], pub
+assert sorted(list(f["podSelector"]["matchLabels"].values())[0] for f in pub["from"])==["agentgateway","ambit-auth","ambit-public"], pub
 assert sorted(list(f["podSelector"]["matchLabels"].values())[0] for f in adm["from"])==["ambit-auth","ambit-console"], adm
 assert len(n["ingress"])==2, n
 pdb=one("PodDisruptionBudget","ambit-hydra")["spec"]; assert pdb["minAvailable"]==1' "Hydra: ClusterIP Services, the admin port only for ambit-auth and the console, the public port only for the public Gateway and the controller"

@@ -32,10 +32,17 @@ who_as() {
   h+=(-H "Mcp-Session-Id: $sid")
   command curl -s -o /dev/null "${h[@]}" -d '{"jsonrpc":"2.0","method":"notifications/initialized"}' "$MCP"
   local names; names=$(command curl -s "${h[@]}" -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' "$MCP" | awk '/^data: /{print substr($0, 7); next} /^\{/{print}' |
-    uv run --no-project python -c 'import json,sys;print(" ".join(t["name"] for t in json.loads(sys.stdin.read())["result"]["tools"]))')
+    uv run --no-project python -c '
+import json,sys
+try: print(" ".join(t["name"] for t in json.loads(sys.stdin.read())["result"]["tools"]))
+except Exception: print("")')
   [[ " $names " == *" whoami_whoami "* ]] || { echo "not listed"; return; }
   command curl -s "${h[@]}" -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"whoami_whoami","arguments":{}}}' "$MCP" | awk '/^data: /{print substr($0, 7); next} /^\{/{print}' |
-    uv run --no-project python -c 'import json,sys;d=json.loads(sys.stdin.read());print(d["result"]["content"][0]["text"] if "result" in d else "error "+d["error"]["message"])'
+    uv run --no-project python -c '
+import json,sys
+try:
+    d=json.loads(sys.stdin.read()); print(d["result"]["content"][0]["text"] if "result" in d else "error "+d["error"]["message"])
+except Exception as e: print("error no answer")'
 }
 AGENTS=(); KEYIDS=()
 cleanup() {

@@ -79,7 +79,7 @@ noemail=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.
 grep -q -- '--require-email=false' <<<"$noemail" || { echo "FAIL chart: controller flag"; exit 1; }
 check_qs "pols={x['metadata']['name']:x['spec'] for x in docs if x['kind']=='ValidatingAdmissionPolicy'}
 # No Lease-holder check in admission: the API server's parameter cache can go stale and lock out every key write.
-assert set(pols)=={'ambit-keys-writer','ambit-key-lease'}, list(pols)
+assert set(pols)=={'ambit-keys-writer','ambit-key-lease','ambit-agent-ack-writer'}, list(pols)
 assert all('paramKind' not in p for p in pols.values()), pols
 w=pols['ambit-keys-writer']
 assert w['failurePolicy']=='Fail', w
@@ -91,16 +91,16 @@ for s in ['system:serviceaccount:ambit-system:ambit-console','authentication.kub
   assert s in we, s
 assert [v['expression'] for v in w['validations']]==['variables.console || variables.cleanup'], w['validations']
 assert w['validations'][0]['message']=='only the Ambit console may write personal API key objects', w
-sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event','ambitproject.dev/agent']
+sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event','ambitproject.dev/agent','ambitproject.dev/agent-stops']
 bs={x['metadata']['name']:x['spec'] for x in docs if x['kind']=='ValidatingAdmissionPolicyBinding'}
-assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(4)}|{'ambit-key-lease'}, list(bs)
+assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(5)}|{'ambit-key-lease','ambit-agent-ack-writer','ambit-keys-writer-stops-name'}, list(bs)
 assert all('paramRef' not in b for b in bs.values()), bs
-bs.pop('ambit-key-lease')
+bs.pop('ambit-key-lease'); bs.pop('ambit-agent-ack-writer'); bs.pop('ambit-keys-writer-stops-name')
 for n,b in bs.items():
   i=int(n[-1])
   assert b['policyName']=='ambit-keys-writer' and b['validationActions']==['Deny'], b
   assert b['matchResources']['namespaceSelector']=={'matchLabels':{'kubernetes.io/metadata.name':'ambit-system'}}, b
-  assert b['matchResources']['objectSelector']=={'matchExpressions':[{'key':sel[i],'operator':'Exists'}]}, b" "admission: console-only writes to key objects (four label bindings), cleanup exempt, no Lease-holder check"
+  assert b['matchResources']['objectSelector']=={'matchExpressions':[{'key':sel[i],'operator':'Exists'}]}, b" "admission: console-only writes to key objects (five label bindings), cleanup exempt, no Lease-holder check"
 check_qs "p=one('ValidatingAdmissionPolicy','ambit-key-lease')['spec']
 assert p['failurePolicy']=='Fail' and 'paramKind' not in p, p
 r=p['matchConstraints']['resourceRules'][0]
@@ -267,6 +267,7 @@ grep -q 'AMBIT_INJECTION_GUARD' <<<"$igold" && grep -q 'mode.*audit' <<<"$igold"
 fdv=(-f deploy/quickstart.yaml -f test/frontdoor/values.yaml)
 fdt() { helm template ambit charts/ambit -n ambit-system "${fdv[@]}" "$@"; }
 dflt=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set limits.enabled=true)
+! grep -q '/json: the public front door' <<<"$dflt" || { echo "FAIL chart: the ratelimit Service publishes port 8080 only with the front door"; exit 1; }
 ! grep -q 'ambit-public' <<<"$dflt" || { echo "FAIL chart: nothing of the front door is rendered by default"; exit 1; }
 ! grep -q 'ambit.ingress' <<<"$dflt" || { echo "FAIL chart: no ambit.ingress attribute without the front door"; exit 1; }
 ! grep -q -- '--public-gateway' <<<"$dflt" || { echo "FAIL chart: no controller flag without the front door"; exit 1; }
@@ -304,15 +305,25 @@ check_fd 'p=one("AgentgatewayPolicy","ambit-public-limits")["spec"]
 assert p["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"Gateway","name":"ambit-public"}], p
 g=p["traffic"]["rateLimit"]["global"]
 assert g["domain"]=="ambit-public" and g["backendRef"]=={"name":"ambit-ratelimit","port":8081} and g["failureMode"]=="FailOpen", g
-assert [d["entries"][0]["name"] for d in g["descriptors"]]==["fd_credential","fd_source"], g
-assert "source.address" in g["descriptors"][1]["entries"][0]["expression"] and "x-forwarded" not in json.dumps(g).lower(), g
+assert [d["entries"][0]["name"] for d in g["descriptors"]]==["fd_credential"], g  # the source limit is counted before authentication (below)
+assert "x-forwarded" not in json.dumps(g).lower(), g
+s=one("AgentgatewayPolicy","ambit-public-source-limit")["spec"]
+assert s["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"Gateway","name":"ambit-public"}], s
+e=s["traffic"]["extAuth"]
+assert s["traffic"]["phase"]=="PreRouting" and set(s["traffic"])=={"phase","extAuth"}, s
+assert e["backendRef"]=={"name":"ambit-ratelimit","port":8080} and e["failureMode"]=="FailOpen", e
+assert e["http"]["path"]=="\"/json\"" and "string(source.address)" in e["http"]["body"] and "fd_source" in e["http"]["body"] and "\"domain\": \"ambit-public\"" in e["http"]["body"], e
+assert e["http"]["allowedRequestHeaders"]==["user-agent"], e  # never the Authorization header: it holds the key of the caller
+assert "x-forwarded" not in json.dumps(e).lower(), e
+svc=[p["port"] for p in one("Service","ambit-ratelimit")["spec"]["ports"]]
+assert svc==[8081,8080], svc  # port 8080 (/json) is published only with the front door
 assert p["traffic"]["rateLimit"]["local"]==[{"requests":200,"unit":"Seconds"}], p
 c=yaml.safe_load(one("ConfigMap","ambit-ratelimit-front-door")["data"]["front-door.yaml"])
 assert c=={"domain":"ambit-public","descriptors":[{"key":"fd_credential","rate_limit":{"unit":"minute","requests_per_unit":600}},{"key":"fd_source","rate_limit":{"unit":"minute","requests_per_unit":120}}]}, c
 v=one("Deployment","ambit-ratelimit")["spec"]["template"]["spec"]["volumes"][0]
 assert [s["configMap"]["name"] for s in v["projected"]["sources"]]==["ambit-ratelimit-config","ambit-ratelimit-front-door"], v
 n=one("NetworkPolicy","ambit-ratelimit")["spec"]["ingress"][0]["from"]
-assert {"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"ambit-public"}}} in n, n' "limits: per key and per source address shared through the ratelimit service, plus a per-pod limit; the ratelimit service admits the public gateway pods"
+assert {"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"ambit-public"}}} in n, n' "limits: per key (after authentication) and per source address (before authentication, every request) shared through the ratelimit service, plus a per-pod limit; the ratelimit service admits the public gateway pods"
 check_fd 'v=one("ValidatingAdmissionPolicy","ambit-public-routes")["spec"]
 assert v["failurePolicy"]=="Fail" and set(v["matchConstraints"]["resourceRules"][0]["resources"])=={"httproutes","grpcroutes","tlsroutes","tcproutes","udproutes"}, v
 e=v["validations"][0]["expression"]
@@ -329,7 +340,7 @@ assert {"name":"ambit.ingress","expression":"\"private\""} in s, s
 assert all(x["spec"].get("type","ClusterIP")=="ClusterIP" for x in docs if x["kind"]=="Service"), [x["metadata"]["name"] for x in docs if x["kind"]=="Service" and x["spec"].get("type","ClusterIP")!="ClusterIP"]
 # The only policies aimed at the public Gateway or its route are the chart'"'"'s three; the controller adds its access-log and offboarding policies.
 t=sorted(x["metadata"]["name"] for x in docs if x["kind"]=="AgentgatewayPolicy" and any(r["kind"] in ("Gateway","HTTPRoute") and r["name"] in ("ambit-public","ambit-mcp-public") for r in x["spec"].get("targetRefs",[])))
-assert t==["ambit-mcp-public-auth","ambit-public-limits"], t' "public gateway: ClusterIP in the test values, controller flag, ambit.ingress in the access-log base, only two chart policies target it"
+assert t==["ambit-mcp-public-auth","ambit-public-limits","ambit-public-source-limit"], t' "public gateway: ClusterIP in the test values, controller flag, ambit.ingress in the access-log base, only three chart policies target it"
 check_fd 'g=one("AgentgatewayPolicy","ambit-mcp-guard")["spec"]["targetRefs"]
 assert [t["name"] for t in g]==["ambit-mcp","ambit-mcp-public"], g
 n=one("NetworkPolicy","ambit-mcp-servers-front-door")["spec"]
@@ -349,8 +360,8 @@ assert a["metadata"]["annotations"]=={"service.beta.kubernetes.io/aws-load-balan
 pp=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml -f test/frontdoor/values.yaml --set frontDoor.clientAddress=proxyProtocol)
 fd=$pp check_fd 'p=one("AgentgatewayPolicy","ambit-public-proxy-protocol")["spec"]
 assert p["frontend"]["proxyProtocol"]=={"mode":"Strict","version":"All"}, p
-g=one("AgentgatewayPolicy","ambit-public-limits")["spec"]["traffic"]["rateLimit"]["global"]
-assert g["descriptors"][1]["entries"][0]["expression"]=="string(source.address)", g' "clientAddress proxyProtocol: the Gateway requires the PROXY protocol"
+e=one("AgentgatewayPolicy","ambit-public-source-limit")["spec"]["traffic"]["extAuth"]["http"]
+assert "string(source.address)" in e["body"], e' "clientAddress proxyProtocol: the Gateway requires the PROXY protocol"
 # Refusals: each message names the value.
 refuse() { local why=$1; shift; ! ${RT:-fdt} "$@" >/dev/null 2>"$W2" || { echo "FAIL chart: $why must be refused"; exit 1; }; grep -q "$MSG" "$W2" || { echo "FAIL chart: $why: wrong message: $(head -c 300 "$W2")"; exit 1; }; }
 W2=$(mktemp)

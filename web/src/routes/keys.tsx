@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { sendJSON, useMe, useModels, useMyAccess } from "@/api";
 import { cn } from "@/lib/utils";
 import { FIRST_USE_TIMEOUT_MS, firstUseLine, keySetCommand, nextTabId, shellNames, toolTabs, usableModelIds, type Block, type Scope, type Shell as ShellName } from "@/lib/tool-setup";
@@ -163,7 +163,7 @@ function KeyDetail({ k, urls, lastUsedAvailable, onClose }: { k: KeyView; urls: 
         {facts.map(([t, v]) => <div key={t} className="contents"><dt className="text-muted">{t}</dt>
           <dd data-testid={`key-${t.toLowerCase().replace(/ /g, "-")}`} className={t === "Starts with" ? "font-mono text-small" : ""}>{v}</dd></div>)}
       </dl>
-      <p>The console showed this key once, when it was created, and cannot show it again. Where the steps below show <span className="font-mono">{KEY_PLACEHOLDER}</span>, put in the key you saved. {k.agent ? <>This key belongs to the agent <span className="font-mono">{k.agent}</span> and carries its scope. If you lost it, revoke this key and create a new key for the agent with <span className="font-mono">POST /api/agents/{k.agent}/keys</span>; a key created on this page has no scope.</> : "If you lost it, revoke this key and create a new one."}</p>
+      <p>The console showed this key once, when it was created, and cannot show it again. Where the steps below show <span className="font-mono">{KEY_PLACEHOLDER}</span>, put in the key you saved. {k.agent ? <>This key belongs to the agent <span className="font-mono">{k.agent}</span> and carries its scope. If you lost it, revoke this key and create a new key for the agent on the <Link to="/agents" search={{ agent: k.agent }} className="underline">Agents page</Link>; a key created on this page has no scope.</> : "If you lost it, revoke this key and create a new one."}</p>
       <div className="space-y-1">
         <CopyBlock text={keySetCommand(urls, k.scope)} testId="key-set-command" label="Store the key you saved in your keychain (ambit CLI)" />
         <p className="text-small text-muted">It asks for the key (the input is hidden). After it, ambit connect and ambit key print use the stored key.</p>

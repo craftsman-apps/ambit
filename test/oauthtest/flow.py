@@ -14,6 +14,9 @@ import urllib.parse, urllib.request
 GW = int(os.environ["GW_PORT"]); IDP_PORT = int(os.environ["IDP_PORT"]); CA = os.environ["CA_FILE"]
 AUTH = os.environ["AUTH_HOST"]; MCP = os.environ["MCP_HOST"]; IDP = os.environ["IDP_HOST"]; CONSOLE = os.environ["CONSOLE_URL"]
 KUBECTL = os.environ["KUBECTL"].split()
+# The stop list (ConfigMap ambit-agent-stops) may be written by the console only (admission policy ambit-keys-writer): the test acts as the
+# console's service account, as a pod of it.
+KUBECTL_CONSOLE = os.environ.get("KUBECTL_CONSOLE", os.environ["KUBECTL"]).split()
 IDP_PORT_URL = int(os.environ.get("IDP_URL_PORT", "443"))
 IDP_BASE = f"https://{IDP}" + ("" if IDP_PORT_URL == 443 else f":{IDP_PORT_URL}")
 RES = f"https://{MCP}/mcp"; ISS = f"https://{AUTH}"
@@ -197,9 +200,12 @@ def console_post(path, data=None):
 
 
 def stop_list(*entries):
-    cm = {"gen": 1, "entries": [{"kind": k, "name": n, "gen": 1, "slot": i} for i, (k, n) in enumerate(entries)]}
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    cm = {"gen": int(time.time()), "entries": [{"kind": k, "name": n, "gen": int(time.time()), "slot": i, "requestedAt": now} for i, (k, n) in enumerate(entries)]}
     y = subprocess.run(KUBECTL + ["create", "configmap", "ambit-agent-stops", "--from-literal=list.json=" + json.dumps(cm), "--dry-run=client", "-o", "yaml"], capture_output=True, text=True).stdout
-    subprocess.run(KUBECTL + ["apply", "-f", "-"], input=y, capture_output=True, text=True)
+    r = subprocess.run(KUBECTL_CONSOLE + ["apply", "-f", "-"], input=y, capture_output=True, text=True)
+    if r.returncode != 0:
+        print("FAIL the stop list could not be written:", r.stderr.strip()[:300]); sys.exit(1)
 
 
 def wait(fn, secs=30, every=1.0):

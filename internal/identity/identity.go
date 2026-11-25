@@ -143,3 +143,38 @@ func AgentAttr(keyField, claim, tokenIssuer string) string {
 // TokenIssuer is the access log's ambit.token_issuer: the validated issuer of a JWT, "" for keys and for requests
 // that carry no token.
 const TokenIssuer = `((` + PresentedKey + `) || !has(jwt.iss)) ? "" : jwt.iss`
+
+// StopList is one chunk of the gateway's stop policy (docs/agents.md, "Stopping an agent"): a Require rule that is true
+// for every request except those of a stopped agent or grant. It is the authoritative check for every accepted
+// credential: a key of a listed agent is refused although its Secret may not be deleted yet, and so is a token (when
+// tokenIssuer is set: only a token of that issuer names an agent or a grant). agents and grants are quoted here; a name
+// is at most 63 characters of [a-z0-9-], and a grant ID is the one Hydra makes.
+func StopList(agents, grants []string, tokenIssuer string) string {
+	quote := func(l []string) string {
+		q := make([]string, len(l))
+		for i, n := range l {
+			q[i] = strconv.Quote(n)
+		}
+		return "[" + strings.Join(q, ", ") + "]"
+	}
+	var hit []string
+	if len(agents) > 0 {
+		hit = append(hit, `(has(apiKey.agent) && apiKey.agent in `+quote(agents)+`)`)
+	}
+	if tokenIssuer != "" {
+		jwt := []string{}
+		if len(agents) > 0 {
+			jwt = append(jwt, `(has(jwt.ambit_agent) && jwt.ambit_agent in `+quote(agents)+`)`)
+		}
+		if len(grants) > 0 {
+			jwt = append(jwt, `(has(jwt.ambit_grant) && jwt.ambit_grant in `+quote(grants)+`)`)
+		}
+		if len(jwt) > 0 {
+			hit = append(hit, `(has(jwt.iss) && jwt.iss == `+strconv.Quote(tokenIssuer)+` && (`+strings.Join(jwt, " || ")+`))`)
+		}
+	}
+	if len(hit) == 0 {
+		return "true"
+	}
+	return "!(" + strings.Join(hit, " || ") + ")"
+}

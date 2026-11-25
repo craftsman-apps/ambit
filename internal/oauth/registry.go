@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"time"
 
@@ -16,33 +17,50 @@ type ValkeyRegistry struct {
 
 func (v *ValkeyRegistry) key() string { return v.Prefix + "dcr-clients" }
 
+// The set is a sorted set: the score is the time of the registration, so that Reset does not drop a client that was registered
+// while the janitor was listing Hydra's clients.
 func (v *ValkeyRegistry) Add(ctx context.Context, id string) (int, error) {
 	pipe := v.C.TxPipeline()
-	pipe.SAdd(ctx, v.key(), id)
-	n := pipe.SCard(ctx, v.key())
+	pipe.ZAdd(ctx, v.key(), redis.Z{Score: float64(time.Now().UnixNano()), Member: id})
+	n := pipe.ZCard(ctx, v.key())
 	if _, err := pipe.Exec(ctx); err != nil {
 		return 0, err
 	}
 	return int(n.Val()), nil
 }
 func (v *ValkeyRegistry) Remove(ctx context.Context, id string) error {
-	return v.C.SRem(ctx, v.key(), id).Err()
+	return v.C.ZRem(ctx, v.key(), id).Err()
 }
 func (v *ValkeyRegistry) Count(ctx context.Context) (int, error) {
-	n, err := v.C.SCard(ctx, v.key()).Result()
+	n, err := v.C.ZCard(ctx, v.key()).Result()
 	return int(n), err
 }
-func (v *ValkeyRegistry) Reset(ctx context.Context, ids []string) error {
-	pipe := v.C.TxPipeline()
-	pipe.Del(ctx, v.key())
-	if len(ids) > 0 {
-		args := make([]any, len(ids))
-		for i, id := range ids {
-			args[i] = id
-		}
-		pipe.SAdd(ctx, v.key(), args...)
+
+// Reset makes the registry match the clients that Hydra listed (ids). since is the time before the listing began: an entry added
+// after it is kept, because the listing may not have seen it.
+func (v *ValkeyRegistry) Reset(ctx context.Context, ids []string, since time.Time) error {
+	old, err := v.C.ZRangeByScore(ctx, v.key(), &redis.ZRangeBy{Min: "-inf", Max: strconv.FormatInt(since.UnixNano(), 10)}).Result()
+	if err != nil {
+		return err
 	}
-	_, err := pipe.Exec(ctx)
+	listed := map[string]bool{}
+	for _, id := range ids {
+		listed[id] = true
+	}
+	var stale []any
+	for _, id := range old {
+		if !listed[id] {
+			stale = append(stale, id)
+		}
+	}
+	pipe := v.C.TxPipeline()
+	if len(stale) > 0 {
+		pipe.ZRem(ctx, v.key(), stale...)
+	}
+	for _, id := range ids { // listed but not known (registered by another replica, or the registry was lost): known from now on
+		pipe.ZAddNX(ctx, v.key(), redis.Z{Score: float64(since.UnixNano()), Member: id})
+	}
+	_, err = pipe.Exec(ctx)
 	return err
 }
 func (v *ValkeyRegistry) Once(ctx context.Context, key string, ttl time.Duration) (bool, error) {
@@ -52,21 +70,21 @@ func (v *ValkeyRegistry) Once(ctx context.Context, key string, ttl time.Duration
 // MemRegistry is the same in memory (tests).
 type MemRegistry struct {
 	mu   sync.Mutex
-	ids  map[string]bool
+	ids  map[string]time.Time // the time of the registration
 	once map[string]time.Time
 	Now  func() time.Time
 }
 
 func (m *MemRegistry) init() {
 	if m.ids == nil {
-		m.ids, m.once = map[string]bool{}, map[string]time.Time{}
+		m.ids, m.once = map[string]time.Time{}, map[string]time.Time{}
 	}
 }
 func (m *MemRegistry) Add(_ context.Context, id string) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.init()
-	m.ids[id] = true
+	m.ids[id] = time.Now()
 	return len(m.ids), nil
 }
 func (m *MemRegistry) Remove(_ context.Context, id string) error {
@@ -81,12 +99,21 @@ func (m *MemRegistry) Count(context.Context) (int, error) {
 	defer m.mu.Unlock()
 	return len(m.ids), nil
 }
-func (m *MemRegistry) Reset(_ context.Context, ids []string) error {
+func (m *MemRegistry) Reset(_ context.Context, ids []string, since time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.ids, m.once = map[string]bool{}, map[string]time.Time{}
+	m.init()
+	listed := map[string]bool{}
 	for _, id := range ids {
-		m.ids[id] = true
+		listed[id] = true
+		if _, ok := m.ids[id]; !ok {
+			m.ids[id] = since
+		}
+	}
+	for id, t := range m.ids {
+		if !listed[id] && !t.After(since) {
+			delete(m.ids, id)
+		}
 	}
 	return nil
 }
@@ -109,6 +136,7 @@ func (m *MemRegistry) Once(_ context.Context, key string, ttl time.Duration) (bo
 // Replicas may run it together: deleting a deleted client is not an error. It returns how many clients it deleted.
 func (s *Server) Janitor(ctx context.Context) (int, error) {
 	cutoff := s.now().Add(-time.Duration(s.Cfg.UnusedClientDays) * 24 * time.Hour)
+	began := time.Now() // the registry's own clock: a client registered after this moment may be missing from the listing
 	var keep []string
 	deleted := 0
 	err := s.Hydra.ListClients(ctx, func(c Client) error {
@@ -134,7 +162,7 @@ func (s *Server) Janitor(ctx context.Context) (int, error) {
 	if err != nil {
 		return deleted, err
 	}
-	return deleted, s.Clients.Reset(ctx, keep)
+	return deleted, s.Clients.Reset(ctx, keep, began)
 }
 
 // RunJanitor runs the janitor every interval until ctx ends.

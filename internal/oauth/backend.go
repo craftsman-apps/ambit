@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/craftsman-apps/ambit/internal/identity"
 )
 
 // ServerChoice is one MCP server a person may let a platform use: what the person's AccessRules allow and the front
@@ -172,7 +174,7 @@ func (d *ConfigDeny) Refresh(ctx context.Context) error {
 			return errors.New("the offboarding list is unreadable")
 		}
 		for _, e := range l {
-			off[strings.ToLower(strings.TrimSpace(e))] = true
+			off[asciiEmail(e)] = true
 		}
 	}
 	st := map[string]bool{}
@@ -217,7 +219,7 @@ func (d *ConfigDeny) Offboarded(email string) (bool, error) {
 	}
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	return d.off[strings.ToLower(strings.TrimSpace(email))], nil
+	return d.off[asciiEmail(email)], nil
 }
 
 func (d *ConfigDeny) Stopped(agent, grant string) (bool, error) {
@@ -241,4 +243,18 @@ func (d *ConfigDeny) Run(ctx context.Context, interval time.Duration, logf func(
 		case <-time.After(interval):
 		}
 	}
+}
+
+// asciiEmail is the address as the rest of Ambit writes it (identity.CanonicalEmail); an unusable one is only trimmed and
+// lower-cased A-Z, so that it still matches the same text in the list.
+func asciiEmail(s string) string {
+	if c, ok := identity.CanonicalEmail(s); ok {
+		return c
+	}
+	return strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' {
+			return r + 32
+		}
+		return r
+	}, strings.TrimSpace(s))
 }

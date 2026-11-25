@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/craftsman-apps/ambit/internal/identity"
 	"golang.org/x/oauth2"
 )
 
@@ -128,9 +129,10 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 		deny("nonce_or_issuer", "the identity provider's answer was not accepted")
 		return
 	}
-	email := strings.ToLower(strings.TrimSpace(claims.Email))
+	// The same rule as everywhere else in Ambit: only A-Z are lower-cased (Unicode lower-casing could make two addresses one).
+	email, usable := identity.CanonicalEmail(claims.Email)
 	switch {
-	case email == "" || strings.Count(email, "@") != 1 || strings.ContainsAny(email, " \t\r\n,;<>\""):
+	case !usable || strings.Count(email, "@") != 1 || strings.ContainsAny(email, " \t\r\n,;<>\""):
 		deny("no_email", "the identity provider sent no usable email address")
 		return
 	case !claims.EmailVerified:

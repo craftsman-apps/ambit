@@ -38,6 +38,11 @@ import (
 type AgentSettings struct {
 	Enabled                            bool
 	MaxTotal, MaxPerPerson, KeyMaxDays int
+	// OrphanDays: how long an itself-mode agent whose person owner left keeps working before it is stopped (0: 7).
+	OrphanDays int
+	// StopRetention: how long a stop entry stays after its credentials are gone and every Gateway acknowledged it
+	// (0: 25 minutes = access token life 15 + 10 leeway).
+	StopRetention time.Duration
 }
 
 const (
@@ -105,11 +110,21 @@ type Agent struct {
 	// Scope: "server" and "server/tool" entries, at most 50. Empty: the agent may use no tool.
 	Scope []string `json:"scope"`
 	// ConnectionConsent: the Connections (apps) whose person-mode owner token the agent may use. Empty: none.
-	ConnectionConsent []string  `json:"connectionConsent"`
-	State             string    `json:"state"`
-	Rev               int       `json:"rev"` // changes with the scope and the platform; keys carry the revision they were written from
-	Created           time.Time `json:"created"`
-	CreatedBy         string    `json:"createdBy"`
+	ConnectionConsent []string `json:"connectionConsent"`
+	State             string   `json:"state"`
+	// Stop (docs/agents.md, "Stopping an agent"): when it was requested and when it was confirmed, whether it could
+	// not be put on the stop list (the list is full: credentials are deleted all the same), when it was reported as not
+	// confirmed, and since when an itself-mode agent's owner has left.
+	StopRequestedAt    *time.Time `json:"stopRequestedAt,omitempty"`
+	StoppedAt          *time.Time `json:"stoppedAt,omitempty"`
+	StopUnlisted       bool       `json:"stopUnlisted,omitempty"`
+	StopNotConfirmedAt *time.Time `json:"stopNotConfirmedAt,omitempty"`
+	// StopAcks: when each Gateway acknowledged the stop, kept for the evidence after the list entry is pruned.
+	StopAcks   map[string]time.Time `json:"stopAcks,omitempty"`
+	OrphanedAt *time.Time           `json:"orphanedAt,omitempty"`
+	Rev        int                  `json:"rev"` // changes with the scope and the platform; keys carry the revision they were written from
+	Created    time.Time            `json:"created"`
+	CreatedBy  string               `json:"createdBy"`
 
 	UID, ResourceVersion string `json:"-"`
 }
@@ -454,6 +469,9 @@ func (s *KeyService) CreateAgent(ctx context.Context, by Session, in AgentInput)
 			return Agent{}, fmt.Errorf("%w: an itself-mode agent gets no app connections in 0.6.0", ErrBadInput)
 		}
 		a.Mode, a.Name, a.Group = ModeItself, in.Name, strings.TrimSpace(in.Group)
+		if a.Name == "stops" || a.Name == "stops-ack" { // their records would be the ConfigMaps of the stop list and its acknowledgment
+			return Agent{}, fmt.Errorf("%w: the names stops and stops-ack are reserved", ErrBadInput)
+		}
 		if !accountNamePattern.MatchString(a.Name) || !groupPattern.MatchString(a.Group) || len(a.Group) > maxGroupLen || slices.Contains(roleGroups, a.Group) {
 			return Agent{}, fmt.Errorf("%w: give a name (lower-case letters, digits, -) and a group", ErrBadInput)
 		}
@@ -547,11 +565,13 @@ func (s *KeyService) changeAgent(ctx context.Context, name string, rule func(a *
 		if err != nil {
 			return err
 		}
+		stored := a
 		write, err := rule(&a)
 		out = a
 		if err != nil || !write {
 			return err
 		}
+		out = stored // until the write succeeds, the answer is what is stored
 		cm := s.record(a)
 		if len(cm.Data["agent.json"]) > maxAgentRecord {
 			return fmt.Errorf("%w: the agent record is too large", ErrBadInput)
@@ -559,6 +579,7 @@ func (s *KeyService) changeAgent(ctx context.Context, name string, rule func(a *
 		if err := s.Client.Update(ctx, cm); err != nil {
 			return err
 		}
+		out = a
 		out.UID, out.ResourceVersion = string(cm.UID), cm.ResourceVersion
 		return nil
 	})
@@ -784,8 +805,8 @@ func (s *KeyService) MoveAgent(ctx context.Context, by Session, name, owner stri
 			return false, fmt.Errorf("%w: only an itself-mode agent has an owner you can move", ErrBadInput)
 		}
 		before = a.Owner
-		a.Owner = owner
-		return a.Owner != before, nil
+		a.Owner, a.OrphanedAt = owner, nil
+		return true, nil
 	})
 	if err == nil && before != a.Owner {
 		s.event(ctx, actor, "agent-move", "", a.Owner, "agent="+a.Name+" from="+before)

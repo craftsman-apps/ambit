@@ -250,8 +250,10 @@ keys only needs no database.
 |---|---|
 | PostgreSQL **15, 16 or 17** | The start check reads `server_version_num`. CI runs 17 and 15. |
 | TLS, and the server's name proven: `sslmode=verify-full` and a CA | The start check refuses every other `sslmode` (`disable`, `allow`, `prefer`, `require`, `verify-ca`, none) before it connects, and then checks that its own session uses TLS. |
-| One database and one owner role, **not a superuser** | The start check refuses a superuser role. The role needs no other right. |
+| One database and one owner role, **not a superuser** | The start check refuses a superuser role, and a session that runs as another role than the one that logged in. The role needs no other right. |
 | Connections: `max_conns` in the address, and `pods × max_conns + 1` within the role's `CONNECTION LIMIT` | The address must name `max_conns` (1 to 64; the chart's example uses 8); the start check compares the role's limit. |
+
+The address may carry only these parameters: `sslmode`, `sslrootcert`, `max_conns`, `max_idle_conns`, `max_conn_lifetime`, `max_idle_conn_time` and `connect_timeout`. Any other (a `host`, `options`, a startup setting) is refused, and its name is not printed. When the connection fails, the message holds a fixed text and, for a refusal by the server, the SQLSTATE code; it never holds the server's own words or the address.
 
 The check is the init container `check-database` of each Hydra pod (`ambit-auth check-database`). It changes nothing in
 the database and never prints the address or the password. If it fails, the pod does not start and its log names the fix:
@@ -265,8 +267,8 @@ kubectl -n ambit-system logs ambit-hydra-1 -c check-database
 | Tested on kind in CI | What it shows |
 |---|---|
 | PostgreSQL 17 and 15, TLS only (a `hostnossl` line that rejects plain connections) | Hydra starts, migrates and serves on both. |
-| The start check, 16 cases | The refusals above, a wrong CA, a name that is not in the certificate, too few connections and a wrong password; no log repeats a password. |
-| Two migrations of an empty PostgreSQL 15 database at the same time, and a repeat | One or both of two at the same time can fail (Hydra v26.2.0 races on its first table); a run on its own succeeds. This is why Hydra's pods start one at a time. |
+| The start check, 16 cases | Every refused `sslmode`, a missing CA or `max_conns`, a wrong CA, a name that is not in the certificate, a superuser, too few connections and a wrong password; no log repeats a password. A login role that differs from the role in effect or from the user in the address is covered by unit tests only. |
+| Two migrations of an empty PostgreSQL 15 database started one after the other, and a repeat | Two that overlap can fail, one or both (Hydra v26.2.0 races on its first table; the test starts them at once but does not prove that they overlap); a run on its own succeeds. This is why Hydra's pods start one at a time. |
 | Changing the address from one database to another and back (a Secret change) | A new, empty database gets its own signing key; going back finds the first key again. |
 
 Measured separately on kind during the design (a prototype, not in CI): a logical dump and restore (`pg_dump -Fc`,
@@ -307,8 +309,18 @@ The **admin API can read Hydra's private keys, and it has no password of its own
 admits only the two callers above, **by pod label**. So the rule holds only while nobody who can create pods in the Ambit
 namespace is untrusted (a pod with the label `app.kubernetes.io/name: ambit-auth` would be let in), and only on a cluster
 network that enforces NetworkPolicy (kindnet, Calico, Cilium and the major clouds' policy engines do; check yours, the
-test `test/stepoauth.sh` shows how). Treat the right to create pods in this namespace as the right to read the signing key. The Kubernetes API refuses any route on the public Gateway that the chart did not write
-(`ValidatingAdmissionPolicy ambit-public-routes`).
+test `test/stepoauth.sh` shows how). Treat the right to create pods in this namespace as the right to read the signing key.
+
+Two more things widen that rule, and neither is a bug of the chart. **First**, a NetworkPolicy does not limit traffic that a pod receives
+from the node it runs on: a process on the node that runs a Hydra pod can reach port 4445 of that pod. **Second**, NetworkPolicies add up:
+another policy in this namespace that admits more pods to Hydra's pods widens the access, whatever this chart says. Whoever can change
+NetworkPolicies, or run a process on the nodes of Hydra's pods, can read the signing key.
+
+The Kubernetes API refuses any route on the public Gateway that the chart did not write (`ValidatingAdmissionPolicy ambit-public-routes`):
+the name, the exact paths, the backend, the listener, and the exact header filter of each route. The policy checks a route when it is created or changed: a route that already named `ambit-public` before the policy existed is not checked (see "Before you turn it on" in [front-door.md](front-door.md)). A route may not rewrite a path, mirror a
+request or edit other headers. The policy does not pin the sign-in host of the Hydra route (the host comes from `frontDoor.authHost`, which
+the policy cannot know when you enable OAuth in the same upgrade); it refuses a wildcard host, and the listener `https-auth` admits only the
+host `frontDoor.authHost` whatever the route says.
 
 Hydra's own dynamic client registration is turned off. Access tokens are signed JWTs that live `oauth.accessTokenMinutes`
 (default 15); a refresh token not used for `oauth.refreshTokenIdleDays` (default 30) stops working; PKCE is required for

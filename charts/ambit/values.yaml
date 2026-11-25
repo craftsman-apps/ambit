@@ -137,6 +137,12 @@ agents:
   # The longest end date of an agent key: 30, 90 or 365 (also limited by apiKeys.maxDays, and for itself mode by
   # serviceAccounts.maxDays).
   keyMaxDays: 90
+  # An itself-mode agent whose person owner was offboarded keeps working this many days (1-90); an admin moves it to a
+  # new owner, or it is stopped.
+  orphanDays: 7
+  # A stop entry stays in the stop list this many minutes after the agent's credentials are gone and every Gateway
+  # acknowledged it (10-1440): 15 minutes of access token life plus 10 minutes of leeway.
+  stopRetentionMinutes: 25
   # Reserved for OAuth (0.6.0, later): the issuer whose tokens may carry agent claims. Empty: no token is read as an
   # agent's, and no token is limited by an agent scope.
   tokenIssuer: ""
@@ -221,7 +227,8 @@ frontDoor:
   # protocol v2 enabled, and others); the gateway then refuses connections without it. X-Forwarded-For is never trusted.
   clientAddress: direct
   rateLimit:
-    # Shared by all gateway pods (the ratelimit service counts in Valkey). Per valid key, and per source address.
+    # Shared by all gateway pods (the ratelimit service counts in Valkey). Per valid key; and per source address, counting
+    # every request of the address, refused ones included (a wrong key, an unknown path), before authentication.
     perCredentialPerMinute: 600
     perSourcePerMinute: 120
     # A second line in each gateway pod, for all requests, if the ratelimit service is down.

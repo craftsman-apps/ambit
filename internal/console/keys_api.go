@@ -105,6 +105,34 @@ func (c *Catalog) registerKeys(mux *http.ServeMux, read func(func(http.ResponseW
 			c.Keys.ResetLimitsForTest()
 			w.WriteHeader(http.StatusNoContent)
 		}, RoleAdmin))
+		mux.HandleFunc("POST /api/test/agents/{name}/list-only", allow("only admins can use test hooks", func(w http.ResponseWriter, r *http.Request, _ Session) {
+			var in struct {
+				On bool `json:"on"`
+			}
+			if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&in) != nil {
+				writeErr(w, http.StatusBadRequest, `send {"on": true|false}`)
+				return
+			}
+			if err := c.Keys.TestListOnly(r.Context(), r.PathValue("name"), in.On); err != nil {
+				keyErr(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}, RoleAdmin))
+		mux.HandleFunc("POST /api/test/agents/stop-fill", allow("only admins can use test hooks", func(w http.ResponseWriter, r *http.Request, _ Session) {
+			var in struct {
+				N int `json:"n"`
+			}
+			if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024)).Decode(&in) != nil || in.N < 0 || in.N > 1000 {
+				writeErr(w, http.StatusBadRequest, `send {"n": 0..1000}`)
+				return
+			}
+			if err := c.Keys.TestFillStopList(r.Context(), in.N); err != nil {
+				keyErr(w, err)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		}, RoleAdmin))
 		mux.HandleFunc("POST /api/test/keys/repair", allow("only admins can use test hooks", func(w http.ResponseWriter, r *http.Request, _ Session) {
 			if _, err := c.Keys.Repair(r.Context()); err != nil {
 				keyErr(w, err)
@@ -129,6 +157,11 @@ func keyErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusUnauthorized, err.Error())
 	case errors.Is(err, ErrKeysOff), errors.Is(err, ErrServicesOff), errors.Is(err, ErrNameTaken), errors.Is(err, ErrAgentsOff),
 		errors.Is(err, ErrAgentLimit), errors.Is(err, ErrAgentNotActive):
+		writeErr(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrStartTooSoon):
+		w.Header().Set("Retry-After", "30")
+		writeErr(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrNotStopped):
 		writeErr(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrNoAgent):
 		writeErr(w, http.StatusNotFound, err.Error())

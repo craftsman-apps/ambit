@@ -55,6 +55,7 @@ export function Shell({ crumb, children }: { crumb: string; children: ReactNode 
         <Section>You</Section>
         <NavLink to="/connections">My connections</NavLink>
         <NavLink to="/keys">Keys</NavLink>
+        <NavLink to="/agents">Agents</NavLink>
         {u.role === "admin" && <><Section>Settings</Section><NavLink to="/settings/sign-in">Sign-in</NavLink><NavLink to="/settings/apps">Apps</NavLink><NavLink to="/settings/keys">Keys</NavLink><NavLink to="/settings/service-accounts">Service accounts</NavLink><NavLink to="/settings/offboarding">Offboarding</NavLink><NavLink to="/settings/evidence">Evidence</NavLink><NavLink to="/settings/dependencies">Dependencies</NavLink></>}
       </nav>
       <div className="flex flex-col">

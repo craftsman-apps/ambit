@@ -1,6 +1,7 @@
 package connect
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,4 +74,34 @@ func Quote(goos, s string) string {
 		return `"` + s + `"`
 	}
 	return `'` + strings.ReplaceAll(s, `'`, `'\''`) + `'`
+}
+
+// QuoteCmd quotes for tools that run the command with cmd.exe (Hermes Agent) or with Git Bash, else cmd.exe (pi).
+// On Windows that is always double quotes: cmd.exe does not read single quotes. Double quotes are only safe for
+// both shells when the text has none of the characters CheckCmdSafe refuses.
+func QuoteCmd(goos, s string) string {
+	if goos == "windows" {
+		return `"` + s + `"`
+	}
+	return Quote(goos, s)
+}
+
+// CheckCmdSafe refuses, on Windows, a path or address that no quoting makes right for both cmd.exe and Git Bash:
+// Git Bash reads $ and a backtick inside double quotes, and a double quote cannot be escaped. A % is left out on
+// purpose: cmd.exe changes only %NAME% for a variable that exists, which no real folder or address is named.
+func CheckCmdSafe(goos, tool string, vals ...string) error {
+	if goos != "windows" {
+		return nil
+	}
+	for i, v := range vals {
+		if strings.ContainsAny(v, "\"$`") {
+			what, next := "the path of ambit", "install ambit in a folder whose path has none of them (npm install -g @craftsman-apps/ambit), then run the command again"
+			if i > 0 {
+				what, next = "the address", "use an address without them, then run the command again"
+			}
+			return &out.Error{What: tool + " cannot run a command with " + what, Why: fmt.Sprintf("%q has a $ ` or \" character, which cmd.exe and Git Bash read differently", v),
+				Next: next, Code: out.ExitFailed}
+		}
+	}
+	return nil
 }

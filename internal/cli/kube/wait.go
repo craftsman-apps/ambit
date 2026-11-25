@@ -69,7 +69,7 @@ func WaitWorkloads(ctx context.Context, cs kubernetes.Interface, ns string, requ
 		}
 		names := make([]string, 0, len(waiting))
 		for _, p := range waiting {
-			names = append(names, p.Name)
+			names = append(names, podProgress(&p, time.Now()))
 		}
 		sort.Strings(names)
 		// The pods first, then every workload line: a waiting pod must not hide a workload with no pod at all.
@@ -92,6 +92,39 @@ func WaitWorkloads(ctx context.Context, cs kubernetes.Interface, ns string, requ
 		case <-time.After(every):
 		}
 	}
+}
+
+// podProgress is the pod's name for a progress line. A pod whose container has not started yet also says which
+// image it waits for (a download can take minutes) and how long the pod has existed (#364).
+func podProgress(p *corev1.Pod, now time.Time) string {
+	img := waitingImage(p)
+	if img == "" {
+		return p.Name
+	}
+	s := p.Name + " (starting image " + img
+	if !p.CreationTimestamp.IsZero() {
+		s += ", pod created " + now.Sub(p.CreationTimestamp.Time).Round(time.Second).String() + " ago"
+	}
+	return s + ")"
+}
+
+// waitingImage returns the image (without its digest) of the first container that has not started because it is
+// being created or its image is being pulled, or "".
+func waitingImage(p *corev1.Pod) string {
+	images := map[string]string{}
+	for _, c := range append(append([]corev1.Container{}, p.Spec.InitContainers...), p.Spec.Containers...) {
+		images[c.Name] = c.Image
+	}
+	for _, cs := range append(append([]corev1.ContainerStatus{}, p.Status.InitContainerStatuses...), p.Status.ContainerStatuses...) {
+		if w := cs.State.Waiting; w != nil {
+			switch w.Reason {
+			case "ContainerCreating", "PodInitializing", "ImagePullBackOff", "ErrImagePull":
+				img, _, _ := strings.Cut(images[cs.Name], "@")
+				return img
+			}
+		}
+	}
+	return ""
 }
 
 // workloadsReady returns one line for each workload that is not complete, and the last API error. A list that

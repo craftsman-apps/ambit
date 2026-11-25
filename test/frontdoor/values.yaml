@@ -1,0 +1,11 @@
+# The public front door (docs/front-door.md) on the kind test cluster and in test/chart.sh. Not for production:
+# a ClusterIP Service (the test reaches it through a port-forward), and low limits so the test can reach them.
+# The certificate Secret ambit-public-tls is made by test/stepfd.sh.
+frontDoor:
+  enabled: true
+  host: mcp-public.localtest.me
+  tls: { certificateSecret: ambit-public-tls }
+  replicas: 2
+  service: { type: ClusterIP }
+limits:
+  enabled: true

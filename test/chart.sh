@@ -234,4 +234,94 @@ reuse=$(helm template ambit "$old/ambit" -n ambit-system -f deploy/quickstart.ya
 grep -q -- '--users-require-verified-email=true' <<<"$reuse" || { echo "FAIL chart: values of 0.1.0 only must keep users on verified emails"; exit 1; }
 grep -q -- '--access-mode=enforce' <<<"$reuse" && grep -q -- '--activation-timeout=120s' <<<"$reuse" && grep -q -- '--activation-settle=3s' <<<"$reuse" || { echo "FAIL chart: values of 0.1.0 only must give enforce and the default timings"; exit 1; }
 ! grep -q 'access.mode is audit' <<<"$(helm template ambit "$old/ambit" -n ambit-system -f deploy/quickstart.yaml --show-only templates/NOTES.txt 2>&1)" || { echo "FAIL chart: no audit warning with the values of 0.1.0 only"; exit 1; }
+# The public front door (frontDoor.*): off by default, and when on, HTTPS only, one host, one route, keys only.
+fdv=(-f deploy/quickstart.yaml -f test/frontdoor/values.yaml)
+fdt() { helm template ambit charts/ambit -n ambit-system "${fdv[@]}" "$@"; }
+dflt=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set limits.enabled=true)
+! grep -q 'ambit-public' <<<"$dflt" || { echo "FAIL chart: nothing of the front door is rendered by default"; exit 1; }
+! grep -q 'ambit.ingress' <<<"$dflt" || { echo "FAIL chart: no ambit.ingress attribute without the front door"; exit 1; }
+! grep -q -- '--public-gateway' <<<"$dflt" || { echo "FAIL chart: no controller flag without the front door"; exit 1; }
+fd=$(fdt) || { echo "FAIL chart: the front door values must render"; exit 1; }
+check_fd() { uv run --no-project --with pyyaml python -c "import sys,yaml,json
+docs=[d for d in yaml.safe_load_all(sys.stdin) if d]
+def one(kind,name): return [x for x in docs if x['kind']==kind and x['metadata']['name']==name][0]
+$1" <<<"$fd" || { echo "FAIL chart: $2"; exit 1; }; }
+check_fd 'g=one("Gateway","ambit-public")["spec"]
+l=g["listeners"]
+assert len(l)==1 and l[0]["protocol"]=="HTTPS" and l[0]["tls"]["mode"]=="Terminate" and l[0]["hostname"]=="mcp-public.localtest.me", l
+assert l[0]["tls"]["certificateRefs"]==[{"name":"ambit-public-tls"}], l
+assert l[0]["allowedRoutes"]=={"namespaces":{"from":"Same"},"kinds":[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute"}]}, l
+assert g["infrastructure"]["parametersRef"]["name"]=="ambit-public", g' "public Gateway: one HTTPS listener bound to the host, same-namespace HTTPRoutes only, no HTTP listener"
+check_fd 'on=[x["metadata"]["name"] for x in docs if x["kind"] in ("HTTPRoute","GRPCRoute","TLSRoute","TCPRoute","UDPRoute") and any(p["name"]=="ambit-public" for p in x["spec"].get("parentRefs",[]))]
+assert on==["ambit-mcp-public"], on
+r=one("HTTPRoute","ambit-mcp-public")["spec"]
+assert r["hostnames"]==["mcp-public.localtest.me"] and len(r["rules"])==1, r
+assert r["rules"][0]["matches"]==[{"path":{"type":"Exact","value":"/mcp"}}], r
+assert r["rules"][0]["backendRefs"]==[{"group":"agentgateway.dev","kind":"AgentgatewayBackend","name":"ambit-mcp-public"}], r
+assert set(r["rules"][0]["filters"][0]["requestHeaderModifier"]["remove"])=={"X-Ambit-User","x-api-key","authorization"}, r
+for x in docs:
+  if x["kind"]=="HTTPRoute" and x["metadata"]["name"]!="ambit-mcp-public":
+    assert all(p["name"]!="ambit-public" for p in x["spec"].get("parentRefs",[])), x["metadata"]["name"]
+    assert "mcp-public.localtest.me" not in x["spec"].get("hostnames",[]), x["metadata"]["name"]' "only the route ambit-mcp-public is attached to ambit-public: exact /mcp on the public host; no private route names it"
+check_fd 'p=one("AgentgatewayPolicy","ambit-mcp-public-auth")["spec"]
+t=p["traffic"]
+assert p["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute","name":"ambit-mcp-public"}], p
+assert "jwtAuthentication" not in t, "no token is accepted on the public route"
+assert t["apiKeyAuthentication"]["secretSelector"]["matchLabels"]=={"ambitproject.dev/key":"true","ambitproject.dev/key-mcp":"true"}, t
+e=t["authorization"]["policy"]["matchExpressions"]
+assert t["authorization"]["action"]=="Require" and len(e)==1 and "has(apiKey.keyId)" in e[0] and "Bearer ambit_" in e[0] and "timestamp(apiKey.until)" in e[0], e' "public route: keys only (no JWT), a valid unexpired MCP key is required"
+check_fd 'p=one("AgentgatewayPolicy","ambit-public-limits")["spec"]
+assert p["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"Gateway","name":"ambit-public"}], p
+g=p["traffic"]["rateLimit"]["global"]
+assert g["domain"]=="ambit-public" and g["backendRef"]=={"name":"ambit-ratelimit","port":8081} and g["failureMode"]=="FailOpen", g
+assert [d["entries"][0]["name"] for d in g["descriptors"]]==["fd_credential","fd_source"], g
+assert "source.address" in g["descriptors"][1]["entries"][0]["expression"] and "x-forwarded" not in json.dumps(g).lower(), g
+assert p["traffic"]["rateLimit"]["local"]==[{"requests":200,"unit":"Seconds"}], p
+c=yaml.safe_load(one("ConfigMap","ambit-ratelimit-front-door")["data"]["front-door.yaml"])
+assert c=={"domain":"ambit-public","descriptors":[{"key":"fd_credential","rate_limit":{"unit":"minute","requests_per_unit":600}},{"key":"fd_source","rate_limit":{"unit":"minute","requests_per_unit":120}}]}, c
+v=one("Deployment","ambit-ratelimit")["spec"]["template"]["spec"]["volumes"][0]
+assert [s["configMap"]["name"] for s in v["projected"]["sources"]]==["ambit-ratelimit-config","ambit-ratelimit-front-door"], v
+n=one("NetworkPolicy","ambit-ratelimit")["spec"]["ingress"][0]["from"]
+assert {"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"ambit-public"}}} in n, n' "limits: per key and per source address shared through the ratelimit service, plus a per-pod limit; the ratelimit service admits the public gateway pods"
+check_fd 'v=one("ValidatingAdmissionPolicy","ambit-public-routes")["spec"]
+assert v["failurePolicy"]=="Fail" and set(v["matchConstraints"]["resourceRules"][0]["resources"])=={"httproutes","grpcroutes","tlsroutes","tcproutes","udproutes"}, v
+assert "ambit-mcp-public" in v["validations"][0]["expression"] and "mcp-public.localtest.me" in v["validations"][0]["expression"], v
+b=one("ValidatingAdmissionPolicyBinding","ambit-public-routes")["spec"]
+assert b["policyName"]=="ambit-public-routes" and b["validationActions"]==["Deny"], b' "admission policy: no other route may name the public Gateway"
+check_fd 'a=one("AgentgatewayParameters","ambit-public")["spec"]["service"]["spec"]
+assert a["type"]=="ClusterIP" and "externalTrafficPolicy" not in a, a
+c=one("Deployment","ambit-controller")["spec"]["template"]["spec"]["containers"][0]["command"]
+assert "--public-gateway=ambit-public" in c, c
+s=yaml.safe_load(one("ConfigMap","ambit-access-log-base")["data"]["spec.yaml"])["frontend"]["accessLog"]["attributes"]["add"]
+assert {"name":"ambit.ingress","expression":"\"private\""} in s, s
+# Nothing rendered by the chart is a load balancer except through the gateways Parameters; no Service names the public gateway.
+assert all(x["spec"].get("type","ClusterIP")=="ClusterIP" for x in docs if x["kind"]=="Service"), [x["metadata"]["name"] for x in docs if x["kind"]=="Service" and x["spec"].get("type","ClusterIP")!="ClusterIP"]
+# The only policies aimed at the public Gateway or its route are the chart'"'"'s three; the controller adds its access-log and offboarding policies.
+t=sorted(x["metadata"]["name"] for x in docs if x["kind"]=="AgentgatewayPolicy" and any(r["name"] in ("ambit-public","ambit-mcp-public") for r in x["spec"].get("targetRefs",[])))
+assert t==["ambit-mcp-public-auth","ambit-public-limits"], t' "public gateway: ClusterIP in the test values, controller flag, ambit.ingress in the access-log base, only two chart policies target it"
+# The load balancer defaults of the real thing (type LoadBalancer): the client address is kept and the source ranges are passed on.
+lb=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml -f test/frontdoor/values.yaml --set frontDoor.service.type=LoadBalancer --set 'frontDoor.service.loadBalancerSourceRanges={203.0.113.0/24}' --set 'frontDoor.service.annotations.service\.beta\.kubernetes\.io/aws-load-balancer-type=nlb')
+fd=$lb check_fd 'a=one("AgentgatewayParameters","ambit-public")["spec"]["service"]
+assert a["spec"]["type"]=="LoadBalancer" and a["spec"]["externalTrafficPolicy"]=="Local" and a["spec"]["loadBalancerSourceRanges"]==["203.0.113.0/24"], a
+assert a["metadata"]["annotations"]=={"service.beta.kubernetes.io/aws-load-balancer-type":"nlb"}, a' "LoadBalancer: externalTrafficPolicy Local, source ranges and annotations reach the Service"
+pp=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml -f test/frontdoor/values.yaml --set frontDoor.clientAddress=proxyProtocol)
+fd=$pp check_fd 'p=one("AgentgatewayPolicy","ambit-public-proxy-protocol")["spec"]
+assert p["frontend"]["proxyProtocol"]=={"mode":"Strict","version":"All"}, p
+g=one("AgentgatewayPolicy","ambit-public-limits")["spec"]["traffic"]["rateLimit"]["global"]
+assert g["descriptors"][1]["entries"][0]["expression"]=="string(source.address)", g' "clientAddress proxyProtocol: the Gateway requires the PROXY protocol"
+# Refusals: each message names the value.
+refuse() { local why=$1; shift; ! fdt "$@" >/dev/null 2>"$W2" || { echo "FAIL chart: $why must be refused"; exit 1; }; grep -q "$MSG" "$W2" || { echo "FAIL chart: $why: wrong message: $(head -c 300 "$W2")"; exit 1; }; }
+W2=$(mktemp)
+MSG='frontDoor.host' refuse "no host" --set frontDoor.host=
+MSG='certificateSecret' refuse "no certificate" --set frontDoor.tls.certificateSecret=
+MSG='also a private host name' refuse "the console's host name" --set frontDoor.host=console.localtest.me
+MSG='also a private host name' refuse "the MCP host name" --set frontDoor.host=mcp.localtest.me
+MSG='limits.enabled' refuse "no shared limits" --set limits.enabled=false
+MSG='evidence.enabled' refuse "no audit" --set evidence.enabled=false
+MSG='apiKeys.enabled' refuse "no API keys" --set apiKeys.enabled=false
+MSG='mcp.enabled' refuse "no MCP" --set mcp.enabled=false
+MSG='clientAddress' refuse "trusting X-Forwarded-For" --set frontDoor.clientAddress=xForwardedFor
+MSG='failureMode' refuse "a bad failure mode" --set frontDoor.rateLimit.failureMode=Maybe
+MSG='perSourcePerMinute' refuse "a zero limit" --set frontDoor.rateLimit.perSourcePerMinute=0
+rm -f "$W2"
 echo "PASS chart"

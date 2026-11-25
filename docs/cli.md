@@ -53,14 +53,14 @@ Creates a local Ambit on a kind cluster, or repairs one that `ambit local up` cr
 | `--chart-repo <repository>` | `oci://ghcr.io/craftsman-apps/charts` | a mirror of the chart registry |
 | `--registry-config <file>` | Helm's | Helm registry login file, for a private registry |
 
-**Running from a checkout (contributors).** A build from source (`go build -tags dev`) has no chart version, so it needs `--chart-dir`, and two things must exist first:
+**Running from a checkout (contributors).** A build from source (`go build -tags dev -o ambit ./cmd/ambit`) has no chart version, so it needs `--chart-dir`, and two things must exist first:
 
 1. The chart's dependencies: run `helm dependency build charts/ambit`. Without the packed files in `charts/ambit/charts/*.tgz`, `ambit local up` stops and names this command.
 2. A console image that matches the chart. The chart uses its `appVersion` (`0.0.1`) as the image tag, so build `ghcr.io/craftsman-apps/ambit-console:0.0.1` (`docker build -t ghcr.io/craftsman-apps/ambit-console:0.0.1 .`), save it (`docker save -o console.tar ghcr.io/craftsman-apps/ambit-console:0.0.1`) and give the file to `--dev-load-archive console.tar`, which loads it into the kind node. If the image is missing, the pod stays in `ImagePullBackOff`, and the progress line names the image.
 
-Then run `ambit local up --chart-dir charts --dev-load-archive console.tar`.
+Then run `./ambit local up --chart-dir charts --dev-load-archive console.tar`.
 
-When a pod waits for its container to start, the progress line (every 10 seconds) names the image and how long ago the pod was created, for example `waiting for ambit-clickhouse-0 (waiting for image clickhouse/clickhouse-server:26.3.36.6, pod created 4m10s ago)`. A large image can take minutes to download on a slow connection.
+When a pod waits for its container to start, the progress line (every 10 seconds) names the image and how long ago the pod was created, for example `waiting for ambit-clickhouse-0 (starting image clickhouse/clickhouse-server:26.3.36.6, pod created 4m10s ago)`. A large image can take minutes to download on a slow connection.
 
 The CLI uses only the kubectl context `kind-<name>` and gives back your previous current context after kind creates the cluster. It keeps an existing OpenRouter Secret on a repair unless you give a new key. Proxies: the CLI and the kind node use `HTTPS_PROXY` and `NO_PROXY` from the environment.
 

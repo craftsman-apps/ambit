@@ -183,7 +183,7 @@ func TestWaitWorkloadsProgressNamesTheImage(t *testing.T) {
 	var progress []string
 	WaitWorkloads(context.Background(), cs, "ambit-system", nil, 20*time.Millisecond, 50*time.Millisecond,
 		func(l string) { progress = append(progress, l) })
-	want := "waiting for ambit-clickhouse-0 (waiting for image clickhouse/clickhouse-server:26.3.36.6, pod created 4m"
+	want := "waiting for ambit-clickhouse-0 (starting image clickhouse/clickhouse-server:26.3.36.6, pod created 4m"
 	if len(progress) == 0 || !strings.HasPrefix(progress[0], want) || strings.Contains(progress[0], "sha256") {
 		t.Fatalf("progress = %q", progress)
 	}

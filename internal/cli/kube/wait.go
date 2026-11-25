@@ -101,7 +101,7 @@ func podProgress(p *corev1.Pod, now time.Time) string {
 	if img == "" {
 		return p.Name
 	}
-	s := p.Name + " (waiting for image " + img
+	s := p.Name + " (starting image " + img
 	if !p.CreationTimestamp.IsZero() {
 		s += ", pod created " + now.Sub(p.CreationTimestamp.Time).Round(time.Second).String() + " ago"
 	}

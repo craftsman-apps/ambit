@@ -273,10 +273,9 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 		return &extmcp.McpResponseResult{Result: &extmcp.McpResponseResult_Error{Error: &extmcp.AuthorizationError{
 			Code: extmcp.AuthorizationError_UNKNOWN, Reason: "the " + what + " " + reason}}}, nil
 	}
-	// json.Unmarshal, not a Decoder with UseNumber: a Decoder holds a second copy of the raw result, and the guard
-	// has a small memory limit (TestMaskResultPeakMemory).
-	var result map[string]any
-	if err := json.Unmarshal(resp.McpResponse, &result); err != nil {
+	// Numbers are exact when the result may hold a number of 16 digits or more (decodeResult, issue 360).
+	result, err := decodeResult(resp.McpResponse)
+	if err != nil {
 		// A result must be an object; anything else (a list, a string, broken JSON) could hold text the walk below
 		// would never see.
 		slog.Error("guard: result is not a JSON object; result withheld", "server", strings.Join(resp.ServiceNames, ","), "method", resp.Method)
@@ -289,18 +288,23 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 	var texts, keys []string
 	var set []func(string)
 	var renames []func(string) bool // false: the masked key is taken
+	// number masks a number from its text; a masked number becomes the placeholder text, an unchanged one stays as it is.
+	number := func(text string, put func(any)) {
+		texts, set = append(texts, text), append(set, func(s string) {
+			if s != text {
+				put(s)
+			}
+		})
+	}
 	var walk func(v any, put func(any), item, withKeys bool)
 	walk = func(v any, put func(any), item, withKeys bool) {
 		switch x := v.(type) {
 		case string:
 			texts, set = append(texts, x), append(set, func(s string) { put(s) })
 		case float64: // exact for integers up to 2^53, which holds 16-digit card numbers
-			text := strconv.FormatFloat(x, 'f', -1, 64)
-			texts, set = append(texts, text), append(set, func(s string) {
-				if s != text {
-					put(s)
-				}
-			})
+			number(strconv.FormatFloat(x, 'f', -1, 64), put)
+		case json.Number: // the digits the server wrote (issue 360)
+			number(numberText(string(x)), put)
 		case []any:
 			for i := range x {
 				walk(x[i], func(s any) { x[i] = s }, item, withKeys)

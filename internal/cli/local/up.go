@@ -102,7 +102,12 @@ func (e *Env) Owner(ctx context.Context, name string) (Ownership, error) {
 func (e *Env) ReadyDocker() (DockerInfo, error) {
 	d := e.Docker()
 	if !d.Reachable {
-		return d, &out.Error{What: "Docker is not running", Why: d.Err, Next: dockerNext()}
+		msg, next := dockerProblem(d)
+		what, why := "Docker is not running", d.Err
+		if d.TimedOut {
+			what, why = "Docker is not responding", msg
+		}
+		return d, &out.Error{What: what, Why: why, Next: next}
 	}
 	return d, nil
 }
@@ -133,6 +138,9 @@ func Up(ctx context.Context, p *out.Printer, e *Env, o UpOptions) error {
 	if err := step("Preflight", func() error {
 		var err error
 		if docker, err = e.ReadyDocker(); err != nil {
+			return err
+		}
+		if err := ctx.Err(); err != nil { // Ctrl+C during a slow docker info: do not go on to create a cluster
 			return err
 		}
 		if own, err = e.Owner(ctx, o.Name); err != nil {

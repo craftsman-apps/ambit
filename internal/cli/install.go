@@ -77,8 +77,8 @@ func chartsFor(cmdline, chartDir, chartRepo string) (local.Charts, error) {
 				return charts, out.Usage("--chart-dir "+chartDir, "has no chart "+c, "pass the charts/ directory of a checkout")
 			}
 		}
-		if _, err := os.Stat(charts.Ref("ambit") + "/charts"); err != nil {
-			return charts, out.Usage("--chart-dir "+chartDir, "the ambit chart has no dependencies in charts/ambit/charts", "helm dependency build "+charts.Ref("ambit"))
+		if !charts.DepsBuilt() {
+			return charts, out.Usage("--chart-dir "+chartDir, "the ambit chart has no packed dependencies (*.tgz) in charts/ambit/charts", "helm dependency build "+charts.Ref("ambit"))
 		}
 	}
 	return charts, nil

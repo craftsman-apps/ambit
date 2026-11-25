@@ -93,14 +93,14 @@ assert [v['expression'] for v in w['validations']]==['variables.console || varia
 assert w['validations'][0]['message']=='only the Ambit console may write personal API key objects', w
 sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event']
 bs={x['metadata']['name']:x['spec'] for x in docs if x['kind']=='ValidatingAdmissionPolicyBinding'}
-assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(3)}|{'ambit-key-lease'}, list(bs)
+assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(4)}|{'ambit-key-lease'}, list(bs)
 assert all('paramRef' not in b for b in bs.values()), bs
 bs.pop('ambit-key-lease')
 for n,b in bs.items():
   i=int(n[-1])
   assert b['policyName']=='ambit-keys-writer' and b['validationActions']==['Deny'], b
   assert b['matchResources']['namespaceSelector']=={'matchLabels':{'kubernetes.io/metadata.name':'ambit-system'}}, b
-  assert b['matchResources']['objectSelector']=={'matchExpressions':[{'key':sel[i],'operator':'Exists'}]}, b" "admission: console-only writes to key objects (three label bindings), cleanup exempt, no Lease-holder check"
+  assert b['matchResources']['objectSelector']=={'matchExpressions':[{'key':sel[i],'operator':'Exists'}]}, b" "admission: console-only writes to key objects (four label bindings), cleanup exempt, no Lease-holder check"
 check_qs "p=one('ValidatingAdmissionPolicy','ambit-key-lease')['spec']
 assert p['failurePolicy']=='Fail' and 'paramKind' not in p, p
 r=p['matchConstraints']['resourceRules'][0]

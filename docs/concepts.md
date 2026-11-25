@@ -147,6 +147,7 @@ llm:
   - `audit`: the classifier gets the prompt unchanged, as the model does, and the request's record says what the guard would have done.
   - Differences from the gateway, all on the safe side or narrow: `PhoneNumber` in `ambit-router` counts any 7 to 15 digits that could be a phone number (the gateway also asks libphonenumber), so in `reject` mode a prompt with such a number (a date, an order number) can get no label and the default model while the gateway lets it through. In your own patterns, `ambit-router` uses Go's regular expressions, where `\d`, `\w`, `\s` and `\b` match ASCII only (Unicode in the gateway): a pattern that needs non-ASCII digits or letters to match can miss in `ambit-router`.
   - With a webhook, `ambit-router` calls it too (one call per classified prompt, within the router's `timeout`), so the webhook Service must accept connections from the `ambit-router` pods.
+  - **A webhook in another namespace** (`webhook.namespace`) is tested on kind: the gateway and `ambit-router` both call it and refuse its prompts. With agentgateway v1.7.0 the gateway also reached it with no `ReferenceGrant`, and Ambit does not create one. If a NetworkPolicy in that namespace limits incoming connections, allow the gateway pods (port of the Service) and the `ambit-router` pods.
 
 ## Compressing tool results
 

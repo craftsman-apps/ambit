@@ -217,8 +217,11 @@ func periodName(from, to time.Time) (string, string) {
 	return from.UTC().Format("2006-01-02"), to.UTC().Add(-time.Nanosecond).Format("2006-01-02")
 }
 
+type paramsKey struct{}
+
 // exportContext has the ClickHouse settings of every export query: a time limit, and read-only.
 func exportContext(ctx context.Context, params clickhouse.Parameters) context.Context {
+	ctx = context.WithValue(ctx, paramsKey{}, params) // for the test database, which cannot read ClickHouse's own copy
 	return clickhouse.Context(ctx, clickhouse.WithParameters(params),
 		clickhouse.WithSettings(clickhouse.Settings{"max_execution_time": int(exportLimit.Seconds()), "readonly": 1}))
 }
@@ -517,5 +520,6 @@ func (c *Catalog) streamExport(ctx context.Context, w http.ResponseWriter, s Ses
 
 func (c *Catalog) registerEvidence(mux *http.ServeMux, admin func(func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc) {
 	mux.HandleFunc("GET /api/evidence", admin(c.evidenceInfo))
+	mux.HandleFunc("GET /api/evidence/access/snapshots", admin(c.accessSnapshots))
 	mux.HandleFunc("GET /api/evidence/{file}", admin(c.evidenceExport))
 }

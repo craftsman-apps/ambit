@@ -9,11 +9,10 @@ Some hosted AI platforms cannot send a fixed API key. They ask the person to sig
 token. This page is about the part of Ambit that makes that possible: **Ory Hydra**, which issues the tokens, and the
 PostgreSQL database it needs. You run the database.
 
-> **What is in this release series so far:** Hydra and its database, and **`ambit-auth`**, the sign-in host: the pages
-> where a person signs in with the company account and decides what a platform may use. The check of tokens on the public
-> MCP route (so that a token opens tools), the list of connected platforms and the offboarding steps that need the
-> console follow in the next change. Until then a platform can finish the sign-in and get tokens, but the public MCP
-> route does not accept them yet.
+> **What is in this release series so far:** Hydra and its database; **`ambit-auth`**, the sign-in host; and the **check of
+> tokens at the public MCP route**, so that a token opens exactly the tools its person ticked. Still to come in this series: the
+> stop of one connection (together with the stop state machine of [Agents](agents.md)), key rotation, the database
+> operations (backup, clean-up, alerts) and the guide for a platform.
 
 It is **off by default** (`oauth.enabled: false`).
 
@@ -88,7 +87,8 @@ provider whose certificate your cluster does not trust gets its CA in `oauth.sig
 ## How a person connects a platform
 
 1. The platform calls the MCP URL without a token and gets `401` with a pointer to `/.well-known/oauth-protected-resource`.
-   (That answer is added with the next change.)
+   The answer carries `WWW-Authenticate: Bearer resource_metadata="https://<host>/.well-known/oauth-protected-resource/mcp"`,
+   and the gateway serves that document itself: this MCP URL, and `authorization_servers: [https://<authHost>]`.
 2. It reads Ambit's authorization server document at `https://<authHost>/.well-known/oauth-authorization-server`, and, if it
    has no registered client, registers itself at `POST /register` (below).
 3. It sends the person's browser to `/oauth2/auth`. `ambit-auth` checks the request, Hydra checks the client and the exact
@@ -175,16 +175,61 @@ shared by every replica. If Valkey does not answer, each replica counts for itse
 These first values are not measured yet (the load test is part of a later change). Many people behind one company address
 share a bucket; the sign-in bucket is large for that reason.
 
-## Stopping a connection
+## Tokens at the public MCP route
 
-The token hook of `ambit-auth` (Hydra calls it for every token request) refuses a **refresh** when the person is on the
-offboarding list (`ambit-offboarded`) or the agent or grant is on the stop list (`ambit-agent-stops`). Hydra then answers
-`access_denied` and does not use up the refresh token, so a restart of the agent works without a new consent. If the
-lists cannot be read for 45 seconds, a list has an entry it cannot read, the request is incomplete (no agent, grant, email
-or grant type), or the console does not answer, the hook refuses (a refresh waits; tokens already
-issued are not affected). A refused sign-in at `/callback` for an offboarded person ends with `access_denied`.
+The public route `ambit-mcp-public` has two rules. A request that carries an Ambit **key** (`x-api-key`, or `Authorization: Bearer ambit_...`)
+takes the key rule, exactly as without OAuth: a request with a wrong key gets **403**. Every other request to `/mcp` takes the **token
+rule**: without a valid token it gets **401** with the `resource_metadata` challenge above, so that a platform can start a sign-in.
 
-Stopping a token that was already issued is done at the gateway, by the stop list, and is added with the next change.
+The token rule accepts a JWT only if: the issuer is Ambit's sign-in host (`https://<authHost>`), the signature fits a key that Hydra
+publishes (the gateway reads them inside the cluster and keeps them for 5 minutes), the audience is exactly this MCP URL, `exp`, `aud`
+and `sub` are there, the person has an email that is not a service account, and the token carries an agent, a grant and a scope list
+(the consent page writes all three into every token). The same checks of every call as for a key then follow: the offboarding list, the
+stop list, the person's AccessRules **and** the scope of the token (`ambit_scope`): a tool outside the scope is not listed and not callable,
+on every call. Only servers that are on the front door are there at all.
+
+Tokens do not work on the private route (it takes tokens of your company's provider), and keys do not work on the sign-in host.
+
+## Stopping a connection, and offboarding
+
+- **Offboarding** (SCIM deactivation): the person's email goes to the offboarding list; the gateway refuses their tokens on both Gateways
+  (the same policy as for keys), a new sign-in is refused, and a refresh is refused by the token hook. Their agents are ended with the
+  stop state machine of [Agents](agents.md#stopping-an-agent) (an agent that is not active makes the hook refuse its refresh for good, also after
+  a reactivation).
+- **Ending one connection**: the person (or an admin) deletes or stops the agent of the platform ([Agents](agents.md): a connection is a
+  person-mode agent, listed with its platform). The hook refuses its refresh at once. A token that was already issued is refused by the
+  gateway through the stop list as soon as the agent is stopped; without the stop list it expires within 15 minutes.
+- **Keeping a platform out**: an admin deletes the platform's OAuth client (`GET /api/admin/oauth/clients`, `DELETE
+  /api/admin/oauth/clients/{id}`): its codes and refresh tokens go with it and no new sign-in works.
+
+The token hook of `ambit-auth` (Hydra calls it for every token request) refuses a **refresh** when the person is on the offboarding list
+(`ambit-offboarded`), the agent or grant is on the stop list (`ambit-agent-stops`), the console says the agent is not active or does not own
+the grant, or the grant is older than `oauth.maxGrantDays` (30). Hydra then answers `access_denied` and does not use up the refresh token,
+so a restart of the agent works without a new consent. If the lists cannot be read for 45 seconds, a list has an entry it cannot read, the
+request is incomplete (no agent, grant, email or grant type), or the console does not answer, the hook refuses (a refresh waits; tokens
+already issued are not affected). **The groups in a token are those of the sign-in** (the console does not know a person's groups between
+sign-ins): a group that the person loses at your identity provider counts until the grant ends, at most `oauth.maxGrantDays`; lower it if that
+is too long.
+
+## If a signing key may be stolen
+
+**First, block every token of the sign-in host at once.** This edit of one policy needs no Helm run, no Hydra, no keys and none of Ambit's
+own components; the gateway applies it within a second. API keys and service account keys are not touched (they take the other rule).
+
+```
+kubectl -n ambit-system patch agentgatewaypolicy ambit-mcp-public-oauth --type json \
+  -p '[{"op":"add","path":"/spec/traffic/authorization/policy/matchExpressions/-","value":"false"}]'
+```
+
+Every request with a token now gets 403 on every public Gateway pod, also with a token that the stolen key signed (the gateway checks this
+clause after it has checked the signature, and `false` is never true). The next `helm upgrade` removes the edit; to keep the block, set
+`oauth.emergencyBlock: true`. To lift it, remove the clause (`"op":"remove"` with its index, the last one) or set the value to `false` and
+upgrade. Platforms then get 403 on `/mcp`: they stay connected, and work again when you lift the block.
+
+The block does **not** replace the new key: a token signed with the stolen key is valid again as soon as the block is lifted, until the
+gateway's copy of the old key is gone. The removal and replacement of the key (every connection then connects again) comes with the next change;
+keep the block until it is done. Measured in the end-to-end test, with Hydra down and the old key cached on the gateways, the block takes
+a fraction of a second (the numbers are in the pull request).
 
 ## PostgreSQL
 
@@ -295,16 +340,21 @@ series.
 
 ## Internal API of the console (experimental)
 
-`ambit-auth` never writes agent records: only the console may. It calls the console with the pod's own service account
-token (a projected token whose audience is `ambit-console`, read again for every call):
+`ambit-auth` never writes agent records: only the console may. It calls the console on port 8085 with the pod's own service account
+token (a projected token whose audience is `ambit-console`, read again for every call). The console asks the Kubernetes API whether the token is
+valid (TokenReview) and refuses every service account but `ambit-auth`'s; a network policy admits only `ambit-auth`'s pods to the port.
 
 | Call | Answer |
 |---|---|
-| `GET /internal/oauth/v1/servers?email=` | `{"servers":[{"name","display","connection"}]}`: the servers that the person's AccessRules allow and the front door serves |
-| `POST /internal/oauth/v1/agents` `{owner, platform, displayName, scope, connections, grantID}` | `{"name": agent}`; `409` with `{"error"}` when the console refuses (for example too many agents) |
-| `GET /internal/oauth/v1/groups?email=` | `{"groups":[...]}`: the person's groups now |
+| `POST /internal/oauth/v1/servers` `{email, groups}` | `{"servers":[{"name","display"}]}`: the servers that the person's AccessRules allow (at least one tool) **and** the front door serves. A service account, an offboarded person and a made-up address get none. |
+| `POST /internal/oauth/v1/agents` `{owner, platform, displayName, scope, connections, grantID}` | `{"name": agent}`: a person-mode agent for the person, with the limits, offboarding check and names of an agent made by hand. `409` `{"error"}` when the console refuses (too many agents, offboarded). |
+| `POST /internal/oauth/v1/active` `{agent, grant}` | `{"active": bool}`: the agent exists, is active, belongs to a person who is not offboarded, and owns this grant. |
 
-The console side comes with the next change; the tests of this change use a stand-in.
+## Platforms that are connected (console)
+
+A connection is a person-mode agent with a grant: it is listed by `GET /api/agents` (`platform`, `scope`, `state`) and ended with `DELETE /api/agents/{name}`
+([Agents](agents.md)). An admin lists the OAuth clients with `GET /api/admin/oauth/clients` (name as the platform declared it, redirect hosts, how it
+registered, last use) and deletes one with `DELETE /api/admin/oauth/clients/{id}`.
 
 ## Public API (experimental)
 
@@ -314,6 +364,8 @@ The console side comes with the next change; the tests of this change use a stan
 - The public endpoints on `frontDoor.authHost`: `POST /oauth2/token`, `POST /oauth2/revoke`, `GET /.well-known/jwks.json`,
   `GET /.well-known/oauth-authorization-server`, `GET /oauth2/auth`, `GET /login`, `GET /callback`, `GET` and `POST
   /consent`, `GET /error`, `POST /register`.
+- The console endpoints `GET /api/admin/oauth/clients`, `DELETE /api/admin/oauth/clients/{id}`, and the internal API above.
+- The routes rule names `keys` and `oauth` of `HTTPRoute ambit-mcp-public`, the policy `ambit-mcp-public-oauth`, and `oauth.emergencyBlock`, `oauth.maxGrantDays`.
 - The access token claims `email`, `groups`, `ambit_agent`, `ambit_agent_mode`, `ambit_agent_owner_at_issue`,
   `ambit_platform_declared`, `ambit_grant`, `ambit_scope`.
 - Helm values `oauth.signIn.*`, `oauth.cookieSecret`, `oauth.registration.*`, `oauth.auth.*`.

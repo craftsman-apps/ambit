@@ -17,7 +17,7 @@ A Copilot Studio agent runs on Microsoft's service, so it reaches Ambit through 
 
 ## Set it up
 
-1. Each person makes an agent and a key, platform `copilot-studio` ([Agents](../../agents.md#create-an-agent-and-a-key)).
+1. Each person makes an agent and a key, platform `copilot-studio` ([Agents](../../agents.md#create-an-agent-and-a-key-in-the-api)).
 2. In Copilot Studio, open the agent, then **Tools**, **Add a tool**, **New tool**, **Model Context Protocol**. Use the server URL `https://mcp-public.example.com/mcp`.
 3. For authentication choose **API key**, placement **Header**, and the header name `x-api-key`. Enter only the name in that field, with no `Bearer ` and no key.
    Make the connection use **End user** credentials (each user signs in with their own key), not the maker's. With maker credentials, everyone who uses the agent acts as the maker's Ambit agent, which is the shared identity that this guide avoids. Check the setting in Microsoft's [tool authentication](https://learn.microsoft.com/en-us/microsoft-copilot-studio/add-tools-custom-agent) page.

@@ -17,7 +17,7 @@ Grok Bot runs on the internet, so it reaches Ambit through the [public front doo
 
 ## Set it up
 
-1. Make the agent and a key ([Agents](../../agents.md#create-an-agent-and-a-key)); platform `grok`. Copy the key.
+1. Make the agent and a key ([Agents](../../agents.md#create-an-agent-and-a-key-in-the-api)); platform `grok`. Copy the key.
 2. In Grok Bot, add an MCP connector with the address `https://mcp-public.example.com/mcp`.
 3. Where the connector asks for headers or an API key, enter the header **name** `Authorization` and the **value** `Bearer ambit_...` (the word `Bearer`, a space, the key). If it lets you choose only the header name and a key without a prefix, enter the header name `x-api-key` and the key alone as the value. If it has one API key field that goes into a fixed header other than these two, it cannot use the front door.
 4. Ask Grok Bot to list its tools. You should see only the tools in the agent's scope.

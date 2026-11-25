@@ -75,7 +75,11 @@ spec:
     matchLabels: { app.kubernetes.io/name: ambit-guard }
   policyTypes: [Ingress]
   ingress:
-    - from: [{ podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit } } }]
+    - from:
+        - podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit } }
+        {{- if (.Values.frontDoor | default dict).enabled }}
+        - podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit-public } }
+        {{- end }}
       ports: [{ port: 9090 }]
     - ports: [{ port: 8081 }]
 ---
@@ -83,7 +87,12 @@ apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata: { name: ambit-mcp-guard }
 spec:
-  targetRefs: [{ group: agentgateway.dev, kind: AgentgatewayBackend, name: ambit-mcp }]
+  targetRefs:
+    - { group: agentgateway.dev, kind: AgentgatewayBackend, name: ambit-mcp }
+    {{- if (.Values.frontDoor | default dict).enabled }}
+    # The public backend has the same guard: pinning, argument limits and masking, FailClosed.
+    - { group: agentgateway.dev, kind: AgentgatewayBackend, name: ambit-mcp-public }
+    {{- end }}
   backend:
     mcp:
       guardrails:

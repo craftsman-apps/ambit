@@ -250,15 +250,15 @@ pass "7 per pod: with the ratelimit service down (FailOpen) a single request pas
 fdset --set frontDoor.rateLimit.perPodPerSecond=200 --set frontDoor.rateLimit.failureMode=FailClosed >/dev/null
 kubectl -n "$NS" scale deploy/ambit-ratelimit --replicas=0 >/dev/null
 kubectl -n "$NS" wait --for=delete pod -l app.kubernetes.io/name=ambit-ratelimit --timeout=60s >/dev/null
-wait_for 90 '[[ $(pubk "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K3") != ok ]]' ||
+wait_for 90 '[[ $(pub "$PA" /nothing) == 403 ]]' ||
   fail "7 FailClosed: with the ratelimit service down a request still passed (policy failureMode: $(kubectl -n "$NS" get agentgatewaypolicy ambit-public-limits -o jsonpath='{.spec.traffic.rateLimit.global.failureMode}'))"
-FC=$(pubk "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K3")
-[[ "$FC" == limited || "$FC" == refused || "$FC" == other:5* ]] || fail "7 FailClosed: with the ratelimit service down a request got '$FC'"
+FC=$(pub "$PA" /nothing)   # without the source check this path is 404: a 403 comes from the check that cannot be reached
+[[ "$FC" == 403 ]] || fail "7 FailClosed: with the ratelimit service down a request for an unknown path got '$FC', want 403 from the source check"
 kubectl -n "$NS" scale deploy/ambit-ratelimit --replicas=1 >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-ratelimit --timeout=120s >/dev/null
 fdset >/dev/null
 wait_for 90 '[[ $(pubk "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K3") == ok ]]' || fail "7 the front door does not recover when the ratelimit service is back"
-pass "7 FailClosed with the ratelimit service down: the request was refused ($FC; the source check cannot be reached, so the request is refused before authentication); back to normal when the service returns"
+pass "7 FailClosed with the ratelimit service down: an unknown path got HTTP $FC (it is 404 when the check works; here the source check cannot be reached, so the request is refused before the route is matched); back to normal when the service returns"
 
 # Valkey down while the ratelimit service runs: the service reports its error as HTTP 400 on /json, so the source check
 # refuses every request, whatever frontDoor.rateLimit.failureMode says (it applies when the service cannot be reached).

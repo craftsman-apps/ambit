@@ -267,6 +267,7 @@ grep -q 'AMBIT_INJECTION_GUARD' <<<"$igold" && grep -q 'mode.*audit' <<<"$igold"
 fdv=(-f deploy/quickstart.yaml -f test/frontdoor/values.yaml)
 fdt() { helm template ambit charts/ambit -n ambit-system "${fdv[@]}" "$@"; }
 dflt=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set limits.enabled=true)
+! grep -q 'name: http, port: 8080' <<<"$dflt" || { echo "FAIL chart: the ratelimit Service publishes port 8080 only with the front door"; exit 1; }
 ! grep -q 'ambit-public' <<<"$dflt" || { echo "FAIL chart: nothing of the front door is rendered by default"; exit 1; }
 ! grep -q 'ambit.ingress' <<<"$dflt" || { echo "FAIL chart: no ambit.ingress attribute without the front door"; exit 1; }
 ! grep -q -- '--public-gateway' <<<"$dflt" || { echo "FAIL chart: no controller flag without the front door"; exit 1; }
@@ -315,7 +316,7 @@ assert e["http"]["path"]=="\"/json\"" and "string(source.address)" in e["http"][
 assert e["http"]["allowedRequestHeaders"]==["user-agent"], e  # never the Authorization header: it holds the key of the caller
 assert "x-forwarded" not in json.dumps(e).lower(), e
 svc=[p["port"] for p in one("Service","ambit-ratelimit")["spec"]["ports"]]
-assert svc==[8081,8080], svc
+assert svc==[8081,8080], svc  # port 8080 (/json) is published only with the front door
 assert p["traffic"]["rateLimit"]["local"]==[{"requests":200,"unit":"Seconds"}], p
 c=yaml.safe_load(one("ConfigMap","ambit-ratelimit-front-door")["data"]["front-door.yaml"])
 assert c=={"domain":"ambit-public","descriptors":[{"key":"fd_credential","rate_limit":{"unit":"minute","requests_per_unit":600}},{"key":"fd_source","rate_limit":{"unit":"minute","requests_per_unit":120}}]}, c

@@ -136,7 +136,7 @@ an MCP request that way). The first two limits are per minute (a fixed window th
   with wrong keys uses up the limit of every key that comes from the same address, for the rest of the minute. That is the
   purpose (the flood stops being cheap), and the price is that callers behind one shared address (a NAT, a hosted-agent
   platform with few addresses) share one budget. A valid key from another address is not affected.
-- **What this does not cover.** The limit starts when a complete HTTP request arrives. Connections that never send a
+- **What this does not cover.** The check runs when the request headers have arrived, before the body is read and before the Host header is compared with the route (a request with the right TLS name and another Host header is counted). Connections that never send a
   request, TLS handshakes, requests for another host name (the listener is bound to one host name), and many source addresses
   (an IPv6 caller can use a whole /64 range; the counter is per address) are not limited by Ambit. Limit them at the edge:
   a cloud firewall or WAF, and the load balancer's own connection limits. For one more cap in the gateway itself, you can add an
@@ -146,7 +146,14 @@ an MCP request that way). The first two limits are per minute (a fixed window th
 - **A failed check on the way in.** `frontDoor.rateLimit.failureMode` also applies to the source check: with `FailOpen`
   (default) requests pass when the ratelimit service cannot be reached, and the per-pod limit still applies; with `FailClosed`
   they are refused with 403. If the ratelimit service answers but **Valkey is down**, the service reports its error as HTTP
-  400, and the front door refuses every request with 400 until Valkey is back, whatever `failureMode` says.
+  400, and the front door refuses every request with 400 until Valkey is back, whatever `failureMode` says. If Valkey is slow
+  instead of failed, the check waits 2 seconds and then follows `failureMode`.
+- **A flood is still read by the limiter.** Every request, also one that is already over its limit, costs one call to the
+  ratelimit service and one operation in Valkey. The limit makes a flood cheap for the gateway pods and for the MCP servers,
+  not free for the ratelimit service. The edge limits above are the place to stop the volume itself.
+- **The ratelimit port.** The check uses port 8080 of the ratelimit service (`/json`), which is also its health port. Like
+  before, every pod in the cluster can reach that port (the health checks need it); `/json` can change any counter. If you
+  run untrusted pods in the namespace, use a network policy of your own, or see [issue #417](https://github.com/craftsman-apps/ambit/issues/417).
 - **Cheap and expensive calls.** In this release there is only one kind of public call (`/mcp`), so there is one source
   limit. When sign-in endpoints are added later, they get their own, lower limit, so that a flood of sign-in attempts
   cannot use up the limit of MCP calls from the same address.

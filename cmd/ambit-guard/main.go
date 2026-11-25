@@ -58,8 +58,16 @@ func main() {
 		records = rec
 		slog.Info("writing compression records", "collector", ep)
 	}
+	injection, err := guard.LoadInjector(os.Getenv("AMBIT_INJECTION_GUARD"), nil) // nil: no injection guard
+	if err != nil {
+		slog.Error("injection guard", "err", err)
+		os.Exit(1)
+	}
+	if injection != nil {
+		slog.Info("injection guard on")
+	}
 	srv := grpc.NewServer(guard.ServerOptions()...)
-	extmcp.RegisterExtMcpServer(srv, &guard.Guard{Records: records, Pins: guard.KubePins{Client: mgr.GetClient(), Namespace: ns}, Masker: masker,
+	extmcp.RegisterExtMcpServer(srv, &guard.Guard{Records: records, Pins: guard.KubePins{Client: mgr.GetClient(), Namespace: ns}, Masker: masker, Injection: injection,
 		Rules: guard.KubeRules{Client: mgr.GetClient(), Namespace: ns}, Compression: guard.KubeCompression{Client: mgr.GetClient(), Namespace: ns}})
 	lis, err := net.Listen("tcp", ":9090")
 	if err != nil {

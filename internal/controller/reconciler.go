@@ -76,6 +76,9 @@ type Reconciler struct {
 	AccessMode string
 	// Activation is the gate each step of a mode switch or rules change waits on; nil: no gate.
 	Activation *Activation
+	// PublicGateway is the name of the public Gateway (--public-gateway, frontDoor.enabled); empty: none. It gets its own
+	// access-log policy, and offboarded people are refused on its route as on the others.
+	PublicGateway string
 	// Snapshots records the AccessRules in force in otel_logs for evidence exports; nil: off (no evidence store).
 	Snapshots *Snapshots
 
@@ -650,7 +653,11 @@ func (r *Reconciler) offboarding(ctx context.Context) (*unstructured.Unstructure
 	if len(rejected) > 0 {
 		log.FromContext(ctx).Error(nil, "offboarded list has entries that are not plain emails; they are not blocked", "entries", rejected)
 	}
-	return offboardedPolicy(&cm, emails, []string{"ambit-mcp", r.Route.Name}), nil
+	routes := []string{"ambit-mcp", r.Route.Name}
+	if r.PublicGateway != "" {
+		routes = append(routes, PublicMCPRoute)
+	}
+	return offboardedPolicy(&cm, emails, routes), nil
 }
 
 // applyAll applies every generated object. It returns the agentgateway Models and Policies it wrote, with the

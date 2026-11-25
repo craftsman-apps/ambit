@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -75,5 +77,29 @@ func TestHeaderFlag(t *testing.T) {
 	}
 	if h.Set("no colon") == nil || h.Set(": empty name") == nil {
 		t.Fatal("a header without a name was accepted")
+	}
+}
+
+func TestFailureCause(t *testing.T) {
+	if c := failure(fmt.Errorf("dial tcp: lookup mcp.localtest.me: no such host"), 0, nil); c != "transport: dial tcp: lookup mcp.localtest.me: no such host" {
+		t.Fatal(c)
+	}
+	if c := failure(nil, 400, []byte("{\"error\":\n  \"session required\"}\n")); c != `status 400: {"error": "session required"}` {
+		t.Fatal(c)
+	}
+	long := strings.Repeat("x", 500)
+	if c := failure(nil, 502, []byte(long)); c != "status 502: "+strings.Repeat("x", 200) {
+		t.Fatalf("a long body is cut to 200 bytes: %q", c)
+	}
+}
+
+func TestCauseSummaryLists(t *testing.T) {
+	got := causeSummary(map[string]int{"status 400: a": 2, "transport: b": 2998, "status 502: c": 2}, 2)
+	want := "errors by cause: 2998 x transport: b; 2 x status 400: a; and 1 more cause"
+	if got != want {
+		t.Fatalf("%q", got)
+	}
+	if causeSummary(nil, 5) != "" {
+		t.Fatal("no errors, no line")
 	}
 }

@@ -113,7 +113,7 @@ Run this once on your own database before you rely on OAuth. It does not depend 
 |---|---|
 | `StatefulSet ambit-hydra` (2 pods) | Hydra v26.2.0 (image pinned by digest). Init containers: `check-database`, `migrate` (`hydra migrate sql up`). Containers: `hydra`, `hydra-keys` (below). |
 | `Service ambit-hydra-public` (4444), `Service ambit-hydra-admin` (4445) | ClusterIP only. |
-| `NetworkPolicy ambit-hydra` | Port 4444: the public Gateway's pods and agentgateway's controller (it fetches the keys). Port 4445: `ambit-auth` and the console only. Every other pod is refused. |
+| `NetworkPolicy ambit-hydra` | Port 4444: the public Gateway's pods, agentgateway's controller (it fetches the keys) and `ambit-auth` (its authorize front). Port 4445: `ambit-auth` and the console only. Every other pod is refused. |
 | `HTTPRoute ambit-auth-hydra` | On the sign-in host, three exact paths: `POST /oauth2/token`, `POST /oauth2/revoke`, `GET /.well-known/jwks.json`. Everything else of Hydra (registration, discovery, user info, device flow, sessions, health, the admin API) has no route and answers 404. |
 | `PodDisruptionBudget ambit-hydra` | One pod stays up during a drain. |
 

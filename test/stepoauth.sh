@@ -156,10 +156,10 @@ kubectl -n "$NS" wait pod -l "$L" --for=condition=Ready --timeout=180s >/dev/nul
 [[ $(reach np-private "$HPUB") == no && $(reach np-private "$HADM") == no ]] || fail "3 a pod of the private Gateway reaches Hydra"
 [[ $(reach np-gw "$HPUB") == 200 && $(reach np-gw "$HADM") == no ]] || fail "3 the public Gateway must reach 4444 and not 4445"
 [[ $(reach np-agw "$HPUB") == 200 && $(reach np-agw "$HADM") == no ]] || fail "3 agentgateway's controller must reach 4444 and not 4445"
-[[ $(reach np-auth "$HADM") == 200 && $(reach np-auth "$HPUB") == no ]] || fail "3 ambit-auth must reach 4445 and not 4444"
+[[ $(reach np-auth "$HADM") == 200 && $(reach np-auth "$HPUB") == 200 ]] || fail "3 ambit-auth must reach 4445 and 4444 (the authorize front)"
 [[ $(reach np-console "$HADM") == 200 && $(reach np-console "$HPUB") == no ]] || fail "3 the console must reach 4445 and not 4444"
 kubectl -n "$NS" delete pod -l "$L" --wait=false >/dev/null
-pass "3 Hydra's public port is open to the public Gateway and the controller only; the admin port to ambit-auth and the console only"
+pass "3 Hydra's public port is open to the public Gateway and the controller only; the admin port to ambit-auth and the console only (ambit-auth also reaches the public port, for its authorize front)"
 
 # --- 4 · the database check, one pod per case (the init container of Hydra's pods, run alone)
 chk() { # chk NAME DSN [replicas [ca secret]]: runs check-database; prints "ok" or "refused", the log in $W/chk-NAME

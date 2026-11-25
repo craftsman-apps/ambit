@@ -235,7 +235,7 @@ kubectl -n "$NS" delete pod ambit-hydra-1 --wait=true >/dev/null
 kubectl -n "$NS" rollout status sts/ambit-hydra --timeout=300s >/dev/null
 pass "5 a Secret with sslmode=require stops the roll-out at the first pod with a message that names the fix; the other pod keeps serving; the right Secret and a deleted pod recover"
 
-# --- 6 · migrations: two runs at the same time, and a repeat
+# --- 6 · migrations: two runs at the same time on an empty database (Hydra v26.2.0 can fail one of them: that is why the pods start one at a time), then a repeat
 sec ambit-oauth-db-conc --from-literal=dsn="$(dsn 15 hydra "$HP" hydra_conc)"
 HYIMG=$(kubectl -n "$NS" get sts ambit-hydra -o jsonpath='{.spec.template.spec.containers[?(@.name=="hydra")].image}')
 mig() { # mig NAME: Hydra's migration against the empty database hydra_conc on PostgreSQL 15
@@ -254,11 +254,14 @@ spec:
   volumes: [{ name: ca, secret: { secretName: ambit-oauth-db-ca, items: [{ key: ca.crt, path: ca.crt }] } }]
 EOF
 }
-done_pod() { wait_for 120 "[[ \$(kubectl -n '$NS' get pod $1 -o jsonpath='{.status.phase}') == Succeeded || \$(kubectl -n '$NS' get pod $1 -o jsonpath='{.status.phase}') == Failed ]]" || fail "6 $1 did not finish"; [[ $(kubectl -n "$NS" get pod "$1" -o jsonpath='{.status.phase}') == Succeeded ]] || fail "6 $1 failed: $(kubectl -n "$NS" logs "$1" | tail -c 400)"; }
+phase_of() { kubectl -n "$NS" get pod "$1" -o jsonpath='{.status.phase}'; }
+await() { wait_for 120 "[[ \$(phase_of $1) == Succeeded || \$(phase_of $1) == Failed ]]" || fail "6 $1 did not finish"; phase_of "$1"; }
 mig mig-a; mig mig-b
-done_pod mig-a; done_pod mig-b
-mig mig-c; done_pod mig-c
-pass "6 two migrations of an empty PostgreSQL 15 database at the same time both succeed, and a third run changes nothing"
+pa=$(await mig-a); pb=$(await mig-b)
+[[ "$pa" == Succeeded || "$pb" == Succeeded ]] || fail "6 neither of two migrations at the same time succeeded: $(kubectl -n "$NS" logs mig-a | tail -c 300)"
+mig mig-c
+[[ $(await mig-c) == Succeeded ]] || fail "6 a repeat of the migration must succeed whatever the first two did: $(kubectl -n "$NS" logs mig-c | tail -c 400)"
+pass "6 two migrations of an empty PostgreSQL 15 database at the same time: $pa and $pb (at least one succeeds; a failed one is retried by its pod); a repeat changes nothing"
 
 # --- 7 · another database: PostgreSQL 15 (a new, empty database gets its own key), then back to 17 (its key is still there)
 sec ambit-oauth-db-15 --from-literal=dsn="$(dsn 15)"

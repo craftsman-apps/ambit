@@ -213,7 +213,7 @@ kubectl -n ambit-system logs ambit-hydra-1 -c check-database
 |---|---|
 | PostgreSQL 17 and 15, TLS only (a `hostnossl` line that rejects plain connections) | Hydra starts, migrates and serves on both. |
 | The start check, 16 cases | The refusals above, a wrong CA, a name that is not in the certificate, too few connections and a wrong password; no log repeats a password. |
-| Two migrations of an empty PostgreSQL 15 database at the same time, and a repeat | Both succeed; nothing changes. |
+| Two migrations of an empty PostgreSQL 15 database at the same time, and a repeat | One of two at the same time can fail (Hydra v26.2.0 races on its first table); the repeat succeeds and changes nothing. This is why Hydra's pods start one at a time. |
 | Changing the address from one database to another and back (a Secret change) | A new, empty database gets its own signing key; going back finds the first key again. |
 
 Measured separately on kind during the design (a prototype, not in CI): a logical dump and restore (`pg_dump -Fc`,

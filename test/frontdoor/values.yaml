@@ -11,6 +11,9 @@ limits:
   enabled: true
 evidence:
   enabled: true
+protection:
+  enabled: true
+  toolsRefresh: 20s
 # MCP with tokens from Ambit's own Dex: the step needs no other identity provider.
 mcp:
   enabled: true

@@ -59,3 +59,38 @@ test("evidence: warnings, download of each export with its SHA-256, export histo
     await expect(history.getByRole("row").filter({ hasText: name }).filter({ hasText: "complete" }).first()).toBeVisible();
   }
 });
+
+// A date with several access snapshots: the page offers them; the choice is sent as `at`; the default sends none.
+// The two endpoints are answered here, so the test needs no second rules change in the cluster.
+test("evidence: the snapshots of a date are offered, and the chosen time is sent as at", async ({ page }) => {
+  await signInAsAdmin(page);
+  const day = today();
+  await page.route("**/api/evidence/access/snapshots?*", (route) => route.fulfill({ json: { date: day, snapshots: [
+    { time: `${day}T08:00:00Z`, rulesVersion: "aaaaaaaaaaaa", rulesHash: "h1", accessMode: "audit" },
+    { time: `${day}T15:30:00Z`, rulesVersion: "bbbbbbbbbbbb", rulesHash: "h2", accessMode: "enforce" },
+  ] } }));
+  const asked: string[] = [];
+  await page.route("**/api/evidence/access.zip?*", (route) => {
+    asked.push(new URL(route.request().url()).search);
+    return route.fulfill({ status: 200, contentType: "application/zip", headers: { "Content-Disposition": 'attachment; filename="ambit-access-test.zip"' }, body: "PK" });
+  });
+  await page.getByRole("navigation", { name: "Console" }).getByRole("link", { name: "Evidence" }).click();
+  await page.getByLabel("Access review date").fill(day);
+  const card = page.getByTestId("export-access");
+  await expect(card.getByTestId("access-snapshots")).toBeVisible();
+  await expect(card.getByRole("option")).toHaveText(["End of the day (the last snapshot)", "08:00:00 UTC · rules aaaaaaaaaaaa (audit-only)", "15:30:00 UTC · rules bbbbbbbbbbbb"]);
+
+  await card.getByRole("button", { name: "Download" }).click();
+  await expect(page.getByTestId("done-access")).toBeVisible();
+  expect(asked.at(-1)).toBe(`?date=${day}`);
+
+  await card.getByLabel("Access review snapshot").selectOption({ label: "08:00:00 UTC · rules aaaaaaaaaaaa (audit-only)" });
+  await card.getByRole("button", { name: "Download" }).click();
+  await expect.poll(() => asked.length).toBe(2);
+  expect(new URLSearchParams(asked[1]).get("at")).toBe(`${day}T08:00:00Z`);
+
+  // Another date: the choice is dropped.
+  await page.getByLabel("Access review date").fill("2000-01-01");
+  await page.getByLabel("Access review date").fill(day);
+  await expect(card.getByLabel("Access review snapshot")).toHaveValue("");
+});

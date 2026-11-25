@@ -12,6 +12,7 @@ import (
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/otlplog"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	collogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	"google.golang.org/grpc"
@@ -31,9 +32,14 @@ type otlpSink struct {
 	mu   sync.Mutex
 	got  []map[string]string // attributes of each record, plus "@time" and "@severity"
 	fail bool
+	hang chan struct{} // when set, Export waits until it is closed
+	rec  *AppRecorder  // flushed before the sink is read: the recorder sends from a queue
 }
 
 func (f *otlpSink) Export(_ context.Context, r *collogs.ExportLogsServiceRequest) (*collogs.ExportLogsServiceResponse, error) {
+	if f.hang != nil {
+		<-f.hang
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.fail {
@@ -55,6 +61,7 @@ func (f *otlpSink) Export(_ context.Context, r *collogs.ExportLogsServiceRequest
 }
 
 func (f *otlpSink) actions() []string {
+	f.rec.Flush()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []string
@@ -65,6 +72,7 @@ func (f *otlpSink) actions() []string {
 }
 
 func (f *otlpSink) last() map[string]string {
+	f.rec.Flush()
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.got[len(f.got)-1]
@@ -86,6 +94,7 @@ func appAuditFixture(t *testing.T, gitops *GitOps) (http.Handler, client.Client,
 	if err != nil {
 		t.Fatal(err)
 	}
+	sink.rec = rec
 	scheme := runtime.NewScheme()
 	if err := v1.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
@@ -276,12 +285,29 @@ func TestGitOpsApprovalIsRecordedAtTheMerge(t *testing.T) {
 func TestAppRecordSendFailureIsCounted(t *testing.T) {
 	h, _, a, sink := appAuditFixture(t, nil)
 	sink.fail = true
-	before := testutil.ToFloat64(appSendFailures)
+	before := testutil.ToFloat64(appSendFailures.WithLabelValues(otlplog.DropSendFailed))
 	if r := do(t, h, "POST", "/api/server-requests", user(a, "user01@example.com", RoleViewer), RequestInput{ServerName: "everything", Image: echoDigest}); r.Code != http.StatusCreated {
 		t.Fatalf("request: %d %s", r.Code, r.Body)
 	}
-	if d := testutil.ToFloat64(appSendFailures) - before; d != 1 {
+	sink.rec.Flush()
+	if d := testutil.ToFloat64(appSendFailures.WithLabelValues(otlplog.DropSendFailed)) - before; d != 1 {
 		t.Errorf("failures counted: %v, want 1", d)
+	}
+}
+
+// A collector that does not answer does not delay the decision (issue 331: it used to wait up to 5 seconds).
+func TestAppRecordDoesNotWaitForTheCollector(t *testing.T) {
+	h, _, a, sink := appAuditFixture(t, nil)
+	sink.hang = make(chan struct{})
+	t.Cleanup(func() { close(sink.hang) })
+	viewer, approver := user(a, "user01@example.com", RoleViewer), user(a, "user11@example.com", RoleApprover)
+	start := time.Now()
+	req := decodeAs[RequestView](t, do(t, h, "POST", "/api/server-requests", viewer, RequestInput{ServerName: "everything", Image: echoDigest}).Body.String())
+	if r := do(t, h, "POST", "/api/server-requests/"+req.Name+"/approve", approver, DecisionInput{}); r.Code != 200 {
+		t.Fatalf("approve: %d %s", r.Code, r.Body)
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Errorf("request and approval took %v with a collector that does not answer", d)
 	}
 }
 

@@ -91,7 +91,7 @@ func TestMaskingCoversKeysNumbersURIsResourcesAndPrompts(t *testing.T) {
 		{"tools/call", `{"content":[],"structuredContent":{"kim@acme.com":{"orders":3}}}`, `{"content":[],"structuredContent":{"<EMAIL>":{"orders":3}}}`},
 		{"tools/call", `{"content":[],"structuredContent":{"owner":{"uri":"mailto:kim@acme.com"}}}`, `{"content":[],"structuredContent":{"owner":{"uri":"mailto:<EMAIL>"}}}`},
 		{"tools/call", `{"content":[{"type":"resource_link","uri":"https://crm.example/u/kim@acme.com","name":"profile"}]}`, `{"content":[{"name":"profile","type":"resource_link","uri":"https://crm.example/u/<EMAIL>"}]}`},
-		{"tools/call", `{"content":[],"structuredContent":{"card":4111111111111111,"at":1763372401127,"price":12.50}}`, `{"content":[],"structuredContent":{"at":1763372401127,"card":"<CARD_NUMBER>","price":12.5}}`},
+		{"tools/call", `{"content":[],"structuredContent":{"card":4111111111111111,"at":1763372401127,"price":12.50}}`, `{"content":[],"structuredContent":{"at":1763372401127,"card":"<CARD_NUMBER>","price":12.50}}`}, // a long number keeps every number as written (issue 360)
 		{"tools/call", `{"content":[],"structuredContent":{"type":"kim@acme.com"}}`, `{"content":[],"structuredContent":{"type":"<EMAIL>"}}`},
 		{"tools/call", `{"content":[{"type":"resource","resource":{"uri":"file:///kim@acme.com.csv","mimeType":"text/csv","text":"RRN 900101-1234567"}}]}`, `{"content":[{"resource":{"mimeType":"text/csv","text":"RRN <NATIONAL_ID>","uri":"file:///<EMAIL>"},"type":"resource"}]}`},
 		{"resources/read", `{"contents":[{"uri":"file:///customers.csv","mimeType":"text/csv","text":"Kim,900101-1234567,kim@acme.com"}]}`, `{"contents":[{"mimeType":"text/csv","text":"Kim,<NATIONAL_ID>,<EMAIL>","uri":"file:///customers.csv"}]}`},

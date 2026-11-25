@@ -217,6 +217,15 @@ v2=$(published)
 access_zip
 day=$(uv run --no-project python -c "import json,sys,zipfile;m=json.loads(zipfile.ZipFile(sys.argv[1]).read('manifest.json'));print(' '.join(sorted({s['rulesVersion'] for s in m['sources']['snapshotsOfTheDay']})), m['sources']['snapshot']['rulesVersion'])" "$W/access.zip")
 [[ "$day" == *"$v1"* && "$day" == *"$v2"* && "$day" == *" $v2" ]] || fail "5 snapshots of the day: '$day' (want $v1 and $v2, in force $v2)"
+# the page's list of the day's snapshots, and the export as of the last $v1 snapshot (before the change): rules version $v1
+today=$(date -u +%Y-%m-%d)
+command curl -s -b "$W/jar" "$BASE/api/evidence/access/snapshots?date=$today" > "$W/snapshots.json"
+at=$(uv run --no-project python -c "import json,sys;l=json.load(open(sys.argv[1]))['snapshots'];assert [s['time'] for s in l]==sorted(s['time'] for s in l);print([s['time'] for s in l if s['rulesVersion']==sys.argv[2]][-1])" "$W/snapshots.json" "$v1") || fail "5 snapshots of the day: $(head -c 400 "$W/snapshots.json")"
+code=$(command curl -s -b "$W/jar" -o "$W/access-at.zip" -w '%{http_code}' "$BASE/api/evidence/access.zip?date=$today&at=$at")
+[[ "$code" == 200 ]] || fail "5 access export at $at answered $code: $(head -c 300 "$W/access-at.zip")"
+atv=$(uv run --no-project python -c "import csv,io,json,sys,zipfile;z=zipfile.ZipFile(sys.argv[1]);m=json.loads(z.read('manifest.json'));print(m['parameters']['at'], {r['rules_version'] for r in csv.DictReader(io.StringIO(z.read('grants.csv').decode()))})" "$W/access-at.zip")
+[[ "$atv" == "$at {'$v1'}" ]] || fail "5 access export at $at: '$atv' (want rules version $v1)"
+[[ "$(command curl -s -b "$W/jar" -o /dev/null -w '%{http_code}' "$BASE/api/evidence/access.zip?date=$today&at=2000-01-01T00:00:00Z")" == 400 ]] || fail "5 an at outside the date was not refused with 400"
 kubectl -n "$NS" delete "accessrules.$G" evidence-snapshot --ignore-not-found >/dev/null
-pass "5 access export: grants.csv equals the AccessRules (rules version $v1); after a change the day lists $v1 and $v2"
+pass "5 access export: grants.csv equals the AccessRules (rules version $v1); after a change the day lists $v1 and $v2; at=$at gives $v1; an at outside the date is refused"
 done_step evidence

@@ -6,7 +6,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -106,7 +105,8 @@ func main() {
 	// JSON-RPC error. The guard masks this result (step 9, check 1f); it does not see lookup_fail's error (issue 333).
 	mcp.AddTool(s, &mcp.Tool{Name: "lookup_fail_result", Description: "Fail with an error result that names the customer."},
 		func(_ context.Context, _ *mcp.CallToolRequest, a args) (*mcp.CallToolResult, any, error) {
-			return nil, nil, errors.New("lookup " + a.ID + " failed for customer RRN 900101-1234567, email minsu.kim@example.com")
+			return &mcp.CallToolResult{IsError: true, Content: []mcp.Content{&mcp.TextContent{
+				Text: "lookup " + a.ID + " failed for customer RRN 900101-1234567, email minsu.kim@example.com"}}}, nil, nil
 		})
 	// get_index returns structured content keyed by email, with a card number as a JSON number and a Unix time in
 	// milliseconds (step 9, check 1e: keys and numbers are masked, the time is not).

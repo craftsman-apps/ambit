@@ -90,7 +90,7 @@ pass "1d the failed call is recorded with mcp.error.code -32000 and without the 
 # 1f · issue 333: a tool that fails with an error RESULT (isError true, as the MCP specification asks) is masked like any
 #      result. Only a JSON-RPC error (1d) and notifications and server requests are not (docs/concepts.md, Masking).
 errres=$(raw_call crm_lookup_fail_result '{"id":"42"}')
-[[ "$errres" == *'"isError":true'* && "$errres" == *'<NATIONAL_ID>'* && "$errres" == *'<EMAIL>'* && "$errres" != *900101-1234567* && "$errres" != *minsu.kim* ]] ||
+[[ "$errres" == *'"isError":true'* && "$errres" == *'lookup 42 failed for customer RRN <NATIONAL_ID>, email <EMAIL>'* && "$errres" == *'<NATIONAL_ID>'* && "$errres" == *'<EMAIL>'* && "$errres" != *900101-1234567* && "$errres" != *minsu.kim* ]] ||
   fail "1f an error result was not masked: $errres"
 pass "1f a tool error returned as a result (isError true) came back masked"
 

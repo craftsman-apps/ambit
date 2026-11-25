@@ -102,7 +102,12 @@ func (e *Env) Owner(ctx context.Context, name string) (Ownership, error) {
 func (e *Env) ReadyDocker() (DockerInfo, error) {
 	d := e.Docker()
 	if !d.Reachable {
-		return d, &out.Error{What: "Docker is not running", Why: d.Err, Next: dockerNext()}
+		msg, next := dockerProblem(d)
+		what, why := "Docker is not running", d.Err
+		if d.TimedOut {
+			what, why = "Docker is not responding", msg
+		}
+		return d, &out.Error{What: what, Why: why, Next: next}
 	}
 	return d, nil
 }

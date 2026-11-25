@@ -134,8 +134,8 @@ func (a *app) localUp(ctx context.Context, f localFlags) error {
 				return out.Usage("--chart-dir "+f.chartDir, "has no chart "+c, "pass the charts/ directory of a checkout")
 			}
 		}
-		if _, err := os.Stat(charts.Ref("ambit") + "/charts"); err != nil {
-			return out.Usage("--chart-dir "+f.chartDir, "the ambit chart has no dependencies in charts/ambit/charts", "helm dependency build "+charts.Ref("ambit"))
+		if !charts.DepsBuilt() {
+			return out.Usage("--chart-dir "+f.chartDir, "the ambit chart has no packed dependencies (*.tgz) in charts/ambit/charts", "helm dependency build "+charts.Ref("ambit"))
 		}
 	}
 	if f.noKey && f.keyFile != "" {

@@ -35,6 +35,13 @@ func (c Charts) Ref(name string) string {
 	return c.Repo + "/" + name
 }
 
+// DepsBuilt reports whether charts/ambit/charts holds the packed dependencies (*.tgz) that `helm dependency
+// build` writes. Only a chart directory (--chart-dir) has them to check.
+func (c Charts) DepsBuilt() bool {
+	m, _ := filepath.Glob(filepath.Join(c.Ref("ambit"), "charts", "*.tgz"))
+	return len(m) > 0
+}
+
 // Ops are the actions local up runs inside the cluster. Every Ops talks to the context kind-<name> only.
 type Ops interface {
 	NodeLabels(ctx context.Context) (map[string]map[string]string, error)

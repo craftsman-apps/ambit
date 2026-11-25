@@ -172,6 +172,23 @@ func TestWaitWorkloadsTimeoutNamesReasons(t *testing.T) {
 	}
 }
 
+func TestWaitWorkloadsProgressNamesTheImage(t *testing.T) {
+	created := metav1.NewTime(time.Now().Add(-4 * time.Minute))
+	img := "clickhouse/clickhouse-server:26.3.36.6@sha256:5b10577fc3382ee6b26c4916a1d915d90543ade66e85fc29e3a78c4ce08daeb3"
+	creating := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "ambit-clickhouse-0", Namespace: "ambit-system", CreationTimestamp: created},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "clickhouse", Image: img}}},
+		Status: corev1.PodStatus{Phase: corev1.PodPending, ContainerStatuses: []corev1.ContainerStatus{{Name: "clickhouse",
+			State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}}}}}}
+	cs := fake.NewSimpleClientset(deployment("ambit-console", nil, 0), creating)
+	var progress []string
+	WaitWorkloads(context.Background(), cs, "ambit-system", nil, 20*time.Millisecond, 50*time.Millisecond,
+		func(l string) { progress = append(progress, l) })
+	want := "waiting for ambit-clickhouse-0 (waiting for image clickhouse/clickhouse-server:26.3.36.6, pod created 4m"
+	if len(progress) == 0 || !strings.HasPrefix(progress[0], want) || strings.Contains(progress[0], "sha256") {
+		t.Fatalf("progress = %q", progress)
+	}
+}
+
 func TestPodReasonSanitizesLog(t *testing.T) {
 	p := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "ambit-controller-1"},
 		Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "controller",

@@ -209,6 +209,19 @@ see [agentgateway issue 4245](https://github.com/agentgateway/agentgateway/issue
 error. A tool result that is not a JSON object, and a tool list that is not an object with a list of tools, are withheld
 (the guard fails closed); see [Masking](concepts.md#masking).
 
+## Connect a platform
+
+Each guide gives the request shape of one platform, tested against a test cluster (**request shape tested; not yet tested with a live
+account**):
+
+| Platform | Credential | Guide |
+|---|---|---|
+| Grok Bot | a person's own agent key | [Grok Bot](guides/agents/grok-bot.md) |
+| Copilot Studio | each user's own agent key, in a header | [Copilot Studio](guides/agents/copilot-studio.md) |
+| AWS AgentCore Gateway | an itself-mode agent key | [AWS AgentCore](guides/agents/agentcore.md) |
+| Cloudflare Agents SDK | an itself-mode or person-mode agent key | [Cloudflare Agents](guides/agents/cloudflare.md) |
+| Claude.ai, one key for a whole team | an itself-mode agent key. **Lower assurance**: Audit shows a shared identity, never a person | [Claude.ai shared team setup](guides/agents/claude-ai-shared-team.md) |
+
 ## Public API (experimental)
 
 What this feature adds, all of it experimental in 0.6.x:

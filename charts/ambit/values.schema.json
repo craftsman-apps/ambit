@@ -34,6 +34,40 @@
           }
         }
       }
+    },
+    "protection": {
+      "type": "object",
+      "properties": {
+        "injectionGuard": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "mode": { "enum": ["audit", "reject", "mask"] },
+            "builtins": { "type": "boolean" },
+            "disabledBuiltins": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "enum": ["ignore-previous-instructions", "disregard-instructions", "new-instructions", "reveal-system-prompt", "chatml-marker", "inst-marker", "role-prefix", "hide-from-user", "persona-override", "addressed-to-ai", "html-comment-instruction", "tag-characters", "zero-width-run"] }
+            },
+            "patterns": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+            },
+            "webhook": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "service": { "type": "string", "pattern": "^$|^[a-z]([-a-z0-9]*[a-z0-9])?$", "maxLength": 63 },
+                "namespace": { "type": "string", "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 63 },
+                "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                "timeout": { "type": "string", "pattern": "^[0-9]{1,5}(\\.[0-9]{1,6})?(ms|s|m)$" },
+                "failureMode": { "enum": ["FailClosed", "FailOpen"] }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }

@@ -12,6 +12,8 @@ type Evidence = {
   history: HistoryRow[];
 };
 
+type Snapshot = { time: string; rulesVersion: string; rulesHash: string; accessMode: string };
+
 async function get<T>(url: string): Promise<T> {
   const r = await fetch(url, { credentials: "same-origin" });
   if (!r.ok) throw new Error((await r.json().catch(() => null))?.error ?? `${url} returned ${r.status}`);
@@ -42,16 +44,25 @@ export function EvidencePage() {
   const q = useQuery({ queryKey: ["evidence"], queryFn: () => get<Evidence>("/api/evidence") });
   const quarter = lastQuarter();
   const [form, setForm] = useState({ date: quarter.to, email: "", offboarding: quarter, audit: quarter });
+  const [at, setAt] = useState(""); // "" is the end of the day; else the time of one of the day's snapshots
   const [busy, setBusy] = useState<string | null>(null);
   const [done, setDone] = useState<{ name: string; file: string; sha: string } | null>(null);
   const [err, setErr] = useState<{ name: string; text: string } | null>(null);
   const e = q.data;
   const oldest = e?.oldestRecord ? iso(new Date(e.oldestRecord)) : null;
   const firstSnapshot = e?.snapshotsSince ? iso(new Date(e.snapshotsSince)) : null;
+  const accessOn = !!e?.exports.find((x) => x.name === "access")?.available;
+  const snaps = useQuery({
+    queryKey: ["access-snapshots", form.date], enabled: accessOn && /^\d{4}-\d{2}-\d{2}$/.test(form.date),
+    queryFn: () => get<{ snapshots: Snapshot[] }>(`/api/evidence/access/snapshots?date=${form.date}`),
+  });
+  const ofDay = snaps.data?.snapshots ?? [];
+  const chosen = ofDay.some((x) => x.time === at) ? at : ""; // a time of another date is not sent
   const beforeRetention = !!e && (!oldest || form.audit.from < oldest);
 
   async function download(name: ExportInfo["name"]) {
     const params = new URLSearchParams(name === "access" ? { date: form.date } : form[name]);
+    if (name === "access" && chosen) params.set("at", chosen);
     if (name === "audit" && form.email.trim()) params.set("email", form.email.trim());
     setBusy(name); setErr(null); setDone(null);
     try {
@@ -93,7 +104,7 @@ export function EvidencePage() {
                 <p className="text-small text-muted">{what[x.name].proves}</p>
                 {x.name === "access" ? (
                   <label className="flex flex-col gap-1 text-small">Date (end of the UTC day)
-                    <input type="date" className={field} value={form.date} onChange={(v) => setForm({ ...form, date: v.target.value })} aria-label="Access review date" /></label>
+                    <input type="date" className={field} value={form.date} onChange={(v) => { setForm({ ...form, date: v.target.value }); setAt(""); }} aria-label="Access review date" /></label>
                 ) : (
                   <div className="grid grid-cols-2 gap-2">
                     <label className="flex min-w-0 flex-col gap-1 text-small">From
@@ -101,6 +112,13 @@ export function EvidencePage() {
                     <label className="flex min-w-0 flex-col gap-1 text-small">To
                       <input type="date" className={`${field} w-full min-w-0`} value={form[pk].to} onChange={(v) => setForm({ ...form, [pk]: { ...form[pk], to: v.target.value } })} aria-label={`${what[x.name].title} to`} /></label>
                   </div>
+                )}
+                {x.name === "access" && ofDay.length > 1 && (
+                  <label className="flex flex-col gap-1 text-small" data-testid="access-snapshots">The rules changed on this date. Export the rules as of
+                    <select className={field} value={chosen} onChange={(v) => setAt(v.target.value)} aria-label="Access review snapshot">
+                      <option value="">End of the day (the last snapshot)</option>
+                      {ofDay.map((x) => <option key={x.time} value={x.time}>{x.time.slice(11, 19)} UTC · rules {x.rulesVersion || "unknown"}{x.accessMode === "audit" ? " (audit-only)" : ""}</option>)}
+                    </select></label>
                 )}
                 {x.name === "audit" && (
                   <p className={`text-small ${beforeRetention ? "text-bad" : "text-muted"}`} data-testid="retention">

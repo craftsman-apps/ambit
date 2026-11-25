@@ -113,9 +113,9 @@ for _ in $(seq 1 20); do [[ $(who_as "$K") == "not listed" ]] && break; sleep 3;
 [[ $(ag PATCH "/api/agents/$A" '{"connectionConsent":["saas"]}') == 200 ]] || fail "4b consent again"
 for _ in $(seq 1 20); do got=$(who_as "$K"); [[ "$got" != "not listed" ]] && break; sleep 3; done
 mcp_open "$K"
-r=rror no answer; [[ "$r" == ok*user09* ]] || fail "4b the open session cannot call whoami with consent: $r"
+r=$(call whoami_whoami '{}' 2>/dev/null || echo 'error no answer'); [[ "$r" == ok*user09* ]] || fail "4b the open session cannot call whoami with consent: $r"
 [[ $(ag PATCH "/api/agents/$A" '{"connectionConsent":[]}') == 200 ]] || fail "4b remove consent"
-for _ in $(seq 1 30); do r=rror no answer; [[ "$r" != ok*user09* ]] && break; sleep 2; done
+for _ in $(seq 1 30); do r=$(call whoami_whoami '{}' 2>/dev/null || echo 'error no answer'); [[ "$r" != ok*user09* ]] && break; sleep 2; done
 [[ "$r" != ok*user09* ]] || fail "4b the open session still reaches whoami as user09 after the consent was removed: $r"
 pass "4b the session that had called whoami is refused after the consent was removed ($r)"
 pass "4 consent ticked: whoami answers as user09 ($got); consent removed: not listed again (checked on every request, no cache of the grant decision beyond the gateway's 60 s)"

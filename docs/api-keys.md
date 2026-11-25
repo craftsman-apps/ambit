@@ -238,6 +238,8 @@ send a key. Every other refusal keeps its message.
    console sign-in plus `apiKeys.inactivityDays`.
 4. The owner's email is not on the offboarding block list.
 5. The owner's groups (from the key) allow the model, the MCP tool and the budget, as for a token.
+6. For the key of an [agent](agents.md) (experimental): if the key names source ranges, the client address is inside one
+   of them (checked with step 2), and the MCP tool is in the agent's scope (checked with step 5).
 
 A request without a key must carry a valid token, with a usable `email` claim unless `requireEmail` is
 `false`. A token whose email ends with `@svc.ambit.internal` (the [service account](service-accounts.md) domain) is
@@ -247,6 +249,13 @@ refused; with `requireEmail: false`, so is a token without an email whose subjec
 Before the request goes on, the gateway removes the `Authorization` and `x-api-key` headers. The provider or
 MCP server never receives the key. Ambit then adds the provider's own credential. Audit records show the key
 ID, never the key.
+
+## Keys of agents
+
+A key can belong to an [agent](agents.md): created through `POST /api/agents/{name}/keys`, MCP only, with the agent's scope
+and optional source ranges in its metadata. It is a key of its owner in every other way: it is listed in **Keys**, counts
+among the 20 keys of a person, is revoked in the same way, and is deleted when the person is offboarded. Agent keys end
+after at most `agents.keyMaxDays` (default 90) days. The **Keys** list shows the agent's name for such a key.
 
 ## Operations
 

@@ -35,7 +35,11 @@ const (
 	// PublicMCPRoute is the route of the public Gateway that offboarded people are refused on, like the private routes.
 	PublicMCPRoute      = "ambit-mcp-public"
 	AccessModeConfigMap = "ambit-access-mode" // the published mode and rules version, for the console and ambit check
-	accessLogManager    = "ambit-controller"  // app.kubernetes.io/managed-by of the policy: not Helm's any more
+	// AgentScopeKey is the data key of AccessModeConfigMap that says the MCP policy in force carries the agent-scope
+	// clause (published with the rules version, after agentgateway applied the change): the console issues no agent
+	// key before it (docs/agents.md). An older controller never writes it.
+	AgentScopeKey    = "agentScope"
+	accessLogManager = "ambit-controller" // app.kubernetes.io/managed-by of the policy: not Helm's any more
 )
 
 // accessLogPolicy is the base spec with ambit.accessMode, ambit.rulesVersion and the audit fields (audit mode only)
@@ -96,7 +100,7 @@ func RulesVersion(objs []*unstructured.Unstructured) string {
 			path = []string{"spec", "virtualModel"}
 		case o.GetKind() == "AgentgatewayModel":
 			path = []string{"spec", "policies", "authorization"}
-		case o.GetKind() == "AgentgatewayPolicy" && o.GetName() == MCPBackendName+"-access":
+		case o.GetKind() == "AgentgatewayPolicy" && (o.GetName() == MCPBackendName+"-access" || o.GetName() == PublicMCPBackendName+"-access"):
 			path = []string{"spec", "backend", "mcp", "authorization"}
 		default:
 			continue
@@ -253,6 +257,7 @@ func (r *Reconciler) publishMode(ctx context.Context, mode, rulesVersion string)
 		if d["rulesVersion"] != rulesVersion {
 			d["rulesVersion"], d["rulesSince"] = rulesVersion, now
 		}
+		d[AgentScopeKey] = "1"
 		delete(d, "pending")
 	})
 }
@@ -359,13 +364,15 @@ func (s *AccessLogStartup) ensure(ctx context.Context) error {
 			live = append(live, &models.Items[i])
 		}
 	}
-	mcp := &unstructured.Unstructured{}
-	mcp.SetGroupVersionKind(AgentgatewayPolicyGVK)
-	switch err := s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: MCPBackendName + "-access"}, mcp); {
-	case err == nil && ownedByAmbit(mcp):
-		live = append(live, mcp)
-	case err != nil && !apierrors.IsNotFound(err):
-		return err
+	for _, name := range []string{MCPBackendName + "-access", PublicMCPBackendName + "-access"} {
+		mcp := &unstructured.Unstructured{}
+		mcp.SetGroupVersionKind(AgentgatewayPolicyGVK)
+		switch err := s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: name}, mcp); {
+		case err == nil && ownedByAmbit(mcp):
+			live = append(live, mcp)
+		case err != nil && !apierrors.IsNotFound(err):
+			return err
+		}
 	}
 	policies, err := accessLogPolicies(&base, "enforce", RulesVersion(live), nil, s.PublicGateway)
 	if err != nil {

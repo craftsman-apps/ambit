@@ -106,10 +106,15 @@ func main() {
 	mcp.AddTool(s, &mcp.Tool{Name: "get_index", Description: "Return orders by customer email."},
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, map[string]any, error) {
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "index"}}},
-				map[string]any{"minsu.kim@example.com": map[string]any{"orders": 3}, "card": int64(4111111111111111), "at": int64(1763372401127),
-					// Numbers above 2^53 (issue 360): a 19-digit card number, with a decimal point, and with an exponent. Rounded, they fail the Luhn check.
-					"card19": int64(4111111111111111110), "card19point": json.Number("4111111111111111110.0"), "card19exp": json.Number("4.111111111111111110e18"),
-					"big": json.Number("12345678901234567890")}, nil
+				map[string]any{"minsu.kim@example.com": map[string]any{"orders": 3}, "card": int64(4111111111111111), "at": int64(1763372401127)}, nil
+		})
+	// get_big_numbers sends numbers above 2^53 as the server wrote them (issue 360). The SDK's typed tools round such a number
+	// (structured content goes through float64), so this tool builds the JSON itself. agentgateway reads integers up to
+	// 2^64 exactly and every number with a point or an exponent as a float, so only plain integers reach the guard exact.
+	s.AddTool(&mcp.Tool{Name: "get_big_numbers", Description: "Return numbers above 2^53.", InputSchema: map[string]any{"type": "object"}},
+		func(context.Context, *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "big numbers"}},
+				StructuredContent: json.RawMessage(`{"card19":4111111111111111110,"big":12345678901234567890}`)}, nil
 		})
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, &mcp.StreamableHTTPOptions{Stateless: true})
 	mux := http.NewServeMux()

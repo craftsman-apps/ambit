@@ -22,9 +22,11 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -81,6 +83,8 @@ type Reconciler struct {
 	PublicGateway string
 	// Snapshots records the AccessRules in force in otel_logs for evidence exports; nil: off (no evidence store).
 	Snapshots *Snapshots
+	// AppRemovals records each deleted Server (MCP app removal) in otel_logs; nil: off (no evidence store).
+	AppRemovals *AppRemovals
 
 	stalled   *stalledStep                // the step a change stopped at (single worker, no lock)
 	gateRetry time.Duration               // the last wait before trying a stopped change again
@@ -170,7 +174,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&corev1.ConfigMap{}, all, builder.WithPredicates(offboarded)).
 		// Only spec changes of Ambit objects: our own status writes must not trigger another pass.
 		Watches(&v1.Model{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Watches(&v1.Server{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Watches(&v1.Server{}, r.recordServerRemoval(all), builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1.AccessRule{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1.Budget{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1.ModelRouter{}, all, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
@@ -185,6 +189,20 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		b = b.Watches(u, all)
 	}
 	return b.Complete(r)
+}
+
+// recordServerRemoval is next with one more step: a deleted Server in our namespace is recorded (AppRemovals) first.
+// The event holds the Server as the cache last saw it, with the annotations the console set before it deleted it.
+func (r *Reconciler) recordServerRemoval(next handler.EventHandler) handler.EventHandler {
+	return handler.Funcs{
+		CreateFunc: next.Create, UpdateFunc: next.Update, GenericFunc: next.Generic,
+		DeleteFunc: func(ctx context.Context, e event.DeleteEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			if srv, ok := e.Object.(*v1.Server); ok && srv.Namespace == r.Namespace {
+				r.AppRemovals.Removed(srv)
+			}
+			next.Delete(ctx, e, q)
+		},
+	}
 }
 
 func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconcile.Result, error) {

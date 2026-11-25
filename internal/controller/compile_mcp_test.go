@@ -74,15 +74,35 @@ func TestToolRulesCompileToOneExpression(t *testing.T) {
 	want := `mcp.tool.target == "everything" && ` + identity.PrincipalGroups + `.exists(g, g in ["ml-research"])` +
 		` || mcp.tool.target == "time" && mcp.tool.name == "convert_time" && ` + identity.PrincipalGroups + `.exists(g, g in ["ml-research"])` +
 		` || mcp.tool.target == "time" && mcp.tool.name == "get_current_time" && ` + identity.PrincipalGroups + `.exists(g, g in ["eng", "ml-research"])`
-	if got := mcpExpr(t, r); got != want {
-		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	if got := mcpExpr(t, r); got != "("+want+") && ("+identity.AgentScope("")+")" {
+		t.Fatalf("got\n%s\nwant\n(%s) && (%s)", got, want, identity.AgentScope(""))
+	}
+}
+
+// The agent-scope clause is one constant text: the expression is as long with 2,000 agents as with none, because
+// an agent's scope travels in its credential, not in the policy (docs/agents.md, "Size").
+func TestAgentScopeClauseIsConstant(t *testing.T) {
+	rules := []v1.AccessRule{toolRule("eng-time", []string{"eng"}, false, v1.ServerAccess{Name: "time"})}
+	servers := []v1.Server{server("time", "stdio")}
+	plain := mcpExpr(t, Compile(nil, servers, rules, route))
+	AgentTokenIssuer = "https://auth.example.com"
+	defer func() { AgentTokenIssuer = "" }()
+	withToken := mcpExpr(t, Compile(nil, servers, rules, route))
+	if !strings.Contains(plain, identity.AgentScope("")) || !strings.Contains(withToken, identity.AgentScope("https://auth.example.com")) {
+		t.Fatalf("the agent-scope clause is missing:\n%s\n%s", plain, withToken)
+	}
+	if strings.Contains(plain, "ambit_scope") || !strings.Contains(withToken, "ambit_scope") {
+		t.Errorf("the token form must appear only with an issuer:\n%s\n%s", plain, withToken)
+	}
+	if len(plain) > 2000 { // the CRD's limit is 16,384 characters (compile_mcp.go)
+		t.Errorf("one server and one rule give %d characters", len(plain))
 	}
 }
 
 func TestAllSignedInOnAllToolsIsEveryPerson(t *testing.T) {
 	r := Compile(nil, []v1.Server{server("time", "stdio")},
 		[]v1.AccessRule{toolRule("everyone", nil, true, v1.ServerAccess{Name: "time"})}, route)
-	if got := mcpExpr(t, r); got != `mcp.tool.target == "time" && `+identity.Person {
+	if got := mcpExpr(t, r); got != `(mcp.tool.target == "time" && `+identity.Person+`) && (`+identity.AgentScope("")+`)` {
 		t.Fatalf("got %s", got)
 	}
 }

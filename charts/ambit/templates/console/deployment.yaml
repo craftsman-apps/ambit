@@ -63,6 +63,11 @@ spec:
             - { name: AMBIT_SA_ENABLED, value: {{ ne (toString $sa.enabled) "false" | quote }} }
             - { name: AMBIT_SA_MAX_DAYS, value: {{ $sa.maxDays | default 90 | quote }} }
             - { name: AMBIT_SA_EXPOSURE_DAYS, value: {{ ternary $sa.exposureDays 7 (hasKey $sa "exposureDays") | quote }} }
+            {{- $ag := .Values.agents | default dict }}{{/* missing after --reuse-values from before 0.6.0 */}}
+            - { name: AMBIT_AGENTS_ENABLED, value: {{ ne (toString $ag.enabled) "false" | quote }} }
+            - { name: AMBIT_AGENTS_MAX_TOTAL, value: {{ $ag.maxTotal | default 2000 | quote }} }
+            - { name: AMBIT_AGENTS_MAX_PER_PERSON, value: {{ $ag.maxPerPerson | default 10 | quote }} }
+            - { name: AMBIT_AGENTS_KEY_MAX_DAYS, value: {{ $ag.keyMaxDays | default 90 | quote }} }
             - name: AMBIT_POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
             - name: AMBIT_NAMESPACE

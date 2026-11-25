@@ -24,6 +24,15 @@ console for 30 days.
 
 A service account is not a Kubernetes ServiceAccount and has nothing to do with one.
 
+## Agents that are service accounts
+
+An [itself-mode agent](agents.md#two-kinds-of-agent) is a service account with an accountable owner (a person or a group),
+a declared platform and a scope. Admins create it with `POST /api/agents` (`"mode":"itself"`); the page here keeps listing
+the account. Create its keys on the agent (`POST /api/agents/{name}/keys`), not here: a key made on this page would not
+carry the agent's scope, so the page refuses to create keys for an account that is an agent (400). Deleting the account on
+this page deletes the agent's record too. The exposure rule below applies to an agent's keys like any other key issued by
+an admin.
+
 ## Create an account and a key
 
 ![Settings → Service accounts](assets/console/service-accounts.png)

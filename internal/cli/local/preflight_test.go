@@ -1,6 +1,7 @@
 package local
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/craftsman-apps/ambit/internal/cli/checks"
+	"github.com/craftsman-apps/ambit/internal/cli/out"
 )
 
 const (

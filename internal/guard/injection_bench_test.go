@@ -73,6 +73,6 @@ func BenchmarkInjectionScan(b *testing.B) {
 	in := mustInjector(b, "audit", "")
 	b.SetBytes(int64(len(text)))
 	for range b.N {
-		in.scanner.scan(text)
+		in.all.scanner.scan(text)
 	}
 }

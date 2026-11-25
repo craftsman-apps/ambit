@@ -579,15 +579,57 @@ func TestHiddenCharactersAreRemovedUntilNoneAreLeft(t *testing.T) {
 	if withheld || strings.Contains(got, "alice") || !strings.Contains(got, `"text":"mail <EMAIL>"`) {
 		t.Errorf("withheld=%v %s", withheld, got)
 	}
-	// nested without end: more rounds than the guard makes
-	deep := "x"
-	for range 6 {
-		deep = "\u200b" + deep + "\u200b"
-		deep = strings.ReplaceAll(deep, "x", "x\U000E0041x")
+}
+
+// A result with more hidden characters than the guard handles is withheld, and the findings are recorded.
+func TestTooManyHiddenCharactersAreWithheldAndRecorded(t *testing.T) {
+	sink := &injSink{}
+	g := &Guard{Pins: pins, Masker: Builtin{}, Records: sink, Injection: injector(t, "mask", "")}
+	var parts []string
+	for range 3000 {
+		parts = append(parts, strings.Repeat("a\\u200b\\u200b", 40))
 	}
+	body := `{"content":[{"type":"text","text":"` + strings.Join(parts, "") + `"}]}`
+	got, withheld := respond(t, g, "tools/call", body)
+	if !withheld || !strings.Contains(got, "hidden characters") {
+		t.Errorf("withheld=%v %.200s", withheld, got)
+	}
+	if len(sink.recs) != 1 || sink.recs[0].Rule != "zero-width-run" || sink.recs[0].Action != ActionRejected {
+		t.Errorf("records %+v", sink.recs)
+	}
+}
+
+// Words of visible text cannot fill the room of the hidden characters: they have their own list.
+func TestVisibleWordsDoNotBlockTheRemovalOfHiddenCharacters(t *testing.T) {
 	in := injector(t, "mask", "")
-	if _, _, over := in.StripHidden([]string{strings.Repeat("\u200b\U000E0041", 3) + deep}); over {
-		t.Log("deep nesting is refused (over)") // either result is fine; no panic and no endless loop
+	text := strings.Repeat("user person ", maxHits) + "a\u200b\u200bb"
+	out, rules, over := in.StripHidden([]string{text})
+	if over || !slices.Equal(rules, []string{"zero-width-run"}) || !strings.HasSuffix(out[0], "ab") {
+		t.Errorf("over=%v rules=%v", over, rules)
+	}
+}
+
+// A match count of exactly the limit is not over it.
+func TestExactlyTheLimitOfMatchesIsNotTooMany(t *testing.T) {
+	in, err := LoadInjector(`{"mode":"mask","builtins":false,"patterns":["x"]}`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := in.Check(t.Context(), []string{strings.Repeat("x", maxMatches)}, nil); r.Withhold != "" || r.Texts[0] != strings.Repeat(InjectionPlaceholder, maxMatches) {
+		t.Errorf("withhold=%q", r.Withhold)
+	}
+	if r := in.Check(t.Context(), []string{strings.Repeat("x", maxMatches+1)}, nil); r.Withhold == "" {
+		t.Error("one more than the limit was not withheld")
+	}
+}
+
+// Privacy guidance about user IDs is not an order to hide something from the user.
+func TestOrdinarySentencesAboutUsersAreNotFindings(t *testing.T) {
+	in := injector(t, "reject", "")
+	for _, text := range []string{"Do not show user IDs in logs.", "We do not tell users about planned downtime.", "Never reveal user passwords"} {
+		if r := in.Check(t.Context(), []string{text}, nil); slices.Contains(r.Rules, "hide-from-user") {
+			t.Errorf("hide-from-user found in %q", text)
+		}
 	}
 }
 
@@ -638,8 +680,8 @@ func TestManySmallTextsOfMatchesAreWithheld(t *testing.T) {
 
 func TestScannerFindsAWordOfTwoBytesAtTheEnd(t *testing.T) {
 	in := injector(t, "audit", "")
-	hits, _ := in.scanner.scan("abc <|")
-	if len(hits) != 1 || in.words[hits[0].word] != "<|" || hits[0].start != 4 || hits[0].end != 6 {
+	hits, _ := in.all.scanner.scan("abc <|")
+	if len(hits) != 1 || in.all.words[hits[0].word] != "<|" || hits[0].start != 4 || hits[0].end != 6 {
 		t.Errorf("hits %+v", hits)
 	}
 }

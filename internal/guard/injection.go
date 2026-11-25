@@ -96,7 +96,7 @@ var injectionRules = []injRule{
 	{name: "role-prefix", needles: []string{"system:", "system :", "assistant:", "assistant :"}, lineStart: true,
 		re: regexp.MustCompile(`(?im)^[ \t]{0,8}(?:system|assistant)[ \t]?:`)},
 	rl("hide-from-user", []string{"user", "human", "person"},
-		`(?i)\b(?:(?:do\s+not|don['’]t|never)\s+(?:tell|inform|mention|reveal|notify|alert|show)|without\s+(?:telling|informing|notifying|alerting))\s+(?:this\s+to\s+)?(?:the\s+|your\s+|this\s+)?(?:user|human|person)\b`+
+		`(?i)\b(?:(?:do\s+not|don['’]t|never)\s+(?:tell|inform|mention|reveal|notify|alert|show)|without\s+(?:telling|informing|notifying|alerting))\s+(?:this\s+to\s+)?(?:(?:the|your|this)\s+(?:user|human|person)\b|(?:user|human|person)\s+(?:about|that|of|anything|know)\b)`+
 			`|(?i)\b(?:hide|keep)\s+(?:this|it|that)\s+(?:a\s+secret\s+)?from\s+the\s+user\b`).near(100, "tell", "inform", "mention", "reveal", "notify", "alert", "show", "hide", "keep"),
 	rl("persona-override", []string{"you are now", "dan mode", "developer mode", "god mode", "jailbreak mode"},
 		`(?i)\byou\s+are\s+now\s+(?:in\s+)?(?:(?:a|an|the)\s+)?(?:DAN\b|developer\s+mode|jailbroken|unrestricted|unfiltered)|\b(?:enable|enter|activate|switch\s+to)\s+(?:DAN|developer|god|jailbreak)\s+mode\b`),
@@ -115,8 +115,14 @@ var injectionRules = []injRule{
 // matches returns the places in t where the rule matches, as FindAllStringIndex does with the limit n. over is true when
 // there may be more than n.
 func (r *injRule) matches(t string, n int) (ms [][]int, over bool) {
-	all := r.re.FindAllStringIndex(t, n)
-	over = n > 0 && len(all) >= n // before the filter: the list that was cut may have held what must would keep
+	limit := n
+	if n > 0 {
+		limit = n + 1 // one more than the limit shows that there are more
+	}
+	all := r.re.FindAllStringIndex(t, limit)
+	if n > 0 && len(all) > n {
+		over, all = true, all[:n]
+	}
 	if r.must == nil {
 		return all, over
 	}
@@ -155,16 +161,40 @@ type Injector struct {
 	mode    string
 	enabled []bool    // by index in injectionRules
 	custom  []injRule // your own patterns
-	// The words of the enabled rules, and a scanner for them: a rule that is switched off costs nothing and cannot fill the
-	// list of words (maxHits). scanner is nil when no built-in rule is enabled.
-	words       []string
-	wordRule    []int
-	wordPartner []bool
-	scanner     *matcher
+	// The words of the enabled rules and a scanner for them (all), and the same for the rules with invisible text only (hidden,
+	// for StripHidden): a rule that is switched off costs nothing and cannot fill the list of words (maxHits), and the words of
+	// visible text cannot hide the invisible ones. A set has no scanner when it has no word.
+	all, hidden wordSet
 	hookURL     string
 	timeout     time.Duration
 	failure     string
 	HTTP        *http.Client
+}
+
+// wordSet is the needles and partners of some rules, with the rule of each word, and a scanner for them.
+type wordSet struct {
+	words   []string
+	rule    []int
+	partner []bool
+	scanner *matcher
+}
+
+func newWordSet(enabled []bool, invisibleOnly bool) (w wordSet) {
+	for i, r := range injectionRules {
+		if !enabled[i] || invisibleOnly && !r.invisible {
+			continue
+		}
+		for _, n := range r.needles {
+			w.words, w.rule, w.partner = append(w.words, n), append(w.rule, i), append(w.partner, false)
+		}
+		for _, n := range r.partners {
+			w.words, w.rule, w.partner = append(w.words, n), append(w.rule, i), append(w.partner, true)
+		}
+	}
+	if w.words != nil {
+		w.scanner = newMatcher(w.words)
+	}
+	return w
 }
 
 // LoadInjector reads the AMBIT_INJECTION_GUARD value. Empty: nil (no injection guard).
@@ -199,20 +229,7 @@ func LoadInjector(s string, hc *http.Client) (*Injector, error) {
 	for i, r := range injectionRules {
 		in.enabled[i] = c.Builtins && !slices.Contains(c.DisabledBuiltins, r.name)
 	}
-	for i, r := range injectionRules {
-		if !in.enabled[i] {
-			continue
-		}
-		for _, n := range r.needles {
-			in.words, in.wordRule, in.wordPartner = append(in.words, n), append(in.wordRule, i), append(in.wordPartner, false)
-		}
-		for _, n := range r.partners {
-			in.words, in.wordRule, in.wordPartner = append(in.words, n), append(in.wordRule, i), append(in.wordPartner, true)
-		}
-	}
-	if in.words != nil {
-		in.scanner = newMatcher(in.words)
-	}
+	in.all, in.hidden = newWordSet(in.enabled, false), newWordSet(in.enabled, true)
 	for i, p := range c.Patterns {
 		re, err := regexp.Compile(p)
 		if err != nil {
@@ -440,10 +457,14 @@ func (in *Injector) spans(text string, seen map[string]bool, hiddenOnly bool) (o
 			}
 		}
 	}
+	set := &in.all
+	if hiddenOnly {
+		set = &in.hidden
+	}
 	var hits []hit
-	if in.scanner != nil {
+	if set.scanner != nil {
 		var overflow bool
-		hits, overflow = in.scanner.scan(text)
+		hits, overflow = set.scanner.scan(text)
 		over = over || overflow
 	}
 	if hits != nil {
@@ -463,7 +484,7 @@ func (in *Injector) spans(text string, seen map[string]bool, hiddenOnly bool) (o
 			}
 		}
 		for _, h := range hits {
-			ri := in.wordRule[h.word]
+			ri := set.rule[h.word]
 			if hiddenOnly && !injectionRules[ri].invisible {
 				continue
 			}
@@ -475,7 +496,7 @@ func (in *Injector) spans(text string, seen map[string]bool, hiddenOnly bool) (o
 			}
 			// Needle and partner: a window from the one to the other, when they are near.
 			mine, other := 0, 1
-			if in.wordPartner[h.word] {
+			if set.partner[h.word] {
 				mine, other = 1, 0
 			}
 			last[ri][mine], seenWord[ri][mine] = me, true

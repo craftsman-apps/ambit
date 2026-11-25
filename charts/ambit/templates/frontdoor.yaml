@@ -197,6 +197,10 @@ spec:
           # A person (an email, not a service account) and an agent and a grant: what the consent page writes into every token.
           - {{ include "ambit.identity.jwtGate" (dict "requireEmail" true "services" (ne (toString (.Values.serviceAccounts | default dict).enabled) "false")) | quote }}
           - 'has(jwt.ambit_agent) && has(jwt.ambit_grant) && type(jwt.ambit_scope) == list'
+          {{- if .Values.oauth.emergencyBlock }}
+          # oauth.emergencyBlock: no token of this issuer passes, whatever else is true.
+          - 'false'
+          {{- end }}
 {{- end }}
 ---
 # Two limits on every request of the public Gateway: shared by all gateway pods (the ratelimit service counts in Valkey;

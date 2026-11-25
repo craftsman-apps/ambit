@@ -53,17 +53,22 @@ The kind cluster lock (`/tmp/ambit-kind.lock`) is for local clusters and does no
 
 ## What runs where
 
-| Where | What runs | Time (measured, see the end of this page) |
+| Where | What runs | Time when runners are free (measured 2026-11-25) |
 |---|---|---|
-| Draft pull request | The quick checks: `changes`, `build`, `image`, `cli-unit` on three systems, the `cli-*` jobs the path filter asks for. No quickstart, no e2e. | the same as below |
-| Pull request that is ready | The same, plus `quickstart` when the path filter asks for it. **No e2e** once the queue is on. | a few minutes less than 15 |
-| Merge queue (event `merge_group`) | Everything: the quick checks, `quickstart`, and the full e2e (`e2e (a)` to `e2e (e)`, every part of the matrix in `ci.yml`). | about 30 to 35 |
-| A manual run (event `workflow_dispatch`) | Everything, for any branch, whatever files changed. | about 30 to 35 |
+| Draft pull request | The quick checks: `changes`, `build`, `image`, `cli-unit` on three systems, the `cli-*` jobs the path filter asks for. No quickstart, no e2e. | about 10 minutes: the slowest job is `cli-snapshot` (9 minutes), then `build` (5) and `image` (4) |
+| Pull request that is ready | The same, plus `quickstart` when the path filter asks for it. **No e2e** once the queue is on. | about 10 minutes, the same jobs plus `quickstart` (2 minutes) |
+| Merge queue (event `merge_group`) | Everything: the quick checks, `quickstart`, and the full e2e (`e2e (a)` to `e2e (e)`, every part of the matrix in `ci.yml`). | about 21 minutes: `image` (4) and then the slowest e2e part (17) |
+| A manual run (event `workflow_dispatch`) | Everything, for any branch, whatever files changed. | about 21 minutes, as in the queue |
 
 The rule that keeps `main` safe: the one required check is `merge-gate`. On a queue branch it fails when e2e was skipped
 although the path filter says the change needs it. On a pull request it accepts "e2e not run here" only when the
 repository variable `MERGE_QUEUE` is `true`. So nothing reaches `main` without the full e2e passing on the queue's
 combined commit (the current `main` plus the pull request).
+
+The times are the running times of the jobs. The runner pool is shared, and a job can wait for a runner before it starts:
+in the manual run of 2026-11-25 (all jobs, 16:25 to 17:25 UTC) the quick checks finished after 44 minutes and the e2e
+parts after 60 minutes, because jobs waited more than 10 minutes each for a free runner. Before this change, 82 pull
+request runs that ran e2e took a median of 25 minutes (a quarter of them 34 minutes or more).
 
 The path filters keep their meaning: a change to documentation only needs no e2e, and then the queue skips it on purpose.
 

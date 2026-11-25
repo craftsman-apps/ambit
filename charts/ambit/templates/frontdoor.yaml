@@ -188,6 +188,8 @@ data:
       - key: fd_source
         rate_limit: { unit: minute, requests_per_unit: {{ $rl.perSourcePerMinute }} }
 ---
+# This policy does not change when OAuth is turned on or off (it always admits the routes of both): Helm applies it after the routes, so a policy that
+# changed with the routes would refuse them in the same upgrade.
 # Only the public route may be attached to ambit-public, and only as this chart writes it: the name, the host, one rule with
 # the exact path /mcp, one backend (the public backend), and no other Gateway. A route of another name that names the
 # Gateway, or a change of the right route (another path, host or backend), is refused. A route that already names
@@ -220,10 +222,9 @@ spec:
         has(object.spec.rules[0].backendRefs) && size(object.spec.rules[0].backendRefs) == 1 &&
         object.spec.rules[0].backendRefs[0].name == "ambit-mcp-public" &&
         has(object.spec.rules[0].backendRefs[0].kind) && object.spec.rules[0].backendRefs[0].kind == "AgentgatewayBackend")
-{{- if (.Values.oauth | default dict).enabled }}
         || (object.kind == "HTTPRoute" && object.metadata.name == "ambit-auth-hydra" &&
         size(object.spec.parentRefs) == 1 &&
-        has(object.spec.hostnames) && object.spec.hostnames == [{{ $fd.authHost | quote }}] &&
+        has(object.spec.hostnames) && size(object.spec.hostnames) == 1 &&
         has(object.spec.rules) && size(object.spec.rules) == 1 &&
         has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) == 3 &&
         object.spec.rules[0].matches.all(m, has(m.path) && m.path.type == "Exact" && has(m.method) &&
@@ -240,8 +241,8 @@ spec:
         (!has(object.spec.rules[0].backendRefs[0].group) || object.spec.rules[0].backendRefs[0].group == "") &&
         !has(object.spec.rules[0].backendRefs[0].namespace) && object.spec.rules[0].backendRefs[0].port == 4444 &&
         (!has(object.spec.rules[0].backendRefs[0].filters) || size(object.spec.rules[0].backendRefs[0].filters) == 0))
-{{- end }}
-      message: {{ if (.Values.oauth | default dict).enabled }}"only the routes that the chart sets may be attached to the public Gateway ambit-public (ambit-mcp-public, ambit-auth-hydra), each with its host, exact paths and backend"{{ else }}"only the route ambit-mcp-public may be attached to the public Gateway ambit-public, with the host, the exact path /mcp and the backend ambit-mcp-public that the chart sets"{{ end }}
+
+      message: "only the route ambit-mcp-public (and, with OAuth sign-in, ambit-auth-hydra) may be attached to the public Gateway ambit-public, with the host, the exact paths and the backends that the chart sets"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

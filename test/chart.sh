@@ -493,7 +493,7 @@ MSG='maxClients' refuse "a client cap of 0" --set oauth.registration.dynamic.max
 check_oa 'r=one("HTTPRoute","ambit-mcp-public")["spec"]
 assert [x["name"] for x in r["rules"]]==["keys","oauth"], r["rules"]
 k,o=r["rules"]
-assert k["matches"]==[{"path":{"type":"Exact","value":"/mcp"},"headers":[{"name":"x-api-key","type":"RegularExpression","value":".+"}]},{"path":{"type":"Exact","value":"/mcp"},"headers":[{"name":"Authorization","type":"RegularExpression","value":"^Bearer ambit_.+"}]}], k["matches"]
+assert k["matches"]==[{"path":{"type":"Exact","value":"/mcp"},"headers":[{"name":"x-api-key","type":"RegularExpression","value":".*"}]},{"path":{"type":"Exact","value":"/mcp"},"headers":[{"name":"Authorization","type":"RegularExpression","value":"^Bearer ambit_.*"}]}], k["matches"]
 assert o["matches"]==[{"path":{"type":"Exact","value":"/mcp"}},{"method":"GET","path":{"type":"Exact","value":"/.well-known/oauth-protected-resource/mcp"}}], o["matches"]
 for x in (k,o):
   assert x["backendRefs"]==[{"group":"agentgateway.dev","kind":"AgentgatewayBackend","name":"ambit-mcp-public"}], x
@@ -523,10 +523,11 @@ assert n[1]=={"from":[{"podSelector":{"matchLabels":{"app.kubernetes.io/name":"a
 r=one("ClusterRole","ambit-system-ambit-console-tokenreview")["rules"]
 assert r==[{"apiGroups":["authentication.k8s.io"],"resources":["tokenreviews"],"verbs":["create"]}], r' "the console: an internal API on its own port for ambit-auth only (network policy and a token check), and the right to check tokens and nothing else of the authentication API"
 blk=$(oat --set oauth.emergencyBlock=true)
-oa=$blk check_oa 'ex=one("AgentgatewayPolicy","ambit-mcp-public-oauth")["spec"]["traffic"]["authorization"]["policy"]["matchExpressions"]
+# (not "oa=$blk check_oa": a variable set for one call is exported, and the rendered chart is more than the 128 KB that Linux allows in one)
+( oa=$blk; check_oa 'ex=one("AgentgatewayPolicy","ambit-mcp-public-oauth")["spec"]["traffic"]["authorization"]["policy"]["matchExpressions"]
 assert "false" in ex, ex
 k=one("AgentgatewayPolicy","ambit-mcp-public-auth")["spec"]["traffic"]["authorization"]["policy"]["matchExpressions"]
-assert "false" not in k, "the keys rule must not be touched"' "oauth.emergencyBlock adds a false clause to the token rule only, never to the key rule"
+assert "false" not in k, "the keys rule must not be touched"' "oauth.emergencyBlock adds a false clause to the token rule only, never to the key rule" )
 none=$(helm template ambit charts/ambit -n ambit-system "${fdv[@]}")
 ! grep -q 'ambit-mcp-public-oauth\|sectionName: keys\|ambit-console-oauth\|ambit-console-tokenreview' <<<"$none" || { echo "FAIL chart: nothing of OAuth in the front door's objects without OAuth"; exit 1; }
 MSG='maxGrantDays' refuse "a grant life of 400 days" --set oauth.maxGrantDays=400
@@ -542,5 +543,7 @@ MSG='oauth.hydra.systemSecret' refuse "no system Secret" --set oauth.hydra.syste
 MSG='accessTokenMinutes' refuse "a token that lives two hours" --set oauth.accessTokenMinutes=120
 MSG='refreshTokenIdleDays' refuse "no refresh life" --set oauth.refreshTokenIdleDays=0
 MSG='oauth.hydra.replicas' refuse "no Hydra pod" --set oauth.hydra.replicas=0
+MSG='agents.stopRetentionMinutes' refuse "a stop entry that does not outlive the access tokens" --set oauth.accessTokenMinutes=30 --set agents.stopRetentionMinutes=30
+MSG='agents.tokenIssuer' refuse "another agent token issuer than the sign-in host" --set agents.tokenIssuer=https://other.example.com
 rm -f "$W2"
 echo "PASS chart"

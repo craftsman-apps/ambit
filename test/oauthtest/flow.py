@@ -24,8 +24,13 @@ REDIRECT = "https://chatgpt.com/connector_platform_oauth_redirect"
 fails = []
 
 
+def redact(x):
+    """The text of a failed check, without a token: an access token (a JWT), a refresh token or an authorization code."""
+    return re.sub(r"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*|ory_[a-z]{2}_[A-Za-z0-9_.\-]+", "<token>", str(x))
+
+
 def check(name, cond, detail=""):
-    print(("PASS " if cond else "FAIL ") + name + ("" if cond else f": {detail}"), flush=True)
+    print(("PASS " if cond else "FAIL ") + name + ("" if cond else f": {redact(detail)}"), flush=True)
     if not cond:
         fails.append(name)
 

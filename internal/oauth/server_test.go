@@ -179,6 +179,7 @@ type fakeBackend struct {
 	refuse   string
 	inactive map[string]bool
 	down     bool
+	scopes   [][]string // the scope of every Active call
 }
 
 func (b *fakeBackend) Servers(_ context.Context, email string, _ []string) ([]ServerChoice, error) {
@@ -198,9 +199,10 @@ func (b *fakeBackend) CreateAgent(_ context.Context, in AgentInput) (string, err
 	b.created = append(b.created, in)
 	return "chatgpt-" + fmt.Sprint(len(b.created)), nil
 }
-func (b *fakeBackend) Active(_ context.Context, agent, grant string) (bool, error) {
+func (b *fakeBackend) Active(_ context.Context, agent, grant string, scope []string) (bool, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.scopes = append(b.scopes, scope)
 	if b.down {
 		return false, errors.New("down")
 	}

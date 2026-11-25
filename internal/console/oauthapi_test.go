@@ -146,8 +146,16 @@ func TestOAuthServersOffboardedPersonGetsNothing(t *testing.T) {
 }
 
 func TestOAuthAgentCreatedAndActive(t *testing.T) {
-	a, keys, _ := newOAuthAPI(t)
+	a, keys, _ := newOAuthAPI(t, oaServer("crm", true, ""), oaServer("payroll", false, ""),
+		oaRule("everyone", v1.AccessRuleSpec{AllSignedIn: true, Servers: []v1.ServerAccess{{Name: "crm"}, {Name: "payroll"}}}))
 	grant := "g-" + "abc123" + "-AbCdEfGhIj"
+	// a scope that the person may not offer (payroll is not on the front door) is refused, whatever ambit-auth sends
+	if w := call(a, "/internal/oauth/v1/agents", "auth-token", `{"owner":"Alice@Acme.com","platform":"chatgpt","displayName":"ChatGPT","scope":["payroll"],"grantID":"`+grant+`"}`); w.Code != 422 {
+		t.Fatalf("a server that is not offered: %d %s", w.Code, w.Body.String())
+	}
+	if w := call(a, "/internal/oauth/v1/agents", "auth-token", `{"owner":"Alice@Acme.com","platform":"chatgpt","displayName":"ChatGPT","scope":["nonexistent/tool"],"grantID":"`+grant+`"}`); w.Code != 422 {
+		t.Fatalf("a server that does not exist: %d", w.Code)
+	}
 	body := `{"owner":"Alice@Acme.com","platform":"chatgpt","displayName":"ChatGPT","scope":["crm"],"connections":[],"grantID":"` + grant + `"}`
 	w := call(a, "/internal/oauth/v1/agents", "auth-token", body)
 	if w.Code != 200 {
@@ -159,9 +167,9 @@ func TestOAuthAgentCreatedAndActive(t *testing.T) {
 	if err != nil || ag.Owner != "alice@acme.com" || ag.Mode != ModePerson || ag.Platform != "chatgpt" || len(ag.Grants) != 1 || ag.Grants[0] != grant || len(ag.Scope) != 1 {
 		t.Fatalf("agent %+v %v", ag, err)
 	}
-	active := func(agent, g string) bool {
+	activeWith := func(agent, g string, scope []string) bool {
 		t.Helper()
-		b, _ := json.Marshal(map[string]string{"agent": agent, "grant": g})
+		b, _ := json.Marshal(map[string]any{"agent": agent, "grant": g, "scope": scope})
 		w := call(a, "/internal/oauth/v1/active", "auth-token", string(b))
 		if w.Code != 200 {
 			t.Fatalf("active: %d", w.Code)
@@ -170,8 +178,19 @@ func TestOAuthAgentCreatedAndActive(t *testing.T) {
 		_ = json.Unmarshal(w.Body.Bytes(), &o)
 		return o.Active
 	}
+	active := func(agent, g string) bool { return activeWith(agent, g, nil) }
 	if !active(out.Name, grant) {
 		t.Fatal("a new agent and its grant are active")
+	}
+	if !activeWith(out.Name, grant, []string{"crm"}) || activeWith(out.Name, grant, []string{"crm", "wiki"}) {
+		t.Fatal("a token whose scope is within the agent's refreshes; one with more does not")
+	}
+	// the scope is narrowed after the consent: the refresh of the old token (scope "crm/read" is not in ["crm/list"]) is refused
+	if _, err := keys.UpdateAgent(context.Background(), Session{Email: "alice@acme.com", SignedIn: t0.Unix()}, out.Name, AgentPatch{Scope: &[]string{"crm/list"}}); err != nil {
+		t.Fatal(err)
+	}
+	if activeWith(out.Name, grant, []string{"crm"}) {
+		t.Fatal("the scope was narrowed: the refresh of the old token must be refused")
 	}
 	if active(out.Name, "g-abc123-SomeOtherGrant") || active("no-such-agent", grant) {
 		t.Fatal("another grant, or an agent that does not exist, is not active")

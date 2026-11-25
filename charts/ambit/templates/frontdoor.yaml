@@ -52,6 +52,7 @@ spec:
         has(object.spec.hostnames) && object.spec.hostnames == [{{ $fd.host | quote }}] &&
         has(object.spec.rules) && (
         (size(object.spec.rules) == 1 &&
+        has(object.spec.rules[0].name) && object.spec.rules[0].name == "keys" &&
         has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) == 1 &&
         has(object.spec.rules[0].matches[0].path) && object.spec.rules[0].matches[0].path.type == "Exact" &&
         object.spec.rules[0].matches[0].path.value == "/mcp")
@@ -217,11 +218,11 @@ spec:
   rules:
     - name: keys
       {{- if $oauth }}
-      # With OAuth: a request that carries an Ambit key takes this rule (a key is in x-api-key, or in Authorization after "Bearer ambit_");
+      # With OAuth: a request that carries an Ambit key takes this rule (a key is in x-api-key, or in Authorization after "Bearer ambit_"; an empty x-api-key counts: the key rule refuses it, as the identity rule treats any x-api-key header as a presented key);
       # every other request to /mcp takes the oauth rule below. The more specific match wins.
       matches:
-        - { path: { type: Exact, value: /mcp }, headers: [{ name: x-api-key, type: RegularExpression, value: ".+" }] }
-        - { path: { type: Exact, value: /mcp }, headers: [{ name: Authorization, type: RegularExpression, value: "^Bearer ambit_.+" }] }
+        - { path: { type: Exact, value: /mcp }, headers: [{ name: x-api-key, type: RegularExpression, value: ".*" }] }
+        - { path: { type: Exact, value: /mcp }, headers: [{ name: Authorization, type: RegularExpression, value: "^Bearer ambit_.*" }] }
       {{- else }}
       matches: [{ path: { type: Exact, value: /mcp } }]
       {{- end }}

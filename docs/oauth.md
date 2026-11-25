@@ -210,16 +210,19 @@ Tokens do not work on the private route (it takes tokens of your company's provi
   it asks the console whether the agent is active). A token that was already issued is refused by the gateway through the stop list as
   soon as the Gateway has the policy of the stop. The person's other connections are not touched. A stopped agent can be started again only
   after the retention of the stop entry (`agents.stopRetentionMinutes`, 25 minutes by default, longer than a token lives), so that an old token
-  cannot work again when the entry goes. Hydra cannot revoke one grant, so nothing is revoked there: the agent's state does it. The test
+  cannot work again when the entry goes (the chart refuses a retention shorter than `oauth.accessTokenMinutes` plus 5). Hydra cannot revoke
+  one grant, so a stop takes the grants off the agent's record instead: the old refresh token never works again, also after the agent is
+  started, and the platform connects again (a new consent). The test
   `test/stepoauth.sh` (check 14) stops an agent through the console's API with the real controller and prints the measured times
   (the token refused on every pod, the refresh refused, the console saying "stopped").
 - **Keeping a platform out**: an admin deletes the platform's OAuth client (`GET /api/admin/oauth/clients`, `DELETE
   /api/admin/oauth/clients/{id}`): its codes and refresh tokens go with it and no new sign-in works.
 
 The token hook of `ambit-auth` (Hydra calls it for every token request) refuses a **refresh** when the person is on the offboarding list
-(`ambit-offboarded`), the agent or grant is on the stop list (`ambit-agent-stops`), the console says the agent is not active or does not own
-the grant, or the grant is older than `oauth.maxGrantDays` (30). Hydra then answers `access_denied` and does not use up the refresh token,
-so a restart of the agent works without a new consent. If the lists cannot be read for 45 seconds, a list has an entry it cannot read, the
+(`ambit-offboarded`), the agent or grant is on the stop list (`ambit-agent-stops`), the console says the agent is not active, does not own
+the grant, or the scope of the token is no longer within the agent's scope (a scope that was narrowed ends the refresh: the platform connects
+again, and a token already issued keeps its scope until it expires, at most 15 minutes), or the grant is older than `oauth.maxGrantDays` (30). Hydra then answers `access_denied` and does not use up the refresh token
+(a person who is reactivated after offboarding refreshes again; an agent that was stopped does not: its grants are gone). If the lists cannot be read for 45 seconds, a list has an entry it cannot read, the
 request is incomplete (no agent, grant, email or grant type), or the console does not answer, the hook refuses (a refresh waits; tokens
 already issued are not affected). **The groups in a token are those of the sign-in** (the console does not know a person's groups between
 sign-ins): a group that the person loses at your identity provider counts until the grant ends, at most `oauth.maxGrantDays`; lower it if that

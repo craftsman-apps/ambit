@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -167,7 +168,8 @@ func (a *OAuthAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Owner, Platform, DisplayName string
 		Scope, Connections           []string
-		GrantID                      string `json:"grantID"`
+		GrantID                      string   `json:"grantID"`
+		Groups                       []string `json:"groups"` // the groups of the person's sign-in
 	}
 	if err := readJSON(r, &in); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -177,6 +179,24 @@ func (a *OAuthAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if !ok || identity.IsService(owner) {
 		http.Error(w, "bad owner", http.StatusBadRequest)
 		return
+	}
+	// Whatever ambit-auth sends, a scope must name only servers that the person may offer: what their AccessRules allow and the front
+	// door serves (the same list as the consent page was built from).
+	if len(in.Groups) > 200 {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	allowed, err := a.frontDoorServersFor(r.Context(), owner, in.Groups)
+	if err != nil {
+		http.Error(w, "cannot read the servers", http.StatusServiceUnavailable)
+		return
+	}
+	for _, sc := range in.Scope {
+		name, _, _ := strings.Cut(sc, "/")
+		if !slices.ContainsFunc(allowed, func(c ServerChoice) bool { return c.Name == name }) {
+			reply(w, http.StatusUnprocessableEntity, map[string]string{"error": "the agent was refused"})
+			return
+		}
 	}
 	// The person acts for themselves: the console treats the call as that person's own sign-in (limits, offboarding and names as for an
 	// agent made by hand).
@@ -199,7 +219,10 @@ func (a *OAuthAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *OAuthAPI) active(w http.ResponseWriter, r *http.Request) {
-	var in struct{ Agent, Grant string }
+	var in struct {
+		Agent, Grant string
+		Scope        []string // the scope of the token that is being refreshed
+	}
 	if err := readJSON(r, &in); err != nil || in.Agent == "" || in.Grant == "" {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
@@ -213,6 +236,11 @@ func (a *OAuthAPI) active(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cannot read the agent", http.StatusServiceUnavailable)
 	default:
 		on := ag.State == StateActive && ag.Mode == ModePerson && containsStr(ag.Grants, in.Grant)
+		// The token's scope must still be within the agent's: a scope that was narrowed since the consent ends the refresh (the platform
+		// connects again, and the person sees what is offered). A token that was issued before stays as it is until it expires.
+		for _, sc := range in.Scope {
+			on = on && containsStr(ag.Scope, sc)
+		}
 		if on {
 			// The owner must not be offboarded either: the sign-in is refused, and so is every refresh.
 			if blocked, err := a.Keys.blockedEmails(r.Context()); err != nil {

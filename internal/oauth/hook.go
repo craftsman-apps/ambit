@@ -81,7 +81,15 @@ func (s *Server) tokenHook(w http.ResponseWriter, r *http.Request) {
 	}
 	// The agent must exist, be active and own this grant: deleting an agent (or ending its connection) ends its refresh for
 	// good, without Hydra's help and after the stop list entry is gone.
-	active, err := s.Backend.Active(r.Context(), agent, grant)
+	var scope []string
+	if l, ok := in.Session.Extra["ambit_scope"].([]any); ok {
+		for _, x := range l {
+			if v, ok := x.(string); ok {
+				scope = append(scope, v)
+			}
+		}
+	}
+	active, err := s.Backend.Active(r.Context(), agent, grant, scope)
 	if err != nil {
 		mHook.WithLabelValues("agent_unreadable").Inc()
 		s.log().Error("token hook: the agent could not be checked: the request is refused", "err", err)

@@ -410,7 +410,7 @@ func (s *Server) consentSubmit(w http.ResponseWriter, r *http.Request) {
 	grant := NewGrantID(s.now())
 	platform := Platform(requestRedirect(cr).Hostname())
 	agent, err := s.Backend.CreateAgent(r.Context(), AgentInput{Owner: cr.Subject, Platform: platform,
-		DisplayName: printable(cr.Client.Name, 60), Scope: scope, Connections: conns, GrantID: grant})
+		DisplayName: printable(cr.Client.Name, 60), Scope: scope, Connections: conns, GrantID: grant, Groups: groupNames(cr.Context["groups"])})
 	if err != nil {
 		var refused ErrRefused
 		if errors.As(err, &refused) {
@@ -425,7 +425,7 @@ func (s *Server) consentSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	groups, _ := cr.Context["groups"].([]any)
 	to, err := s.Hydra.AcceptConsent(r.Context(), ch, AcceptConsentBody{GrantScope: cr.RequestedScope, GrantAudience: []string{s.Cfg.Resource},
-		AccessToken: map[string]any{"email": cr.Subject, "groups": groups, "ambit_agent": agent, "ambit_agent_mode": "person",
+		AccessToken: map[string]any{"email": cr.Subject, "email_verified": true, "groups": groups, "ambit_agent": agent, "ambit_agent_mode": "person",
 			"ambit_agent_owner_at_issue": cr.Subject, "ambit_grant": grant, "ambit_scope": scope, "ambit_platform_declared": platform}})
 	if err != nil {
 		s.log().Error("consent: Hydra did not accept", "err", err)
@@ -489,4 +489,16 @@ func GrantAge(id string, now time.Time) (time.Duration, bool) {
 		return 0, false
 	}
 	return now.Sub(time.Unix(secs, 0)), true
+}
+
+// groupNames reads the groups that the sign-in put into the consent request's context.
+func groupNames(v any) []string {
+	var out []string
+	l, _ := v.([]any)
+	for _, x := range l {
+		if s, ok := x.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }

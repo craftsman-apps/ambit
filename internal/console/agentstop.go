@@ -706,3 +706,20 @@ func (s *KeyService) TestFillStopList(ctx context.Context, n int) error {
 	})
 	return err
 }
+
+// RevokeAgentGrants is step S3 of a stop with OAuth sign-in (set as KeyService.RevokeGrants). Hydra cannot revoke one grant, so the
+// grants are taken off the agent's record: a refresh needs the grant to be on an active agent (the token hook asks the console), and
+// it never is again, also after the agent is started. A platform that was stopped connects again, with a new consent. Call it holding s.mu.
+func (s *KeyService) RevokeAgentGrants(ctx context.Context, a Agent) error {
+	if len(a.Grants) == 0 {
+		return nil
+	}
+	_, err := s.changeAgent(ctx, a.Name, func(cur *Agent) (bool, error) {
+		if len(cur.Grants) == 0 {
+			return false, nil
+		}
+		cur.Grants = nil
+		return true, nil
+	})
+	return err
+}

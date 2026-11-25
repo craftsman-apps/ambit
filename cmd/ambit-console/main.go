@@ -222,11 +222,10 @@ func run(ctx context.Context) error {
 		}()
 		go func() { <-ctx.Done(); osrv.Close() }()
 		slog.Info("OAuth internal API ready", "addr", addr)
-		// Step S3 of a stop. Hydra cannot revoke one grant (only all of a client's), so nothing is revoked there: a stopped agent is not
-		// active, which makes ambit-auth's token hook refuse every refresh for good, and its stop entry makes the gateway refuse the
-		// access tokens already issued. Setting the hook tells the stop machine that grants exist: it then keeps the entry, and refuses
-		// to start the agent again, for the whole retention (25 minutes by default), longer than a token lives (15 minutes).
-		keySvc.RevokeGrants = func(context.Context, console.Agent) error { return nil }
+		// Step S3 of a stop: the grants leave the agent's record (Hydra cannot revoke one grant). Setting it also tells the stop machine that
+		// grants exist: it keeps the stop entry, and refuses to start the agent again, for the whole retention (25 minutes by default), longer
+		// than a token lives (15 minutes).
+		keySvc.RevokeGrants = keySvc.RevokeAgentGrants
 		if h := os.Getenv("AMBIT_HYDRA_ADMIN"); h != "" {
 			hydra = &oauth.HydraAdmin{Base: h}
 		}

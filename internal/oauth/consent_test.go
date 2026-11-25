@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1076,5 +1077,25 @@ func TestAsciiEmailDoesNotFoldUnicode(t *testing.T) {
 	}
 	if got := asciiEmail("  Alice@Acme.TEST "); got != "alice@acme.test" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// The refresh asks the console with the scope of the token: the console refuses it when the scope was narrowed since.
+func TestTokenHookSendsTheTokensScope(t *testing.T) {
+	e := newEnv(t)
+	sess := map[string]any{"subject": "alice@acme.test", "extra": map[string]any{"ambit_agent": "a1", "ambit_grant": NewGrantID(e.now.Add(-time.Hour)),
+		"email": "alice@acme.test", "ambit_scope": []string{"time", "mail/send"}}}
+	if w := hook(e, sess); w.Code != 204 {
+		t.Fatalf("refresh: %d", w.Code)
+	}
+	if len(e.be.scopes) != 1 || !slices.Equal(e.be.scopes[0], []string{"time", "mail/send"}) {
+		t.Fatalf("the console was asked with %v", e.be.scopes)
+	}
+}
+
+// The consent writes the verified email into the token, as AccessRules by email need it, and the groups to the console.
+func TestConsentTokenCarriesVerifiedEmail(t *testing.T) {
+	if g := groupNames([]any{"eng", 3, "ml"}); !slices.Equal(g, []string{"eng", "ml"}) {
+		t.Fatalf("groups %v", g)
 	}
 }

@@ -131,10 +131,11 @@ func (r *injRule) matches(t string, n int) (ms [][]int, over bool) {
 	return ms, over
 }
 
-// hasMatch says if the rule has a match with text in t (an empty match is none), looking at the first matches only.
-func (r *injRule) hasMatch(t string) bool {
-	ms, _ := r.matches(t, 64)
-	return len(ms) > 0
+// hasMatch says if the rule has a match with text in t (an empty match is none), reading up to maxMatches matches. over is true
+// when there were that many and none had text: the rest was not read.
+func (r *injRule) hasMatch(t string) (found, over bool) {
+	ms, more := r.matches(t, maxMatches)
+	return len(ms) > 0, more && len(ms) == 0
 }
 
 // InjectionBuiltinNames lists the names of the built-in rules (the chart's values schema lists the same names).
@@ -489,8 +490,12 @@ func (in *Injector) spans(text string, seen map[string]bool, hiddenOnly bool) (o
 		if in.mode != InjectionMask && !hiddenOnly {
 			// Audit and reject need the name of the rule, not where it matched: no list of spans, and nothing taken from the
 			// budget of spans (maxSpansPerResult) that a later text needs.
-			if r.re.MatchString(t) && r.hasMatch(t) {
-				seen[r.name] = true
+			if r.re.MatchString(t) {
+				found, more := r.hasMatch(t)
+				if found {
+					seen[r.name] = true
+				}
+				over = over || more // unread: audit goes on, reject withholds
 			}
 			return
 		}

@@ -760,3 +760,20 @@ func TestFindingInALaterTextIsNotLostToDenseMatchesBefore(t *testing.T) {
 		}
 	}
 }
+
+// Many comments without an instruction before one with it: reject mode finds it, however many come first.
+func TestRejectFindsAQualifyingMatchAfterManyThatDoNotQualify(t *testing.T) {
+	in := injector(t, "reject", "")
+	text := strings.Repeat("<!-- a note -->\n", 500) + "<!-- ignore this -->"
+	if r := in.Check(t.Context(), []string{text}, nil); !slices.Contains(r.Rules, "html-comment-instruction") {
+		t.Errorf("rules %v", r.Rules)
+	}
+	// more empty matches than the guard reads before the first one with text: not read to the end, so withheld (reject)
+	pat, err := LoadInjector(`{"mode":"reject","builtins":false,"patterns":["\\b|needle"]}`, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := pat.Check(t.Context(), []string{strings.Repeat("a ", maxMatches+5) + "needle"}, nil); r.Withhold == "" {
+		t.Error("a text read in part was not withheld in reject mode")
+	}
+}

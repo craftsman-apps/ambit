@@ -29,6 +29,8 @@ For each group that appears in your AccessRules, export the member list from you
 
 In the console, open **Settings → Evidence**. In **Access review**, the date is the last day of the last full quarter. Change it if needed and select **Download**.
 
+If the rules changed during that date, the page shows the day's snapshots under the date. By default the export is as of the end of the day; choose a time to get the rules, the keys and the people seen as of that snapshot (the ZIP is then named `ambit-access-<date>-T<hhmmss>Z.zip` and the manifest says `at`).
+
 If the page says "No snapshot for this date", the date is before the upgrade to 0.5.0, or before evidence was turned on. Choose a later date.
 
 The ZIP file `ambit-access-<date>.zip` holds:

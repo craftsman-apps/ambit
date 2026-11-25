@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -49,6 +50,27 @@ type fakeCH struct {
 	seen      [][]driver.Value   // rows of peopleSeenSQL
 	stats     [][]driver.Value   // answers of offboardStatsSQL, in call order
 	after     [][][]driver.Value // rows of offboardCallsAfterSQL, in call order
+}
+
+// snapshotsIn are the snapshots before the query's {end} parameter, and from its {start} parameter when withStart
+// (read from the context: the test database sees no query parameters).
+func (f *fakeCH) snapshotsIn(ctx context.Context, withStart bool) [][]driver.Value {
+	p, _ := ctx.Value(paramsKey{}).(clickhouse.Parameters)
+	at := func(k string) time.Time {
+		t, err := time.Parse("2006-01-02 15:04:05.000000000", p[k])
+		if err != nil {
+			panic("fakeCH: no " + k + " parameter")
+		}
+		return t
+	}
+	end := at("end")
+	var out [][]driver.Value
+	for _, s := range f.snapshots {
+		if t := s[0].(time.Time); t.Before(end) && (!withStart || !t.Before(at("start"))) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func (f *fakeCH) Connect(context.Context) (driver.Conn, error) { return fakeConn{f}, nil }
@@ -91,13 +113,15 @@ func (c fakeConn) QueryContext(ctx context.Context, q string, _ []driver.NamedVa
 			return one(2, int64(0), time.Unix(0, 0)), nil
 		}
 		return one(2, int64(len(f.snapshots)), f.snapshots[0][0]), nil
-	case q == snapshotInForceSQL: // the test sets only snapshots before the date's end
-		if len(f.snapshots) == 0 {
+	case q == snapshotInForceSQL: // the newest snapshot before {end}
+		in := f.snapshotsIn(ctx, false)
+		if len(in) == 0 {
 			return &fakeRows{ctx: ctx, f: f, cols: 5}, nil
 		}
-		return one(5, f.snapshots[len(f.snapshots)-1]...), nil
-	case q == snapshotsOfDaySQL:
-		return &fakeRows{ctx: ctx, f: f, cols: 4, n: len(f.snapshots), row: func(i int) []driver.Value { return f.snapshots[i][:4] }}, nil
+		return one(5, in[len(in)-1]...), nil
+	case q == snapshotsOfDaySQL: // those in [{start}, {end})
+		in := f.snapshotsIn(ctx, true)
+		return &fakeRows{ctx: ctx, f: f, cols: 4, n: len(in), row: func(i int) []driver.Value { return in[i][:4] }}, nil
 	case q == peopleSeenSQL:
 		return &fakeRows{ctx: ctx, f: f, cols: 5, n: len(f.seen), row: func(i int) []driver.Value { return f.seen[i] }}, nil
 	case q == offboardStatsSQL:

@@ -189,6 +189,45 @@ func (c *Catalog) keysAliveAt(ctx context.Context, end time.Time) ([]keyAlive, e
 	return out, nil
 }
 
+// snapshotsOfDay lists the access snapshots recorded in the UTC day that starts at day, oldest first (never nil).
+func (c *Catalog) snapshotsOfDay(ctx context.Context, day time.Time) ([]snapshotInfo, error) {
+	ofDay := []snapshotInfo{}
+	rows, err := c.Audit.DB.QueryContext(exportContext(ctx, clickhouse.Parameters{"start": chTime(day), "end": chTime(day.AddDate(0, 0, 1))}), snapshotsOfDaySQL)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var s snapshotInfo
+		if err := rows.Scan(&s.Time, &s.RulesVersion, &s.RulesHash, &s.AccessMode); err != nil {
+			return nil, err
+		}
+		s.Time = s.Time.UTC()
+		ofDay = append(ofDay, s)
+	}
+	return ofDay, rows.Err()
+}
+
+// accessSnapshots answers GET /api/evidence/access/snapshots?date=D: the access snapshots of that UTC day, oldest
+// first, so that the page can offer them (the "at" parameter of access.zip takes one of their times).
+func (c *Catalog) accessSnapshots(w http.ResponseWriter, r *http.Request, _ Session) {
+	if c.Audit == nil {
+		writeErr(w, http.StatusNotFound, "the audit store is off (evidence.enabled: false): access snapshots are kept there")
+		return
+	}
+	day, err := time.Parse("2006-01-02", r.URL.Query().Get("date"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "date: use 2026-12-31")
+		return
+	}
+	ofDay, err := c.snapshotsOfDay(r.Context(), day)
+	if err != nil {
+		storeErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"date": day.Format("2006-01-02"), "snapshots": ofDay})
+}
+
 func (c *Catalog) prepareAccessExport(ctx context.Context, q url.Values) (*exportJob, error) {
 	if c.Audit == nil {
 		return nil, refuse(http.StatusNotFound, "the audit store is off (evidence.enabled: false): access snapshots are kept there, so there is no access review to export")
@@ -200,18 +239,31 @@ func (c *Catalog) prepareAccessExport(ctx context.Context, q url.Values) (*expor
 	if err != nil {
 		return nil, refuse(http.StatusBadRequest, "date: use 2026-12-31")
 	}
-	end := day.AddDate(0, 0, 1)
+	end := day.AddDate(0, 0, 1) // the export is as of this time: the end of the day, or at
+	cut := end                  // exclusive end of the queries: the same, or one nanosecond after at (a snapshot at exactly at counts)
+	var at time.Time
+	if q.Has("at") {
+		if at, err = time.Parse(time.RFC3339, q.Get("at")); err != nil {
+			return nil, refuse(http.StatusBadRequest, "at: use an RFC 3339 time inside the date, for example %sT10:30:00Z", day.Format("2006-01-02"))
+		}
+		if at = at.UTC(); at.Before(day) || !at.Before(end) {
+			return nil, refuse(http.StatusBadRequest, "at: the time must be inside the UTC day %s (from %sT00:00:00Z to %sT23:59:59Z)", day.Format("2006-01-02"), day.Format("2006-01-02"), day.Format("2006-01-02"))
+		}
+		end, cut = at, at.Add(time.Nanosecond)
+	}
 	first, err := c.firstSnapshot(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var snap snapshotInfo
 	var body string
-	err = c.Audit.DB.QueryRowContext(exportContext(ctx, clickhouse.Parameters{"end": chTime(end)}), snapshotInForceSQL).
+	err = c.Audit.DB.QueryRowContext(exportContext(ctx, clickhouse.Parameters{"end": chTime(cut)}), snapshotInForceSQL).
 		Scan(&snap.Time, &snap.RulesVersion, &snap.RulesHash, &snap.AccessMode, &body)
 	switch {
 	case errors.Is(err, sql.ErrNoRows) && first == nil:
 		return nil, refuse(http.StatusNotFound, "No snapshot for this date: the controller has not recorded the access rules yet (evidence.enabled, Ambit 0.5.0 or later).")
+	case errors.Is(err, sql.ErrNoRows) && !at.IsZero():
+		return nil, refuse(http.StatusNotFound, "No snapshot at or before %s. Snapshots exist from %s.", at.Format(time.RFC3339), first.Format(time.RFC3339))
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, refuse(http.StatusNotFound, "No snapshot for this date. Snapshots exist from %s (the upgrade to 0.5.0).", first.Format("2006-01-02"))
 	case err != nil:
@@ -222,22 +274,8 @@ func (c *Catalog) prepareAccessExport(ctx context.Context, q url.Values) (*expor
 	if err != nil {
 		return nil, err
 	}
-	var ofDay []snapshotInfo
-	rows, err := c.Audit.DB.QueryContext(exportContext(ctx, clickhouse.Parameters{"start": chTime(day), "end": chTime(end)}), snapshotsOfDaySQL)
+	ofDay, err := c.snapshotsOfDay(ctx, day)
 	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var s snapshotInfo
-		if err := rows.Scan(&s.Time, &s.RulesVersion, &s.RulesHash, &s.AccessMode); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		s.Time = s.Time.UTC()
-		ofDay = append(ofDay, s)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	src, err := c.auditSource(ctx)
@@ -260,10 +298,10 @@ func (c *Catalog) prepareAccessExport(ctx context.Context, q url.Values) (*expor
 	}
 	date := day.Format("2006-01-02")
 	seenFrom := end.AddDate(0, 0, -peopleSeenDays)
-	seenParams := clickhouse.Parameters{"start": chTime(seenFrom), "end": chTime(end)}
+	seenParams := clickhouse.Parameters{"start": chTime(seenFrom), "end": chTime(cut)}
 	job := &exportJob{
 		export:     "access",
-		parameters: map[string]string{"date": date, "end": end.Format(time.RFC3339), "peopleSeenFrom": seenFrom.Format(time.RFC3339)},
+		parameters: map[string]string{"date": date, "end": end.Format(time.RFC3339Nano), "peopleSeenFrom": seenFrom.Format(time.RFC3339Nano)},
 		sources: map[string]any{"snapshot": snap, "snapshotsOfTheDay": ofDay, "snapshotsSince": first, "accessMode": snap.AccessMode,
 			"auditRetention": src.Retention, "auditRetentionFrom": src.RetentionFrom, "oldestRecordKept": src.Oldest,
 			"periodStartsInsideRetention": src.insideRetention(seenFrom), "keyHistory": keyHistory},
@@ -273,17 +311,29 @@ func (c *Catalog) prepareAccessExport(ctx context.Context, q url.Values) (*expor
 		filename: "ambit-access-" + date + ".zip",
 		period:   date,
 	}
+	when, atNote := "the end of "+date, "" // the time every file is as of
+	if !at.IsZero() {
+		when = at.Format(time.RFC3339Nano)
+		atNote = " The export is as of the time given with at (parameters.at), not the end of the date."
+		job.parameters["at"] = at.Format(time.RFC3339Nano)
+		job.filename = "ambit-access-" + date + "-T" + at.Format("150405") + "Z.zip"
+		job.period = date + " " + at.Format("15:04:05Z")
+	}
 	job.notes = append(job.notes,
-		fmt.Sprintf("grants.csv is the AccessRules in force at the end of %s: the newest access snapshot before it (sources.snapshot, recorded %s). A snapshot is written when a change is active in the gateway, when only an AccessRule's text changes, at controller start, and daily at 00:05 UTC (the daily record repeats the state; it is not a measurement at midnight).", date, snap.Time.Format(time.RFC3339)),
+		fmt.Sprintf("grants.csv is the AccessRules in force at %s: the newest access snapshot at or before it (sources.snapshot, recorded %s). A snapshot is written when a change is active in the gateway, when only an AccessRule's text changes, at controller start, and daily at 00:05 UTC (the daily record repeats the state; it is not a measurement at midnight).%s", when, snap.Time.Format(time.RFC3339), atNote),
 		"rules_version 'unknown': the snapshot has no rules version. Gateway records carry the rules version that judged each call (ambit.rulesVersion), so a call can be tied to these rules.",
-		"Ambit keeps no group directory: the identity provider decides who is in each group. people-seen.csv shows observed use (people whose calls carried the group in the 90 days before the end of the date), not who may use the group's access: a member who never made a call is not in it. A complete access review needs a dated member list of each granted group from your identity provider (docs/guides/access-review.md).",
-		"keys.csv lists the keys alive at the end of the date: stored keys created before it whose end (until) is after it, and keys deleted since (revoked_at) from the key history, which is kept 400 days (sources.keyHistory). Groups of deleted keys are not kept, so they are empty. Key values and hashes are never exported.")
+		fmt.Sprintf("Ambit keeps no group directory: the identity provider decides who is in each group. people-seen.csv shows observed use (people whose calls carried the group in the %d days before %s), not who may use the group's access: a member who never made a call is not in it. A complete access review needs a dated member list of each granted group from your identity provider (docs/guides/access-review.md).", peopleSeenDays, when),
+		fmt.Sprintf("keys.csv lists the keys alive at %s: stored keys created before it whose end (until) is after it, and keys deleted since (revoked_at) from the key history, which is kept 400 days (sources.keyHistory). Groups of deleted keys are not kept, so they are empty. Key values and hashes are never exported.", when))
 	if len(ofDay) > 1 {
-		job.notes = append(job.notes, fmt.Sprintf("The rules changed during %s: sources.snapshotsOfTheDay lists each of the %d snapshots of the day with its time; grants.csv is the last one.", date, len(ofDay)))
+		last := "grants.csv is the last one."
+		if !at.IsZero() {
+			last = "grants.csv is the newest one at or before at."
+		}
+		job.notes = append(job.notes, fmt.Sprintf("The rules changed during %s: sources.snapshotsOfTheDay lists each of the %d snapshots of the day with its time; %s", date, len(ofDay), last))
 	}
 	audit := snap.AccessMode == "audit"
 	for _, s := range ofDay {
-		audit = audit || s.AccessMode == "audit"
+		audit = audit || (s.AccessMode == "audit" && (at.IsZero() || !s.Time.After(at)))
 	}
 	if audit {
 		job.notes = append(job.notes, "Audit-only mode (access.mode: audit) was in force on this date (sources.snapshotsOfTheDay): the rules were not enforced, so \"may use\" was not \"was limited to\" during that time.")

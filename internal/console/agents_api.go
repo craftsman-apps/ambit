@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -29,15 +30,22 @@ type agentView struct {
 	Created           time.Time `json:"created"`
 	CreatedBy         string    `json:"createdBy"`
 	// Manageable: the caller may change it (the owner in person mode, an admin in itself mode).
-	Manageable bool       `json:"manageable"`
-	Keys       *[]KeyView `json:"keys,omitempty"` // the detail only
+	Manageable bool `json:"manageable"`
+	// Stop (docs/agents.md): see the Agent record. Stopped only when every Gateway confirmed it.
+	StopRequestedAt    *time.Time `json:"stopRequestedAt,omitempty"`
+	StoppedAt          *time.Time `json:"stoppedAt,omitempty"`
+	StopUnlisted       bool       `json:"stopUnlisted,omitempty"`
+	StopNotConfirmedAt *time.Time `json:"stopNotConfirmedAt,omitempty"`
+	OrphanedAt         *time.Time `json:"orphanedAt,omitempty"`
+	Keys               *[]KeyView `json:"keys,omitempty"` // the detail only
 }
 
 func (c *Catalog) agentView(a Agent, s Session) agentView {
 	actor, _ := identity.CanonicalEmail(s.Email)
 	v := agentView{Name: a.Name, DisplayName: a.DisplayName, Owner: a.Owner, Mode: a.Mode, Group: a.Group, Platform: a.Platform,
 		Scope: nonNil(a.Scope), ConnectionConsent: nonNil(a.ConnectionConsent), State: a.State, Rev: a.Rev, Created: a.Created, CreatedBy: a.CreatedBy,
-		Manageable: canManage(s, a, actor) == nil}
+		Manageable: canManage(s, a, actor) == nil, StopRequestedAt: a.StopRequestedAt, StoppedAt: a.StoppedAt, StopUnlisted: a.StopUnlisted,
+		StopNotConfirmedAt: a.StopNotConfirmedAt, OrphanedAt: a.OrphanedAt}
 	if a.Mode == ModeItself {
 		v.Identity = AccountIdentity(a.Name)
 	}
@@ -66,6 +74,8 @@ func (c *Catalog) registerAgents(mux *http.ServeMux, read func(func(http.Respons
 	mux.HandleFunc("PATCH /api/agents/{name}", allow("", c.patchAgent))
 	mux.HandleFunc("DELETE /api/agents/{name}", allow("", c.deleteAgent))
 	mux.HandleFunc("POST /api/agents/{name}/keys", allow("", c.createAgentKey))
+	mux.HandleFunc("POST /api/agents/{name}/stop", allow("", c.stopAgent))
+	mux.HandleFunc("POST /api/agents/{name}/start", allow("", c.startAgent))
 	mux.HandleFunc("PUT /api/agents/{name}/owner", allow("only admins can move an agent", c.moveAgent, RoleAdmin))
 }
 
@@ -214,6 +224,30 @@ func (c *Catalog) moveAgent(w http.ResponseWriter, r *http.Request, s Session) {
 		return
 	}
 	a, err := c.Keys.MoveAgent(r.Context(), s, r.PathValue("name"), in.Owner)
+	if err != nil {
+		keyErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, c.agentView(a, s))
+}
+
+// stopAgent answers POST /api/agents/{name}/stop with 202 and the agent in state stopping (or stopped, when every Gateway
+// had confirmed already). The state changes to stopped when every Gateway acknowledged the stop: poll the agent.
+func (c *Catalog) stopAgent(w http.ResponseWriter, r *http.Request, s Session) {
+	a, err := c.Keys.StopAgent(r.Context(), s, r.PathValue("name"))
+	if err != nil && a.Name == "" {
+		keyErr(w, err)
+		return
+	}
+	if err != nil { // the stop is recorded and goes on; the caller learns that a step is still to be repeated
+		w.Header().Set("Retry-After", "5")
+		slog.Warn("stop not complete yet", "agent", a.Name, "err", err)
+	}
+	writeJSON(w, http.StatusAccepted, c.agentView(a, s))
+}
+
+func (c *Catalog) startAgent(w http.ResponseWriter, r *http.Request, s Session) {
+	a, err := c.Keys.StartAgent(r.Context(), s, r.PathValue("name"))
 	if err != nil {
 		keyErr(w, err)
 		return

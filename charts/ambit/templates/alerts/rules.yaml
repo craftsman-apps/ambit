@@ -85,6 +85,20 @@ spec:
             summary: "The controller dropped access snapshot records ({{`{{ $value | printf \"%.0f\" }}`}} in 30 minutes, reason {{`{{ $labels.reason }}`}})"
             description: "The rules were applied; only their record for evidence exports is missing, so an access review export for this time shows a gap. The next change or the daily record at 00:05 UTC writes the rules again. send_failed: the collector was not reachable (kubectl -n {{ $ns }} logs deploy/ambit-otel-collector). queue_full: more records than the controller can send. too_large: the AccessRules together are larger than 1 MiB (kubectl -n {{ $ns }} logs deploy/ambit-controller | grep 'access snapshot')."
         {{- end }}
+        # Agents (docs/agents.md): a stop is complete only when every Gateway accepted the stop policy.
+        - alert: AmbitAgentStopNotConfirmed
+          expr: max by (namespace, gateway) (ambit_agent_stop_unconfirmed_seconds{namespace="{{ $ns }}"}) > 60
+          labels: { severity: critical }
+          annotations:
+            summary: "A stop is not confirmed on the Gateway {{`{{ $labels.gateway }}`}} for {{`{{ $value | printf \"%.0f\" }}`}} seconds"
+            description: "The agent's keys are deleted, but the Gateway has not accepted the stop policy that blocks its tokens and any key still in use. Check agentgateway: kubectl -n {{ $ns }} get agentgatewaypolicy | grep ambit-agent-stops; kubectl -n {{ $ns }} logs deploy/ambit-controller. The agent stays in state stopping until the Gateway confirms."
+        - alert: AmbitStopPolicyDegraded
+          expr: max by (namespace) (ambit_agent_stop_policy_degraded{namespace="{{ $ns }}"}) == 1
+          for: 1m
+          labels: { severity: critical }
+          annotations:
+            summary: "The stop list was not turned into gateway policies"
+            description: "The last stop policies stay in force, but new stops are not applied. Read why: kubectl -n {{ $ns }} get configmap ambit-agent-stops-ack -o yaml (field degraded). A list over 1,000 entries or an unreadable list is the usual cause."
         {{- if and .Values.mcp.enabled .Values.protection.enabled }}
         - alert: AmbitGuardCompressionFailing
           expr: sum by (namespace, server) (increase(ambit_guard_compress_results_total{namespace="{{ $ns }}", outcome=~"error|timeout"}[30m])) > 0

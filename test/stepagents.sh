@@ -143,4 +143,122 @@ sign_in keycloak user09 user09-test-pass
 wait_for 30 '[[ $(init_code "$K4B") == 403 ]]' || fail "9 a deleted agent's key still works: $(cat "$W/init")"
 [[ $(ag GET "/api/agents/$A2") == 404 ]] || fail "9 the agent is still there"
 pass "9 deleting the agent revoked its keys: refused (403)"
+
+# ---- stopping an agent (docs/agents.md): the gateway's stop policy, the acknowledgment, and the measured times ----
+CONNECT=${AMBIT_E2E_CONNECT:-127.0.0.1:8080}
+now_ms() { perl -MTime::HiRes=time -e 'printf("%d", time*1000)'; }
+agent_state() { api GET "/api/agents/$1" >/dev/null && field 'd["state"]'; }
+# new_agent_key: a person agent of user09 with one key; sets AGENT, K, KID (the agent is deleted at the end, the key with it)
+new_agent_key() {
+  local c; c=$(ag POST /api/agents "{\"displayName\":\"stop test $1\",\"scope\":[\"time\"]}"); [[ "$c" == 201 ]] || fail "$1 create agent: HTTP $c $(cat "$W/api")"
+  AGENT=$(field 'd["name"]'); AGENTS+=("$AGENT")
+  agent_key "$AGENT" probe '[]'; K=$KEY; KEYIDS+=("$KID")
+  wait_for 90 '[[ $(init_code "$K") == 200 ]]' || fail "$1 a new agent key is not accepted: $(cat "$W/init")"
+}
+# poll KEY OUTFILE: calls the MCP URL with the key every 25 ms in the background; sets POLLPID
+poll() { go run ./test/stopmeasure -url "$MCP" -key "$1" -connect "$CONNECT" > "$2" & POLLPID=$!; sleep 1; }
+# measure FILE T0: first refusal (status >= 400 or no answer) at or after T0, as "<ms from T0> <accepted calls after T0>"
+measure() {
+  python3 - "$1" "$2" <<'PY'
+import sys
+t0 = int(sys.argv[2]); first = None; acc = 0
+for line in open(sys.argv[1]):
+    p = line.split()
+    if len(p) != 2: continue
+    t, st = int(p[0]), int(p[1])
+    if t < t0: continue
+    if st == 0 or st >= 400:
+        if first is None: first = t - t0
+    else:
+        acc += 1
+print(first if first is not None else -1, acc)
+PY
+}
+await_state() { wait_for "$3" '[[ $(agent_state '"$1"') == '"$2"' ]]'; }
+
+# 10 · the stop list alone refuses a key that is still valid: the gateway's policy is the authoritative check
+sign_in keycloak user09 user09-test-pass; new_agent_key 10
+[[ $(api POST "/api/test/agents/$AGENT/list-only" '{"on":true}') == 204 ]] || fail "10 list-only hook: $(cat "$W/api")"
+wait_for 60 '[[ $(init_code "$K") == 403 ]]' || fail "10 a key of a listed agent was not refused by the stop policy: $(cat "$W/init")"
+kubectl -n "$NS" get secret "ambit-key-$KID" >/dev/null || fail "10 the key Secret is gone: the refusal came from the key, not from the stop policy"
+[[ $(api POST "/api/test/agents/$AGENT/list-only" '{"on":false}') == 204 ]] || fail "10 unlist: $(cat "$W/api")"
+wait_for 90 '[[ $(init_code "$K") == 200 ]]' || fail "10 the key is not accepted again after the entry was removed"
+pass "10 the agent on the stop list: its still-valid key is refused (403) by the gateway policy; off the list it works again"
+
+# 11 · a list of 151 entries is two policies; both are accepted and the policy still refuses
+[[ $(api POST /api/test/agents/stop-fill '{"n":151}') == 204 ]] || fail "11 fill hook: $(cat "$W/api")"
+wait_for 60 'kubectl -n "$NS" get agentgatewaypolicy ambit-agent-stops-0 ambit-agent-stops-1 >/dev/null' || fail "11 two stop policies were not created"
+[[ $(api POST "/api/test/agents/$AGENT/list-only" '{"on":true}') == 204 ]] || fail "11 list-only hook"
+wait_for 90 '[[ $(init_code "$K") == 403 ]]' || fail "11 with 152 entries in 2 policies the listed agent's key is still accepted"
+for i in 0 1; do
+  [[ $(kubectl -n "$NS" get agentgatewaypolicy "ambit-agent-stops-$i" -o jsonpath='{.status.ancestors[*].conditions[?(@.type=="Accepted")].status}') == *True* ]] || fail "11 policy $i is not accepted"
+done
+[[ $(api POST /api/test/agents/stop-fill '{"n":0}') == 204 ]] && [[ $(api POST "/api/test/agents/$AGENT/list-only" '{"on":false}') == 204 ]] || fail "11 clean up"
+wait_for 90 '! kubectl -n "$NS" get agentgatewaypolicy ambit-agent-stops-1 >/dev/null 2>&1' || fail "11 the second policy stays after the list got short"
+pass "11 152 entries: two stop policies, both accepted, the listed agent is refused; back to one policy when the list is short"
+
+# 12 · measured: stop request to first refusal, 20 runs with keys on the private Gateway
+RUNS=${STOP_RUNS:-20}; : > "$W/runs"
+for i in $(seq 1 "$RUNS"); do
+  new_agent_key "12.$i"; poll "$K" "$W/poll"
+  T0=$(now_ms); c=$(ag POST "/api/agents/$AGENT/stop" '{}'); T1=$(now_ms); [[ "$c" == 202 ]] || fail "12.$i stop: HTTP $c $(cat "$W/api")"
+  await_state "$AGENT" stopped 120 || fail "12.$i the agent is not reported stopped in 120 s: $(cat "$W/api")"
+  T2=$(now_ms); sleep 1; kill "$POLLPID" 2>/dev/null; wait "$POLLPID" 2>/dev/null || true
+  read -r first acc < <(measure "$W/poll" "$T0")
+  [[ "$first" -ge 0 ]] || fail "12.$i the key was never refused after the stop: $(tail -3 "$W/poll")"
+  echo "$first $acc $((T2 - T0))" >> "$W/runs"
+  [[ $(ag DELETE "/api/agents/$AGENT") == 204 ]] || fail "12.$i delete: $(cat "$W/api")"
+done
+python3 - "$W/runs" <<'PY' | tee "$W/summary"
+import sys
+rows = [list(map(int, l.split())) for l in open(sys.argv[1])]
+def pct(v, p):
+    v = sorted(v); k = (len(v) - 1) * p / 100; lo = int(k); hi = min(lo + 1, len(v) - 1)
+    return v[lo] + (v[hi] - v[lo]) * (k - lo)
+f = [r[0] for r in rows]; a = [r[1] for r in rows]; s = [r[2] for r in rows]
+print("MEASURED stop request to first refusal, keys, private Gateway, %d runs: p50 %.0f ms, p95 %.0f ms, p99 %.0f ms, max %d ms; accepted calls after the request (25 ms polling): median %.0f, max %d; request to 'stopped': p50 %.1f s, max %.1f s"
+      % (len(rows), pct(f, 50), pct(f, 95), pct(f, 99), max(f), pct(a, 50), max(a), pct(s, 50) / 1000, max(s) / 1000))
+PY
+pass "12 $(cat "$W/summary")"
+
+# 13 · the Ambit controller is down: the key is still deleted and refused, but the stop is not confirmed until it is back
+new_agent_key 13; poll "$K" "$W/poll13"
+kubectl -n "$NS" scale deploy/ambit-controller --replicas=0 >/dev/null; kubectl -n "$NS" wait --for=delete pod -l app.kubernetes.io/name=ambit-controller --timeout=120s >/dev/null
+T0=$(now_ms); c=$(ag POST "/api/agents/$AGENT/stop" '{}'); [[ "$c" == 202 ]] || fail "13 stop: HTTP $c"
+wait_for 60 '[[ $(init_code "$K") != 200 ]]' || fail "13 the key is still accepted 60 s after the stop with the controller down"
+sleep 70
+[[ $(agent_state "$AGENT") == stopping ]] || fail "13 the agent is reported $(agent_state "$AGENT") while no Gateway confirmed the stop"
+[[ $(field 'bool(d.get("stopNotConfirmedAt"))') == True ]] || fail "13 no report that the stop is not confirmed after 60 s: $(cat "$W/api")"
+kill "$POLLPID" 2>/dev/null; wait "$POLLPID" 2>/dev/null || true
+read -r f13 a13 < <(measure "$W/poll13" "$T0")
+kubectl -n "$NS" scale deploy/ambit-controller --replicas=1 >/dev/null
+await_state "$AGENT" stopped 180 || fail "13 the agent is not stopped 180 s after the controller came back"
+pass "13 controller down: key refused after $f13 ms ($a13 accepted calls in between), stop not confirmed for 70 s (reported), confirmed after it returned"
+
+# 14 · the Ambit controller restarts while a stop is open: it finishes
+new_agent_key 14
+T0=$(now_ms); c=$(ag POST "/api/agents/$AGENT/stop" '{}'); [[ "$c" == 202 ]] || fail "14 stop: HTTP $c"
+kubectl -n "$NS" rollout restart deploy/ambit-controller >/dev/null
+await_state "$AGENT" stopped 240 || fail "14 the agent is not stopped after a controller restart"
+[[ $(init_code "$K") != 200 ]] || fail "14 the key works after the stop"
+pass "14 a controller restart during a stop: the agent is stopped ($(( $(now_ms) - T0 )) ms after the request)"
+
+# 15 · the agentgateway controller is down: the proxies keep their last configuration, so the key keeps working until it is back
+AGW=$(kubectl -n "$NS" get deploy -o name | grep -E 'agentgateway$' | head -1)
+if [[ -n "$AGW" ]]; then
+  new_agent_key 15; poll "$K" "$W/poll15"
+  kubectl -n "$NS" scale "$AGW" --replicas=0 >/dev/null; kubectl -n "$NS" wait --for=delete pod -l app.kubernetes.io/name=agentgateway --timeout=120s >/dev/null || true
+  T0=$(now_ms); c=$(ag POST "/api/agents/$AGENT/stop" '{}'); [[ "$c" == 202 ]] || fail "15 stop: HTTP $c"
+  sleep 20
+  [[ $(agent_state "$AGENT") == stopping ]] || fail "15 the agent is reported $(agent_state "$AGENT") while the gateway control plane is down"
+  read -r f15 a15 < <(measure "$W/poll15" "$T0")
+  kubectl -n "$NS" scale "$AGW" --replicas=1 >/dev/null
+  await_state "$AGENT" stopped 300 || fail "15 the agent is not stopped after the control plane came back"
+  sleep 1; kill "$POLLPID" 2>/dev/null; wait "$POLLPID" 2>/dev/null || true
+  read -r g15 b15 < <(measure "$W/poll15" "$T0")
+  [[ "$g15" -ge 0 ]] || fail "15 the key was never refused"
+  pass "15 gateway control plane down: in the first 20 s the first refusal was $f15 ms ($a15 calls accepted; -1 = none refused); after it returned the first refusal was $g15 ms after the request ($b15 accepted in all)"
+else
+  pass "15 skipped: no agentgateway controller Deployment found"
+fi
 done_step agents

@@ -518,4 +518,5 @@ func (c *Catalog) streamExport(ctx context.Context, w http.ResponseWriter, s Ses
 func (c *Catalog) registerEvidence(mux *http.ServeMux, admin func(func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc) {
 	mux.HandleFunc("GET /api/evidence", admin(c.evidenceInfo))
 	mux.HandleFunc("GET /api/evidence/{file}", admin(c.evidenceExport))
+	mux.HandleFunc("GET /api/evidence/agent-stop/{file}", admin(c.evidenceAgentStop))
 }

@@ -38,6 +38,11 @@ import (
 type AgentSettings struct {
 	Enabled                            bool
 	MaxTotal, MaxPerPerson, KeyMaxDays int
+	// OrphanDays: how long an itself-mode agent whose person owner left keeps working before it is stopped (0: 7).
+	OrphanDays int
+	// StopRetention: how long a stop entry stays after its credentials are gone and every Gateway acknowledged it
+	// (0: 25 minutes = access token life 15 + 10 leeway).
+	StopRetention time.Duration
 }
 
 const (
@@ -102,11 +107,19 @@ type Agent struct {
 	// Scope: "server" and "server/tool" entries, at most 50. Empty: the agent may use no tool.
 	Scope []string `json:"scope"`
 	// ConnectionConsent: the Connections (apps) whose person-mode owner token the agent may use. Empty: none.
-	ConnectionConsent []string  `json:"connectionConsent"`
-	State             string    `json:"state"`
-	Rev               int       `json:"rev"` // changes with the scope and the platform; keys carry the revision they were written from
-	Created           time.Time `json:"created"`
-	CreatedBy         string    `json:"createdBy"`
+	ConnectionConsent []string `json:"connectionConsent"`
+	State             string   `json:"state"`
+	// Stop (docs/agents.md, "Stopping an agent"): when it was requested and when it was confirmed, whether it could
+	// not be put on the stop list (the list is full: credentials are deleted all the same), when it was reported as not
+	// confirmed, and since when an itself-mode agent's owner has left.
+	StopRequestedAt    *time.Time `json:"stopRequestedAt,omitempty"`
+	StoppedAt          *time.Time `json:"stoppedAt,omitempty"`
+	StopUnlisted       bool       `json:"stopUnlisted,omitempty"`
+	StopNotConfirmedAt *time.Time `json:"stopNotConfirmedAt,omitempty"`
+	OrphanedAt         *time.Time `json:"orphanedAt,omitempty"`
+	Rev                int        `json:"rev"` // changes with the scope and the platform; keys carry the revision they were written from
+	Created            time.Time  `json:"created"`
+	CreatedBy          string     `json:"createdBy"`
 
 	UID, ResourceVersion string `json:"-"`
 }
@@ -771,8 +784,8 @@ func (s *KeyService) MoveAgent(ctx context.Context, by Session, name, owner stri
 			return false, fmt.Errorf("%w: only an itself-mode agent has an owner you can move", ErrBadInput)
 		}
 		before = a.Owner
-		a.Owner = owner
-		return a.Owner != before, nil
+		a.Owner, a.OrphanedAt = owner, nil
+		return true, nil
 	})
 	if err == nil && before != a.Owner {
 		s.event(ctx, actor, "agent-move", "", a.Owner, "agent="+a.Name+" from="+before)

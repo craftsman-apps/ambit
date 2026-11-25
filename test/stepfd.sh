@@ -178,7 +178,25 @@ grep -q 'only the route ambit-mcp-public' <<<"$out" || fail "4 wrong refusal: $o
 out=$(route ambit-mcp-public ambit-public other.example.com | kubectl -n "$NS" apply --dry-run=server -f - 2>&1) && fail "4 the public route for another host was admitted"
 grep -q 'only the route ambit-mcp-public' <<<"$out" || fail "4 wrong refusal (host): $out"
 route fd-other ambit console.localtest.me | kubectl -n "$NS" apply --dry-run=server -f - >/dev/null 2>&1 || fail "4 a route of the private Gateway was refused"
-pass "4 admission: a route of another name, or for another host, is refused on ambit-public; routes of the private Gateway are not affected"
+# a change of the real route: another path, another backend, another Gateway next to the public one
+edit() { # edit PYTHON-STATEMENT: the real route with one change, dry-run
+  kubectl -n "$NS" get httproute ambit-mcp-public -o json | "${PY[@]}" -c "
+import json, sys
+o = json.load(sys.stdin)
+for k in ('status',): o.pop(k, None)
+for k in ('resourceVersion', 'uid', 'creationTimestamp', 'generation', 'managedFields'): o['metadata'].pop(k, None)
+$1
+print(json.dumps(o))" | kubectl -n "$NS" apply --dry-run=server -f - 2>&1
+}
+for change in "o['spec']['rules'][0]['matches'][0]['path']['value']='/mcp/x'" \
+  "o['spec']['rules'][0]['backendRefs']=[{'name':'ambit-console','port':8080}]" \
+  "o['spec']['rules'][0]['matches'][0]['path']['type']='PathPrefix'" \
+  "o['spec']['parentRefs'].append({'name':'ambit'})"; do
+  out=$(edit "$change") && fail "4 a change of the public route was admitted: $change"
+  grep -q 'only the route ambit-mcp-public' <<<"$out" || fail "4 wrong refusal for $change: $out"
+done
+edit "pass" >/dev/null || fail "4 the unchanged public route was refused"
+pass "4 admission: a route of another name, or for another host, is refused on ambit-public, and so is a change of the public route (path, backend, extra Gateway); routes of the private Gateway are not affected"
 
 # --- 5 · the audit record says public, with the caller; a private call says private
 cnt() { ch "SELECT count() FROM otel.otel_logs WHERE LogAttributes['ambit.ingress'] = '$1' AND LogAttributes['ambit.key_id'] = '$KID_K2' AND Timestamp >= now() - INTERVAL 10 MINUTE"; }

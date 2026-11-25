@@ -571,12 +571,12 @@ func TestRulesVersionCoversThePublicPolicy(t *testing.T) {
 // Audit-only mode relaxes the private rules only: nothing on the public Gateway is ever relaxed.
 func TestAuditModeNeverRelaxesThePublicPolicy(t *testing.T) {
 	r := Compile(nil, []v1.Server{onDoor(server("crm", "stdio"))}, []v1.AccessRule{toolRule("eng", []string{"eng"}, false, v1.ServerAccess{Name: "crm"})}, route)
-	relaxed := RelaxForAudit(r, nil, func(*Result) {})
-	got := Result{Objects: relaxed}
-	if e := accessExpr(t, got, MCPBackendName+"-access"); e != "true" {
+	before := accessExpr(t, r, PublicMCPBackendName+"-access")
+	relaxed := Result{Objects: RelaxForAudit(r, nil, func(*Result) {})}
+	if e := accessExpr(t, relaxed, MCPBackendName+"-access"); !strings.HasPrefix(e, "(true)") || strings.Contains(e, `"eng"`) {
 		t.Errorf("private policy not relaxed: %q", e)
 	}
-	if e := accessExpr(t, got, PublicMCPBackendName+"-access"); e == "true" || !strings.Contains(e, `"eng"`) {
-		t.Errorf("public policy relaxed: %q", e)
+	if e := accessExpr(t, relaxed, PublicMCPBackendName+"-access"); e != before || !strings.Contains(e, `"eng"`) {
+		t.Errorf("public policy relaxed: %q (was %q)", e, before)
 	}
 }

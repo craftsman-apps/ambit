@@ -298,7 +298,8 @@ assert p["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute"
 assert "jwtAuthentication" not in t, "no token is accepted on the public route"
 assert t["apiKeyAuthentication"]["secretSelector"]["matchLabels"]=={"ambitproject.dev/key":"true","ambitproject.dev/key-mcp":"true"}, t
 e=t["authorization"]["policy"]["matchExpressions"]
-assert t["authorization"]["action"]=="Require" and len(e)==1 and "has(apiKey.keyId)" in e[0] and "Bearer ambit_" in e[0] and "timestamp(apiKey.until)" in e[0], e' "public route: keys only (no JWT), a valid unexpired MCP key is required"
+assert t["authorization"]["action"]=="Require" and len(e)==2 and "sourceRanges" in e[0] and "cidr(r).containsIP(source.address)" in e[0], e
+assert "has(apiKey.keyId)" in e[1] and "Bearer ambit_" in e[1] and "timestamp(apiKey.until)" in e[1], e' "public route: keys only (no JWT), a valid unexpired MCP key is required"
 check_fd 'p=one("AgentgatewayPolicy","ambit-public-limits")["spec"]
 assert p["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"Gateway","name":"ambit-public"}], p
 g=p["traffic"]["rateLimit"]["global"]

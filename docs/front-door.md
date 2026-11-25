@@ -22,7 +22,7 @@ MCP scope). Sign-in with OAuth is a later step; until then, a request without a 
 | Host name | One name, `frontDoor.host`. It must differ from `console.host`, `llm.host` and `mcp.host`. A request for another name gets 404 or no TLS answer. |
 | Routes | One: the exact path `/mcp` on `frontDoor.host`. Every other path is 404. The Kubernetes API refuses (a `ValidatingAdmissionPolicy`, `ambit-public-routes`) a route that names `ambit-public` and is not `ambit-mcp-public`, and a change of that route (another host, another path, another backend, another Gateway). |
 | Not reachable | The console (`/`, `/api/*`), Dex (`/dex/*`), the LLM host, SCIM and the app sign-in pages. They are not routes of `ambit-public`, so they answer 404 there. |
-| Credentials | An Ambit API key with the MCP scope, in `x-api-key` or `Authorization: Bearer ambit_...`. A company token (JWT) is refused on this gateway. |
+| Credentials | An Ambit API key with the MCP scope, in `x-api-key` or `Authorization: Bearer ambit_...`. A company token (JWT) is refused on this gateway. A key of an [agent](agents.md) that names source ranges works only from those addresses (as seen by the gateway: see [the client address](#load-balancers-and-the-client-address)). |
 | Servers | Only the servers an admin marks for the front door and acknowledges (`Server` `spec.frontDoor`, see [Choose the servers](#choose-the-servers)). |
 
 Everything an agent does through the front door is checked and recorded like any other call: the person's AccessRules,

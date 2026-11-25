@@ -57,6 +57,14 @@ Sources: [Google](https://developers.google.com/identity/protocols/oauth2/web-se
 [Microsoft oauth2PermissionGrant delete](https://learn.microsoft.com/en-us/graph/api/oauth2permissiongrant-delete),
 [Atlassian](https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/).
 
+## Agents of the person (experimental)
+
+When a person is offboarded, Ambit also handles their [agents](agents.md): after the block list and the deletion of their keys, it
+**stops every person-mode agent they own** with the [stop state machine](agents.md#stopping-an-agent) (stop list, keys deleted, every Gateway
+confirms), and marks the **itself-mode agents they own as orphaned**: such an agent keeps working for `agents.orphanDays` (7 days) so
+that an admin can move it to a new owner (`PUT /api/agents/{name}/owner`); then it is stopped. The offboarding record shows
+`agentsStopped` and `agentsOrphaned`. Like the key deletion, the step is repeated while the identity provider retries.
+
 ## Prove it to an auditor: the offboarding export
 
 **Settings → Evidence → Offboarding** exports the offboarding records of a period as one ZIP file (admins only; see [Evidence exports](compliance.md#evidence-exports)). `offboarding.csv` has one row per record, with three columns from the audit store:

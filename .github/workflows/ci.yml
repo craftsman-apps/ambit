@@ -240,7 +240,8 @@ jobs:
         part:
           - { name: a, steps: "0 1 2 3 3b 3c args", ui: true }
           - { name: b, steps: "8 fallback", ui: false }
-          - { name: c, steps: "10 keys 9 compress sa agents", ui: false }
+          - { name: c, steps: "10 keys 9 compress sa", ui: false }
+          - { name: f, steps: "agents", ui: false }
           - { name: d, steps: "12 ext savings evidence", ui: false }
           - { name: e, steps: "4a 4b 4c 4d 5 6 7 guard fd platforms", ui: false }
     steps:
@@ -253,7 +254,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # test/stepsavings.sh and test/stepevidence.sh build the console's ClickHouse tests and run them in the ClickHouse pod.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        if: contains(matrix.part.steps, 'savings') || contains(matrix.part.steps, 'evidence')
+        if: contains(matrix.part.steps, 'savings') || contains(matrix.part.steps, 'evidence') || contains(matrix.part.steps, 'agents')
         with: { go-version-file: go.mod }
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: 26, cache: npm, cache-dependency-path: web/package-lock.json }

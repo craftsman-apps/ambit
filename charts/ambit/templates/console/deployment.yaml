@@ -68,6 +68,8 @@ spec:
             - { name: AMBIT_AGENTS_MAX_TOTAL, value: {{ $ag.maxTotal | default 2000 | quote }} }
             - { name: AMBIT_AGENTS_MAX_PER_PERSON, value: {{ $ag.maxPerPerson | default 10 | quote }} }
             - { name: AMBIT_AGENTS_KEY_MAX_DAYS, value: {{ $ag.keyMaxDays | default 90 | quote }} }
+            - { name: AMBIT_AGENTS_ORPHAN_DAYS, value: {{ $ag.orphanDays | default 7 | quote }} }
+            - { name: AMBIT_AGENTS_STOP_RETENTION_MINUTES, value: {{ $ag.stopRetentionMinutes | default 25 | quote }} }
             - name: AMBIT_POD_NAME
               valueFrom: { fieldRef: { fieldPath: metadata.name } }
             - name: AMBIT_NAMESPACE

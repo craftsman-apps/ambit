@@ -133,6 +133,12 @@ Ambit keeps a record of each offboarding. As an admin, open **Settings** and **O
 
 In the console, open **Settings → Evidence**. In **Offboarding**, set both dates to today and select **Download**. In `offboarding.csv` of the ZIP file, the row for `user04@example.com` has `gateway_blocked` `true` and `accepted_calls_after` `0`: from 5 seconds after the offboarding (calls already in flight) until the export, the gateway accepted no call of User04 that the audit store kept. `first_refused_call_after` has the time of the first refused request from the [Check it works](#check-it-works) step. These three columns come from the audit store: without `evidence.enabled: true` they are empty, and the manifest says why. The page shows the ZIP's SHA-256; send it to the auditor with the file. What each column means is in [Offboarding](../offboarding.md#prove-it-to-an-auditor-the-offboarding-export).
 
+## Their agents
+
+If the person made [agents](../agents.md) (experimental), offboarding stops them: each person-mode agent goes through the stop state
+machine (stop list, keys deleted, every Gateway confirms). An agent that is a service account with this person as owner keeps working
+for 7 days and shows as orphaned; move it to a new owner (`PUT /api/agents/{name}/owner`) or it is stopped.
+
 ## If the person comes back
 
 Reactivating the user in the identity provider lifts the block. The old keys and app grants stay deleted. The person signs in and creates new keys.

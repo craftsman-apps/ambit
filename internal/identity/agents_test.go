@@ -1,6 +1,7 @@
 package identity
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -116,5 +117,53 @@ func TestAgentAttr(t *testing.T) {
 		if got := evalAgent(t, AgentAttr(c.field, c.claim, c.is), c.key, c.jwt, "", ""); got != c.want {
 			t.Errorf("%s: %q, want %q", c.name, got, c.want)
 		}
+	}
+}
+
+func TestStopList(t *testing.T) {
+	future := "2027-01-01T00:00:00Z"
+	key := func(agent string) map[string]any {
+		m := map[string]any{"keyId": "k", "until": future}
+		if agent != "" {
+			m["agent"] = agent
+		}
+		return m
+	}
+	for _, c := range []struct {
+		name           string
+		agents, grants []string
+		issuer         string
+		key, jwt       map[string]any
+		want           any
+	}{
+		{"nothing listed", nil, nil, "", key("grok-y"), map[string]any{}, true},
+		{"a listed agent's key", []string{"grok-y"}, nil, "", key("grok-y"), map[string]any{}, false},
+		{"another agent's key", []string{"grok-y"}, nil, "", key("other"), map[string]any{}, true},
+		{"a person's key (no agent)", []string{"grok-y"}, nil, "", key(""), map[string]any{}, true},
+		{"a person's token", []string{"grok-y"}, nil, hydra, map[string]any{}, map[string]any{"iss": "https://dex.example.com", "email": "a@x.com"}, true},
+		{"a listed agent's token", []string{"chatgpt-y"}, nil, hydra, map[string]any{}, map[string]any{"iss": hydra, "ambit_agent": "chatgpt-y"}, false},
+		{"a token of another issuer naming a listed agent", []string{"chatgpt-y"}, nil, hydra, map[string]any{}, map[string]any{"iss": "https://evil.example.com", "ambit_agent": "chatgpt-y"}, true},
+		{"a listed grant", nil, []string{"g1", "g2"}, hydra, map[string]any{}, map[string]any{"iss": hydra, "ambit_agent": "chatgpt-y", "ambit_grant": "g2"}, false},
+		{"another grant of the same agent", nil, []string{"g1"}, hydra, map[string]any{}, map[string]any{"iss": hydra, "ambit_agent": "chatgpt-y", "ambit_grant": "g3"}, true},
+		{"agent and grant lists: the agent matches", []string{"a"}, []string{"g1"}, hydra, map[string]any{}, map[string]any{"iss": hydra, "ambit_agent": "a", "ambit_grant": "g9"}, false},
+		{"no issuer: tokens are not read", []string{"a"}, []string{"g1"}, "", map[string]any{}, map[string]any{"iss": hydra, "ambit_agent": "a", "ambit_grant": "g1"}, true},
+	} {
+		if got := evalAgent(t, StopList(c.agents, c.grants, c.issuer), c.key, c.jwt, "", ""); got != c.want {
+			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+	// a full chunk: 150 names of 63 characters stay under 12,000 characters
+	names := make([]string, 150)
+	for i := range names {
+		names[i] = fmt.Sprintf("%063d", i)
+	}
+	if n := len(StopList(names, names, hydra)); n > 25000 {
+		t.Logf("a chunk with 150 names and 150 grants is %d characters", n)
+	}
+	if n := len(StopList(names, nil, "")); n > 12000 {
+		t.Errorf("150 agent names: %d characters, the limit is 12,000", n)
+	}
+	if got := evalAgent(t, StopList(names, nil, ""), key(names[149]), map[string]any{}, "", ""); got != false {
+		t.Errorf("the last of 150 names: %v", got)
 	}
 }

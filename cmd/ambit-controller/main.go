@@ -113,6 +113,12 @@ func main() {
 		log.Error(err, "set up controller")
 		os.Exit(1)
 	}
+	// The stop list of agents: policies on every MCP and LLM route, and the acknowledgment per Gateway.
+	if err := (&controller.StopReconciler{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: ns,
+		Routes: []string{"ambit-mcp", *route, "ambit-llm-codex-models"}, Issuer: *agentIssuer, Settle: *activationSettle}).SetupWithManager(mgr); err != nil {
+		log.Error(err, "set up the agent stop controller")
+		os.Exit(1)
+	}
 	if *xdsAddr != "" {
 		if err := mgr.Add(&xdscert.Nudger{Client: mgr.GetClient(), Namespace: ns, Secret: *xdsSecret, Addr: *xdsAddr}); err != nil {
 			log.Error(err, "add xds certificate check")

@@ -72,16 +72,21 @@ type GrantResult struct {
 
 // OffboardingRecord proves what happened when a user was deactivated.
 type OffboardingRecord struct {
-	Email           string        `json:"email"`
-	At              time.Time     `json:"at"`
-	Trigger         string        `json:"trigger"` // "scim PATCH active=false", "scim DELETE", ...
-	Grants          []GrantResult `json:"grants"`
-	SessionsEnded   int           `json:"sessionsEnded"`
-	GatewayBlocked  bool          `json:"gatewayBlocked"`
-	KeysDeleted     int           `json:"keysDeleted"`
-	KeysExposed     int           `json:"keysExposed"` // service account keys this person issued (exposure rule)
-	KeysError       string        `json:"keysError,omitempty"`
-	CompleteSuccess bool          `json:"completeSuccess"`
+	Email          string        `json:"email"`
+	At             time.Time     `json:"at"`
+	Trigger        string        `json:"trigger"` // "scim PATCH active=false", "scim DELETE", ...
+	Grants         []GrantResult `json:"grants"`
+	SessionsEnded  int           `json:"sessionsEnded"`
+	GatewayBlocked bool          `json:"gatewayBlocked"`
+	KeysDeleted    int           `json:"keysDeleted"`
+	KeysExposed    int           `json:"keysExposed"` // service account keys this person issued (exposure rule)
+	KeysError      string        `json:"keysError,omitempty"`
+	// Agents (docs/agents.md): the person-mode agents stopped, and the itself-mode agents they own that start their
+	// orphan clock (stopped after agents.orphanDays unless an admin moves them).
+	AgentsStopRequested int  `json:"agentsStopRequested"` // stops started; each is confirmed by the stop state machine (the agent's state)
+	AgentsStopped       int  `json:"agentsStopped"`       // of them, already confirmed by every Gateway
+	AgentsOrphaned      int  `json:"agentsOrphaned"`
+	CompleteSuccess     bool `json:"completeSuccess"`
 
 	keysUnusable bool // the email cannot own keys; retrying would never help
 }
@@ -593,6 +598,15 @@ func (s *SCIM) Offboard(ctx context.Context, email, trigger string) OffboardingR
 			slog.Error("offboarding: expose service account keys", "email", email, "err", err)
 			rec.KeysError, rec.CompleteSuccess = strings.TrimPrefix(rec.KeysError+"; "+err.Error(), "; "), false
 			rec.keysUnusable = rec.keysUnusable && errors.Is(err, ErrBadInput)
+		}
+	}
+	if s.Keys != nil { // agents: stopped with the state machine, after the keys
+		requested, stopped, orphaned, err := s.Keys.OffboardAgents(ctx, email, trigger)
+		rec.AgentsStopRequested, rec.AgentsStopped, rec.AgentsOrphaned = requested, stopped, orphaned
+		if err != nil && !errors.Is(err, ErrBadInput) {
+			slog.Error("offboarding: agents", "email", email, "err", err)
+			rec.KeysError, rec.CompleteSuccess = strings.TrimPrefix(rec.KeysError+"; "+err.Error(), "; "), false
+			rec.keysUnusable = false
 		}
 	}
 	s.saveRecord(ctx, rec)

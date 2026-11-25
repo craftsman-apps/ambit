@@ -8,7 +8,9 @@
 # reported a matrix as passed when one leg was cancelled before it got a runner.
 #
 # Environment: for each job J: R_J is its result (success, failure, cancelled, skipped) and W_J what changes.sh said
-# it needs (true or false; "always" for a job that always runs). DRAFT is "true" for a draft pull request. JOBS_FILE is
+# it needs (true or false; "always" for a job that always runs). DRAFT is "true" for a draft pull request. EVENT is the
+# event of the run (pull_request, merge_group, workflow_dispatch) and QUEUE the repository variable MERGE_QUEUE ("true"
+# when the merge queue is on): only then may e2e be skipped on a pull request. JOBS_FILE is
 # a file with one "<job name>|<conclusion>" line per job of the run (leave it unset only in tests).
 # Prints one line per job and exits 1 when any job does not count.
 set -u
@@ -45,8 +47,14 @@ check() { # check <job> <result> <wanted>
       return ;;
     skipped)
       if [ "$wanted" = false ]; then echo "ok   $job: skipped on purpose (changes.sh: not needed)"; return; fi
-      if [ "${DRAFT:-false}" = true ] && { [ "$job" = quickstart ] || [ "$job" = e2e ]; }; then
+      if [ "${DRAFT:-false}" = true ] && [ "${EVENT:-pull_request}" = pull_request ] && { [ "$job" = quickstart ] || [ "$job" = e2e ]; }; then
         echo "ok   $job: skipped (draft pull request)"; return
+      fi
+      # The full e2e runs in the merge queue, not on the pull request, once MERGE_QUEUE is "true" (ci.yml). The gate of
+      # the queue (event merge_group) and of a manual run (workflow_dispatch) never accepts that skip.
+      # (Actions compares strings without regard to case, so TRUE counts as true there; here too.)
+      if [ "$job" = e2e ] && [ "${EVENT:-}" = pull_request ] && [ "$(printf %s "${QUEUE:-}" | tr 'A-Z' 'a-z')" = true ]; then
+        echo "ok   $job: not run on a pull request; it runs in the merge queue"; return
       fi
       why="skipped, but changes.sh says it is needed ($wanted)" ;;
     *) why="$result" ;;

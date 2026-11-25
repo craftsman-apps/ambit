@@ -1,15 +1,21 @@
 name: ci
-# Cost: a pull request runs the full check; a merge to main does not run it again (the merge script merges only a
-# PR that already contains the current main). Draft PRs skip quickstart and e2e. Each job runs only when a file it
-# builds or tests changes (.github/scripts/changes.sh; a file no rule names runs everything), so a documentation-only
-# change still gets a green check in seconds: a job skipped by its `if:` reports success.
-# GitHub's merge queue (event merge_group) runs the same jobs as a pull request for the same change: the queue tests
-# the branch plus the queued pull request(s) before the merge. Its draft check is empty, so quickstart and e2e run.
-# The job `merge-gate` at the end is the one check a merge needs (docs/maintainers/merging.md).
+# Where the jobs run (docs/maintainers/merging.md):
+#  - A pull request runs the quick checks: changes, build, image, cli-unit, the cli-* jobs, quickstart. The full e2e
+#    (the five parts of the matrix below) does NOT run on a pull request once the repository variable MERGE_QUEUE is
+#    "true" (the owner sets it when the merge queue is on). Without that variable, e2e runs on pull requests as before.
+#  - GitHub's merge queue (event merge_group) runs every job, e2e included, on the queue's branch: the branch plus the
+#    queued pull request(s). Its draft check is empty, so quickstart and e2e run.
+#  - A person can run everything on a pull request branch before the queue: `gh workflow run ci.yml --ref <branch>`
+#    (event workflow_dispatch; there is no base to compare with, so every job runs).
+# Draft pull requests skip quickstart and e2e. Each job runs only when a file it builds or tests changes
+# (.github/scripts/changes.sh; a file no rule names runs everything), so a documentation-only change still gets a green
+# check in seconds: a job skipped by its `if:` reports success. The job `merge-gate` at the end is the one check a
+# merge needs; it fails when e2e was skipped on a merge group or a manual run although the change needs it.
 on:
   push: { branches: ["step-*"] }
   pull_request: { types: [opened, synchronize, reopened, ready_for_review] }
   merge_group: { types: [checks_requested] }
+  workflow_dispatch: {}
 permissions: { contents: read }
 concurrency:
   group: ci-${{ github.ref }}
@@ -224,7 +230,8 @@ jobs:
   e2e:
     name: e2e (${{ matrix.part.name }})
     needs: [changes, image]
-    if: ${{ !github.event.pull_request.draft && needs.changes.outputs.e2e == 'true' }}
+    # Not on a pull request while the merge queue runs it (MERGE_QUEUE is "true"): the queue and a manual run do.
+    if: ${{ !github.event.pull_request.draft && needs.changes.outputs.e2e == 'true' && (github.event_name != 'pull_request' || vars.MERGE_QUEUE != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -235,7 +242,7 @@ jobs:
           - { name: b, steps: "8 fallback", ui: false }
           - { name: c, steps: "10 keys 9 compress sa agents", ui: false }
           - { name: d, steps: "12 ext savings evidence", ui: false }
-          - { name: e, steps: "4a 4b 4c 4d 5 6 7 guard fd", ui: false }
+          - { name: e, steps: "4a 4b 4c 4d 5 6 7 guard fd platforms", ui: false }
           - { name: f, steps: "oauth", ui: false }
     steps:
       # The runner's disk held the kind images, the build cache and Go's caches until "no space left on device"
@@ -624,6 +631,8 @@ jobs:
       W_QUICKSTART: ${{ needs.changes.outputs.quickstart }}
       W_E2E: ${{ needs.changes.outputs.e2e }}
       DRAFT: ${{ github.event.pull_request.draft && 'true' || 'false' }}
+      EVENT: ${{ github.event_name }}
+      QUEUE: ${{ vars.MERGE_QUEUE }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { sparse-checkout: .github/scripts }

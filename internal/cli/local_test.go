@@ -31,6 +31,12 @@ func TestLocalUpChartDirChecks(t *testing.T) {
 	if code != 2 || !strings.Contains(s, "next: helm dependency build "+filepath.Join(dir, "ambit")) {
 		t.Fatalf("no dependencies: code %d, output %q", code, s)
 	}
+	// An empty charts/ambit/charts folder is still "not built" (#356): the packed dependencies are *.tgz files.
+	os.MkdirAll(filepath.Join(dir, "ambit", "charts"), 0o755)
+	code, s = runCLI(t, &fakeHelm{}, "local", "up", "--no-key", "--chart-dir", dir)
+	if code != 2 || !strings.Contains(s, "next: helm dependency build "+filepath.Join(dir, "ambit")) {
+		t.Fatalf("empty dependency folder: code %d, output %q", code, s)
+	}
 }
 
 func TestLocalUpKeyFlagsConflict(t *testing.T) {

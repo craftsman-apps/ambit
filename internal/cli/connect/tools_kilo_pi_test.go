@@ -216,6 +216,14 @@ func TestPiWindowsAndDir(t *testing.T) {
 	if got := piKeyCommand(in); got != `!'/opt/$$tools/ambit' key print --url 'https://llm.example.com'` {
 		t.Fatalf("$ must be written as $$: %q", got)
 	}
+	in.GOOS, in.AmbitPath = "windows", `C:\Users\a$b\ambit.exe`
+	if _, err := PlanPiModels(in); err == nil || !strings.Contains(err.Error(), "cannot run a command") {
+		t.Fatalf("a $ in a Windows path must be refused: %v", err)
+	}
+	in.AmbitPath = `C:\Users\O’Brien\ambit.exe`
+	if got := piKeyCommand(in); got != `!"C:\Users\O’Brien\ambit.exe" key print --url "https://llm.example.com"` {
+		t.Fatalf("cmd.exe reads no single quotes: %q", got)
+	}
 	env := func(v string) func(string) string { return func(string) string { return v } }
 	for v, want := range map[string]string{"": filepath.Join("/h", ".pi", "agent"), "~/pi": filepath.Join("/h", "pi"), "/srv/pi": "/srv/pi"} {
 		if got := PiDir(env(v), "/h"); got != want {

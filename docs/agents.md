@@ -161,10 +161,14 @@ pruned; the agent record keeps `state: stopped`. Start removes the entry at once
 
 | Failure | Keys | Measured |
 |---|---|---|
-| none | refused after the proxies learn of the policy and the key deletion | MEASURED_NONE |
-| Ambit controller down | refused after S2 as usual; the stop is not confirmed (state stays `stopping`) until it is back | MEASURED_CONTROLLER |
-| agentgateway controller down | **not refused until it is back**: the proxies keep their last configuration | MEASURED_AGW |
+| none | refused after the proxies learn of the policy and the key deletion | refused **0.92 s** after the request (p50; p95 0.94 s, p99 0.94 s, max 0.94 s in 20 runs); a client calling every 25 ms had 36 calls accepted after the request (max 37); reported `stopped` after 8.3 s |
+| Ambit controller down | refused after S2 as usual; the stop is not confirmed (state stays `stopping`) until it is back | key refused after 0.73 s (29 accepted calls in between); the agent stayed `stopping` and was reported "not confirmed" after 60 s; confirmed after the controller was back |
+| agentgateway controller down | **not refused until it is back**: the proxies keep their last configuration | in the first 20 s **874 calls with the deleted key were accepted** (none refused); the first refusal came 30.7 s after the request, when the control plane was back |
 | console down | a stop cannot be requested. Emergency stops: the Helm values `apiKeys.enabled: false` (all keys) and `agents.enabled: false` | not applicable |
+
+Measured on kind with agentgateway v1.7.0, one gateway pod, a polling client with the key (`test/stepagents.sh`, 2026-11-25). Real clusters
+with more proxy pods, a network and a load balancer will differ; run the test on yours before you rely on a number. A controller restart during
+a stop delayed the confirmation to 26.4 s. A partial rollout across two Gateways is covered by the controller's tests (one Gateway ready, the other not: the agent stays `stopping`).
 
 An OAuth access token is checked offline by the gateway; once OAuth exists, a token stays valid until it expires (at most 15 minutes) when
 no stop policy applies.

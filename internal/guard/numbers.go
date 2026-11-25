@@ -50,6 +50,17 @@ func decodeResult(raw []byte) (result map[string]any, err error) {
 	return result, nil
 }
 
+// numberText is the text the masker sees for a number: expandExponent, then without a fraction that is only zeros
+// (4111111111111111.0 is 4111111111111111), as a float64 would have been printed. Otherwise a masked card number would
+// keep its ".0" next to the placeholder. Zeros in a fraction with other digits stay: they can be digits of a card number.
+func numberText(lit string) string {
+	lit = expandExponent(lit)
+	if whole, frac, ok := strings.Cut(lit, "."); ok && strings.Trim(frac, "0") == "" && !strings.ContainsAny(lit, "eE") {
+		return whole
+	}
+	return lit
+}
+
 // expandExponent writes a number with an exponent (4.111111111111111e15) as plain digits (4111111111111111), as a
 // float64 would have been printed, so the masker sees the digits that a reader of the number sees. A number without
 // an exponent, or with an exponent beyond maxExpandExponent, is returned as it is.

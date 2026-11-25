@@ -56,6 +56,9 @@ func TestLargeNumbersAreMaskedFromTheirExactText(t *testing.T) {
 			if withheld || !strings.Contains(got, "<CARD_NUMBER>") || strings.Contains(got, number) {
 				t.Errorf("%s: card number not masked: %s", name, got)
 			}
+			if strings.Contains(got, "<CARD_NUMBER>.") { // the zeros of a fraction do not stay next to the placeholder
+				t.Errorf("%s: fraction zeros kept after the placeholder: %s", name, got)
+			}
 		}
 	}
 }
@@ -124,6 +127,25 @@ func TestExpandExponent(t *testing.T) {
 	} {
 		if got := expandExponent(in); got != want {
 			t.Errorf("expandExponent(%s) = %s, want %s", in, got, want)
+		}
+	}
+}
+
+func TestNumberText(t *testing.T) {
+	for in, want := range map[string]string{
+		"4111111111111111.0":   "4111111111111111",
+		"4111111111111111.000": "4111111111111111",
+		"12.50":                "12.50", // other digits in the fraction: the zero stays
+		"100":                  "100",   // no point: the zeros are digits
+		"100.0":                "100",
+		"-1.0":                 "-1",
+		"0.0":                  "0",
+		"0.10":                 "0.10",
+		"1.50e400":             "1.50e400", // not written out: kept as it is
+		"4.0e15":               "4000000000000000",
+	} {
+		if got := numberText(in); got != want {
+			t.Errorf("numberText(%s) = %s, want %s", in, got, want)
 		}
 	}
 }

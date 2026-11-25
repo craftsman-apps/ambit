@@ -302,7 +302,7 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 		case float64: // exact for integers up to 2^53, which holds 16-digit card numbers
 			number(strconv.FormatFloat(x, 'f', -1, 64), put)
 		case json.Number: // the digits the server wrote (issue 360)
-			number(expandExponent(string(x)), put)
+			number(numberText(string(x)), put)
 		case []any:
 			for i := range x {
 				walk(x[i], func(s any) { x[i] = s }, item, withKeys)

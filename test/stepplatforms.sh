@@ -18,7 +18,7 @@ field() { "${PY[@]}" -c "import json,sys;d=json.load(open(sys.argv[1]));print($1
 ag() { local c; for _ in $(seq 1 15); do c=$(api "$@"); [[ "$c" == 503 ]] || break; sleep 2; done; echo "$c"; }
 AGENTS=()
 cleanup() {
-  for p in ${PIDS[@]+"${PIDS[@]}"}; do kill "$p" 2>/dev/null || true; done
+  stop_forwards
   kubectl -n "$NS" patch "servers.$G" time --type json -p '[{"op":"remove","path":"/spec/frontDoor"}]' >/dev/null 2>&1 || true
   kubectl -n "$NS" delete "accessrules.$G" fp-time fp-ops --ignore-not-found >/dev/null 2>&1 || true
   local pw; pw=$(kubectl -n "$NS" get secret ambit-initial-admin -o jsonpath='{.data.password}' 2>/dev/null | base64 -d) || true
@@ -36,6 +36,7 @@ rm -f "$W/tls.key"
 helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/frontdoor/values.yaml --wait --timeout 5m >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-public --timeout=300s >/dev/null
 kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
+kubectl -n "$NS" rollout status deploy/ambit-guard --timeout=300s >/dev/null || fail "0 ambit-guard is not running"
 kubectl -n "$NS" apply -f - >/dev/null <<EOF
 apiVersion: $G/v1alpha1
 kind: AccessRule
@@ -48,13 +49,13 @@ metadata: { name: fp-ops }
 spec: { groups: [ops], servers: [{ name: time }] }
 EOF
 kubectl -n "$NS" wait "servers.$G" time --for=condition=Ready --timeout=300s >/dev/null || fail "0 server time not Ready"
+kubectl -n "$NS" wait "servers.$G" time --for=condition=ToolsPinned --timeout=300s >/dev/null || fail "0 tools of time not pinned"
 kubectl -n "$NS" patch "servers.$G" time --type merge -p '{"spec":{"frontDoor":{"enabled":true,"acceptUnmaskedServerMessages":true}}}' >/dev/null
 wait_for 120 "kubectl -n '$NS' get agentgatewaybackend ambit-mcp-public >/dev/null" || fail "0 no public backend"
 PW=$(kubectl -n "$NS" get secret ambit-initial-admin -o jsonpath='{.data.password}' | base64 -d)
 sign_in local admin@ambit.local "$PW" || fail "0 admin sign-in"
 [[ $(api POST /api/test/keys/reset-limits '{}') == 204 ]] || fail "0 reset-limits hook: $(cat "$W/api")"
-PODS=($(kubectl -n "$NS" get pods -l gateway.networking.k8s.io/gateway-name=ambit-public --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}'))
-PA=$(forward "${PODS[0]}"); PB=$PA
+reforward
 SUFFIX=$(date +%s | tail -c 7)
 
 # agent MODE PLATFORM NAME [RANGES-JSON]: makes an agent (scope: the time server's one tool) and a key; sets AGENT, KEY, KID

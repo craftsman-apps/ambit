@@ -119,17 +119,34 @@ Limits protect the gateway and the keys. They are on by default. Values are in `
 
 | Limit | Default | Counted | Counts |
 |---|---|---|---|
-| `perCredentialPerMinute` | 600 | by the ratelimit service and Valkey, **shared by all gateway pods** | requests with one valid key (by key ID) |
-| `perSourcePerMinute` | 120 | by the same service, shared | requests from one source address that pass authentication, whatever key they carry |
-| `perPodPerSecond` | 200 | in each gateway pod | every request that reaches the limit check. A second line: it still works when the ratelimit service is down. |
+| `perSourcePerMinute` | 120 | by the ratelimit service and Valkey, **shared by all gateway pods**, **before** the route is matched and before the key is checked | **every** request from one source address: a valid key, no key, a wrong key, an unknown path |
+| `perCredentialPerMinute` | 600 | by the same service, shared, after authentication | requests with one valid key (by key ID) |
+| `perPodPerSecond` | 200 | in each gateway pod, after authentication | every request that reaches the limit check. A second line: it still works when the ratelimit service is down. |
 
 A request over a limit gets **429** (or, for an MCP request, `200` with a JSON-RPC error: agentgateway reports some errors of
 an MCP request that way). The first two limits are per minute (a fixed window that starts at each full minute).
 
-- **Refused requests are not counted.** agentgateway v1.7.0 checks the rate limits **after** it matches the route and checks
-  the credential. A request for another path (404), or with no key, a wrong key, an expired key or an offboarded owner (403),
-  is answered first and counts against no limit. These answers are cheap, but a flood of them is not slowed by Ambit.
-  Limit that traffic at the edge (cloud firewall, WAF, load balancer), where you can see the source. Ambit tracks this in [issue #390](https://github.com/craftsman-apps/ambit/issues/390).
+- **How the source limit works before authentication.** agentgateway v1.7.0 runs its rate limits after it matches the route
+  and checks the key, and it allows no rate limit earlier. So a flood of wrong keys (403) or unknown paths (404) would
+  count against nothing ([issue #390](https://github.com/craftsman-apps/ambit/issues/390)). The chart therefore adds the
+  policy `ambit-public-source-limit`: before the route is matched, the Gateway asks the ratelimit service (its `/json`
+  endpoint, over the cluster network) to count one request for the source address. Over the limit, the service answers 429 and the
+  Gateway sends that answer to the caller. The Gateway sends only the address, never the key.
+- **A flood from one address also blocks that address's good requests.** The counter is per address, so a caller that floods
+  with wrong keys uses up the limit of every key that comes from the same address, for the rest of the minute. That is the
+  purpose (the flood stops being cheap), and the price is that callers behind one shared address (a NAT, a hosted-agent
+  platform with few addresses) share one budget. A valid key from another address is not affected.
+- **What this does not cover.** The limit starts when a complete HTTP request arrives. Connections that never send a
+  request, TLS handshakes, requests for another host name (the listener is bound to one host name), and many source addresses
+  (an IPv6 caller can use a whole /64 range; the counter is per address) are not limited by Ambit. Limit them at the edge:
+  a cloud firewall or WAF, and the load balancer's own connection limits. For one more cap in the gateway itself, you can add an
+  `AgentgatewayPolicy` of your own with `frontend.tcp.maxConnections` (connections per Gateway port) or
+  `frontend.http.maxConcurrentRequests` (requests in flight). Both count all callers together, so a flood can use them up and block good
+  callers too: they protect the pods, not the callers. Ambit does not set them.
+- **A failed check on the way in.** `frontDoor.rateLimit.failureMode` also applies to the source check: with `FailOpen`
+  (default) requests pass when the ratelimit service cannot be reached, and the per-pod limit still applies; with `FailClosed`
+  they are refused with 403. If the ratelimit service answers but **Valkey is down**, the service reports its error as HTTP
+  400, and the front door refuses every request with 400 until Valkey is back, whatever `failureMode` says.
 - **Cheap and expensive calls.** In this release there is only one kind of public call (`/mcp`), so there is one source
   limit. When sign-in endpoints are added later, they get their own, lower limit, so that a flood of sign-in attempts
   cannot use up the limit of MCP calls from the same address.

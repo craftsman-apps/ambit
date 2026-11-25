@@ -127,9 +127,34 @@ spec:
       location:
         expression: '"x-api-key" in request.headers ? request.headers["x-api-key"] : request.headers["authorization"].replace("Bearer ", "")'
 ---
-# Two limits on every request of the public Gateway: shared by all gateway pods (the ratelimit service counts in Valkey;
-# its limits are in ConfigMap ambit-ratelimit-front-door), and per pod as a second line if that service is down.
-# The shared limit counts per key and per source address; the source limit counts every request, refused ones included.
+# Three limits on the public Gateway (docs/front-door.md, "Rate limits"). All of them count in the ratelimit service and
+# Valkey, so they are shared by all gateway pods, except the per-pod limit, which is a second line if that service is down.
+# 1. The source limit counts EVERY request of a source address, refused ones included (a wrong key, an unknown path). It
+#    must run before authentication and before the route is matched, and agentgateway v1.7.0 allows no rate limit in that
+#    phase. So the Gateway asks the ratelimit service over HTTP (extAuth, phase PreRouting): the service's /json endpoint
+#    counts one hit for the source address and answers 200, or 429 when the source is over its limit.
+# 2. The key limit counts requests with one valid key (after authentication). Requests without a valid key share one
+#    counter ("" below), capped like a key.
+# 3. The per-pod limit counts every request that reaches the limit check, in each pod.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: ambit-public-source-limit
+spec:
+  targetRefs: [{ group: gateway.networking.k8s.io, kind: Gateway, name: ambit-public }]
+  traffic:
+    phase: PreRouting
+    extAuth:
+      backendRef: { name: ambit-ratelimit, port: 8080 }
+      # FailOpen: the ratelimit service cannot be reached, so the request passes (and the per-pod limit still applies).
+      # If the service answers but Valkey is down, it answers 400 and the request is refused whatever this says.
+      failureMode: {{ $rl.failureMode | default "FailOpen" }}
+      http:
+        path: '"/json"'
+        body: '{"domain": "ambit-public", "descriptors": [{"entries": [{"key": "fd_source", "value": string(source.address)}]}]}'
+        # Only this header goes to the ratelimit service. Without the list, agentgateway sends Authorization: the caller's key.
+        allowedRequestHeaders: [user-agent]
+---
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata:
@@ -146,8 +171,6 @@ spec:
           # "" for a request without a valid key: all of those share one counter, capped like a key.
           - unit: Requests
             entries: [{ name: fd_credential, expression: 'has(apiKey.keyId) ? apiKey.keyId : ""' }]
-          - unit: Requests
-            entries: [{ name: fd_source, expression: "string(source.address)" }]
       local:
         - requests: {{ $rl.perPodPerSecond }}
           unit: Seconds

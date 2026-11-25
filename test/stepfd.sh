@@ -16,7 +16,7 @@ CH_POD=ambit-clickhouse-0
 ch() { kubectl -n "$NS" exec "$CH_POD" -- sh -c 'clickhouse-client --user ambit --password "$CLICKHOUSE_PASSWORD" -q "$0"' "$1"; }
 # values used by every helm upgrade of this step; the limits are high so the other checks never reach them (check 7 lowers them)
 fdset() { helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/frontdoor/values.yaml \
-  --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 \
+  --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=100000 --set frontDoor.rateLimit.perPodPerSecond=200 \
   "$@" --wait --timeout 5m >/dev/null; }
 cleanup() {
   stop_forwards
@@ -26,6 +26,7 @@ cleanup() {
   kubectl -n "$NS" delete "accessrules.$G" fd-time --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" delete httproute fd-evil fd-other --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" scale deploy/ambit-ratelimit --replicas=1 >/dev/null 2>&1 || true
+  kubectl -n "$NS" scale deploy/ambit-valkey --replicas=1 >/dev/null 2>&1 || true
   for id in ${KEYIDS[@]+"${KEYIDS[@]}"}; do api DELETE "/api/keys/$id" >/dev/null 2>&1 || true; done
 }
 trap 'rc=$?; cleanup; on_exit "$rc"' EXIT
@@ -214,21 +215,25 @@ pass "7 per key: of 30 requests with one key, $KEY1_OK passed and $KEY1_LIM were
 fdset >/dev/null
 wait_for 150 'rlconfig "$NS" | grep -q "fd_credential.*requests_per_unit=600"' || fail "7 the key limit was not restored"
 
-# per source: counted for requests that pass authentication. Requests that authentication refuses (no key, wrong key) are
-# not counted: agentgateway runs rate limits after authorization (docs/front-door.md says so).
+# per source: counts EVERY request of an address before authentication and before the route is matched (#390): no key, a wrong
+# key, an unknown path and a valid key all use the same counter. Over the limit the answer is 429.
 fdset --set frontDoor.rateLimit.perSourcePerMinute=30 >/dev/null
 wait_for 150 'rlconfig "$NS" | grep -q "fd_source.*requests_per_unit=30"' || fail "7 the ratelimit service did not load the source limit 30: $(rlconfig "$NS" | grep ambit-public)"
 reforward  # a port-forward that sat idle may be gone
 new_window  # the source counter of this minute holds every request of the checks before: start in a new minute
-read -r nok nlim nden nother LASTOTHER <<<"$(burst 40 "$PA")"       # no key: every answer is 403, none is counted
-(( nden == 40 && nlim == 0 )) || fail "7 requests without a key: $nok ok, $nlim limited, $nden refused, $nother other (${LASTOTHER:-}; want 40 refused and none limited: refused requests are not counted)"
-read -r ok lim den other LASTOTHER <<<"$(burst 40 "$PA" -H "x-api-key: $K3")"   # valid key: counted per source
-(( lim >= 1 && ok >= 1 && ok <= 30 && other == 0 )) || fail "7 per source, valid key (limit 30): $ok ok, $lim limited, $den refused, $other other"
-SRC_OK=$ok; SRC_LIM=$lim
-[[ $(pubk "$PB" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K4") == limited ]] || fail "7 another key from the limited source was not limited (the source counter is shared by all keys and pods)"
-pass "7 per source: 40 requests without a key were all refused (403) and none was limited (refused requests are not counted); with a valid key, $SRC_OK of 40 passed and $SRC_LIM were limited in one minute (limit 30); another key and the other pod were limited too"
+read -r nok nlim nden nother LASTOTHER <<<"$(burst 40 "$PA")"       # no key: 403 until the source is over its limit, then 429
+(( nden >= 1 && nden <= 30 && nlim >= 10 && nok == 0 && nother == 0 )) || fail "7 requests without a key (source limit 30): $nok ok, $nlim limited, $nden refused, $nother other (${LASTOTHER:-}; want some 403, then 429, from the 31st request on)"
+SRC_DEN=$nden; SRC_LIM=$nlim
+[[ $(pubk "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K3") == limited ]] || fail "7 a valid key from the source that is over its limit was not limited"
+[[ $(pubk "$PB" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K4") == limited ]] || fail "7 another key from the limited source was not limited on the other pod (the source counter is shared by all keys and pods)"
+pass "7 per source: of 40 requests without a key, $SRC_DEN were refused (403) and $SRC_LIM were limited (429, limit 30 a minute); then a valid key from the same source, on either pod, was limited too"
+new_window
+n404=0; n429=0; nx=0
+for _ in $(seq 1 40); do c=$(pub "$PA" /nothing); case $c in 404) n404=$((n404+1));; 429) n429=$((n429+1));; *) nx=$((nx+1));; esac; done
+(( n404 >= 1 && n404 <= 30 && n429 >= 1 && nx == 0 )) || fail "7 unknown path (source limit 30): $n404 not found, $n429 limited, $nx other (want 404 until the limit, then 429)"
+pass "7 per source: of 40 requests for an unknown path, $n404 got 404 and $n429 were limited (429): requests the route does not match are counted too"
 fdset >/dev/null
-wait_for 150 'rlconfig "$NS" | grep -q "fd_source.*requests_per_unit=1000"' || fail "7 the source limit was not restored"
+wait_for 150 'rlconfig "$NS" | grep -q "fd_source.*requests_per_unit=100000"' || fail "7 the source limit was not restored"
 
 # per pod, and the ratelimit service down: FailOpen keeps serving and the per-pod limit still applies; FailClosed refuses
 fdset --set frontDoor.rateLimit.perPodPerSecond=3 >/dev/null
@@ -248,12 +253,22 @@ kubectl -n "$NS" wait --for=delete pod -l app.kubernetes.io/name=ambit-ratelimit
 wait_for 90 '[[ $(pubk "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K3") != ok ]]' ||
   fail "7 FailClosed: with the ratelimit service down a request still passed (policy failureMode: $(kubectl -n "$NS" get agentgatewaypolicy ambit-public-limits -o jsonpath='{.spec.traffic.rateLimit.global.failureMode}'))"
 FC=$(pubk "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K3")
-[[ "$FC" == limited || "$FC" == other:5* ]] || fail "7 FailClosed: with the ratelimit service down a request got '$FC'"
+[[ "$FC" == limited || "$FC" == refused || "$FC" == other:5* ]] || fail "7 FailClosed: with the ratelimit service down a request got '$FC'"
 kubectl -n "$NS" scale deploy/ambit-ratelimit --replicas=1 >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-ratelimit --timeout=120s >/dev/null
 fdset >/dev/null
 wait_for 90 '[[ $(pubk "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K3") == ok ]]' || fail "7 the front door does not recover when the ratelimit service is back"
-pass "7 FailClosed with the ratelimit service down: the request was refused ($FC); back to normal when the service returns"
+pass "7 FailClosed with the ratelimit service down: the request was refused ($FC; the source check cannot be reached, so the request is refused before authentication); back to normal when the service returns"
+
+# Valkey down while the ratelimit service runs: the service reports its error as HTTP 400 on /json, so the source check
+# refuses every request, whatever frontDoor.rateLimit.failureMode says (it applies when the service cannot be reached).
+kubectl -n "$NS" scale deploy/ambit-valkey --replicas=0 >/dev/null
+kubectl -n "$NS" wait --for=delete pod -l app.kubernetes.io/name=ambit-valkey --timeout=60s >/dev/null
+wait_for 60 '[[ $(pubk "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K3") == other:400 ]]' || fail "7 Valkey down (FailOpen): want HTTP 400 from the source check, got $(pubk "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K3")"
+kubectl -n "$NS" scale deploy/ambit-valkey --replicas=1 >/dev/null
+kubectl -n "$NS" rollout status deploy/ambit-valkey --timeout=120s >/dev/null
+wait_for 90 '[[ $(pubk "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K3") == ok ]]' || fail "7 the front door does not recover when Valkey is back"
+pass "7 Valkey down with the ratelimit service up: every request is refused with HTTP 400 (documented); back to normal when Valkey returns"
 
 # --- 8 · the client address: direct (this test: the connection) and the PROXY protocol
 REQ=(uv run --no-project python -I test/frontdoor/request.py)
@@ -265,14 +280,15 @@ wait_for 60 '[[ $("${REQ[@]}" "$PA" "$W/ca.pem" "$PUB" /nothing --proxy 203.0.11
 wait_for 90 'rlconfig "$NS" | grep -q "fd_source.*requests_per_unit=30"' || fail "8 source limit 30 not loaded"
 next_window
 a=0
-for _ in $(seq 1 40); do c=$("${REQ[@]}" "$PA" "$W/ca.pem" "$PUB" /mcp --proxy 203.0.113.7 --header "x-api-key: $K3" --post "$INIT"); [[ "$c" == 429 || "$c" == error200 ]] && a=$((a+1)); done
+# 203.0.113.7 floods the door with a WRONG key (403, never authenticated): the source limit must still count it (#390)
+for _ in $(seq 1 40); do c=$("${REQ[@]}" "$PA" "$W/ca.pem" "$PUB" /mcp --proxy 203.0.113.7 --header "x-api-key: ambit_wrongwrongwrongwrongwrongwrongwrongwrongwro" --post "$INIT"); [[ "$c" == 429 ]] && a=$((a+1)); done
 c8=$("${REQ[@]}" "$PA" "$W/ca.pem" "$PUB" /mcp --proxy 203.0.113.8 --header "x-api-key: $K3" --post "$INIT")
-(( a >= 1 )) || fail "8 203.0.113.7 was never limited ($a of 40; the last answer of 203.0.113.8: $c8)"
+(( a >= 1 )) || fail "8 203.0.113.7 was never limited with a wrong key ($a of 40; the last answer of 203.0.113.8: $c8)"
 [[ "$c8" == 200 ]] || fail "8 203.0.113.8 got '$c8' while 203.0.113.7 was limited: the limit does not use the address in the PROXY header"
 wait_for 120 '[[ $(ch "SELECT count() FROM otel.otel_logs WHERE LogAttributes['"'"'ambit.ingress'"'"'] = '"'"'public'"'"' AND Timestamp >= now() - INTERVAL 5 MINUTE AND LogAttributes['"'"'client.address'"'"'] = '"'"'203.0.113.7'"'"'") -ge 1 ]]' || fail "8 the audit record does not carry the proxied client address"
 # last: a connection that the gateway refuses can end kubectl's port-forward
 [[ $("${REQ[@]}" "$PA" "$W/ca.pem" "$PUB" /nothing) == refused ]] || fail "8 a connection without a PROXY header was served (a caller could choose its own address)"
-pass "8 PROXY protocol: no header: refused; 203.0.113.7 was limited ($a of 40 requests, limit 30) while 203.0.113.8 was not (HTTP $c8); the audit record (client.address) has 203.0.113.7"
+pass "8 PROXY protocol: no header: refused; 203.0.113.7 was limited ($a of 40 requests with a wrong key, limit 30) while a valid key from 203.0.113.8 was not (HTTP $c8); the audit record (client.address) has 203.0.113.7"
 fdset >/dev/null
 
 # --- 9 · public/private separation: every MCP method on the public route (a front-door server `time`, a private server

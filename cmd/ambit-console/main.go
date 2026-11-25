@@ -312,6 +312,7 @@ func run(ctx context.Context) error {
 		if appAudit, err = console.NewAppRecorder(ep); err != nil {
 			return fmt.Errorf("AMBIT_OTLP_ENDPOINT: %w", err)
 		}
+		defer appAudit.Close() // sends what is queued, within 5 seconds
 		// ambit_console_audit_send_failures_total, for the AmbitConsoleAuditSendFailed alert.
 		msrv := &http.Server{Addr: ":8084", Handler: promhttp.Handler(), ReadHeaderTimeout: 10 * time.Second}
 		go func() {

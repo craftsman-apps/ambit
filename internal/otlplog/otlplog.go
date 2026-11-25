@@ -40,6 +40,7 @@ type Exporter struct {
 	dropped *prometheus.CounterVec
 	queue   chan *logspb.LogRecord
 	done    chan struct{}
+	flush   chan chan struct{} // Flush requests
 	once    sync.Once
 	warn    time.Time // last logged send failure
 }
@@ -58,7 +59,7 @@ func New(endpoint, service string, dropped *prometheus.CounterVec) (*Exporter, e
 }
 
 func newExporter(service string, dropped *prometheus.CounterVec, queue int) *Exporter {
-	return &Exporter{service: service, dropped: dropped, queue: make(chan *logspb.LogRecord, queue), done: make(chan struct{})}
+	return &Exporter{service: service, dropped: dropped, queue: make(chan *logspb.LogRecord, queue), done: make(chan struct{}), flush: make(chan chan struct{})}
 }
 
 // Send queues rec. It returns at once.
@@ -67,6 +68,17 @@ func (e *Exporter) Send(rec *logspb.LogRecord) {
 	case e.queue <- rec:
 	default:
 		e.dropped.WithLabelValues(DropQueueFull).Inc()
+	}
+}
+
+// Flush sends what is queued now and returns when that is done (for tests and for a shutdown that must not lose records).
+// It does nothing after Close.
+func (e *Exporter) Flush() {
+	ack := make(chan struct{})
+	select {
+	case e.flush <- ack:
+		<-ack
+	case <-e.done:
 	}
 }
 
@@ -104,6 +116,24 @@ func (e *Exporter) run() {
 			}
 		case <-tick.C:
 			flush()
+		case ack := <-e.flush:
+			for drained := false; !drained; {
+				select {
+				case rec, ok := <-e.queue:
+					if !ok {
+						drained = true
+						break
+					}
+					batch = append(batch, rec)
+					if len(batch) >= Batch {
+						flush()
+					}
+				default:
+					drained = true
+				}
+			}
+			flush()
+			close(ack)
 		}
 	}
 }

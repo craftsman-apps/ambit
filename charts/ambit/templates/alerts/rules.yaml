@@ -77,7 +77,7 @@ spec:
           labels: { severity: warning }
           annotations:
             summary: "The console could not send {{`{{ $value | printf \"%.0f\" }}`}} MCP app request or approval records to the collector in 30 minutes"
-            description: "The requests and decisions happened; the Audit page and otel_logs miss these records. The ServerRequest objects still hold them (kubectl -n {{ $ns }} get serverrequests). Read why: kubectl -n {{ $ns }} logs deploy/ambit-console | grep 'app audit record'; check the collector: kubectl -n {{ $ns }} logs deploy/ambit-otel-collector"
+            description: "The requests and decisions happened; the Audit page and otel_logs miss these records. The ServerRequest objects still hold them (kubectl -n {{ $ns }} get serverrequests). Read why: kubectl -n {{ $ns }} logs deploy/ambit-console | grep 'not delivered to the collector'; check the collector: kubectl -n {{ $ns }} logs deploy/ambit-otel-collector"
         - alert: AmbitControllerRecordsDropped
           expr: sum by (namespace, reason) (increase(ambit_controller_record_dropped_total{namespace="{{ $ns }}"}[30m])) > 0
           labels: { severity: warning }

@@ -28,3 +28,18 @@ func TestFullQueueDrops(t *testing.T) {
 		t.Errorf("dropped %v, want 3", d)
 	}
 }
+
+// Flush sends what is queued before it returns, also when the collector is down (then the records are counted).
+func TestFlushSendsQueued(t *testing.T) {
+	dropped := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_flush_dropped_total"}, []string{"reason"})
+	e, err := New("127.0.0.1:1", "test", dropped) // nothing listens here
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Send(Record(time.Now(), "x"))
+	e.Send(Record(time.Now(), "y"))
+	e.Flush()
+	if d := testutil.ToFloat64(dropped.WithLabelValues(DropSendFailed)); d != 2 {
+		t.Errorf("send failures %v, want 2", d)
+	}
+}

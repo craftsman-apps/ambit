@@ -5,7 +5,7 @@ gateway:
   # Gateway container resources. A rolling update starts one extra pod first, so the nodes need room for one
   # more gateway pod. Memory grows with open MCP sessions: about 7 KiB each, dropped after 30 idle minutes
   # (agentgateway's fixed default). A client that never closes its sessions levels off: at 12 new sessions a
-  # second, about 160Mi. With several replicas, a closed session stays in the other replicas until the 30 minutes pass,
+  # second, about 160Mi. With several replicas, a closed session stays in a replica that did not get the DELETE until that replica has not used it for 30 minutes,
   # so memory rises for the first 30 minutes of steady traffic and then levels off (docs/alerts.md). A pod over its limit restarts; clients keep their sessions on the other replicas.
   resources:
     requests: { cpu: 100m, memory: 128Mi }

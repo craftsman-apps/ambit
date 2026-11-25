@@ -26,10 +26,12 @@ So it is a rise for the first 30 minutes, then a level: bounded, not a leak.
 - Every other replica that resumed the session keeps the entry until `idle_ttl` passes (`reap_expired_entries`, every 30 s).
 - `idle_ttl` is `DEFAULT_SESSION_IDLE_TTL` (30 minutes) when the backend comes through xDS
   (`types/agent_xds.rs`: `session_idle_ttl: crate::mcp::DEFAULT_SESSION_IDLE_TTL`). Only the local file configuration
-  (`LocalMcpBackend`, `mcp_session_ttl`) can change it. `AgentgatewayBackend` has no field for it.
+  (`LocalMcpBackend`, `config.mcp.sessionTtl`) can change it. `AgentgatewayBackend` has no field for it.
 
-So with N replicas, up to N-1 copies of every closed session stay for 30 minutes, and the level of memory is
-(new sessions a minute) x 30 x (the size of a resumed session).
+So with N replicas, up to N-1 copies of every closed session stay for 30 minutes after their last use on that replica. The
+memory of one pod is its own baseline plus (sessions a minute that this pod served and did not delete) x 30 x (the size
+of a session). With the 36 sessions a minute of the phased test, about 7 KiB and about 0.9 copies kept per pod, that is about
+7 MiB: the rise that was measured.
 
 ## What to ask
 

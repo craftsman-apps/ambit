@@ -17,7 +17,7 @@ description: "One shared Ambit key for a whole Claude.ai organization, entered a
 
 ## Set it up
 
-1. An admin makes the agent and one key, platform `claude-ai`, end date 30 days or less, source ranges = Anthropic's published addresses ([Agents](../../agents.md#create-an-agent-and-a-key)).
+1. An admin makes the agent and one key, platform `claude-ai`, end date 30 days or less, source ranges = Anthropic's published addresses ([Agents](../../agents.md#create-an-agent-and-a-key-in-the-api)).
 2. In the organization's Claude.ai settings, add a custom connector with the address `https://mcp-public.example.com/mcp` and, where the setup allows a static header, the header `Authorization: Bearer ambit_...`.
 3. Choose no sign-in for the connector (**No sign-in**): when Claude's own OAuth is on, Claude uses the `Authorization` header for its own token. Screens differ; check Anthropic's [connector authentication](https://claude.com/docs/connectors/custom/add-unlisted#choose-authentication-settings) page.
 4. Claude.ai calls from the internet on port 443: the front door must answer on 443 (see Before you start).

@@ -32,9 +32,40 @@ There is **no delegation**: an agent never acts for a person other than its owne
 assistant uses one itself-mode agent, which Audit shows as that service account, never as a person. If every person
 should act as themselves, each makes their own person-mode agent.
 
-## Create an agent and a key
+## The Agents page
 
-In the API (the console page for agents comes in a later 0.6.0 change):
+**You → Agents** in the console lists the agents you may see: your own, and for admins every agent. Each row shows the
+owner, the **declared platform**, the kind (person or itself), the last use, the tools the agent may use (its scope) and
+its state.
+
+![You → Agents: three agents with their owner, declared platform, kind, last use, scope and state.](assets/console/agents-list.png)
+
+- **Declared platform** is what the owner said the agent is. Ambit does not check it, and no rule, limit or bill uses it.
+  The console and Audit always call it "declared".
+- **Last used** is the newest call made with any key of the agent. If the console has no audit trail (ClickHouse is not set
+  up), it says "unknown", and says why.
+- **Tools used** (the calls of the last 30 days, counted per tool) are on the agent's detail page, for admins, because
+  they come from the audit trail, which only admins may read. A person sees a note that admins can look it up in Audit.
+- **No agents yet** shows a short explanation and the **New agent** button. When your administrator has switched agents
+  off, the page says so and has no button.
+
+**New agent** asks for a name, a declared platform and the tools the agent may use. Nothing ticked means no tool. A
+person makes agents for themselves only. Admins also see the choice **Itself**, which makes a service account with an
+owner (a person or `group:name`), a group and an account name.
+
+![The New agent form: name, declared platform and the servers the agent may use.](assets/console/agents-new.png)
+
+The detail page shows the agent's facts, its scope (with **Change**), and its keys. **New key** asks for a key name, an end
+date and, if you want, source address ranges. The key is shown **once**, together with the MCP URL and the two header forms
+(`Authorization: Bearer` and `x-api-key`). The page never shows it again: it keeps only the start of the key.
+
+![A new key, shown once, with the MCP URL and the header lines.](assets/console/agents-key-shown.png)
+
+**Revoke** deletes one key. **Delete agent** deletes the agent, its keys and (itself mode) its service account.
+
+## Create an agent and a key in the API
+
+The same, with the API:
 
 ```sh
 # as a signed-in person: an agent for yourself (the name is made from the display name)
@@ -116,7 +147,17 @@ the verified key:
 
 Records written before this release do not have them, and keep exporting with empty cells.
 
-The **Audit** API accepts `agent=`, `platform_declared=` and `ingress=` (`private` or `public`) next to `email=`. An agent or a
+The **Audit** page (**Evidence → Audit**, admins) has the fields **Agent**, **Declared platform** and **Entrance** (private
+or public) next to **Email**. An agent or a declared platform alone selects calls the way an email does, and then the email
+is optional; the entrance only narrows one of them, so it is off until one of them is filled in. A call made with an agent's
+key has an **agent** badge. Under it the row says which agent (and its mode), the declared platform, the owner when the key
+was issued and, if the agent was moved since, the owner now. A call that came in through the public entrance has a
+**public** badge. **Export CSV** has the same eight columns as `calls.csv`, after the columns it had before. **See every call of
+this agent in Audit** on the agent's page opens the search for it.
+
+![Audit, searched by declared platform and entrance: two calls of agents with the agent badge, the declared platform and the owner at issue and now.](assets/console/audit-agent.png)
+
+The Audit API accepts `agent=`, `platform_declared=` and `ingress=` (`private` or `public`) next to `email=`. An agent or a
 platform alone selects calls the way an email does; `ingress` only narrows another filter.
 
 ```sh
@@ -185,6 +226,8 @@ attributes above, and the columns appended to `calls.csv`.
 | `GET /api/audit?agent=&platform_declared=&ingress=` | Admins |
 
 Answers to people who may not see an agent are `404`, not `403`, so a name is not confirmed.
+
+The Agents page and the Audit filters use only the endpoints on this page and the key endpoints of [Personal API keys](api-keys.md) (`GET /api/keys`, `GET /api/admin/keys`, `DELETE /api/keys/{id}`, `DELETE /api/admin/keys/{id}`). They have no private API.
 
 ## Measured
 

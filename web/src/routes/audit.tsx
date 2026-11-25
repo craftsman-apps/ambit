@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearch } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Shell, Status } from "@/components/shell";
 import { useConfig } from "@/api";
 import { csvRow } from "@/lib/csv";
+import { knownPlatforms, platformText } from "@/lib/agents";
 import { guardLabel, isStale, outcomeLabel, switchCheck, utcMinute, type Outcome, type WouldRefuse } from "@/lib/audit-mode";
 
 type Call = { time: string; email: string; route: string; method: string; server: string; tool: string; model: string; status: string; error: string; inputTokens: number; outputTokens: number; router: string; label: string; labelReason: string;
@@ -16,7 +18,10 @@ type Call = { time: string; email: string; route: string; method: string; server
   // What the guard did to the tool result (#203); absent when it did not compress it or its record did not arrive.
   compression?: Compression;
   // What the injection guard found in the tool result (protection.injectionGuard): the strongest action and the rule names; never the text.
-  injection?: Injection };
+  injection?: Injection;
+  // The agent whose key or token made the call (docs/agents.md, experimental). The platform is what the owner declared, never a proof.
+  agent?: string; agentMode?: "person" | "itself"; agentOwnerAtIssue?: string; agentOwnerNow?: string; platformDeclared?: string;
+  grantId?: string; tokenIssuer?: string; ingress?: "private" | "public" };
 type Injection = { action: "found" | "masked" | "rejected"; mode: string; rules: string[] };
 type Compression = { mode: string; bytesIn: number; bytesOut: number; match: string;
   parts: { part: number; type: string; bytesIn: number; bytesOut: number; omitted: number }[] };
@@ -31,6 +36,12 @@ const modeHelp: Record<string, string> = { shorten: "shorten: parts were left ou
 const compressionLines = (z: Compression) => z.parts.map((p) => `${z.parts.length > 1 ? `Text ${p.part + 1}: r` : "R"}esult ${z.mode === "shorten" ? "shortened" : "compressed"}: ${kb(p.bytesIn)} → ${kb(p.bytesOut)} (${z.mode}, ${p.type}${z.mode === "shorten" ? `, ${p.omitted} ${p.omitted === 1 ? "part" : "parts"} left out` : ""})`);
 // A routed call shows the router and the model that answered, e.g. "auto → mock/echo (coding)".
 const target = (c: Call) => c.identity === "invalid key" ? `from ${c.clientAddress || "an unknown address"}` : c.router ? `${c.router} → ${c.model}${c.label || c.labelReason ? ` (${c.label || c.labelReason})` : ""}` : (c.server || c.model);
+// "Agent grok-bot-x7k2pq (person mode), declared platform Grok Bot, owner at issue a@b; owner now c@d" (the owner now only when it differs).
+// The platform is what the owner declared; Ambit does not check it.
+const agentLine = (c: Call) => [`${c.agent} (${c.agentMode === "itself" ? "itself mode" : "person mode"})`,
+  c.platformDeclared ? `declared platform: ${platformText(c.platformDeclared)}` : "",
+  c.agentOwnerAtIssue ? `owner at issue: ${c.agentOwnerAtIssue}` : "",
+  c.agentOwnerNow && c.agentOwnerNow !== c.agentOwnerAtIssue ? `owner now: ${c.agentOwnerNow}` : ""].filter(Boolean).join(" · ");
 // One step of an MCP app's request and approval (issue #112): who did what, on which server, and why it was refused.
 type AppEvent = { time: string; action: string; actor: string; role: string; server: string; request: string; requestedBy: string;
   image: string; url: string; comment: string; pullRequest: string; tools: string[]; reason: string };
@@ -76,8 +87,9 @@ function csv(calls: Call[]) {
   // The compression columns are at the end, so existing spreadsheets keep their positions (#203).
   const rows = calls.map((c) => csvRow([utc(c.time), c.email || "no person", what(c), target(c), outcome(c), c.status, c.error, c.inputTokens, c.outputTokens, c.mark ?? "", c.rulesVersion ?? "",
     c.compression?.bytesIn ?? "", c.compression?.bytesOut ?? "", c.compression?.parts.map((p) => `${c.compression!.mode} ${p.type} ${p.omitted}`).join("; ") ?? "",
-    c.injection ? `${c.injection.action}: ${c.injection.rules.join("; ")}` : ""]));
-  return ["time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version,result_bytes_in,result_bytes_out,compression,injection", ...rows].join("\n") + "\n";
+    c.injection ? `${c.injection.action}: ${c.injection.rules.join("; ")}` : "",
+    c.agent ?? "", c.agentMode ?? "", c.agentOwnerAtIssue ?? "", c.agentOwnerNow ?? "", c.platformDeclared ?? "", c.grantId ?? "", c.tokenIssuer ?? "", c.ingress ?? ""]));
+  return ["time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version,result_bytes_in,result_bytes_out,compression,injection,agent,agent_mode,agent_owner_at_issue,agent_owner_now,platform_declared,grant_id,token_issuer,ingress", ...rows].join("\n") + "\n";
 }
 function download(name: string, text: string) {
   const a = document.createElement("a");
@@ -90,16 +102,19 @@ function download(name: string, text: string) {
 // Audit (journey A5): every gateway call one person made in a period, refused ones included; or every request made
 // with an invalid key (wrong, revoked or expired), which has no person (issue #117).
 export function AuditPage() {
-  const [form, setForm] = useState({ invalidKey: false, approvals: false, email: "", from: monthAgo(), to: today() });
-  const [q, setQ] = useState<typeof form | null>(null);
+  const arrived = useSearch({ from: "/audit" });
+  const [form, setForm] = useState({ invalidKey: false, approvals: false, email: "", agent: arrived.agent ?? "", platform: arrived.platform ?? "", ingress: "", from: monthAgo(), to: today() });
+  const [q, setQ] = useState<typeof form | null>(arrived.agent || arrived.platform ? { ...form } : null); // a link from the Agents page searches at once
   const [protocol, setProtocol] = useState(false);
   const [onlyWouldRefuse, setOnlyWouldRefuse] = useState(false);
   const [onlyInjection, setOnlyInjection] = useState(false);
   const audit = useConfig().data?.accessMode === "audit";
+  const narrowed = !form.invalidKey && !form.approvals && !!(form.email.trim() || form.agent || form.platform);
   const res = useQuery({
     queryKey: ["audit", q], enabled: !!q && !q.approvals, retry: false,
     queryFn: () => get<{ calls: Call[]; limited: boolean }>(`/api/audit?${new URLSearchParams({
-      ...(q!.invalidKey ? { invalidKey: "true" } : { email: q!.email }), from: q!.from, to: nextDay(q!.to) })}`),
+      ...(q!.invalidKey ? { invalidKey: "true" } : { ...(q!.email && { email: q!.email }), ...(q!.agent && { agent: q!.agent }), ...(q!.platform && { platform_declared: q!.platform }), ...(q!.ingress && { ingress: q!.ingress }) }),
+      from: q!.from, to: nextDay(q!.to) })}`),
   });
   const apps = useQuery({
     queryKey: ["audit-approvals", q], enabled: !!q?.approvals, retry: false,
@@ -113,6 +128,7 @@ export function AuditPage() {
     .filter((c) => !onlyInjection || q?.invalidKey || c.injection);
   const search = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!narrowed && form.ingress) { setForm({ ...form, ingress: "" }); return; }
     // The same search again must ask again (after an error, or for new calls), not reuse the answer.
     if (JSON.stringify(form) === JSON.stringify(q)) (q?.approvals ? apps : res).refetch(); else setQ({ ...form });
   };
@@ -126,9 +142,15 @@ export function AuditPage() {
         <form className="flex flex-wrap items-end gap-2" onSubmit={search}>
           <label><span className="mb-1 block text-muted">Search</span>
             <select id="audit-mode" className={field} value={form.approvals ? "approvals" : form.invalidKey ? "invalid" : "email"} onChange={(e) => setForm({ ...form, invalidKey: e.target.value === "invalid", approvals: e.target.value === "approvals" })}>
-              <option value="email">One person</option><option value="invalid">Requests with an invalid key</option><option value="approvals">MCP app requests and approvals</option>
+              <option value="email">One person, agent or platform</option><option value="invalid">Requests with an invalid key</option><option value="approvals">MCP app requests and approvals</option>
             </select></label>
-          {!form.invalidKey && <label><span className="mb-1 block text-muted">{form.approvals ? "Email (optional)" : "Email"}</span><input id="audit-email" className={field} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="user01@acme.com" required={!form.approvals} /></label>}
+          {!form.invalidKey && <label><span className="mb-1 block text-muted">{form.approvals || narrowed ? "Email (optional)" : "Email"}</span><input id="audit-email" className={field} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="user01@acme.com" required={!form.approvals && !narrowed} /></label>}
+          {!form.invalidKey && !form.approvals && <>
+            <label><span className="mb-1 block text-muted">Agent (optional)</span><input id="audit-agent" className={field} value={form.agent} pattern="[a-z0-9._-]{0,64}" title="The agent's name: lower-case letters, digits and . _ -" onChange={(e) => setForm({ ...form, agent: e.target.value.trim() })} placeholder="grok-bot-for-sales-x7k2pq" /></label>
+            <label><span className="mb-1 block text-muted" title="What the agent's owner said it is. Ambit does not check it.">Declared platform (optional)</span><input id="audit-platform" className={field} value={form.platform} list="audit-platforms" pattern="[a-z0-9._-]{0,64}" title="A platform name: lower-case letters, digits and . _ -" onChange={(e) => setForm({ ...form, platform: e.target.value.trim() })} placeholder="grok" />
+              <datalist id="audit-platforms">{knownPlatforms.map(([v]) => <option key={v} value={v} />)}</datalist></label>
+            <label><span className="mb-1 block text-muted">Entrance</span><select id="audit-ingress" className={field} value={form.ingress} disabled={!narrowed} title={narrowed ? "" : "Give an email, an agent or a platform first: the entrance only narrows one of them"} onChange={(e) => setForm({ ...form, ingress: e.target.value })}>
+              <option value="">Any</option><option value="private">Private</option><option value="public">Public</option></select></label></>}
           <label><span className="mb-1 block text-muted">From (UTC)</span><input id="audit-from" type="date" className={field} value={form.from} onChange={(e) => setForm({ ...form, from: e.target.value })} /></label>
           <label><span className="mb-1 block text-muted">To (UTC, inclusive)</span><input id="audit-to" type="date" className={field} value={form.to} onChange={(e) => setForm({ ...form, to: e.target.value })} /></label>
           <Button type="submit" className="w-auto" disabled={res.isFetching || apps.isFetching}>{res.isFetching || apps.isFetching ? "Searching…" : "Search"}</Button>
@@ -152,7 +174,7 @@ export function AuditPage() {
               <label className="inline-flex items-center gap-1.5"><input id="audit-protocol" type="checkbox" checked={protocol} onChange={(e) => setProtocol(e.target.checked)} />
                 Show protocol messages ({all.length - all.filter(isCall).length})</label>
               <Button variant="outline" className="ml-auto w-auto" disabled={all.length === 0}
-                onClick={() => download(`audit-${q!.invalidKey ? "invalid-key" : q!.email}-${q!.from}-${q!.to}.csv`, csv(all))}>Export CSV</Button>
+                onClick={() => download(`audit-${q!.invalidKey ? "invalid-key" : q!.email || q!.agent || q!.platform}-${q!.from}-${q!.to}.csv`, csv(all))}>Export CSV</Button>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full border-collapse text-body">
@@ -163,6 +185,10 @@ export function AuditPage() {
                       <td className="whitespace-nowrap px-3 py-2 font-mono text-small">{utc(c.time)}</td>
                       <td className="px-3 py-2 font-mono">{what(c)}{c.identity === "service account" && (
                         <span data-testid="sa-badge" className="ml-1.5 whitespace-nowrap rounded border border-line px-1 font-sans text-small text-muted" title={`Called with the service account key ${c.keyId ?? ""}`}>service account</span>)}
+                        {c.agent && <span data-testid="agent-badge" className="ml-1.5 whitespace-nowrap rounded border border-line px-1 font-sans text-small text-muted"
+                          title={`Called with a key of the agent ${c.agent} (${c.agentMode === "itself" ? "itself mode" : "person mode"})`}>agent</span>}
+                        {c.ingress === "public" && <span data-testid="ingress-badge" className="ml-1.5 whitespace-nowrap rounded border border-line px-1 font-sans text-small text-muted" title="The call came in through the public entrance">public</span>}
+                        {c.agent && <span data-testid="agent-detail" className="block font-sans text-small text-muted">{agentLine(c)}</span>}
                         {c.injection && <>
                           <span data-testid="injection-tag" className={`ml-1.5 whitespace-nowrap rounded border border-line px-1 font-sans text-small ${injectionTag[c.injection.action].tone}`} title={injectionTag[c.injection.action].help}>{injectionTag[c.injection.action].text}</span>
                           <span data-testid="injection-rules" className="block font-sans text-small text-muted">Rules: {c.injection.rules.join(", ")}</span>
@@ -177,7 +203,7 @@ export function AuditPage() {
                       <td className="px-3 py-2 font-mono text-small tabular-nums">{c.inputTokens || c.outputTokens ? `${c.inputTokens} in / ${c.outputTokens} out` : ""}</td>
                     </tr>
                   ))}
-                  {shown.length === 0 && <tr><td colSpan={5} className="px-3 py-6 text-muted">{q!.invalidKey ? "No requests with an invalid key in this period." : `No calls by ${q!.email} in this period.`}</td></tr>}
+                  {shown.length === 0 && <tr><td colSpan={5} className="px-3 py-6 text-muted">{q!.invalidKey ? "No requests with an invalid key in this period." : `No calls ${[q!.email && `by ${q!.email}`, q!.agent && `of the agent ${q!.agent}`, q!.platform && `with the declared platform ${q!.platform}`, q!.ingress && `through the ${q!.ingress} entrance`].filter(Boolean).join(", ")} in this period.`}</td></tr>}
                 </tbody>
               </table>
             </div>

@@ -152,6 +152,18 @@ c=$(command curl -sk -o "$W/au" -w '%{http_code}' --max-time 15 --resolve "other
 c=$(auth "$PA" GET /.well-known/jwks.json -H 'Host: console.localtest.me'); [[ "$c" == 404 ]] || fail "2 Host header console.localtest.me under the sign-in name: HTTP $c"
 pass "2 on the sign-in host: JWKS (GET), token and revoke (POST) reach Hydra; 70 other paths, methods and path variants and other host names are 404"
 
+# the admission policy: a change of the Hydra route that opens more than the chart wrote is refused (server-side dry run)
+for patch in '[{"op":"add","path":"/spec/rules/0/filters/-","value":{"type":"URLRewrite","urlRewrite":{"path":{"type":"ReplaceFullPath","replaceFullPath":"/admin/keys/hydra.jwt.access-token"}}}}]' \
+  '[{"op":"replace","path":"/spec/rules/0/backendRefs/0/port","value":4445}]' \
+  '[{"op":"replace","path":"/spec/rules/0/backendRefs/0/name","value":"ambit-hydra-admin"}]' \
+  '[{"op":"add","path":"/spec/rules/0/matches/-","value":{"method":"GET","path":{"type":"Exact","value":"/oauth2/sessions/logout"}}}]' \
+  '[{"op":"remove","path":"/spec/rules/0/matches/2"}]' \
+  '[{"op":"replace","path":"/spec/parentRefs/0/sectionName","value":"https"}]'; do
+  out=$(kubectl -n "$NS" patch httproute ambit-auth-hydra --type json -p "$patch" --dry-run=server 2>&1) && fail "2 the admission policy admitted a change of the Hydra route: $patch"
+  grep -q "ambit-public-routes\|denied" <<<"$out" || fail "2 the change was refused, but not by the route policy: $patch: $(head -c 200 <<<"$out")"
+done
+pass "2 the route policy refuses a rewrite, another backend or port, an extra or a missing path, and another listener on the Hydra route"
+
 # --- 3 · who may reach Hydra (NetworkPolicy)
 probe() { # probe NAME [label=value ...]: a pod that can run Python, with the given labels
   local n=$1; shift

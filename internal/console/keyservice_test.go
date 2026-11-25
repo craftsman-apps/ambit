@@ -706,7 +706,8 @@ func TestEndingTheTermCancelsAnOperation(t *testing.T) {
 	}
 }
 
-// The console's Secret permission covers every Secret in the namespace; the code must only ever read key objects.
+// The console's Secret permission covers every Secret in the namespace; the code must only ever read key objects
+// (and agent records, which are labelled the same way).
 func TestKeyReadsAreLabelFiltered(t *testing.T) {
 	check := func(t *testing.T, l client.ObjectList, opts []client.ListOption) {
 		switch l.(type) {
@@ -715,7 +716,7 @@ func TestKeyReadsAreLabelFiltered(t *testing.T) {
 			return
 		}
 		o := (&client.ListOptions{}).ApplyOptions(opts)
-		if o.LabelSelector == nil || !strings.Contains(o.LabelSelector.String(), keyLabel) {
+		if o.LabelSelector == nil || !(strings.Contains(o.LabelSelector.String(), keyLabel) || strings.Contains(o.LabelSelector.String(), agentLabel)) {
 			t.Errorf("unfiltered %T list (selector %v)", l, o.LabelSelector)
 		}
 	}

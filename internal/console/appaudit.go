@@ -10,33 +10,29 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/craftsman-apps/ambit/internal/apprecord"
+	"github.com/craftsman-apps/ambit/internal/otlplog"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	collogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
-	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
-	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
-	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 )
 
-// AppRecordKind marks the console's records of MCP app requests and decisions in otel_logs (LogAttributes['ambit.kind']).
-const AppRecordKind = "app-approval"
+// AppRecordKind marks the records of MCP app requests and decisions in otel_logs (LogAttributes['ambit.kind']).
+const AppRecordKind = apprecord.Kind
 
-// Actions of an AppEvent. A refused action is an attempt the console answered with an error: who tried, on what, and why.
+// Actions of an AppEvent (see apprecord).
 const (
-	AppRequested         = "requested"
-	AppApproved          = "approved"
-	AppPullRequestOpened = "pull-request-opened"
-	AppDenied            = "denied"
-	AppToolsApproved     = "tools-approved"
-	AppApproveRefused    = "approve-refused"
-	AppDenyRefused       = "deny-refused"
-	AppToolsRefused      = "tools-approve-refused"
+	AppRequested         = apprecord.Requested
+	AppApproved          = apprecord.Approved
+	AppPullRequestOpened = apprecord.PullRequestOpened
+	AppDenied            = apprecord.Denied
+	AppToolsApproved     = apprecord.ToolsApproved
+	AppApproveRefused    = apprecord.ApproveRefused
+	AppDenyRefused       = apprecord.DenyRefused
+	AppToolsRefused      = apprecord.ToolsRefused
 )
 
 // eventReason is the Kubernetes Event reason of each action.
@@ -46,88 +42,39 @@ var eventReason = map[string]string{
 	AppDenyRefused: "ServerRequestDenyRefused", AppToolsRefused: "ToolsApproveRefused",
 }
 
-func refusedAction(action string) bool { return strings.HasSuffix(action, "-refused") }
+func refusedAction(action string) bool { return apprecord.Refused(action) }
 
 // AppEvent is one step of an MCP app's request and approval, as the Audit page and otel_logs hold it.
-type AppEvent struct {
-	Time        time.Time `json:"time"`
-	Action      string    `json:"action"`
-	Actor       string    `json:"actor"` // email from the console sign-in
-	Role        string    `json:"role"`  // the actor's console role; empty for a GitOps approval seen at the merge
-	Server      string    `json:"server"`
-	Request     string    `json:"request"` // ServerRequest name; empty for tool approvals
-	RequestedBy string    `json:"requestedBy"`
-	Image       string    `json:"image"`
-	URL         string    `json:"url"`
-	Comment     string    `json:"comment"` // the request's reason, or the decision's comment
-	PullRequest string    `json:"pullRequest"`
-	Tools       []string  `json:"tools"`  // tools-approved: the tools whose new definitions were approved
-	Reason      string    `json:"reason"` // refused actions: why the console refused
-}
+type AppEvent = apprecord.Event
 
-var appSendFailures = promauto.NewCounter(prometheus.CounterOpts{Name: "ambit_console_audit_send_failures_total",
-	Help: "MCP app request and approval records the console could not deliver to the collector."})
+// appSendFailures counts records not delivered to the collector, by reason (queue_full, send_failed, closed).
+var appSendFailures = promauto.NewCounterVec(prometheus.CounterOpts{Name: "ambit_console_audit_send_failures_total",
+	Help: "MCP app request and approval records the console could not deliver to the collector, by reason."}, []string{"reason"})
 
 // AppRecorder sends AppEvents to the OpenTelemetry collector over OTLP/gRPC, the endpoint the gateway and the guard
-// use, so they reach otel_logs with the same retention. Events are rare (people's decisions), so each is sent at once.
-type AppRecorder struct {
-	conn *grpc.ClientConn
-	logs collogs.LogsServiceClient
-}
+// use, so they reach otel_logs with the same retention. Send queues the record and returns at once (the same queue as
+// the guard's), so a collector that is down or slow never delays a decision; a record that cannot be delivered is
+// counted in appSendFailures.
+type AppRecorder struct{ exp *otlplog.Exporter }
 
 // NewAppRecorder does not connect until the first event, so a collector that starts later is no problem.
 func NewAppRecorder(endpoint string) (*AppRecorder, error) {
-	conn, err := grpc.NewClient(endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	exp, err := otlplog.New(endpoint, "ambit-console", appSendFailures)
 	if err != nil {
 		return nil, err
 	}
-	return &AppRecorder{conn: conn, logs: collogs.NewLogsServiceClient(conn)}, nil
+	return &AppRecorder{exp: exp}, nil
 }
 
-func (r *AppRecorder) send(ctx context.Context, ev AppEvent) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	_, err := r.logs.Export(ctx, appLogRequest(ev))
-	return err
-}
+func (r *AppRecorder) send(ev AppEvent) { r.exp.Send(apprecord.Record(ev)) }
 
-func strAttr(k, v string) *commonpb.KeyValue {
-	return &commonpb.KeyValue{Key: k, Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: v}}}
-}
-
-// appLogRequest is the OTLP record of ev. It never sets jwt.email, so no query of gateway calls counts it.
-func appLogRequest(ev AppEvent) *collogs.ExportLogsServiceRequest {
-	tools := ""
-	if len(ev.Tools) > 0 {
-		b, _ := json.Marshal(ev.Tools)
-		tools = string(b)
-	}
-	attrs := []*commonpb.KeyValue{strAttr("ambit.kind", AppRecordKind), strAttr("ambit.app.action", ev.Action),
-		strAttr("ambit.actor", ev.Actor), strAttr("ambit.actor.role", ev.Role), strAttr("mcp.target", ev.Server)}
-	for _, kv := range [][2]string{{"ambit.app.request", ev.Request}, {"ambit.app.requested_by", ev.RequestedBy},
-		{"ambit.app.image", ev.Image}, {"ambit.app.url", ev.URL}, {"ambit.app.comment", ev.Comment},
-		{"ambit.app.pull_request", ev.PullRequest}, {"ambit.app.tools", tools}, {"ambit.app.refused_reason", ev.Reason}} {
-		if kv[1] != "" {
-			attrs = append(attrs, strAttr(kv[0], kv[1]))
-		}
-	}
-	sev, sevText := logspb.SeverityNumber_SEVERITY_NUMBER_INFO, "INFO"
-	if refusedAction(ev.Action) {
-		sev, sevText = logspb.SeverityNumber_SEVERITY_NUMBER_WARN, "WARN"
-	}
-	now := uint64(time.Now().UnixNano())
-	return &collogs.ExportLogsServiceRequest{ResourceLogs: []*logspb.ResourceLogs{{
-		Resource: &resourcepb.Resource{Attributes: []*commonpb.KeyValue{strAttr("service.name", "ambit-console")}},
-		ScopeLogs: []*logspb.ScopeLogs{{LogRecords: []*logspb.LogRecord{{
-			TimeUnixNano: uint64(ev.Time.UnixNano()), ObservedTimeUnixNano: now, SeverityNumber: sev, SeverityText: sevText,
-			Body: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: AppRecordKind}}, Attributes: attrs,
-		}}}},
-	}}}
-}
+// Flush sends what is queued (tests); Close sends it and stops, within otlplog.Timeout.
+func (r *AppRecorder) Flush() { r.exp.Flush() }
+func (r *AppRecorder) Close() { r.exp.Close() }
 
 // recordApp keeps one step: a record in otel_logs (when evidence is on) and a Kubernetes Event on obj (the
 // ServerRequest or Server; nil when there is none, e.g. a refused attempt on a request that does not exist). A failure
-// is logged and counted, never returned: the change already happened, and the ServerRequest object stays its record.
+// is counted (appSendFailures) and logged, never returned: the change already happened, and the ServerRequest object stays its record.
 func (c *Catalog) recordApp(ctx context.Context, ev AppEvent, obj client.Object) {
 	if ev.Time.IsZero() {
 		ev.Time = time.Now()
@@ -144,10 +91,7 @@ func (c *Catalog) recordApp(ctx context.Context, ev AppEvent, obj client.Object)
 	if c.AppAudit == nil {
 		return
 	}
-	if err := c.AppAudit.send(ctx, ev); err != nil {
-		appSendFailures.Inc()
-		slog.Error("app audit record not delivered to the collector", "action", ev.Action, "server", ev.Server, "request", ev.Request, "by", ev.Actor, "err", err)
-	}
+	c.AppAudit.send(ev)
 }
 
 func (c *Catalog) kubeEvent(ctx context.Context, ev AppEvent, obj client.Object) {

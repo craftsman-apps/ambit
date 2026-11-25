@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -30,6 +31,9 @@ type Audit struct {
 	// ReferenceInputPrice is the admin's price per million input tokens for compression dollars of a group without
 	// priced LLM traffic; nil means none (console.savings.referenceInputPricePerMillion).
 	ReferenceInputPrice *float64
+	// AgentOwners returns each agent's owner as the records say now (agent name to owner); nil means none are known.
+	// Audit adds it to a call as agentOwnerNow; the call itself keeps the owner at issue.
+	AgentOwners func(ctx context.Context) (map[string]string, error)
 
 	sumMu sync.Mutex
 	sum   summaryState
@@ -101,8 +105,29 @@ type Call struct {
 	// Compression is what the guard did to the tool result (#203); nil when it did not compress it, or when no record
 	// of it arrived. CallID (ambit.call_id) links the guard's records to this call; it is not in the answer.
 	Compression *Compression `json:"compression,omitempty"`
-	CallID      string       `json:"-"`
+	// Injection is what the injection guard (protection.injectionGuard) found in the result; nil when it found nothing, or
+	// when no record of it arrived. From the guard's records, joined by the call ID; never the matched text.
+	Injection *Injection `json:"injection,omitempty"`
+	CallID    string     `json:"-"`
+	// The agent of the call (docs/agents.md, experimental), read from a verified key or token; empty for a person's own
+	// key or token. PlatformDeclared is what the agent's record says it is, never a proof. AgentOwnerAtIssue is the
+	// owner when the credential was issued; AgentOwnerNow is added when the console reads (the agent's record today;
+	// empty when the record is gone). GrantID joins an OAuth grant; TokenIssuer is the validated issuer of a token.
+	// Ingress is private or public: the Gateway that took the call.
+	Agent             string `json:"agent,omitempty"`
+	AgentMode         string `json:"agentMode,omitempty"`
+	AgentOwnerAtIssue string `json:"agentOwnerAtIssue,omitempty"`
+	AgentOwnerNow     string `json:"agentOwnerNow,omitempty"`
+	PlatformDeclared  string `json:"platformDeclared,omitempty"`
+	GrantID           string `json:"grantId,omitempty"`
+	TokenIssuer       string `json:"tokenIssuer,omitempty"`
+	Ingress           string `json:"ingress,omitempty"`
 }
+
+// agentColumns are the access-log attributes of an agent call, in the order of Call's agent fields; they come last in
+// every query that reads calls.
+const agentColumns = `LogAttributes['ambit.agent'], LogAttributes['ambit.agent_mode'], LogAttributes['ambit.agent_owner_at_issue'],
+       LogAttributes['ambit.platform_declared'], LogAttributes['ambit.grant_id'], LogAttributes['ambit.token_issuer'], LogAttributes['ambit.ingress']`
 
 // Compression is the guard's records of one call's result: one part per compressed text, and the sums.
 type Compression struct {
@@ -111,6 +136,14 @@ type Compression struct {
 	BytesIn  int64             `json:"bytesIn"`
 	BytesOut int64             `json:"bytesOut"`
 	Match    string            `json:"match"` // call-id: joined by the call ID
+}
+
+// Injection is the injection guard's findings in one call's result: the strongest action (rejected, masked or found) and
+// the names of the rules, in alphabetical order.
+type Injection struct {
+	Action string   `json:"action"`
+	Mode   string   `json:"mode"`
+	Rules  []string `json:"rules"`
 }
 
 // CompressionPart is one compressed text of the result (its index in content[]).
@@ -139,7 +172,8 @@ const status = auditsql.Status
 
 var callsSQL = withClassify(`{classify}
 SELECT Timestamp,
-       {email:String}, LogAttributes['route'], LogAttributes['mcp.method.name'], LogAttributes['mcp.target'],
+       -- the person asked for; for an agent or platform search the principal the gateway logged
+       if({email:String} != '', {email:String}, LogAttributes['jwt.email']), LogAttributes['route'], LogAttributes['mcp.method.name'], LogAttributes['mcp.target'],
        LogAttributes['gen_ai.tool.name'],
        -- a model the gateway refused itself has no gen_ai.request.model; agentgateway v1.7.0 logs the name asked for
        if(LogAttributes['gen_ai.request.model'] != '', LogAttributes['gen_ai.request.model'], LogAttributes['agw.ai.original_model']),
@@ -148,13 +182,16 @@ SELECT Timestamp,
        LogAttributes['ambit.router'], LogAttributes['ambit.route'], LogAttributes['ambit.routeReason'],
        LogAttributes['ambit.key_id'], LogAttributes['ambit.identity'], LogAttributes['jwt.sub'],
        LogAttributes['ambit.accessMode'], c_mark, LogAttributes['ambit.rulesVersion'], c_outcome, LogAttributes['url.path'],
-       ` + promptGuardSQL + `, LogAttributes['ambit.call_id']
+       ` + promptGuardSQL + `, LogAttributes['ambit.call_id'], ` + agentColumns + `
 FROM otel_logs
 WHERE LogAttributes['ambit.kind'] = '' -- gateway records only: guard and console records (ambit.kind set) are not calls
-  AND (LogAttributes['jwt.email'] = {email:String}
+  AND ({email:String} = '' OR LogAttributes['jwt.email'] = {email:String}
        -- Some refusals (e.g. a model the user may not use) are logged with the token's subject but
        -- without the email attribute; match them through the subjects seen with this email.
        OR (LogAttributes['jwt.email'] = '' AND has({subs:Array(String)}, LogAttributes['jwt.sub'])))
+  AND ({agent:String} = '' OR LogAttributes['ambit.agent'] = {agent:String})
+  AND ({platform:String} = '' OR LogAttributes['ambit.platform_declared'] = {platform:String})
+  AND ({ingress:String} = '' OR LogAttributes['ambit.ingress'] = {ingress:String})
   AND Timestamp >= {from:DateTime64(9)} AND Timestamp < {to:DateTime64(9)}
 ORDER BY Timestamp DESC
 LIMIT {limit:UInt32}`)
@@ -172,25 +209,30 @@ LIMIT {limit:UInt32}`
 const subsSQL = `SELECT DISTINCT LogAttributes['jwt.sub'] FROM otel_logs
 WHERE LogAttributes['ambit.kind'] = '' AND LogAttributes['jwt.email'] = {email:String} AND LogAttributes['jwt.sub'] != '' LIMIT 100`
 
-// Calls lists one user's gateway calls in [from, to), newest first.
-func (a *Audit) Calls(ctx context.Context, email string, from, to time.Time, limit int) ([]Call, error) {
+// CallFilter narrows Calls to one agent, one declared platform, or one Gateway (private or public). Empty: no filter.
+type CallFilter struct{ Agent, Platform, Ingress string }
+
+// Calls lists the gateway calls of one user, or of one agent or declared platform (email empty), in [from, to), newest first.
+func (a *Audit) Calls(ctx context.Context, email string, from, to time.Time, limit int, f CallFilter) ([]Call, error) {
 	// Two steps: ClickHouse 26.3 fails on IN (subquery) inside OR over map keys ("Not-ready Set").
 	var subs []string
-	srows, err := a.DB.QueryContext(clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{"email": email})), subsSQL)
-	if err != nil {
-		return nil, err
-	}
-	for srows.Next() {
-		var s string
-		if err := srows.Scan(&s); err != nil {
-			srows.Close()
+	if email != "" {
+		srows, err := a.DB.QueryContext(clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{"email": email})), subsSQL)
+		if err != nil {
 			return nil, err
 		}
-		subs = append(subs, s)
+		for srows.Next() {
+			var s string
+			if err := srows.Scan(&s); err != nil {
+				srows.Close()
+				return nil, err
+			}
+			subs = append(subs, s)
+		}
+		srows.Close()
 	}
-	srows.Close()
 	ctx = clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{
-		"email": email, "subs": arrayLiteral(subs),
+		"email": email, "subs": arrayLiteral(subs), "agent": f.Agent, "platform": f.Platform, "ingress": f.Ingress,
 		"from": from.UTC().Format("2006-01-02 15:04:05.000000000"), "to": to.UTC().Format("2006-01-02 15:04:05.000000000"),
 		"limit": strconv.Itoa(limit)}))
 	rows, err := a.DB.QueryContext(ctx, callsSQL)
@@ -203,7 +245,8 @@ func (a *Audit) Calls(ctx context.Context, email string, from, to time.Time, lim
 		var c Call
 		var requested string
 		if err := rows.Scan(&c.Time, &c.Email, &c.Route, &c.Method, &c.Server, &c.Tool, &c.Model, &c.Status, &c.Error, &c.InputTokens, &c.OutputTokens,
-			&requested, &c.Label, &c.LabelReason, &c.KeyID, &c.Identity, &c.Subject, &c.AccessMode, &c.Mark, &c.RulesVersion, &c.Outcome, &c.Path, &c.PromptGuard, &c.CallID); err != nil {
+			&requested, &c.Label, &c.LabelReason, &c.KeyID, &c.Identity, &c.Subject, &c.AccessMode, &c.Mark, &c.RulesVersion, &c.Outcome, &c.Path, &c.PromptGuard, &c.CallID,
+			&c.Agent, &c.AgentMode, &c.AgentOwnerAtIssue, &c.PlatformDeclared, &c.GrantID, &c.TokenIssuer, &c.Ingress); err != nil {
 			return nil, err
 		}
 		c.Router = routerOf(requested, c.Model)
@@ -212,7 +255,63 @@ func (a *Audit) Calls(ctx context.Context, email string, from, to time.Time, lim
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return out, a.addCompression(ctx, email, from, out)
+	if err := a.addCompression(ctx, email, from, out); err != nil {
+		return out, err
+	}
+	return out, a.addInjection(ctx, email, from, out)
+}
+
+// injectionSQL reads the injection guard's records of the given calls by the same person: one row per call and rule, so a
+// record delivered twice counts once. Like the compression records it is written up to a few seconds after its call, and
+// with protection.compressionAudit.caller false it has no email and is not shown.
+const injectionSQL = `SELECT LogAttributes['ambit.call_id'] AS id, LogAttributes['ambit.injection.rule'] AS rule,
+       argMin(LogAttributes['ambit.injection.mode'], Timestamp), argMin(LogAttributes['ambit.injection.action'], Timestamp)
+FROM otel_logs
+WHERE LogAttributes['ambit.kind'] = 'injection' AND LogAttributes['jwt.email'] = {email:String}
+  AND Timestamp >= {from:DateTime64(9)} AND has({ids:Array(String)}, LogAttributes['ambit.call_id'])
+GROUP BY id, rule
+ORDER BY id, rule`
+
+// injectionRank orders the actions: the strongest one is shown for the call.
+var injectionRank = map[string]int{"found": 1, "masked": 2, "rejected": 3}
+
+// addInjection sets Injection on the calls that have records.
+func (a *Audit) addInjection(ctx context.Context, email string, from time.Time, calls []Call) error {
+	byID := map[string]*Call{}
+	var ids []string
+	for i := range calls {
+		if id := calls[i].CallID; id != "" && byID[id] == nil {
+			byID[id] = &calls[i]
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := a.DB.QueryContext(clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{"email": email, "ids": arrayLiteral(ids),
+		"from": from.UTC().Format("2006-01-02 15:04:05.000000000")})), injectionSQL)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, rule, mode, action string
+		if err := rows.Scan(&id, &rule, &mode, &action); err != nil {
+			return err
+		}
+		c := byID[id]
+		if c == nil {
+			continue
+		}
+		if c.Injection == nil {
+			c.Injection = &Injection{Mode: mode, Rules: []string{}}
+		}
+		c.Injection.Rules = append(c.Injection.Rules, rule)
+		if injectionRank[action] > injectionRank[c.Injection.Action] {
+			c.Injection.Action = action
+		}
+	}
+	return rows.Err()
 }
 
 // compressionSQL reads the guard's records of the given calls by the same person: one row per call and part, so a
@@ -225,7 +324,7 @@ const compressionSQL = `SELECT LogAttributes['ambit.call_id'] AS id, toInt64OrZe
        argMin(toInt64OrZero(LogAttributes['ambit.compress.bytes_in']), Timestamp), argMin(toInt64OrZero(LogAttributes['ambit.compress.bytes_out']), Timestamp),
        argMin(toInt64OrZero(LogAttributes['ambit.compress.omitted']), Timestamp)
 FROM otel_logs
-WHERE LogAttributes['ambit.kind'] = 'compression' AND LogAttributes['jwt.email'] = {email:String}
+WHERE LogAttributes['ambit.kind'] = 'compression' AND ({email:String} = '' OR LogAttributes['jwt.email'] = {email:String})
   AND Timestamp >= {from:DateTime64(9)} AND has({ids:Array(String)}, LogAttributes['ambit.call_id'])
 GROUP BY id, part
 ORDER BY id, part`
@@ -487,6 +586,23 @@ func aggregateUsage(rows []usageRow, prices map[string]v1.ModelPrice) []GroupUsa
 }
 
 // period reads from/to (RFC 3339 or YYYY-MM-DD) with a default of the last 30 days.
+// agentOwnerNow reads the owners once and returns a lookup; nil when owners are not available. A failed read is
+// logged and leaves the owner empty: the audit rows are still right.
+func (a *Audit) agentOwnerNow(ctx context.Context) func(string) string {
+	if a.AgentOwners == nil {
+		return nil
+	}
+	owners, err := a.AgentOwners(ctx)
+	if err != nil {
+		slog.Warn("agent owners unknown", "err", err)
+		return nil
+	}
+	return func(agent string) string { return owners[agent] }
+}
+
+// filterValue: an agent name or a declared platform in a query (empty allowed).
+var filterValue = regexp.MustCompile(`^[a-z0-9._-]{0,64}$`)
+
 func period(r *http.Request) (time.Time, time.Time, error) {
 	parse := func(v string, def time.Time) (time.Time, error) {
 		if v == "" {
@@ -513,14 +629,26 @@ func period(r *http.Request) (time.Time, time.Time, error) {
 
 func (a *Audit) register(mux *http.ServeMux, admin func(func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc) {
 	mux.HandleFunc("GET /api/audit", admin(func(w http.ResponseWriter, r *http.Request, s Session) {
-		email, invalid, approvals := r.URL.Query().Get("email"), r.URL.Query().Get("invalidKey"), r.URL.Query().Get("approvals")
+		q := r.URL.Query()
+		email, invalid, approvals := q.Get("email"), q.Get("invalidKey"), q.Get("approvals")
+		f := CallFilter{Agent: q.Get("agent"), Platform: q.Get("platform_declared"), Ingress: q.Get("ingress")}
+		if !filterValue.MatchString(f.Agent) || !filterValue.MatchString(f.Platform) || (f.Ingress != "" && f.Ingress != "private" && f.Ingress != "public") {
+			writeErr(w, http.StatusBadRequest, "agent and platform_declared are names (letters, digits, . _ -); ingress is private or public")
+			return
+		}
+		selective := email != "" || f.Agent != "" || f.Platform != ""
 		if approvals != "" {
-			if approvals != "true" || invalid != "" {
+			if approvals != "true" || invalid != "" || f.Agent != "" || f.Platform != "" || f.Ingress != "" {
 				writeErr(w, http.StatusBadRequest, "give approvals=true, with an optional email")
 				return
 			}
-		} else if (email == "") == (invalid == "") || (invalid != "" && invalid != "true") {
-			writeErr(w, http.StatusBadRequest, "give either email or invalidKey=true")
+		} else if invalid != "" {
+			if invalid != "true" || selective || f.Ingress != "" {
+				writeErr(w, http.StatusBadRequest, "give invalidKey=true alone, or email, agent or platform_declared")
+				return
+			}
+		} else if !selective {
+			writeErr(w, http.StatusBadRequest, "give email, agent, platform_declared or invalidKey=true (ingress only narrows one of them)")
 			return
 		}
 		from, to, err := period(r)
@@ -546,12 +674,18 @@ func (a *Audit) register(mux *http.ServeMux, admin func(func(http.ResponseWriter
 			writeJSON(w, http.StatusOK, map[string]any{"invalidKey": true, "from": from, "to": to, "calls": calls, "limited": len(calls) == 1000})
 			return
 		}
-		calls, err := a.Calls(r.Context(), email, from, to, 1000)
+		calls, err := a.Calls(r.Context(), email, from, to, 1000, f)
 		if err != nil {
 			storeErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"email": email, "from": from, "to": to, "calls": calls, "limited": len(calls) == 1000})
+		if owner := a.agentOwnerNow(r.Context()); owner != nil {
+			for i := range calls {
+				calls[i].AgentOwnerNow = owner(calls[i].Agent)
+			}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"email": email, "agent": f.Agent, "platform_declared": f.Platform, "ingress": f.Ingress,
+			"from": from, "to": to, "calls": calls, "limited": len(calls) == 1000})
 	}))
 	mux.HandleFunc("GET /api/usage", admin(func(w http.ResponseWriter, r *http.Request, _ Session) {
 		from, to, err := period(r)

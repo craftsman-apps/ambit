@@ -125,6 +125,22 @@ serviceAccounts:
   # Days a service account key keeps working after the admin who issued it is offboarded (0-30; 0: it stops at once).
   exposureDays: 7
 
+agents:
+  # Agents (console: Agents): a hosted assistant that calls MCP tools with its own key, for one person (person mode) or
+  # on its own (itself mode: a service account with an owner). EXPERIMENTAL in 0.6.x: the API and the key fields may
+  # change in 0.7.0 with an upgrade note (docs/agents.md). false: creating agents and agent keys is refused; the keys
+  # that exist keep working until they end.
+  enabled: true
+  # At most this many agents in all (each is one small ConfigMap; at most 2000), and per person in person mode.
+  maxTotal: 2000
+  maxPerPerson: 10
+  # The longest end date of an agent key: 30, 90 or 365 (also limited by apiKeys.maxDays, and for itself mode by
+  # serviceAccounts.maxDays).
+  keyMaxDays: 90
+  # Reserved for OAuth (0.6.0, later): the issuer whose tokens may carry agent claims. Empty: no token is read as an
+  # agent's, and no token is limited by an agent scope.
+  tokenIssuer: ""
+
 routing:
   router:
     # ambit-router labels prompts for ModelRouters of type LLM. Installed but at 0 replicas until such a router
@@ -218,8 +234,8 @@ oauth:
   # OAuth for MCP clients. Ory Hydra issues the tokens; it needs a PostgreSQL database that you run (15 to 17, TLS, backups).
   # Off by default. Needs frontDoor.enabled, frontDoor.authHost, oauth.database and oauth.hydra.systemSecret.
   enabled: false
-  # How long an access token lives, in minutes. A stop or an offboarding refuses a token at once at the gateways; this
-  # only bounds the rare cases where that cannot happen (docs/oauth.md, "Stopping a connection").
+  # How long an access token lives, in minutes. The gateways will refuse a stopped or offboarded person's token at once (a later change of
+  # this release series); this only bounds the rare cases where that cannot happen (docs/oauth.md, "Stopping a connection").
   accessTokenMinutes: 15
   # A refresh token not used for this many days stops working.
   refreshTokenIdleDays: 30
@@ -367,6 +383,34 @@ protection:
     # The time limit for all analyzer calls of one tool result (a Go duration). If it is exceeded, the result
     # is withheld.
     timeout: 10s
+  # Injection guard: looks for prompt-injection text in the results of tool calls, resources/read and prompts/get, after
+  # masking (so a webhook never gets personal data). OFF by default. It is a tripwire, not a detector: it finds only the
+  # wording its rules describe, and new wording passes. The rule names are in docs/concepts.md (Injection guard).
+  injectionGuard:
+    enabled: false
+    # audit: record each finding and let the result through unchanged (start here).
+    # reject: withhold a result with a finding; the call fails with an error that names the rules (never the text).
+    # mask: replace each match with <PROMPT_INJECTION> and remove hidden characters; the rest of the result passes.
+    mode: audit
+    # The built-in rules (13, each with a name). false: only your patterns and the webhook.
+    builtins: true
+    # Built-in rules to switch off, by name, for example [role-prefix] when your tools print log lines that start with
+    # "system:". The chart refuses a name it does not know.
+    disabledBuiltins: []
+    # Your own regular expressions (Go RE2 syntax: no look-around, no back-references), at most 1,024 characters each. A
+    # match is a finding named pattern-1, pattern-2, ... in list order. Example: ['(?i)send the (data|file) to https?://']
+    patterns: []
+    # An optional classifier of your own, in the cluster: POST /request on this Service, with the request and answer
+    # format of the prompt guard webhook (llm.promptGuard.webhook). Empty service: no webhook. The webhook adds up to
+    # its timeout to every tool call.
+    webhook:
+      service: ""
+      namespace: ""     # empty: the release namespace
+      port: 8000
+      timeout: 2s
+      # FailClosed withholds the result when the webhook does not answer (modes reject and mask); FailOpen lets it through.
+      # In mode audit a webhook that fails never blocks.
+      failureMode: FailClosed
 
 limits:
   # Budgets: daily LLM request limits per group and per user (Budget objects), shared by every replica.

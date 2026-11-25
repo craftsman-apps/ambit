@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -49,6 +50,27 @@ type fakeCH struct {
 	seen      [][]driver.Value   // rows of peopleSeenSQL
 	stats     [][]driver.Value   // answers of offboardStatsSQL, in call order
 	after     [][][]driver.Value // rows of offboardCallsAfterSQL, in call order
+}
+
+// snapshotsIn are the snapshots before the query's {end} parameter, and from its {start} parameter when withStart
+// (read from the context: the test database sees no query parameters).
+func (f *fakeCH) snapshotsIn(ctx context.Context, withStart bool) [][]driver.Value {
+	p, _ := ctx.Value(paramsKey{}).(clickhouse.Parameters)
+	at := func(k string) time.Time {
+		t, err := time.Parse("2006-01-02 15:04:05.000000000", p[k])
+		if err != nil {
+			panic("fakeCH: no " + k + " parameter")
+		}
+		return t
+	}
+	end := at("end")
+	var out [][]driver.Value
+	for _, s := range f.snapshots {
+		if t := s[0].(time.Time); t.Before(end) && (!withStart || !t.Before(at("start"))) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 func (f *fakeCH) Connect(context.Context) (driver.Conn, error) { return fakeConn{f}, nil }
@@ -85,19 +107,21 @@ func (c fakeConn) QueryContext(ctx context.Context, q string, _ []driver.NamedVa
 		n := f.calls
 		f.calls = 0
 		f.mu.Unlock()
-		return &fakeRows{ctx: ctx, f: f, cols: len(callsHeader), n: n, row: f.callRow, failAfter: f.failAfter, blockAt: f.blockAt}, nil
+		return &fakeRows{ctx: ctx, f: f, cols: len(callsHeader) - 1, n: n, row: f.callRow, failAfter: f.failAfter, blockAt: f.blockAt}, nil
 	case q == firstSnapshotSQL:
 		if len(f.snapshots) == 0 {
 			return one(2, int64(0), time.Unix(0, 0)), nil
 		}
 		return one(2, int64(len(f.snapshots)), f.snapshots[0][0]), nil
-	case q == snapshotInForceSQL: // the test sets only snapshots before the date's end
-		if len(f.snapshots) == 0 {
+	case q == snapshotInForceSQL: // the newest snapshot before {end}
+		in := f.snapshotsIn(ctx, false)
+		if len(in) == 0 {
 			return &fakeRows{ctx: ctx, f: f, cols: 5}, nil
 		}
-		return one(5, f.snapshots[len(f.snapshots)-1]...), nil
-	case q == snapshotsOfDaySQL:
-		return &fakeRows{ctx: ctx, f: f, cols: 4, n: len(f.snapshots), row: func(i int) []driver.Value { return f.snapshots[i][:4] }}, nil
+		return one(5, in[len(in)-1]...), nil
+	case q == snapshotsOfDaySQL: // those in [{start}, {end})
+		in := f.snapshotsIn(ctx, true)
+		return &fakeRows{ctx: ctx, f: f, cols: 4, n: len(in), row: func(i int) []driver.Value { return in[i][:4] }}, nil
 	case q == peopleSeenSQL:
 		return &fakeRows{ctx: ctx, f: f, cols: 5, n: len(f.seen), row: func(i int) []driver.Value { return f.seen[i] }}, nil
 	case q == offboardStatsSQL:
@@ -111,7 +135,7 @@ func (c fakeConn) QueryContext(ctx context.Context, q string, _ []driver.NamedVa
 		rows := f.after[0]
 		f.after = f.after[1:]
 		f.mu.Unlock()
-		return &fakeRows{ctx: ctx, f: f, cols: len(callsHeader), n: len(rows), row: func(i int) []driver.Value { return rows[i] }}, nil
+		return &fakeRows{ctx: ctx, f: f, cols: len(callsHeader) - 1, n: len(rows), row: func(i int) []driver.Value { return rows[i] }}, nil
 	case q == evidenceCompressionSQL:
 		f.mu.Lock()
 		rows := f.compress
@@ -175,6 +199,10 @@ var evT0 = time.Date(2026, 10, 1, 8, 0, 0, 0, time.UTC)
 func seededCall(i int) []driver.Value {
 	email, identity, client, rules, mode, status, errText := "ana@example.com", "jwt", "", "3f9a1c0e2b7d", "enforce", "200", ""
 	tool, method := "", ""
+	agent, agentMode, agentOwner, platform := "", "", "", ""
+	if i%13 == 5 { // an agent's call (a key of the agent grok-y, owned by ana at issue)
+		agent, agentMode, agentOwner, platform = "grok-y", "person", "ana@example.com", "grok"
+	}
 	switch {
 	case i%7 == 3:
 		email, identity, client, status, errText = "", "invalid key", "10.0.0.7", "403", "=HYPERLINK(\"http://evil\")"
@@ -184,7 +212,8 @@ func seededCall(i int) []driver.Value {
 		method, tool, status, errText = "tools/call", "@SUM(A1),\"x\"\nnext", "400", "Unknown tool"
 	}
 	return []driver.Value{evT0.Add(time.Duration(i) * 3 * time.Hour), email, "ambit-system/ambit-llm", method, "", tool, "gpt-5", status, errText,
-		int64(12), int64(3), "", "", "", "k1", identity, "sub-ana", mode, "", rules, "n/a", "/v1/chat/completions", "", client, fmt.Sprintf("call-%d", i)}
+		int64(12), int64(3), "", "", "", "k1", identity, "sub-ana", mode, "", rules, "n/a", "/v1/chat/completions", "", client, fmt.Sprintf("call-%d", i),
+		agent, agentMode, agentOwner, platform, "", "", "private"}
 }
 
 type evidenceFixture struct {
@@ -400,6 +429,10 @@ func TestAuditExportZipAndManifest(t *testing.T) {
 		int64(48000), int64(9000), int64(14), `["eng"]`}}
 	ch.app = [][]driver.Value{{evT0.Add(time.Hour), "approved", "=cmd@example.com", "admin", "github", "req-1", "ana@example.com", "ghcr.io/x/y@sha256:1", "", "ok", "", `["a","b"]`, ""}}
 	e := newEvidenceFixture(t, ch)
+	// the agent's record today: moved since the keys were issued
+	e.cat.Audit.AgentOwners = func(context.Context) (map[string]string, error) {
+		return map[string]string{"grok-y": "ana-new@example.com"}, nil
+	}
 	resp, body, err := e.get(t, t.Context(), "/api/evidence/audit.zip?from=2026-10-01&to=2026-10-07", e.admin)
 	if err != nil || resp.StatusCode != 200 {
 		t.Fatalf("%v %v %s", resp.StatusCode, err, body)
@@ -442,6 +475,30 @@ func TestAuditExportZipAndManifest(t *testing.T) {
 	col := map[string]int{}
 	for i, h := range calls[0] {
 		col[h] = i
+	}
+	// Agents (experimental): the columns are appended after call_id; the ones before keep their place.
+	if got := callsHeader[:25]; strings.Join(got, ",") != "time,email,what,target,outcome,status,error,input_tokens,output_tokens,mark,rules_version,identity,key_id,subject,route,method,server,tool,model,router,path,access_mode,client_address,prompt_guard,call_id" {
+		t.Errorf("the first 25 columns changed: %v", got)
+	}
+	if got := strings.Join(callsHeader[25:], ","); got != "agent,agent_mode,agent_owner_at_issue,agent_owner_now,platform_declared,grant_id,token_issuer,ingress" {
+		t.Errorf("appended columns: %s", got)
+	}
+	var agents int
+	for _, r := range calls[1:] {
+		if r[col["agent"]] == "" {
+			if r[col["agent_mode"]] != "" || r[col["agent_owner_now"]] != "" || r[col["platform_declared"]] != "" || r[col["ingress"]] != "private" {
+				t.Errorf("a call without an agent has agent cells: %v", r)
+			}
+			continue
+		}
+		agents++
+		if r[col["agent"]] != "grok-y" || r[col["agent_mode"]] != "person" || r[col["agent_owner_at_issue"]] != "ana@example.com" ||
+			r[col["agent_owner_now"]] != "ana-new@example.com" || r[col["platform_declared"]] != "grok" {
+			t.Errorf("agent row %v", r)
+		}
+	}
+	if agents == 0 {
+		t.Error("the fixture has no agent call")
 	}
 	var invalid, unknown, formula, multiline int
 	for _, r := range calls[1:] {

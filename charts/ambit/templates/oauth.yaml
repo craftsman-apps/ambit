@@ -86,7 +86,8 @@ spec:
           volumeMounts: [{ name: ca, mountPath: /ca, readOnly: true }]
           securityContext: {{ $sc }}
           resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 64Mi } }
-        # Schema migrations: idempotent, and safe if two pods run them together. Back up the database before an upgrade.
+        # Schema migrations: idempotent, but two runs at the same time on an empty database can fail (Hydra v26.2.0): the pods start
+        # one at a time, and a failed run is repeated by Kubernetes. Back up the database before an upgrade.
         - name: migrate
           image: {{ $h.image | quote }}
           args: [migrate, sql, up, -e, --yes]

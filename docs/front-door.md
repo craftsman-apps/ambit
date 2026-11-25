@@ -22,8 +22,8 @@ MCP scope). Sign-in with OAuth is a separate, experimental feature ([OAuth sign-
 | Host name | One name, `frontDoor.host`. It must differ from `console.host`, `llm.host` and `mcp.host`. A request for another name gets 404 or no TLS answer. |
 | Routes | One: the exact path `/mcp` on `frontDoor.host`. Every other path is 404. The Kubernetes API refuses (a `ValidatingAdmissionPolicy`, `ambit-public-routes`) a route that names `ambit-public` and is not `ambit-mcp-public`, and a change of that route (another host, another path, another backend, another Gateway). |
 | Not reachable | The console (`/`, `/api/*`), Dex (`/dex/*`), the LLM host, SCIM and the app sign-in pages. They are not routes of `ambit-public`, so they answer 404 there. |
-| Credentials | An Ambit API key with the MCP scope, in `x-api-key` or `Authorization: Bearer ambit_...`. A company token (JWT) is refused on this gateway. |
-| Servers | Only the servers an admin marks for the front door (`Server` `spec.frontDoor`, see [Choose the servers](#choose-the-servers)). |
+| Credentials | An Ambit API key with the MCP scope, in `x-api-key` or `Authorization: Bearer ambit_...`. A company token (JWT) is refused on this gateway. A key of an [agent](agents.md) that names source ranges works only from those addresses (as seen by the gateway: see [the client address](#load-balancers-and-the-client-address)). |
+| Servers | Only the servers an admin marks for the front door and acknowledges (`Server` `spec.frontDoor`, see [Choose the servers](#choose-the-servers)). |
 
 Everything an agent does through the front door is checked and recorded like any other call: the person's AccessRules,
 the guard, the audit record, offboarding. The audit record also says `ambit.ingress = public`. The value is a constant
@@ -41,6 +41,7 @@ The chart refuses `frontDoor.enabled: true` unless each of these is set, and the
 | `apiKeys.enabled: true` | Keys are the only credential. |
 | `limits.enabled: true` | The shared rate limits are counted by the ratelimit service and Valkey. |
 | `evidence.enabled: true` | Every call through the public gateway must be recorded. |
+| `protection.enabled: true` | The public backend has the guard (tool pinning, argument limits, masking), which fails closed. |
 
 ## Install
 
@@ -144,18 +145,82 @@ Edge limits (a cloud firewall or WAF in front of the load balancer) are the oper
 
 ## Choose the servers
 
-> The server list is added in the next change of this release series (`Server` `spec.frontDoor`). Until then the route
-> `ambit-mcp-public` has no backend, so a request with a valid key passes the checks above and then gets an error from the
-> gateway.
+Nothing is on the front door until an admin puts it there. In the `Server` object:
+
+```yaml
+apiVersion: ambitproject.dev/v1alpha1
+kind: Server
+metadata:
+  name: wiki
+spec:
+  url: https://wiki.example.com/mcp
+  frontDoor:
+    enabled: true
+    acceptUnmaskedServerMessages: true
+```
+
+`enabled` puts the server on the front door. `acceptUnmaskedServerMessages: true` is the admin's written
+acknowledgment of the limit in [What the guard does not mask](#what-the-guard-does-not-mask): there is no safe default for
+it, so it is a separate field that you have to set on purpose. **With `enabled` and without the acknowledgment the server
+is not served at all, on either gateway**: `Ready` is `False`, reason `FrontDoorNotAcknowledged`, and the message says what
+to set. A half-written decision must not leave a server open anywhere.
+
+A server with a `connection` (a person's own app account) cannot be on the front door yet: `Ready` is `False`, reason
+`FrontDoorConnection` (a server whose connection is bound to another address says `ConnectionBound` first). A hosted agent would otherwise receive the person's own app token. The front door will carry it only
+when the person has agreed for that agent and that app, in a later change of this release series.
+
+The `frontDoor` setting of a server request is never used: an approved request creates a server that is not on the front
+door. Only an admin, with `kubectl`, in GitOps, or in the console later, puts a running server there.
+
+**Taking a server off the front door** (remove `frontDoor`, or remove the acknowledgment) removes it from the public backend at
+once and the public access policy refuses its tools from then on. A public session that is already open can still send the
+server the messages that open a session (the server is contacted when the session was made), until the session ends; no tool call
+passes. The server's proxy pod loses the label that admits the public gateway.
+
+### How the separation works
+
+The controller writes **a second backend**, `ambit-mcp-public`, that contains only the servers on the front door, and its own
+access policy `ambit-mcp-public-access`. The public route names that backend. The private route names `ambit-mcp`
+(every server). No header says which door a request came through, so no header can be forged.
+
+| What | On the public route |
+|---|---|
+| The server's tools in `tools/list` | only servers on the front door |
+| `tools/call`, `resources/read`, `prompts/get` or `completion/complete` for a private server (with or without its name prefix) | refused: the server is not a target |
+| Access rules | the same rules as on the private route, restricted to the servers on the front door. Audit-only mode relaxes the private route only, never the public one. |
+| The guard (tool pinning, argument limits, masking) | the same guard, `FailClosed` |
+| Network | of the MCP server pods, the public gateway pods reach only the pods of front-door servers (network policy `ambit-mcp-servers-front-door`, pod label `ambitproject.dev/front-door`) |
+| The console's token broker (port 8082) | closed to the public gateway pods. Other ports of the console and Dex keep the network policies they had; they are not routes of `ambit-public`, but they are not closed to a pod in the cluster. Add a network policy of your own if you need that. |
+| A header such as `x-ambit-ingress`, `X-Ambit-User` or `x-ambit-agent` sent by a client | no effect; the gateway removes `X-Ambit-User`, and nothing reads the others |
+| An MCP session id from the private gateway | unknown on the public gateway |
+
+The e2e test `test/stepfd.sh` runs every MCP method against a front-door server and a private server that the same person
+may use, on both routes, and checks the table above.
+
+### What the guard does not mask
+
+`ambit-guard` masks personal data in the **result** of a tool call. The gateway does not send it other messages, so a
+server's **error messages and notifications** (log, progress, sampling and elicitation requests) reach the hosted agent
+as the server wrote them (issue #333). Hosted agents are outside your network, so this matters more here. Put a server on
+the front door only if it never writes personal data into an error or a notification; that is what
+`acceptUnmaskedServerMessages` says. Ambit cannot remove the limit until agentgateway can pass these messages to the guard:
+see [agentgateway issue 4245](https://github.com/agentgateway/agentgateway/issues/4245) and
+[pull request 4345](https://github.com/agentgateway/agentgateway/pull/4345). The audit log never stores the text of an
+error. A tool result that is not a JSON object, and a tool list that is not an object with a list of tools, are withheld
+(the guard fails closed); see [Masking](concepts.md#masking).
 
 ## Public API (experimental)
 
 What this feature adds, all of it experimental in 0.6.x:
 
 - Helm values `frontDoor.*` (all off or empty by default).
+- The field `Server.spec.frontDoor` (`enabled`, `acceptUnmaskedServerMessages`) and the `Ready` reasons
+  `FrontDoorNotAcknowledged` and `FrontDoorConnection`.
 - The objects `Gateway ambit-public`, `HTTPRoute ambit-mcp-public`, `AgentgatewayParameters ambit-public`,
-  `ConfigMap ambit-ratelimit-front-door`, `ValidatingAdmissionPolicy ambit-public-routes`, and the policies
-  `ambit-mcp-public-auth`, `ambit-public-limits` and `ambit-public-access-log` (written by the controller).
+  `ConfigMap ambit-ratelimit-front-door`, `ValidatingAdmissionPolicy ambit-public-routes`, the generated
+  `AgentgatewayBackend ambit-mcp-public` with its policy `ambit-mcp-public-access`, the network policy
+  `ambit-mcp-servers-front-door` and the pod label `ambitproject.dev/front-door`, and the policies `ambit-mcp-public-auth`,
+  `ambit-public-limits` and `ambit-public-access-log` (written by the controller).
 - The public route: exact path `/mcp` on `frontDoor.host`, with a key in `x-api-key` or `Authorization: Bearer ambit_...`.
 - The audit attribute `ambit.ingress` (`public` or `private`; written only when the front door is on).
 

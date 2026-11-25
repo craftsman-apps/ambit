@@ -56,4 +56,21 @@ spec:
         - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-console } }
       ports: [{ port: 8080 }]
     - from: [{ podSelector: { matchLabels: { app.kubernetes.io/name: mcpserver, toolhive: "true" } } }]
+{{- if (.Values.frontDoor | default dict).enabled }}
+---
+# The public Gateway reaches only the servers an admin put on the front door (Server spec.frontDoor): ambit-controller
+# labels the proxy pods of those servers, and this policy admits ambit-public to pods with the label and to no other.
+# Network policies add up: the policy above does not admit the public Gateway to any server.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ambit-mcp-servers-front-door
+spec:
+  podSelector:
+    matchLabels: { toolhive: "true", ambitproject.dev/front-door: "true" }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit-public } } }]
+      ports: [{ port: 8080 }]
+{{- end }}
 {{- end }}

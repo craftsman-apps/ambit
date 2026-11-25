@@ -263,9 +263,10 @@ var maskRoots = map[string][]struct {
 	key        string
 	item, keys bool
 }{
-	"tools/call":     {{"content", true, false}, {"structuredContent", false, true}},
-	"resources/read": {{"contents", true, false}},
-	"prompts/get":    {{"messages", true, false}, {"description", false, false}},
+	// _meta is the result's own metadata (next to the content); its keys stay as they are (issue 374).
+	"tools/call":     {{"content", true, false}, {"structuredContent", false, true}, {"_meta", false, false}},
+	"resources/read": {{"contents", true, false}, {"_meta", false, false}},
+	"prompts/get":    {{"messages", true, false}, {"description", false, false}, {"_meta", false, false}},
 }
 
 // maskResult masks personal data in every text of a result: strings, numbers in decimal form (a masked number becomes the

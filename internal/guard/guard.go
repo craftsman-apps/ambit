@@ -220,13 +220,20 @@ func mutated(v any) (*extmcp.McpResponseResult, error) {
 // filterList drops every tool whose definition, as the server sends it now, is not the approved one.
 // It checks the live response, so a changed description is hidden on the very next tools/list.
 func (g *Guard) filterList(ctx context.Context, resp *extmcp.McpResponse) (*extmcp.McpResponseResult, error) {
+	// A tool list that is not an object with a list of tools cannot be checked against the approved definitions, so it is
+	// withheld, not passed: the client would otherwise get tools the guard never compared (fail closed, like masking).
+	withhold := func() (*extmcp.McpResponseResult, error) {
+		slog.Error("guard: tool list is not a JSON object with a list of tools; list withheld", "server", strings.Join(resp.ServiceNames, ","))
+		return &extmcp.McpResponseResult{Result: &extmcp.McpResponseResult_Error{Error: &extmcp.AuthorizationError{
+			Code: extmcp.AuthorizationError_UNKNOWN, Reason: "the tool list is not a JSON object with a list of tools, so it could not be checked and was withheld"}}}, nil
+	}
 	var result map[string]json.RawMessage
-	if err := json.Unmarshal(resp.McpResponse, &result); err != nil {
-		return passResp(), nil
+	if err := json.Unmarshal(resp.McpResponse, &result); err != nil || result == nil {
+		return withhold()
 	}
 	var tools []map[string]json.RawMessage
-	if err := json.Unmarshal(result["tools"], &tools); err != nil {
-		return passResp(), nil
+	if err := json.Unmarshal(result["tools"], &tools); err != nil || bytes.Equal(bytes.TrimSpace(result["tools"]), []byte("null")) {
+		return withhold()
 	}
 	keep := tools[:0:0]
 	for _, t := range tools {

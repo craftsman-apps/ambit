@@ -16,6 +16,7 @@ import (
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/apprecord"
 	"github.com/craftsman-apps/ambit/internal/identity"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -25,9 +26,9 @@ import (
 
 // Annotations on a Server created by approving a ServerRequest.
 const (
-	requestedByKey = "ambitproject.dev/requested-by"
-	approvedByKey  = "ambitproject.dev/approved-by"
-	requestKey     = "ambitproject.dev/server-request"
+	requestedByKey = apprecord.AnnRequestedBy
+	approvedByKey  = apprecord.AnnApprovedBy
+	requestKey     = apprecord.AnnRequest
 )
 
 var (
@@ -482,6 +483,9 @@ func (c *Catalog) approveRequest(w http.ResponseWriter, r *http.Request, s Sessi
 			requestedByKey: q.Spec.RequestedBy, approvedByKey: s.Email, requestKey: q.Name}},
 		Spec: q.Spec.Server,
 	}
+	// The public front door is an admin's decision about a running server, never part of what a person asked for: a
+	// request written with kubectl cannot put its server on the internet through an approval.
+	srv.Spec.FrontDoor = nil
 	if c.GitOps != nil {
 		// GitOps mode: approval opens the pull request; merging it is the second review, and the
 		// Server appears when Argo CD syncs.

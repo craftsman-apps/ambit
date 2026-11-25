@@ -367,3 +367,23 @@ func TestRejectedOfNamesErrorsOnly(t *testing.T) {
 		t.Fatalf("reason %q", reason)
 	}
 }
+
+// With a public Gateway, a NACK from its proxies stalls the gate like one from the private Gateway's (frontDoor.enabled).
+func TestGateFailsOnANackOfThePublicGateway(t *testing.T) {
+	ok := gatedPolicy(1, ancestor(agentgatewayController, agwCond("Accepted", "True", "Valid", 1), agwCond("Attached", "True", "Attached", 1)))
+	objs := []gated{{kind: "AgentgatewayPolicy", name: PublicAccessLogPolicy, generation: 1}}
+	for _, public := range []string{"", "ambit-public"} {
+		r, _ := gateReconciler(ok)
+		r.PublicGateway = public
+		seen, _ := r.nacksSeen(t.Context())
+		e := nack(gateStart.Truncate(time.Second))
+		e.InvolvedObject.Name = "ambit-public"
+		if err := r.Create(t.Context(), e); err != nil {
+			t.Fatal(err)
+		}
+		err := r.gate(t.Context(), objs, seen, 120*time.Second)
+		if (public != "") != (err != nil) {
+			t.Errorf("public gateway %q: gate error %v", public, err)
+		}
+	}
+}

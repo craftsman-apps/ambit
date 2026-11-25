@@ -45,6 +45,22 @@ has(mcpGuardrails.callId) ? mcpGuardrails.callId : ""
 {{- if .requireEmail -}}(has(apiKey.keyId) ? apiKey.email : jwt.email.trim().lowerAscii()){{- else -}}(has(apiKey.keyId) ? apiKey.email : (({{ include "ambit.identity.hasEmail" . }}) ? jwt.email.trim().lowerAscii() : jwt.sub)){{- end -}}
 {{- end -}}
 
+{{/* Agents (identity.AgentAttr, identity.TokenIssuer, identity.SourceRanges): one audit attribute of an agent call, read only from
+a verified credential. Takes (dict "key" <metadata field or ""> "claim" <token claim or ""> "root" $); .root.Values.agents.tokenIssuer is the issuer
+whose tokens may carry agent claims ("" in 0.6.0 before OAuth). */}}
+{{- define "ambit.identity.agentAttr" -}}
+{{- $iss := ((.root.Values.agents | default dict).tokenIssuer | default "") -}}
+{{- $jwt := `""` -}}
+{{- if and .claim $iss -}}{{- $jwt = printf `((has(jwt.iss) && jwt.iss == %s && has(jwt.%s)) ? jwt.%s : "")` ($iss | toJson) .claim .claim -}}{{- end -}}
+{{- if .key -}}(({{ include "ambit.identity.validKey" . }}) && has(apiKey.{{ .key }})) ? apiKey.{{ .key }} : {{ $jwt }}{{- else -}}{{ $jwt }}{{- end -}}
+{{- end -}}
+{{- define "ambit.identity.tokenIssuer" -}}
+(({{ include "ambit.identity.presented" . }}) || !has(jwt.iss)) ? "" : jwt.iss
+{{- end -}}
+{{- define "ambit.identity.sourceRanges" -}}
+!has(apiKey.sourceRanges) || apiKey.sourceRanges.exists(r, cidr(r).containsIP(source.address))
+{{- end -}}
+
 {{/*
 The auth policy body shared by the LLM and MCP gateways. Usage:
 include "ambit.gatewayAuth" (dict "root" $ "jwt" $jwt "scope" "llm" "extra" (list ...))
@@ -57,6 +73,10 @@ authorization:
     matchExpressions:
       {{- range .extra }}
       - {{ . | quote }}
+      {{- end }}
+      {{- if and $keys (eq .scope "mcp") }}
+      # An agent key may name source ranges (at most 10 CIDRs): it is accepted only from them.
+      - {{ include "ambit.identity.sourceRanges" . | quote }}
       {{- end }}
       - {{ include (ternary "ambit.identity.gate" "ambit.identity.jwtGate" $keys) (dict "requireEmail" .jwt.requireEmail "services" (ne (toString (.root.Values.serviceAccounts | default dict).enabled) "false")) | quote }}
 jwtAuthentication:

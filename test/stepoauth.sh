@@ -351,7 +351,8 @@ kubectl -n "$NS" wait "servers.$G" time everything --for=condition=ToolsPinned -
 kubectl -n "$NS" patch "servers.$G" time --type merge -p '{"spec":{"frontDoor":{"enabled":true,"acceptUnmaskedServerMessages":true}}}' >/dev/null
 wait_for 120 "kubectl -n '$NS' get agentgatewaybackend ambit-mcp-public >/dev/null && kubectl -n '$NS' get agentgatewaypolicy ambit-mcp-public-access >/dev/null" || fail "14 no public backend"
 kubectl -n "$NS" wait agentgatewaybackend/ambit-mcp-public --for=condition=Accepted --timeout=120s >/dev/null || fail "14 public backend not accepted"
-kubectl -n "$NS" wait "agentgatewaypolicy/ambit-mcp-public-oauth" "agentgatewaypolicy/ambit-mcp-public-auth" --for=condition=Accepted --timeout=120s >/dev/null || fail "14 the token or key policy is not accepted: $(kubectl -n "$NS" get agentgatewaypolicy ambit-mcp-public-oauth ambit-mcp-public-auth -o jsonpath='{range .items[*]}{.metadata.name}: {.status.ancestors[*].conditions[*].message}{"\n"}{end}')"
+accepted() { kubectl -n "$NS" get agentgatewaypolicy "$1" -o jsonpath='{.status.ancestors[*].conditions[?(@.type=="Accepted")].status}' 2>/dev/null; }
+wait_for 120 '[[ "$(accepted ambit-mcp-public-oauth)" == *True* && "$(accepted ambit-mcp-public-auth)" == *True* ]]' || fail "14 the token or key policy is not accepted: oauth '$(accepted ambit-mcp-public-oauth)' keys '$(accepted ambit-mcp-public-auth)': $(kubectl -n "$NS" get agentgatewaypolicy ambit-mcp-public-oauth ambit-mcp-public-auth -o jsonpath='{range .items[*]}{.metadata.name}: {.status.ancestors[*].conditions[*].message}{"\n"}{end}')"
 PW=$(kubectl -n "$NS" get secret ambit-initial-admin -o jsonpath='{.data.password}' | base64 -d)
 sign_in local admin@ambit.local "$PW"
 mkkey oauth-key mcp; OKEY=$KEY; OKID=$KID

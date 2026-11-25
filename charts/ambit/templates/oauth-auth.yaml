@@ -137,6 +137,35 @@ spec:
         - { name: idp-ca, secret: { secretName: {{ $si.caSecret | quote }}, items: [{ key: ca.crt, path: ca.crt }] } }
         {{- end }}
 ---
+# The console may check ambit-auth's token (TokenReview) and nothing more of the cluster's authentication API.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: {{ .Release.Namespace }}-ambit-console-tokenreview }
+rules:
+  - apiGroups: [authentication.k8s.io]
+    resources: [tokenreviews]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: {{ .Release.Namespace }}-ambit-console-tokenreview }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ .Release.Namespace }}-ambit-console-tokenreview }
+subjects: [{ kind: ServiceAccount, name: ambit-console, namespace: {{ .Release.Namespace }} }]
+---
+# The console's internal API (port 8085) is for ambit-auth only. This policy also lists the console's other open ports, because a
+# pod that a policy selects refuses every port it does not list (the policy of the token broker adds its own).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: ambit-console-oauth }
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: ambit-console }
+  policyTypes: [Ingress]
+  ingress:
+    - ports: [{ port: 8080 }, { port: 8084 }]
+    - from: [{ podSelector: { matchLabels: { app.kubernetes.io/name: ambit-auth } } }]
+      ports: [{ port: 8085 }]
+---
 apiVersion: v1
 kind: Service
 metadata: { name: ambit-auth }

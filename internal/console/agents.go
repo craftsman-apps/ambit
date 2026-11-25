@@ -99,6 +99,9 @@ type Agent struct {
 	AccountUID string `json:"accountUID,omitempty"`
 	// Platform is what the agent says it is ("chatgpt", "grok", ...): declared, never a proof; no policy uses it.
 	Platform string `json:"platform"`
+	// Grants: the OAuth grants of this agent (person mode; made at the consent page, docs/oauth.md). A refresh of a grant that is
+	// not listed here, or of an agent that is not active, is refused.
+	Grants []string `json:"grants,omitempty"`
 	// Scope: "server" and "server/tool" entries, at most 50. Empty: the agent may use no tool.
 	Scope []string `json:"scope"`
 	// ConnectionConsent: the Connections (apps) whose person-mode owner token the agent may use. Empty: none.
@@ -162,6 +165,8 @@ type AgentInput struct {
 	Scope       []string
 	// Consent: the Connections the agent may use (person mode only).
 	Consent []string
+	// Grant: the OAuth grant this agent is made for (person mode, from the consent page); "" for an agent made by hand.
+	Grant string
 	// Itself mode only: the service account's name, its group, and its accountable owner (a person, or "group:<name>";
 	// default the admin who creates it).
 	Name, Group, Owner string
@@ -172,6 +177,8 @@ type AgentPatch struct {
 	DisplayName, Platform *string
 	Scope, Consent        *[]string
 }
+
+var grantPattern = regexp.MustCompile(`^g-[0-9a-z]{1,13}-[A-Za-z0-9_-]{6,24}$`)
 
 func (s *KeyService) agentsOn() error {
 	if !s.Settings.Enabled {
@@ -427,6 +434,12 @@ func (s *KeyService) CreateAgent(ctx context.Context, by Session, in AgentInput)
 		return Agent{}, err
 	}
 	a.State, a.Rev, a.Created, a.CreatedBy = StateActive, 1, s.now(), actor
+	if in.Grant != "" {
+		if !grantPattern.MatchString(in.Grant) || (in.Mode != "" && in.Mode != ModePerson) {
+			return Agent{}, fmt.Errorf("%w: a grant belongs to a person-mode agent and has the form g-<time>-<random>", ErrBadInput)
+		}
+		a.Grants = []string{in.Grant}
+	}
 	switch in.Mode {
 	case "", ModePerson:
 		a.Mode, a.Owner = ModePerson, actor

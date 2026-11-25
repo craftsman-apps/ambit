@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -25,8 +26,14 @@ import (
 // The access log. agentgateway uses only the first access-log policy of a Gateway (store/binds.rs), so the
 // controller writes the one policy, under the name the chart used before, from the chart's static part.
 const (
-	AccessLogBase       = "ambit-access-log-base" // chart: spec.yaml holds the policy's spec without the generated fields
-	AccessLogPolicy     = "ambit-access-log"
+	AccessLogBase   = "ambit-access-log-base" // chart: spec.yaml holds the policy's spec without the generated fields
+	AccessLogPolicy = "ambit-access-log"
+	// PublicAccessLogPolicy is the access-log policy of the public Gateway (frontDoor.enabled). agentgateway uses only the
+	// first access-log policy of a Gateway, so each Gateway has exactly one; this one differs from the other only in its
+	// target and in ambit.ingress.
+	PublicAccessLogPolicy = "ambit-public-access-log"
+	// PublicMCPRoute is the route of the public Gateway that offboarded people are refused on, like the private routes.
+	PublicMCPRoute      = "ambit-mcp-public"
 	AccessModeConfigMap = "ambit-access-mode" // the published mode and rules version, for the console and ambit check
 	// AgentScopeKey is the data key of AccessModeConfigMap that says the MCP policy in force carries the agent-scope
 	// clause (published with the rules version, after agentgateway applied the change): the console issues no agent
@@ -56,6 +63,29 @@ func accessLogPolicy(base *corev1.ConfigMap, mode, rulesVersion string, fields [
 	p := generated("agentgateway.dev/v1alpha1", "AgentgatewayPolicy", AccessLogPolicy, base.Namespace, spec)
 	p.SetLabels(map[string]string{"app.kubernetes.io/managed-by": accessLogManager})
 	p.SetOwnerReferences([]metav1.OwnerReference{{APIVersion: "v1", Kind: "ConfigMap", Name: base.Name, UID: base.UID}})
+	return p, nil
+}
+
+// publicAccessLogPolicy is the access-log policy of the public Gateway: the base's policy aimed at that Gateway, with
+// ambit.ingress "public" (a constant of this Gateway's policy: no request header can set it). Audit-only mode relaxes
+// the rules of the private Gateways only, never the public one: its records say "enforce" and carry no "would be
+// refused" fields. Every other attribute is the private policy's, so a public request is recorded with the same identity
+// and MCP fields as a private one.
+func publicAccessLogPolicy(base *corev1.ConfigMap, rulesVersion, gateway string) (*unstructured.Unstructured, error) {
+	p, err := accessLogPolicy(base, "enforce", rulesVersion, nil)
+	if err != nil {
+		return nil, err
+	}
+	p.SetName(PublicAccessLogPolicy)
+	if err := unstructured.SetNestedSlice(p.Object, []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": gateway}}, "spec", "targetRefs"); err != nil {
+		return nil, err
+	}
+	add, _, _ := unstructured.NestedSlice(p.Object, "spec", "frontend", "accessLog", "attributes", "add")
+	add = slices.DeleteFunc(add, func(a any) bool { m, _ := a.(map[string]any); return m["name"] == "ambit.ingress" })
+	add = append(add, map[string]any{"name": "ambit.ingress", "expression": strconv.Quote("public")})
+	if err := unstructured.SetNestedSlice(p.Object, add, "spec", "frontend", "accessLog", "attributes", "add"); err != nil {
+		return nil, err
+	}
 	return p, nil
 }
 
@@ -94,26 +124,66 @@ func (r *Reconciler) accessMode() string {
 }
 
 // writeAccessLog writes ambit-access-log from the base ConfigMap, also over the chart's object of an older
-// version (Helm deletes that one after an upgrade; the watch then writes it again). No base: no policy.
+// version (Helm deletes that one after an upgrade; the watch then writes it again), and with a public Gateway
+// its own policy ambit-public-access-log. No base: no policy. No public Gateway: the public policy is removed.
 func (r *Reconciler) writeAccessLog(ctx context.Context, mode, rulesVersion string, fields []any) ([]gated, error) {
 	var base corev1.ConfigMap
 	if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: AccessLogBase}, &base); err != nil {
 		return nil, client.IgnoreNotFound(err)
 	}
-	p, err := accessLogPolicy(&base, mode, rulesVersion, fields)
+	policies, err := accessLogPolicies(&base, mode, rulesVersion, fields, r.PublicGateway)
 	if err != nil {
 		return nil, err
 	}
-	current := &unstructured.Unstructured{}
-	current.SetGroupVersionKind(AgentgatewayPolicyGVK)
-	if err := r.Get(ctx, client.ObjectKeyFromObject(p), current); err != nil && !apierrors.IsNotFound(err) {
-		return nil, err
+	var written []gated
+	for _, p := range policies {
+		current := &unstructured.Unstructured{}
+		current.SetGroupVersionKind(AgentgatewayPolicyGVK)
+		if err := r.Get(ctx, client.ObjectKeyFromObject(p), current); err != nil && !apierrors.IsNotFound(err) {
+			return nil, err
+		}
+		if err := r.Patch(ctx, p, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
+			return nil, err
+		}
+		written = append(written, gated{kind: p.GetKind(), name: p.GetName(), generation: p.GetGeneration(), changed: p.GetGeneration() != current.GetGeneration()})
 	}
-	if err := r.Patch(ctx, p, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
-		return nil, err
+	if r.PublicGateway == "" { // front door turned off: its Gateway is gone, and so is the policy aimed at it
+		if err := r.deleteAccessLog(ctx, PublicAccessLogPolicy); err != nil {
+			return nil, err
+		}
 	}
 	r.accessLog = &logState{mode, rulesVersion, fields}
-	return []gated{{kind: p.GetKind(), name: p.GetName(), generation: p.GetGeneration(), changed: p.GetGeneration() != current.GetGeneration()}}, nil
+	return written, nil
+}
+
+// accessLogPolicies is the policy of every Gateway: ambit-access-log, and with a public Gateway ambit-public-access-log.
+func accessLogPolicies(base *corev1.ConfigMap, mode, rulesVersion string, fields []any, publicGateway string) ([]*unstructured.Unstructured, error) {
+	p, err := accessLogPolicy(base, mode, rulesVersion, fields)
+	if err != nil {
+		return nil, err
+	}
+	out := []*unstructured.Unstructured{p}
+	if publicGateway != "" {
+		q, err := publicAccessLogPolicy(base, rulesVersion, publicGateway)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, q)
+	}
+	return out, nil
+}
+
+// deleteAccessLog deletes an access-log policy the controller wrote; nothing else.
+func (r *Reconciler) deleteAccessLog(ctx context.Context, name string) error {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(AgentgatewayPolicyGVK)
+	if err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: name}, u); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if u.GetLabels()["app.kubernetes.io/managed-by"] != accessLogManager {
+		return nil
+	}
+	return client.IgnoreNotFound(r.Delete(ctx, u))
 }
 
 // auditRoom is how many attributes ambit.wouldRefuse may use beside the base's and the fixed ones; no base: 0.
@@ -157,13 +227,23 @@ func (r *Reconciler) urgent(ctx context.Context) error {
 	if r.accessLog == nil { // not written yet in this process: the pass (or the start) writes it
 		return nil
 	}
-	current := &unstructured.Unstructured{}
-	current.SetGroupVersionKind(AgentgatewayPolicyGVK)
-	err = r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: AccessLogPolicy}, current)
-	if apierrors.IsNotFound(err) {
-		_, err = r.writeAccessLog(ctx, r.accessLog.mode, r.accessLog.rulesVersion, r.accessLog.fields)
+	names := []string{AccessLogPolicy}
+	if r.PublicGateway != "" {
+		names = append(names, PublicAccessLogPolicy)
 	}
-	return err
+	for _, name := range names {
+		current := &unstructured.Unstructured{}
+		current.SetGroupVersionKind(AgentgatewayPolicyGVK)
+		err = r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: name}, current)
+		if apierrors.IsNotFound(err) {
+			_, err = r.writeAccessLog(ctx, r.accessLog.mode, r.accessLog.rulesVersion, r.accessLog.fields)
+			return err
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // publishMode writes ambit-access-mode: the mode and the rules version in force, each with the time it last
@@ -215,7 +295,9 @@ func (r *Reconciler) updateMode(ctx context.Context, change func(map[string]stri
 type AccessLogStartup struct {
 	Client    client.Client
 	Namespace string
-	done      atomic.Bool
+	// PublicGateway is the public Gateway (frontDoor.enabled); its policy is written like the other.
+	PublicGateway string
+	done          atomic.Bool
 }
 
 // Ready is the readiness check.
@@ -251,13 +333,24 @@ func (s *AccessLogStartup) ensure(ctx context.Context) error {
 	if err := s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: AccessLogBase}, &base); err != nil {
 		return client.IgnoreNotFound(err)
 	}
-	current := &unstructured.Unstructured{}
-	current.SetGroupVersionKind(AgentgatewayPolicyGVK)
-	switch err := s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: AccessLogPolicy}, current); {
-	case err == nil && current.GetLabels()["app.kubernetes.io/managed-by"] == accessLogManager:
+	names := []string{AccessLogPolicy}
+	if s.PublicGateway != "" {
+		names = append(names, PublicAccessLogPolicy)
+	}
+	var missing []string // not written by the controller yet
+	for _, name := range names {
+		current := &unstructured.Unstructured{}
+		current.SetGroupVersionKind(AgentgatewayPolicyGVK)
+		switch err := s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: name}, current); {
+		case err == nil && current.GetLabels()["app.kubernetes.io/managed-by"] == accessLogManager:
+			continue
+		case err != nil && !apierrors.IsNotFound(err):
+			return err
+		}
+		missing = append(missing, name)
+	}
+	if len(missing) == 0 {
 		return nil
-	case err != nil && !apierrors.IsNotFound(err):
-		return err
 	}
 	// The rules in force: the generated objects as they are now.
 	var models unstructured.UnstructuredList
@@ -279,9 +372,17 @@ func (s *AccessLogStartup) ensure(ctx context.Context) error {
 	case err != nil && !apierrors.IsNotFound(err):
 		return err
 	}
-	p, err := accessLogPolicy(&base, "enforce", RulesVersion(live), nil)
+	policies, err := accessLogPolicies(&base, "enforce", RulesVersion(live), nil, s.PublicGateway)
 	if err != nil {
 		return err
 	}
-	return s.Client.Patch(ctx, p, client.Apply, fieldOwner, client.ForceOwnership)
+	for _, p := range policies {
+		if !slices.Contains(missing, p.GetName()) {
+			continue
+		}
+		if err := s.Client.Patch(ctx, p, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -92,8 +92,11 @@ data:
             - { name: ambit.platform_declared, expression: {{ include "ambit.identity.agentAttr" (dict "key" "platformDeclared" "claim" "ambit_platform_declared" "root" $) | quote }} }
             - { name: ambit.grant_id, expression: {{ include "ambit.identity.agentAttr" (dict "key" "" "claim" "ambit_grant" "root" $) | quote }} }
             - { name: ambit.token_issuer, expression: {{ include "ambit.identity.tokenIssuer" . | quote }} }
-            # Which Gateway took the call: a constant of this Gateway's policy, never a request header.
+            {{- if (.Values.frontDoor | default dict).enabled }}
+            # Which Gateway the call came in on: a constant of this Gateway's policy (ambit-controller writes the public Gateway's
+            # copy with "public"), never a request header.
             - { name: ambit.ingress, expression: '"private"' }
+            {{- end }}
             # The model name the client asked for (a ModelRouter such as "auto"); gen_ai.request.model is the one that answered.
             - { name: ambit.router, expression: "metadata.ambit_requested_model" }
             # A classifier's label and its reason (set by ambit-router, PR 2); empty for type Rules.

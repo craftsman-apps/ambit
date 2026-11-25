@@ -51,6 +51,9 @@ spec:
             - --router-deployment=ambit-router
             - --router-replicas={{ .Values.routing.router.replicas }}
             {{- end }}
+            {{- if (.Values.frontDoor | default dict).enabled }}
+            - --public-gateway=ambit-public
+            {{- end }}
             {{- if .Values.limits.enabled }}
             - --ratelimit-service=ambit-ratelimit
             - --ratelimit-failure-mode={{ .Values.limits.failureMode }}

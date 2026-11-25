@@ -11,9 +11,12 @@ oauth:
   hydra:
     systemSecret: { name: ambit-oauth-hydra, key: system }
   signIn:
-    issuer: https://idp.oauth-test.svc
+    issuer: https://ambit-oauth-idp.ambit-system.svc   # the step passes the real namespace
     clientID: ambit-auth
     clientSecret: { name: ambit-oauth-idp, key: client-secret }
+    caSecret: ambit-oauth-idp-ca
+  auth:
+    consoleURL: http://ambit-oauth-console.ambit-system.svc:8085   # the test stand-in for the console's internal API
   cookieSecret: { name: ambit-oauth-cookie, key: cookie }
   registration:
     dynamic: { enabled: true, redirectHosts: [chatgpt.com, claude.ai] }

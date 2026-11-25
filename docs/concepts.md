@@ -61,6 +61,8 @@ Ambit accepts three kinds of identity.
 
 A personal API key carries the access of its owner, never more: the same access rules, budgets, audit records and offboarding. See [Personal API keys](api-keys.md).
 
+A request can also come in through the [public front door](front-door.md) (experimental, off by default), a second gateway for hosted agents. It accepts API keys only, serves only the MCP servers an admin marked for it, and its audit records say `ambit.ingress = public`.
+
 ## How a request is checked
 
 Models and MCP servers use two separate paths. Both start at the same gateway (built on agentgateway) and both end in the audit log.

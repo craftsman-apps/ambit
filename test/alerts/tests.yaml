@@ -145,7 +145,7 @@ tests:
           - exp_labels: { severity: warning, namespace: ambit-system, pod: ambit-console-1 }
             exp_annotations:
               summary: "The console could not send 3 MCP app request or approval records to the collector in 30 minutes"
-              description: "The requests and decisions happened; the Audit page and otel_logs miss these records. The ServerRequest objects still hold them (kubectl -n ambit-system get serverrequests). Read why: kubectl -n ambit-system logs deploy/ambit-console | grep 'app audit record'; check the collector: kubectl -n ambit-system logs deploy/ambit-otel-collector"
+              description: "The requests and decisions happened; the Audit page and otel_logs miss these records. The ServerRequest objects still hold them (kubectl -n ambit-system get serverrequests). Read why: kubectl -n ambit-system logs deploy/ambit-console | grep 'not delivered to the collector'; check the collector: kubectl -n ambit-system logs deploy/ambit-otel-collector"
   # Agents: a stop that a Gateway has not confirmed for more than a minute fires, naming the Gateway; a confirmed one does not.
   - interval: 1m
     input_series:
@@ -180,4 +180,3 @@ tests:
             exp_annotations:
               summary: "The stop list was not turned into gateway policies"
               description: "The last stop policies stay in force, but new stops are not applied. Read why: kubectl -n ambit-system get configmap ambit-agent-stops-ack -o yaml (field degraded). A list over 1,000 entries or an unreadable list is the usual cause."
-              description: "The requests and decisions happened; the Audit page and otel_logs miss these records. The ServerRequest objects still hold them (kubectl -n ambit-system get serverrequests). Read why: kubectl -n ambit-system logs deploy/ambit-console | grep 'not delivered to the collector'; check the collector: kubectl -n ambit-system logs deploy/ambit-otel-collector"

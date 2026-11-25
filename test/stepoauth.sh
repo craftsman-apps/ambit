@@ -344,7 +344,7 @@ IDPP=$(freeport); kubectl -n "$NS" port-forward svc/ambit-oauth-idp "$IDPP:443" 
 CONP=$(freeport); kubectl -n "$NS" port-forward svc/ambit-oauth-console "$CONP:8085" >/dev/null 2>&1 & echo $! >> "$W/pids"
 wait_for 60 '(exec 3<>"/dev/tcp/127.0.0.1/$IDPP") 2>/dev/null && (exec 3<>"/dev/tcp/127.0.0.1/$CONP") 2>/dev/null' || fail "12 port-forwards"
 cat "$W/ca.pem" "$W/dbca.pem" > "$W/allca.pem"
-flow() { GW_PORT=$PA IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
+flow() { GW_PORT=$PA IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" KUBECTL_CONSOLE="kubectl -n $NS --as=system:serviceaccount:$NS:ambit-console --as-user-extra=authentication.kubernetes.io/pod-name=oauth-test" \
   "${PY[@]}" test/oauthtest/flow.py "$@" || fail "12 the sign-in checks failed (see FAIL lines above)"; }
 # the registration limit first, at its default of 10 per hour and address (the counter is per hour: nothing registered before)
 flow limits

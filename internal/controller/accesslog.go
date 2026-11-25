@@ -62,10 +62,16 @@ func accessLogPolicy(base *corev1.ConfigMap, mode, rulesVersion string, fields [
 	return p, nil
 }
 
-// publicAccessLogPolicy is the access-log policy of the public Gateway: the policy of the private one, aimed at that
-// Gateway, with ambit.ingress "public" (a constant of this Gateway's policy: no request header can set it).
-func publicAccessLogPolicy(private *unstructured.Unstructured, gateway string) (*unstructured.Unstructured, error) {
-	p := private.DeepCopy()
+// publicAccessLogPolicy is the access-log policy of the public Gateway: the base's policy aimed at that Gateway, with
+// ambit.ingress "public" (a constant of this Gateway's policy: no request header can set it). Audit-only mode relaxes
+// the rules of the private Gateways only, never the public one: its records say "enforce" and carry no "would be
+// refused" fields. Every other attribute is the private policy's, so a public request is recorded with the same identity
+// and MCP fields as a private one.
+func publicAccessLogPolicy(base *corev1.ConfigMap, rulesVersion, gateway string) (*unstructured.Unstructured, error) {
+	p, err := accessLogPolicy(base, "enforce", rulesVersion, nil)
+	if err != nil {
+		return nil, err
+	}
 	p.SetName(PublicAccessLogPolicy)
 	if err := unstructured.SetNestedSlice(p.Object, []any{map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": gateway}}, "spec", "targetRefs"); err != nil {
 		return nil, err
@@ -154,7 +160,7 @@ func accessLogPolicies(base *corev1.ConfigMap, mode, rulesVersion string, fields
 	}
 	out := []*unstructured.Unstructured{p}
 	if publicGateway != "" {
-		q, err := publicAccessLogPolicy(p, publicGateway)
+		q, err := publicAccessLogPolicy(base, rulesVersion, publicGateway)
 		if err != nil {
 			return nil, err
 		}

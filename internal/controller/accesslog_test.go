@@ -158,7 +158,7 @@ frontend:
       protocol: GRPC
       backendRef: { name: ambit-otel-collector, port: 4317 }
 `
-	ps, err := accessLogPolicies(base, "enforce", "abc", nil, "ambit-public")
+	ps, err := accessLogPolicies(base, "audit", "abc", []any{map[string]any{"name": "ambit.wouldRefuse", "expression": `"n/a"`}}, "ambit-public")
 	if err != nil || len(ps) != 2 {
 		t.Fatalf("policies %d (%v)", len(ps), err)
 	}
@@ -185,26 +185,19 @@ frontend:
 	if pa["ambit.ingress"] != `"private"` || qa["ambit.ingress"] != `"public"` {
 		t.Errorf("ingress %q, %q", pa["ambit.ingress"], qa["ambit.ingress"])
 	}
-	delete(pa, "ambit.ingress")
-	delete(qa, "ambit.ingress")
-	if len(pa) != len(qa) || pa["jwt.email"] != qa["jwt.email"] || pa["ambit.rulesVersion"] != qa["ambit.rulesVersion"] {
+	// Audit-only mode relaxes the private rules only: the public record says "enforce" and has no "would be refused" field.
+	if pa["ambit.accessMode"] != `"audit"` || qa["ambit.accessMode"] != `"enforce"` || pa["ambit.wouldRefuse"] == "" || qa["ambit.wouldRefuse"] != "" {
+		t.Errorf("audit fields: private %v, public %v", pa, qa)
+	}
+	if pa["jwt.email"] != qa["jwt.email"] || pa["ambit.rulesVersion"] != qa["ambit.rulesVersion"] {
 		t.Errorf("other attributes differ: %v vs %v", pa, qa)
 	}
 	// A base without ambit.ingress (an older chart) still gives exactly one, "public".
-	if q, err := publicAccessLogPolicy(mustPolicy(t, testBase), "ambit-public"); err != nil || attributes(q)["ambit.ingress"] != `"public"` {
+	if q, err := publicAccessLogPolicy(baseConfigMap(testBase), "x", "ambit-public"); err != nil || attributes(q)["ambit.ingress"] != `"public"` {
 		t.Errorf("without the base's ambit.ingress: %v %v", attributes(q), err)
 	}
 	// The public policy never changes the private one.
 	if ps, _ := accessLogPolicies(base, "enforce", "abc", nil, ""); len(ps) != 1 {
 		t.Errorf("no public Gateway: %d policies", len(ps))
 	}
-}
-
-func mustPolicy(t *testing.T, spec string) *unstructured.Unstructured {
-	t.Helper()
-	p, err := accessLogPolicy(baseConfigMap(spec), "enforce", "x", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return p
 }

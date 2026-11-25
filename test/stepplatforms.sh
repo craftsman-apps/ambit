@@ -90,7 +90,8 @@ replay() {
   c=$(psend "$PA" '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"time_get_current_time","arguments":{"timezone":"UTC"}}}' "${KH[@]}" -H "MCP-Protocol-Version: $proto")
   [[ "$c" == 200 ]] && grep -q '"result"' "$W/pubj" && ! grep -q '"isError":true' "$W/pubj" || fail "$label: the allowed call: $c $(head -c 300 "$W/pub")"
   c=$(psend "$PA" '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"time_convert_time","arguments":{"source_timezone":"UTC","time":"12:00","target_timezone":"UTC"}}}' "${KH[@]}" -H "MCP-Protocol-Version: $proto")
-  [[ "$c" == 200 ]] && { grep -q '"error"' "$W/pubj" || grep -q '"isError":true' "$W/pubj"; } || fail "$label: a tool outside the scope was not refused with an error: HTTP $c $(head -c 300 "$W/pub")"
+  # refused as an unknown tool: a JSON-RPC error (HTTP 400 on the public route), or a result with isError
+  [[ "$c" == 200 || "$c" == 400 ]] && { grep -q '"error"' "$W/pubj" || grep -q '"isError":true' "$W/pubj"; } || fail "$label: a tool outside the scope was not refused with an error: HTTP $c $(head -c 300 "$W/pub")"
   # a server may decline to end a session (405); agentgateway's answer is recorded in the pass line
   c=$(pub "$PA" /mcp -X DELETE -H "Mcp-Session-Id: $PSID" -H "MCP-Protocol-Version: $proto" "${KH[@]}"); [[ "$c" =~ ^(200|202|204|405)$ ]] || fail "$label: closing the session: $c"
   DELETE_CODE=$c

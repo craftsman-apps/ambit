@@ -323,6 +323,60 @@ func TestWaitingChangeStillOffboardsAndKeepsTheAccessLog(t *testing.T) {
 	wait(t, done)
 }
 
+// deleteAccessLogOnce deletes the access-log policy the first time the gate lists Events while the policy exists. The
+// gate lists Events at the start of each check, after it has applied what must not wait: this is the delete landing
+// between those two moments.
+type deleteAccessLogOnce struct {
+	client.Reader
+	t    *testing.T
+	ns   string
+	done bool
+}
+
+func (d *deleteAccessLogOnce) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*corev1.EventList); ok && !d.done {
+		if _, err := accessLogOf(ctx, d.ns); err == nil {
+			d.done = true
+			p := &unstructured.Unstructured{Object: map[string]any{"apiVersion": "agentgateway.dev/v1alpha1",
+				"kind": "AgentgatewayPolicy", "metadata": map[string]any{"name": AccessLogPolicy, "namespace": d.ns}}}
+			if err := envClient.Delete(ctx, p); err != nil {
+				d.t.Error(err)
+			}
+		}
+	}
+	return d.Reader.List(ctx, list, opts...)
+}
+
+// The access-log policy is deleted just after the gate applied what must not wait and just before it checks the step
+// (the first poll, forced here). The gone policy is not "nothing left to apply": the step must wait until the policy
+// is written again and agentgateway has accepted it. Regression for #361.
+func TestAccessLogDeletedBetweenApplyAndCheckStillWaits(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-gate-race"
+	gateFixture(t, ns)
+	ctx := t.Context()
+	r := &Reconciler{Client: envClient, Live: &deleteAccessLogOnce{Reader: envClient, t: t, ns: ns}, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}, AccessMode: "audit",
+		Activation: &Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond}}
+	done := reconcileAsync(r)
+	eventually(t, "access log written again", func() error {
+		p, err := accessLogOf(ctx, ns)
+		if err == nil && p.GetDeletionTimestamp() != nil {
+			return fmt.Errorf("still being deleted")
+		}
+		return err
+	})
+	stays(t, "authorization waits for the access log", func() error {
+		if _, err := genGet(ctx, ns, "AgentgatewayModel", "gemma"); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("authorization written before the access log was active: %v", err)
+		}
+		return nil
+	})
+	playAgentgateway(t, ns, "AgentgatewayPolicy", AccessLogPolicy)
+	eventually(t, "authorization written", func() error { _, err := genGet(ctx, ns, "AgentgatewayModel", "gemma"); return err })
+	playAgentgateway(t, ns, "AgentgatewayModel", "gemma")
+	wait(t, done)
+}
+
 // Offboarding written while a step waits its settle time applies at once, not when the settle time ends.
 func TestOffboardingAppliesDuringTheSettleWait(t *testing.T) {
 	needEnv(t)

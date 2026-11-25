@@ -67,6 +67,8 @@ type Guard struct {
 	// Records, when set, receives one record per compressed text (server, type, sizes, the caller's groups; no
 	// content, no email). It feeds the Savings page. Delivery is best effort and never fails a call.
 	Records RecordSink
+	// Injection, when set, looks for prompt-injection text in a result after masking (injection.go).
+	Injection *Injector
 }
 
 func pass() *extmcp.McpRequestResult {
@@ -335,7 +337,19 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 		slog.Error("guard: masking failed; result withheld", "server", strings.Join(resp.ServiceNames, ","), "err", maskErr)
 		return withhold("could not be checked for personal data, so it was withheld")
 	}
-	if total == 0 && !compressed {
+	changed := total > 0 || compressed
+	if g.Injection != nil {
+		// After masking: a webhook never receives personal data.
+		inj := g.Injection.Check(ctx, masked)
+		g.reportInjection(resp, inj)
+		if inj.Withhold != "" {
+			return withhold(inj.Withhold)
+		}
+		if inj.Changed {
+			masked, changed = inj.Texts, true
+		}
+	}
+	if !changed {
 		return passResp(), nil
 	}
 	for i := range texts {
@@ -351,6 +365,22 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 		slog.Info("guard: masked personal data", "server", strings.Join(resp.ServiceNames, ","), "method", resp.Method, "count", total)
 	}
 	return mutated(result)
+}
+
+// reportInjection counts and records the findings of the injection guard: the rule names, never the matched text.
+func (g *Guard) reportInjection(resp *extmcp.McpResponse, r InjectionResult) {
+	server := strings.Join(resp.ServiceNames, ",")
+	if r.HookError != nil {
+		injectionFindings.WithLabelValues(server, ActionError).Inc()
+		slog.Error("guard: the prompt-injection webhook failed", "server", server, "err", r.HookError)
+	}
+	for _, rule := range r.Rules {
+		injectionFindings.WithLabelValues(server, r.Action).Inc()
+		g.recordInjection(resp.MetadataContext, InjectionRecord{Server: server, Mode: g.Injection.mode, Action: r.Action, Rule: rule})
+	}
+	if len(r.Rules) > 0 {
+		slog.Warn("guard: prompt injection found in a result", "server", server, "method", resp.Method, "mode", g.Injection.mode, "action", r.Action, "rules", strings.Join(r.Rules, ","))
+	}
 }
 
 func (g *Guard) maskTexts(ctx context.Context, texts []string) ([]string, int, error) {
@@ -434,6 +464,20 @@ func (g *Guard) record(meta *structpb.Struct, r CompressionRecord) {
 	r.Groups, r.Email, r.KeyID = groups, f["recordEmail"].GetStringValue(), f["keyId"].GetStringValue()
 	r.CallID, r.Tool = f["callId"].GetStringValue(), f["tool"].GetStringValue()
 	g.Records.Record(r)
+}
+
+// recordInjection hands one finding to the record sink (when it takes injection records), with the caller and the call
+// from the gateway's metadata. Unlike a compression record it is kept without groups: it is evidence, not a statistic.
+func (g *Guard) recordInjection(meta *structpb.Struct, r InjectionRecord) {
+	sink, ok := g.Records.(InjectionSink)
+	if !ok {
+		return
+	}
+	f := meta.GetFields()
+	r.Groups, _ = metadataStrings(meta, "groups")
+	r.Email, r.KeyID = f["recordEmail"].GetStringValue(), f["keyId"].GetStringValue()
+	r.CallID, r.Tool = f["callId"].GetStringValue(), f["tool"].GetStringValue()
+	sink.RecordInjection(r)
 }
 
 func (g *Guard) hasPresidio() bool {

@@ -47,12 +47,13 @@ check() { # check <job> <result> <wanted>
       return ;;
     skipped)
       if [ "$wanted" = false ]; then echo "ok   $job: skipped on purpose (changes.sh: not needed)"; return; fi
-      if [ "${DRAFT:-false}" = true ] && { [ "$job" = quickstart ] || [ "$job" = e2e ]; }; then
+      if [ "${DRAFT:-false}" = true ] && [ "${EVENT:-pull_request}" = pull_request ] && { [ "$job" = quickstart ] || [ "$job" = e2e ]; }; then
         echo "ok   $job: skipped (draft pull request)"; return
       fi
       # The full e2e runs in the merge queue, not on the pull request, once MERGE_QUEUE is "true" (ci.yml). The gate of
       # the queue (event merge_group) and of a manual run (workflow_dispatch) never accepts that skip.
-      if [ "$job" = e2e ] && [ "${EVENT:-}" = pull_request ] && [ "${QUEUE:-}" = true ]; then
+      # (Actions compares strings without regard to case, so TRUE counts as true there; here too.)
+      if [ "$job" = e2e ] && [ "${EVENT:-}" = pull_request ] && [ "$(printf %s "${QUEUE:-}" | tr 'A-Z' 'a-z')" = true ]; then
         echo "ok   $job: not run on a pull request; it runs in the merge queue"; return
       fi
       why="skipped, but changes.sh says it is needed ($wanted)" ;;

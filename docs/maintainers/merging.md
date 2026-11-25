@@ -57,7 +57,7 @@ The kind cluster lock (`/tmp/ambit-kind.lock`) is for local clusters and does no
 |---|---|---|
 | Draft pull request | The quick checks: `changes`, `build`, `image`, `cli-unit` on three systems, the `cli-*` jobs the path filter asks for. No quickstart, no e2e. | about 10 minutes: the slowest job is `cli-snapshot` (9 minutes), then `build` (5) and `image` (4) |
 | Pull request that is ready | The same, plus `quickstart` when the path filter asks for it. **No e2e** once the queue is on. | about 10 minutes, the same jobs plus `quickstart` (2 minutes) |
-| Merge queue (event `merge_group`) | Everything: the quick checks, `quickstart`, and the full e2e (`e2e (a)` to `e2e (e)`, every part of the matrix in `ci.yml`). | about 21 minutes: `image` (4) and then the slowest e2e part (17) |
+| Merge queue (event `merge_group`) | Everything the path filter asks for: the quick checks, `quickstart`, and the full e2e (`e2e (a)` to `e2e (e)`, every part of the matrix in `ci.yml`). | about 21 minutes: `image` (4) and then the slowest e2e part (17) |
 | A manual run (event `workflow_dispatch`) | Everything, for any branch, whatever files changed. | about 21 minutes, as in the queue |
 
 The rule that keeps `main` safe: the one required check is `merge-gate`. On a queue branch it fails when e2e was skipped
@@ -72,11 +72,18 @@ request runs that ran e2e took a median of 25 minutes (a quarter of them 34 minu
 
 The path filters keep their meaning: a change to documentation only needs no e2e, and then the queue skips it on purpose.
 
+Pushes to a branch named `step-*` (the old way of testing a change) still run every job, e2e included: they are not
+pull requests, so nothing there depends on the switch.
+
 **The switch.** The repository variable `MERGE_QUEUE` is the only difference between "e2e on every pull request" (today)
 and "e2e only in the queue". Only the owner sets it, together with turning the queue on (Settings, Secrets and
 variables, Actions, Variables: name `MERGE_QUEUE`, value `true`). Without it, nothing changes for pull requests, so
 this change can be merged before the queue is on. The repository rules must also make the merge queue mandatory for
-`main`: if a pull request could be merged without the queue, it would have no e2e at all.
+`main`: if a pull request could be merged without the queue, it would have no e2e at all. Before setting the variable,
+check these four things in the repository rules: (1) the merge queue is required for `main`; (2) `merge-gate` is a
+required check; (3) nobody can bypass the rules, administrators included; (4) a trusted person reviews changes to
+`.github/` (for example with a CODEOWNERS entry), because the queue runs the workflow and `merge-gate.sh` from the
+candidate commit itself, so a change to them is judged by the version it brings.
 
 ## Run the full e2e before the queue
 
@@ -86,8 +93,9 @@ Use it for a risky change (the gateway, the charts, the controller), so you do n
 gh workflow run ci.yml --ref <your branch>
 ```
 
-It runs every job, e2e included, on your branch. The results appear under the Actions tab and on the pull request,
-next to the pull request checks. It costs the same Actions minutes as one queue run, so use it when the risk is real.
+It runs every job, e2e included, on your branch (the trigger must exist on `main`, which it does once this change is
+merged). The results appear under the Actions tab and, as checks of the same commit, on the pull request. They do not
+count as the required check for merging: they are for you to learn early. It costs the same Actions minutes as one queue run, so use it when the risk is real.
 
 ## Which checks must pass
 

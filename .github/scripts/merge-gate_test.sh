@@ -47,6 +47,11 @@ run 1 "merge queue run: e2e failed" EVENT=merge_group QUEUE=true R_E2E=failure
 run 1 "pull request, queue on: quickstart may not be skipped by mistake" EVENT=pull_request QUEUE=true R_QUICKSTART=skipped
 run 1 "pull request, queue on: e2e failure still fails" EVENT=pull_request QUEUE=true R_E2E=failure
 run 0 "merge queue run: documentation only skips e2e on purpose" EVENT=merge_group QUEUE=true R_E2E=skipped W_E2E=false
+run 0 "pull request, QUEUE=TRUE (Actions ignores case): e2e not run there" EVENT=pull_request QUEUE=TRUE R_E2E=skipped
+run 1 "a draft flag on a merge queue run does not excuse a skipped e2e" EVENT=merge_group DRAFT=true R_E2E=skipped
+run 1 "a draft flag on a manual run does not excuse a skipped quickstart" EVENT=workflow_dispatch DRAFT=true R_QUICKSTART=skipped
+# ci.yml: the gate always runs, even when a job it needs failed or was skipped
+awk '/^  merge-gate:/{f=1} f&&/^    if: always\(\)/{found=1} END{exit !found}' ../workflows/ci.yml && echo "ok   ci.yml: merge-gate runs always()" || { echo "FAIL merge-gate has no if: always()"; fails=$((fails + 1)); }
 # ci.yml: e2e leaves the pull request only when MERGE_QUEUE is "true", and the gate gets the event and the variable
 grep -q "github.event_name != 'pull_request' || vars.MERGE_QUEUE != 'true'" ../workflows/ci.yml && echo "ok   ci.yml: e2e runs on a pull request only without MERGE_QUEUE" || { echo "FAIL ci.yml e2e condition"; fails=$((fails + 1)); }
 grep -q 'EVENT: ${{ github.event_name }}' ../workflows/ci.yml && grep -q 'QUEUE: ${{ vars.MERGE_QUEUE }}' ../workflows/ci.yml && echo "ok   ci.yml: the gate gets EVENT and QUEUE" || { echo "FAIL ci.yml gate env"; fails=$((fails + 1)); }

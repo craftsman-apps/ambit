@@ -93,9 +93,9 @@ assert [v['expression'] for v in w['validations']]==['variables.console || varia
 assert w['validations'][0]['message']=='only the Ambit console may write personal API key objects', w
 sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event','ambitproject.dev/agent','ambitproject.dev/agent-stops']
 bs={x['metadata']['name']:x['spec'] for x in docs if x['kind']=='ValidatingAdmissionPolicyBinding'}
-assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(5)}|{'ambit-key-lease','ambit-agent-ack-writer'}, list(bs)
+assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(5)}|{'ambit-key-lease','ambit-agent-ack-writer','ambit-keys-writer-stops-name'}, list(bs)
 assert all('paramRef' not in b for b in bs.values()), bs
-bs.pop('ambit-key-lease'); bs.pop('ambit-agent-ack-writer')
+bs.pop('ambit-key-lease'); bs.pop('ambit-agent-ack-writer'); bs.pop('ambit-keys-writer-stops-name')
 for n,b in bs.items():
   i=int(n[-1])
   assert b['policyName']=='ambit-keys-writer' and b['validationActions']==['Deny'], b

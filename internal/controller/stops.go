@@ -48,7 +48,7 @@ const (
 	// names go into one policy, so at most 7 policies per route.
 	MaxStopEntries = 1000
 	StopChunk      = 150
-	maxStopExpr    = 12000 // characters of one policy's expression; the CRD allows 16,384
+	maxStopExpr    = 15000 // characters of one policy's expression; the CRD allows 16,384 (150 names of at most 40 characters, in a key clause and a token clause: about 13,500)
 	// StopAckLag is how long the console waits before it says that a stop is not confirmed.
 	StopAckLag = 60 * time.Second
 )
@@ -91,6 +91,9 @@ type StopAck struct {
 	Gen     int64  `json:"gen"`     // the list generation last rendered
 	// Gateways: the Gateways that have a route a policy is attached to. A stop is complete only when each has the entry's generation.
 	Gateways map[string]GatewayAck `json:"gateways"`
+	// CheckedAt: when the controller last looked. The console treats an answer older than two minutes as no answer (the controller
+	// asks again every 30 s while the list has entries), so a controller that is down cannot leave an old "ready" in force.
+	CheckedAt time.Time `json:"checkedAt"`
 	// Degraded: why the list could not be rendered (the last policies stay in force); empty when it could.
 	Degraded string `json:"degraded,omitempty"`
 }
@@ -115,14 +118,8 @@ func ParseStopAck(cm *corev1.ConfigMap) (a StopAck, ok bool) {
 	return a, true
 }
 
-// StopChunkSize is how many names one policy lists: 150 when only keys name an agent; with tokens (an issuer) every name
-// is in two clauses, so 70.
-func StopChunkSize(issuer string) int {
-	if issuer != "" {
-		return 70
-	}
-	return StopChunk
-}
+// StopChunkSize is how many names one policy lists: always 150, so that an entry never changes its policy when a setting changes.
+func StopChunkSize(string) int { return StopChunk }
 
 // stopPolicies renders the list as policies ambit-agent-stops-<k> for the given routes. An entry is in the policy
 // Slot/chunk size, so entries never move between policies (a change of one policy never takes a name out of the block
@@ -216,7 +213,8 @@ type StopReconciler struct {
 
 	mu       sync.Mutex
 	seen     map[string]time.Time // "<policy>/<uid>/<generation>/<gateway>" -> first time seen accepted
-	nackBase map[string]int32     // the NACK Events of the Gateways when the policies were last written
+	nackBase map[string]int32     // the NACK Events of the Gateways before the first write of list generation nackGen
+	nackGen  int64
 }
 
 func (r *StopReconciler) now() time.Time {
@@ -350,21 +348,23 @@ func (r *StopReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (re
 		return r.degraded(ctx, &old, ack, err.Error(), 10*time.Second)
 	}
 	if len(allRoutes) > 0 {
+		// One baseline of the NACK Events per list generation, taken before its first write and kept for the whole rollout:
+		// a rejection of any of its policies is then never mistaken for an old one.
+		r.mu.Lock()
+		newRollout := r.nackGen != list.Gen || r.nackBase == nil
+		r.mu.Unlock()
+		if newRollout {
+			base, err := r.currentNacks(ctx, gws)
+			if err != nil {
+				return reconcile.Result{}, err
+			}
+			r.mu.Lock()
+			r.nackBase, r.nackGen = base, list.Gen
+			r.mu.Unlock()
+		}
 		for _, p := range policies {
-			live := &unstructured.Unstructured{}
-			live.SetGroupVersionKind(AgentgatewayPolicyGVK)
-			changed := r.Live.Get(ctx, client.ObjectKeyFromObject(p), live) != nil
 			if err := r.Patch(ctx, p, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
 				return r.degraded(ctx, &old, ack, "applying "+p.GetName()+": "+err.Error(), 5*time.Second)
-			}
-			if changed || p.GetGeneration() != live.GetGeneration() { // a new write: the NACKs before it are not its
-				base, err := r.currentNacks(ctx, gws)
-				if err != nil {
-					return reconcile.Result{}, err
-				}
-				r.mu.Lock()
-				r.nackBase = base
-				r.mu.Unlock()
 			}
 		}
 		// Policies of chunks that are no longer used (the highest slots are free again). Chunk 0 always stays. An entry never
@@ -391,7 +391,7 @@ func (r *StopReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (re
 	// not rejected by a proxy since it was written, and settled. Ready says so for now; AckedGen only ever rises.
 	pending := false
 	now := r.now()
-	ack.Gen, ack.Degraded = list.Gen, ""
+	ack.Gen, ack.Degraded, ack.CheckedAt = list.Gen, "", now.UTC()
 	nacks, err := r.currentNacks(ctx, gws)
 	if err != nil {
 		return reconcile.Result{}, err
@@ -486,9 +486,17 @@ func (r *StopReconciler) degraded(ctx context.Context, old *corev1.ConfigMap, ac
 }
 
 func (r *StopReconciler) writeAck(ctx context.Context, old *corev1.ConfigMap, ack StopAck) error {
+	if ack.CheckedAt.IsZero() {
+		ack.CheckedAt = r.now().UTC()
+	}
 	b, _ := json.Marshal(ack)
-	if old.Data["ack.json"] == string(b) {
-		return nil
+	if prev, ok := ParseStopAck(old); ok && old.Data["ack.json"] != "" {
+		same := prev
+		same.CheckedAt = ack.CheckedAt
+		sb, _ := json.Marshal(same)
+		if string(sb) == string(b) && ack.CheckedAt.Sub(prev.CheckedAt) < 20*time.Second {
+			return nil // nothing changed, and the last look is recent enough
+		}
 	}
 	if old.Name == "" {
 		cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: StopsAckConfigMap, Namespace: r.Namespace,

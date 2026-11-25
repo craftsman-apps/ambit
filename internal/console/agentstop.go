@@ -151,8 +151,9 @@ func (s *KeyService) StopAck(ctx context.Context) (controller.StopAck, bool, err
 // acknowledged: the answer is for this list (its UID), renders, and every Gateway the controller knows is ready right now
 // at generation gen or later. No answer: not acknowledged. A controller that found no route to attach to answers with no
 // Gateways: nothing can be reached, so the stop is complete.
-func acknowledged(a controller.StopAck, have bool, listUID string, gen int64) bool {
-	if !have || a.Degraded != "" || a.ListUID != listUID || a.Gen < gen {
+func acknowledged(a controller.StopAck, have bool, listUID string, gen int64, now time.Time) bool {
+	// An answer the controller has not renewed for two minutes is no answer: it asks every 30 s while the list has entries.
+	if !have || a.Degraded != "" || a.ListUID != listUID || a.Gen < gen || now.Sub(a.CheckedAt) > 2*time.Minute {
 		return false
 	}
 	for _, g := range a.Gateways {
@@ -256,29 +257,32 @@ func (s *KeyService) advanceLocked(ctx context.Context, a Agent) (Agent, error) 
 		return a, nil
 	}
 	now := s.now()
-	// S1 again: the entry is on the list (a full list is not an error: the credentials go all the same).
+	// S1 again: the entry is on the list (a full list is not an error: the credentials go all the same). A failure here must
+	// not keep the keys alive: S2 and S3 run in any case, and the stop is not confirmed.
+	var errs []error
 	listed, err := s.addEntry(ctx, a.Name)
 	if err != nil {
-		return a, err
-	}
-	if !listed != a.StopUnlisted {
+		errs = append(errs, err)
+	} else if !listed != a.StopUnlisted {
 		if a, err = s.changeAgent(ctx, a.Name, func(cur *Agent) (bool, error) { cur.StopUnlisted = !listed; return true, nil }); err != nil {
-			return a, err
-		}
-		if !listed {
+			errs = append(errs, err)
+		} else if !listed {
 			slog.Error("stop list full: the agent is stopped without a list entry until there is room", "agent", a.Name)
 			s.event(ctx, consoleActor, "agent-stop-unlisted", "", a.Owner, "agent="+a.Name+" the stop list is full; the credentials are deleted, tokens expire on their own")
 		}
 	}
 	// S2: every key of the agent (also one made while it is stopping, and one the console cannot decode).
 	if err := s.deleteAgentKeySecrets(ctx, a.Name, consoleActor); err != nil {
-		return a, err
+		errs = append(errs, err)
 	}
 	// S3: grants (OAuth); none in this release.
 	if s.RevokeGrants != nil {
 		if err := s.RevokeGrants(ctx, a); err != nil {
-			return a, err
+			errs = append(errs, err)
 		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return a, err
 	}
 	var gen int64
 	l, err := s.changeStopList(ctx, func(l *controller.StopList) (bool, bool) {
@@ -309,7 +313,7 @@ func (s *KeyService) advanceLocked(ctx context.Context, a Agent) (Agent, error) 
 	}
 	switch {
 	case entryIndex(l, a.Name) < 0: // not listed (the list is full): not confirmed until there is room
-	case acknowledged(ack, have, string(listCM.UID), gen):
+	case acknowledged(ack, have, string(listCM.UID), gen, now):
 		return s.finishStop(ctx, a, ack, now)
 	}
 	return s.notConfirmed(ctx, a, ack, have, gen, now)
@@ -541,6 +545,23 @@ func (s *KeyService) AdvanceStops(ctx context.Context) (bool, error) {
 			}
 		}
 	}
+	// The time every Gateway first acknowledged an entry is kept (also for a deleted agent, and after a crash between two writes).
+	if _, err := s.changeStopList(ctx, func(l *controller.StopList) (bool, bool) {
+		changed := false
+		for i := range l.Entries {
+			e := &l.Entries[i]
+			if e.AckedAt == nil && e.KeysDeletedAt != nil && acknowledged(ack, have, string(listCM.UID), e.Gen, now) {
+				e.AckedAt, changed = &now, true
+			}
+		}
+		return false, changed
+	}); err != nil {
+		errs = append(errs, err)
+	}
+	if l2, cm2, err := s.stopList(ctx); err == nil {
+		l, listCM = l2, cm2
+	}
+	_ = l
 	// Entries whose agent is gone (deleted) or stopped for long enough are pruned: the credentials are gone, every Gateway
 	// acknowledged the entry, and the retention has passed since the later of S2, S3 and the acknowledgment.
 	pruned := 0
@@ -555,8 +576,8 @@ func (s *KeyService) AdvanceStops(ctx context.Context) (bool, error) {
 					since = t
 				}
 			}
-			done := since != nil && acknowledged(ack, have, string(listCM.UID), e.Gen) && now.Sub(*since) >= s.stopRetention() &&
-				(e.AckedAt != nil || !ok)
+			done := since != nil && acknowledged(ack, have, string(listCM.UID), e.Gen, now) && now.Sub(*since) >= s.stopRetention() &&
+				e.AckedAt != nil
 			switch {
 			case !ok && done: // the agent was deleted: its keys are gone and the name is never used again
 				pruned++

@@ -31,7 +31,7 @@ func playController(t *testing.T, s *KeyService, ackedGen map[string]int64, degr
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := controller.StopAck{ListUID: string(lcm.UID), Gen: l.Gen, Gateways: map[string]controller.GatewayAck{}, Degraded: degraded}
+	a := controller.StopAck{ListUID: string(lcm.UID), Gen: l.Gen, CheckedAt: s.now(), Gateways: map[string]controller.GatewayAck{}, Degraded: degraded}
 	for g, n := range ackedGen {
 		a.Gateways[g] = controller.GatewayAck{AckedGen: n, At: s.now(), Ready: !notReady[g]}
 	}
@@ -144,11 +144,13 @@ func TestStopStateMachine(t *testing.T) {
 	}
 	// retention: the entry stays for 25 minutes after the credentials are gone, then it is pruned; the agent stays stopped
 	clk.Set(clk.Now().Add(20 * time.Minute))
+	playController(t, s, map[string]int64{"ambit": 1, "ambit-public": 1}, "") // the controller renews its answer every 30 s
 	_, _ = s.AdvanceStops(ctx)
 	if len(listOf(t, s).Entries) != 1 {
 		t.Fatal("the entry went before its retention")
 	}
 	clk.Set(clk.Now().Add(10 * time.Minute))
+	playController(t, s, map[string]int64{"ambit": 1, "ambit-public": 1}, "")
 	if more, _ := s.AdvanceStops(ctx); more {
 		t.Error("no work should remain")
 	}
@@ -552,5 +554,98 @@ func TestStopListSlots(t *testing.T) {
 	}
 	if slots["a"] != 0 || slots["c"] != 2 || slots["d"] != 1 {
 		t.Errorf("slots %v: a removed entry's slot is reused, and nobody else moves", slots)
+	}
+}
+
+// Review (Codex, second pass).
+func TestStaleAcknowledgmentIsNoAcknowledgment(t *testing.T) {
+	s, clk := newAgentSvc(t)
+	ctx := context.Background()
+	a := mustAgent(t, s, user01("eng"), AgentInput{DisplayName: "bot"})
+	_, _ = s.StopAgent(ctx, user01(), a.Name)
+	playController(t, s, map[string]int64{"ambit": 1}, "")
+	clk.Set(clk.Now().Add(3 * time.Minute)) // the controller is down: its answer is not renewed
+	_, _ = s.AdvanceStops(ctx)
+	if got, _ := s.GetAgent(ctx, a.Name); got.State != StateStopping {
+		t.Fatalf("an answer from three minutes ago stopped the agent: %s", got.State)
+	}
+	playController(t, s, map[string]int64{"ambit": 1}, "")
+	_, _ = s.AdvanceStops(ctx)
+	if got, _ := s.GetAgent(ctx, a.Name); got.State != StateStopped {
+		t.Fatalf("a renewed answer did not: %s", got.State)
+	}
+}
+
+func TestReservedAgentNames(t *testing.T) {
+	s, _ := newAgentSvc(t)
+	for _, n := range []string{"stops", "stops-ack"} {
+		if _, err := s.CreateAgent(context.Background(), adminA, AgentInput{DisplayName: "x", Mode: ModeItself, Name: n, Group: "ops"}); !errors.Is(err, ErrBadInput) {
+			t.Errorf("%s: %v", n, err)
+		}
+	}
+	// a person-mode name never equals them: slug, a dash and six characters
+	if n, _ := newAgentName("stops"); n == "stops" || len(n) != len("stops-")+6 {
+		t.Errorf("generated %q", n)
+	}
+}
+
+// A stop whose agent record cannot be written is not on record: the answer is the stored (active) state, so the API does not say 202.
+func TestFailedRecordWriteIsNotAStop(t *testing.T) {
+	fail := false
+	s, _ := newAgentSvcWith(t, interceptor.Funcs{Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+		if cm, ok := obj.(*corev1.ConfigMap); ok && fail && cm.Labels[agentLabel] != "" {
+			return errors.New("unavailable")
+		}
+		return c.Update(ctx, obj, opts...)
+	}})
+	ctx := context.Background()
+	a := mustAgent(t, s, user01("eng"), AgentInput{DisplayName: "bot"})
+	fail = true
+	got, err := s.StopAgent(ctx, user01(), a.Name)
+	if err == nil || got.State != StateActive {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+// The keys go even when the stop list cannot be written.
+func TestKeysGoWhenTheListCannotBeWritten(t *testing.T) {
+	failList := false
+	s, _ := newAgentSvcWith(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+		if obj.GetName() == controller.StopsConfigMap && failList {
+			return errors.New("unavailable")
+		}
+		return c.Create(ctx, obj, opts...)
+	}})
+	ctx := context.Background()
+	a := mustAgent(t, s, user01("eng"), AgentInput{DisplayName: "bot"})
+	_, k, _ := s.CreateAgentKey(ctx, user01(), a.Name, "k", 30, nil)
+	failList = true
+	got, err := s.StopAgent(ctx, user01(), a.Name)
+	if err == nil || got.State != StateStopping {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if _, err := s.getKey(ctx, k.ID); !apierrors.IsNotFound(err) {
+		t.Error("the key lives although the list could not be written")
+	}
+}
+
+// An entry of a deleted agent is pruned only after the retention counted from its acknowledgment.
+func TestDeletedAgentsEntryWaitsForItsAcknowledgment(t *testing.T) {
+	s, clk := newAgentSvc(t)
+	ctx := context.Background()
+	a := mustAgent(t, s, user01("eng"), AgentInput{DisplayName: "bot"})
+	_, _ = s.StopAgent(ctx, user01(), a.Name)
+	clk.Set(clk.Now().Add(time.Hour)) // the keys were deleted long ago; no Gateway has answered yet
+	_ = s.DeleteAgent(ctx, user01(), a.Name)
+	playController(t, s, map[string]int64{"ambit": 1}, "")
+	_, _ = s.AdvanceStops(ctx)
+	if len(listOf(t, s).Entries) != 1 {
+		t.Fatal("the entry was pruned in the pass that first saw the acknowledgment")
+	}
+	clk.Set(clk.Now().Add(26 * time.Minute))
+	playController(t, s, map[string]int64{"ambit": 1}, "")
+	_, _ = s.AdvanceStops(ctx)
+	if len(listOf(t, s).Entries) != 0 {
+		t.Error("the entry stays after the retention")
 	}
 }

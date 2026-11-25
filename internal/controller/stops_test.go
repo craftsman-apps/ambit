@@ -157,15 +157,22 @@ func TestStopEntriesStayInTheirPolicy(t *testing.T) {
 			t.Errorf("%s was rendered", name)
 		}
 	}
-	// with an issuer every name is in two clauses: 70 per policy, and a full policy still fits
-	if StopChunkSize("https://auth.example.com") != 70 || StopChunkSize("") != 150 {
+	// The chunk size never depends on a setting (an entry must not change its policy). A full policy with the longest names
+	// (40 characters, an agent name's limit) still fits with an issuer, where every name is in two clauses.
+	if StopChunkSize("https://auth.example.com") != 150 || StopChunkSize("") != 150 {
 		t.Error("chunk sizes")
 	}
 	full := StopList{Gen: 1}
-	for i := 0; i < 70; i++ {
-		full.Entries = append(full.Entries, StopEntry{Kind: "agent", Name: fmt.Sprintf("%063d", i), Slot: i})
+	for i := 0; i < 150; i++ {
+		full.Entries = append(full.Entries, StopEntry{Kind: "agent", Name: fmt.Sprintf("%040d", i), Slot: i})
 	}
-	if _, err := stopPolicies(cm, full, routes, "https://auth.example.com"); err != nil {
-		t.Errorf("70 long names with an issuer: %v", err)
+	for _, issuer := range []string{"", "https://auth.example.com"} {
+		ps, err := stopPolicies(cm, full, routes, issuer)
+		if err != nil {
+			t.Errorf("150 names of 40 characters, issuer %q: %v", issuer, err)
+			continue
+		}
+		e, _, _ := unstructured.NestedStringSlice(ps[0].Object, "spec", "traffic", "authorization", "policy", "matchExpressions")
+		t.Logf("issuer %q: %d characters", issuer, len(e[0]))
 	}
 }

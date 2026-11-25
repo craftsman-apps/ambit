@@ -142,6 +142,11 @@ If a stop policy is edited, deleted or rejected afterwards, the Gateway is no lo
 prunes a stop until it is. The answer is bound to the stop list it was made for (its UID) and only the controller may write it
 (admission policy `ambit-agent-ack-writer`). A route that is attached to more than one Gateway counts for each of them.
 
+The controller renews its answer every 30 s while the list has entries; the console treats an answer older than two minutes as no
+answer, so a controller that is down cannot leave an old "ready" in force (the agent stays `stopping`). Both stop ConfigMaps
+(`ambit-agent-stops`, `ambit-agent-stops-ack`) are fenced by name: only the console writes the list and only the controller the answer, labelled or
+not. The names `stops` and `stops-ack` are reserved and cannot be the name of an itself-mode agent (their records would be these ConfigMaps).
+
 **The list is stable.** An entry has a fixed slot (0 to 999) and is in policy slot ÷ 150; adding or removing an entry never moves
 another one to another policy, so a change of one policy never takes a still-listed agent out of the block.
 

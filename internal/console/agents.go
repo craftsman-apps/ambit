@@ -456,6 +456,9 @@ func (s *KeyService) CreateAgent(ctx context.Context, by Session, in AgentInput)
 			return Agent{}, fmt.Errorf("%w: an itself-mode agent gets no app connections in 0.6.0", ErrBadInput)
 		}
 		a.Mode, a.Name, a.Group = ModeItself, in.Name, strings.TrimSpace(in.Group)
+		if a.Name == "stops" || a.Name == "stops-ack" { // their records would be the ConfigMaps of the stop list and its acknowledgment
+			return Agent{}, fmt.Errorf("%w: the names stops and stops-ack are reserved", ErrBadInput)
+		}
 		if !accountNamePattern.MatchString(a.Name) || !groupPattern.MatchString(a.Group) || len(a.Group) > maxGroupLen || slices.Contains(roleGroups, a.Group) {
 			return Agent{}, fmt.Errorf("%w: give a name (lower-case letters, digits, -) and a group", ErrBadInput)
 		}
@@ -549,11 +552,13 @@ func (s *KeyService) changeAgent(ctx context.Context, name string, rule func(a *
 		if err != nil {
 			return err
 		}
+		stored := a
 		write, err := rule(&a)
 		out = a
 		if err != nil || !write {
 			return err
 		}
+		out = stored // until the write succeeds, the answer is what is stored
 		cm := s.record(a)
 		if len(cm.Data["agent.json"]) > maxAgentRecord {
 			return fmt.Errorf("%w: the agent record is too large", ErrBadInput)
@@ -561,6 +566,7 @@ func (s *KeyService) changeAgent(ctx context.Context, name string, rule func(a *
 		if err := s.Client.Update(ctx, cm); err != nil {
 			return err
 		}
+		out = a
 		out.UID, out.ResourceVersion = string(cm.UID), cm.ResourceVersion
 		return nil
 	})

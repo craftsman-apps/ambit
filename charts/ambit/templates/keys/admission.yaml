@@ -107,6 +107,7 @@ spec:
         apiVersions: [v1]
         operations: [CREATE, UPDATE, DELETE]
         resources: [configmaps]
+        resourceNames: [ambit-agent-stops-ack] # by name, not only by label: an unlabelled ConfigMap of this name is fenced too
   validations:
     - expression: >-
         request.userInfo.username == "system:serviceaccount:{{ $ns }}:ambit-controller" ||
@@ -123,4 +124,20 @@ spec:
   validationActions: [Deny]
   matchResources:
     namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ $ns }} } }
-    objectSelector: { matchExpressions: [{ key: ambitproject.dev/agent-stops-ack, operator: Exists }] }
+---
+# The stop list by its name too (the console writes it): an unlabelled ConfigMap of this name is fenced like a labelled one.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ambit-keys-writer-stops-name
+spec:
+  policyName: ambit-keys-writer
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ $ns }} } }
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [configmaps]
+        resourceNames: [ambit-agent-stops]

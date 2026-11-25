@@ -71,7 +71,10 @@ pass "1c other written forms masked, ordinary numbers kept: $(uv run --no-projec
 idx=$(raw_call crm_get_index '{}')
 [[ "$idx" != *minsu.kim* && "$idx" != *4111111111111111* && "$idx" == *'"<EMAIL>"'* && "$idx" == *'"<CARD_NUMBER>"'* && "$idx" == *1763372401127* ]] ||
   fail "1e structured content: $idx"
-pass "1e email key and card number masked in structured content, Unix time kept"
+# issue 360: 19-digit card numbers (also with a decimal point and an exponent) are masked; a long number that is no card stays exact
+[[ "$idx" != *4.111111111111111* && "$idx" == *'"card19":"<CARD_NUMBER>"'* && "$idx" == *'"card19point":"<CARD_NUMBER>'* && "$idx" == *'"card19exp":"<CARD_NUMBER>"'* && "$idx" == *'"big":12345678901234567890'* ]] ||
+  fail "1e long numbers: $idx"
+pass "1e email key and card number masked in structured content, Unix time kept; 19-digit card numbers masked, long numbers exact"
 
 # 1d · issue 335: the text of a server's JSON-RPC error is not stored in the audit log; its code is. (The client still
 #      receives the error text unmasked: the gateway does not send errors to the guard, issue 333.)

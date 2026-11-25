@@ -102,11 +102,14 @@ func main() {
 			return nil, nil, &jsonrpc.Error{Code: -32000, Message: "lookup " + a.ID + " failed for customer RRN 900101-1234567, email minsu.kim@example.com"}
 		})
 	// get_index returns structured content keyed by email, with a card number as a JSON number and a Unix time in
-	// milliseconds (step 9, check 1e: keys and numbers are masked, the time is not).
+	// milliseconds (step 9, check 1e: keys and numbers are masked, the time is not). big is a long number that is not a card.
 	mcp.AddTool(s, &mcp.Tool{Name: "get_index", Description: "Return orders by customer email."},
 		func(_ context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, map[string]any, error) {
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "index"}}},
-				map[string]any{"minsu.kim@example.com": map[string]any{"orders": 3}, "card": int64(4111111111111111), "at": int64(1763372401127)}, nil
+				map[string]any{"minsu.kim@example.com": map[string]any{"orders": 3}, "card": int64(4111111111111111), "at": int64(1763372401127),
+					// Numbers above 2^53 (issue 360): a 19-digit card number, with a decimal point, and with an exponent. Rounded, they fail the Luhn check.
+					"card19": int64(4111111111111111110), "card19point": json.Number("4111111111111111110.0"), "card19exp": json.Number("4.111111111111111110e18"),
+					"big": json.Number("12345678901234567890")}, nil
 		})
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return s }, &mcp.StreamableHTTPOptions{Stateless: true})
 	mux := http.NewServeMux()

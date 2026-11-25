@@ -14,7 +14,7 @@ import (
 func stopCM(gen int64, n int) (*corev1.ConfigMap, StopList) {
 	l := StopList{Gen: gen}
 	for i := 0; i < n; i++ {
-		l.Entries = append(l.Entries, StopEntry{Kind: "agent", Name: fmt.Sprintf("agent-%04d", i), Gen: gen, RequestedAt: time.Now()})
+		l.Entries = append(l.Entries, StopEntry{Kind: "agent", Name: fmt.Sprintf("agent-%04d", i), Gen: gen, Slot: i, RequestedAt: time.Now()})
 	}
 	return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: StopsConfigMap, Namespace: "ns", UID: "u"}}, l
 }
@@ -60,7 +60,7 @@ func TestStopPolicyChunks(t *testing.T) {
 		t.Error("an unknown kind was rendered")
 	}
 	// grants and agents in the same chunks, with an issuer
-	l = StopList{Gen: 2, Entries: []StopEntry{{Kind: "agent", Name: "a"}, {Kind: "grant", Name: "g1"}, {Kind: "grant", Name: "g1"}}}
+	l = StopList{Gen: 2, Entries: []StopEntry{{Kind: "agent", Name: "a", Slot: 0}, {Kind: "grant", Name: "g1", Slot: 1}}}
 	ps, _ := stopPolicies(cm, l, routes, "https://auth.example.com")
 	e, _, _ := unstructured.NestedStringSlice(ps[0].Object, "spec", "traffic", "authorization", "policy", "matchExpressions")
 	if !strings.Contains(e[0], `jwt.ambit_grant in ["g1"]`) || !strings.Contains(e[0], `apiKey.agent in ["a"]`) {
@@ -105,5 +105,67 @@ func TestAncestorsAccept(t *testing.T) {
 	}
 	if ancestorsAccept(policyWithStatus(1, nil), "ambit", nil) {
 		t.Error("no routes: nothing is acknowledged")
+	}
+}
+
+// An entry never moves between policies: the policy of a name is its slot's, whatever else is on the list. So a change of
+// one policy never takes a still-listed name out of the block while another policy has not applied yet.
+func TestStopEntriesStayInTheirPolicy(t *testing.T) {
+	routes := []string{"ambit-mcp"}
+	cm, l := stopCM(5, 151) // slots 0..150: the last one is alone in policy 1
+	where := func(l StopList, name string) int {
+		ps, err := stopPolicies(cm, l, routes, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for k, p := range ps {
+			if e, _, _ := unstructured.NestedStringSlice(p.Object, "spec", "traffic", "authorization", "policy", "matchExpressions"); strings.Contains(e[0], `"`+name+`"`) {
+				return k
+			}
+		}
+		return -1
+	}
+	if where(l, "agent-0150") != 1 || where(l, "agent-0149") != 0 {
+		t.Fatalf("slot 150 is in policy %d, slot 149 in %d", where(l, "agent-0150"), where(l, "agent-0149"))
+	}
+	// a name that sorts first is added: nobody moves
+	l.Entries = append(l.Entries, StopEntry{Kind: "agent", Name: "aaa", Slot: 151, Gen: 6})
+	if where(l, "agent-0149") != 0 || where(l, "agent-0150") != 1 || where(l, "aaa") != 1 {
+		t.Error("a new name moved another one to another policy")
+	}
+	// an entry in the middle goes: nobody moves
+	l.Entries = append(l.Entries[:3], l.Entries[4:]...)
+	if where(l, "agent-0149") != 0 || where(l, "agent-0150") != 1 {
+		t.Error("a removed name moved another one")
+	}
+	// a hole in the slots gives an empty policy that lets everyone through, never none
+	l = StopList{Gen: 1, Entries: []StopEntry{{Kind: "agent", Name: "far", Slot: 400}}}
+	ps, _ := stopPolicies(cm, l, routes, "")
+	if len(ps) != 3 {
+		t.Fatalf("%d policies for slot 400", len(ps))
+	}
+	if e, _, _ := unstructured.NestedStringSlice(ps[0].Object, "spec", "traffic", "authorization", "policy", "matchExpressions"); e[0] != "true" {
+		t.Errorf("empty chunk: %v", e)
+	}
+	// two names in one slot, or a slot outside the list, are refused
+	for name, es := range map[string][]StopEntry{
+		"same slot": {{Kind: "agent", Name: "a", Slot: 3}, {Kind: "agent", Name: "b", Slot: 3}},
+		"slot 1000": {{Kind: "agent", Name: "a", Slot: 1000}},
+		"slot -1":   {{Kind: "agent", Name: "a", Slot: -1}},
+	} {
+		if _, err := stopPolicies(cm, StopList{Entries: es}, routes, ""); err == nil {
+			t.Errorf("%s was rendered", name)
+		}
+	}
+	// with an issuer every name is in two clauses: 70 per policy, and a full policy still fits
+	if StopChunkSize("https://auth.example.com") != 70 || StopChunkSize("") != 150 {
+		t.Error("chunk sizes")
+	}
+	full := StopList{Gen: 1}
+	for i := 0; i < 70; i++ {
+		full.Entries = append(full.Entries, StopEntry{Kind: "agent", Name: fmt.Sprintf("%063d", i), Slot: i})
+	}
+	if _, err := stopPolicies(cm, full, routes, "https://auth.example.com"); err != nil {
+		t.Errorf("70 long names with an issuer: %v", err)
 	}
 }

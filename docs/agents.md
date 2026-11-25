@@ -134,6 +134,20 @@ The **stop policy is the authoritative check for every credential the gateway ac
 (403) by the gateway even while its Secret still exists, and so is a token that names the agent or its grant. Deleting the keys
 (S2) is the second line.
 
+**Where the acknowledgment comes from.** Each policy is attached to routes, and agentgateway reports per route whether it accepted
+and attached the policy at its current generation. A Gateway is **ready** only while every policy of the list's current generation
+is accepted on its routes, has not been rejected by a proxy since it was written (the Gateway's NACK events) and has
+settled (`--activation-settle`, 3 s: agentgateway v1.7.0 has no acknowledgment from the proxies that a controller can read).
+If a stop policy is edited, deleted or rejected afterwards, the Gateway is no longer ready, and the console neither completes nor
+prunes a stop until it is. The answer is bound to the stop list it was made for (its UID) and only the controller may write it
+(admission policy `ambit-agent-ack-writer`). A route that is attached to more than one Gateway counts for each of them.
+
+**The list is stable.** An entry has a fixed slot (0 to 999) and is in policy slot ÷ 150; adding or removing an entry never moves
+another one to another policy, so a change of one policy never takes a still-listed agent out of the block.
+
+**Start.** `start` removes the entry. It is refused (409) for one minute after the keys were deleted, so that the proxies have dropped
+them; with OAuth it waits for the whole retention, because an access token already issued stays valid until it expires.
+
 **Retention.** An entry stays in the list until the agent's credentials are gone, every Gateway acknowledged it, and
 `agents.stopRetentionMinutes` (25: the access token life of 15 minutes and 10 minutes of leeway) have passed. Then it is
 pruned; the agent record keeps `state: stopped`. Start removes the entry at once.

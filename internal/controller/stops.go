@@ -37,7 +37,9 @@ import (
 // The console reports an agent stopped only after every Gateway acknowledged the generation of its entry.
 
 const (
-	StopsConfigMap    = "ambit-agent-stops"
+	StopsConfigMap = "ambit-agent-stops"
+	// StopsAckLabel marks the acknowledgment ConfigMap: admission lets only the controller write it.
+	StopsAckLabel     = "ambitproject.dev/agent-stops-ack"
 	StopsAckConfigMap = "ambit-agent-stops-ack"
 	StopPolicyPrefix  = "ambit-agent-stops-"
 	// StopsGenAnnotation: the list generation a policy was rendered from.
@@ -57,9 +59,15 @@ type StopEntry struct {
 	Name        string    `json:"name"`
 	Gen         int64     `json:"gen"` // the list generation that added it
 	RequestedAt time.Time `json:"requestedAt"`
-	// Console steps (the controller ignores them): S2 keys deleted, S3 grants revoked.
+	// Slot is the entry's place in the list (0 to MaxStopEntries-1), fixed for its life: it decides which policy lists the
+	// name (Slot/chunk size), so that an entry never moves from one policy to another while the others change. The console
+	// gives the lowest free slot.
+	Slot int `json:"slot"`
+	// Console steps (the controller ignores them): S2 keys deleted, S3 grants revoked, and when every Gateway first
+	// acknowledged the entry.
 	KeysDeletedAt   *time.Time `json:"keysDeletedAt,omitempty"`
 	GrantsRevokedAt *time.Time `json:"grantsRevokedAt,omitempty"`
+	AckedAt         *time.Time `json:"ackedAt,omitempty"`
 }
 
 // StopList is the content of ambit-agent-stops (key list.json).
@@ -72,11 +80,15 @@ type StopList struct {
 type GatewayAck struct {
 	AckedGen int64     `json:"ackedGen"` // the highest list generation every policy of the Gateway has accepted
 	At       time.Time `json:"at"`       // when it became that
+	// Ready: right now every policy of the list's generation is accepted and settled on this Gateway. A policy that is
+	// edited, deleted or rejected afterwards sets it to false: the console completes or prunes a stop only while it is true.
+	Ready bool `json:"ready"`
 }
 
 // StopAck is the content of ambit-agent-stops-ack (key ack.json).
 type StopAck struct {
-	Gen int64 `json:"gen"` // the list generation last rendered
+	ListUID string `json:"listUID"` // the UID of the stop list ConfigMap this answer is for: a recreated list is not acknowledged by an old answer
+	Gen     int64  `json:"gen"`     // the list generation last rendered
 	// Gateways: the Gateways that have a route a policy is attached to. A stop is complete only when each has the entry's generation.
 	Gateways map[string]GatewayAck `json:"gateways"`
 	// Degraded: why the list could not be rendered (the last policies stay in force); empty when it could.
@@ -95,46 +107,69 @@ func ParseStopList(cm *corev1.ConfigMap) (StopList, error) {
 	return l, nil
 }
 
-// ParseStopAck reads ambit-agent-stops-ack; none is an empty answer.
-func ParseStopAck(cm *corev1.ConfigMap) StopAck {
-	var a StopAck
-	if cm != nil {
-		_ = json.Unmarshal([]byte(cm.Data["ack.json"]), &a)
+// ParseStopAck reads ambit-agent-stops-ack; none, or one that does not parse, is an empty answer (ok false).
+func ParseStopAck(cm *corev1.ConfigMap) (a StopAck, ok bool) {
+	if cm == nil || json.Unmarshal([]byte(cm.Data["ack.json"]), &a) != nil || a.Gateways == nil {
+		return StopAck{}, false
 	}
-	return a
+	return a, true
 }
 
-// stopPolicies renders the list as policies ambit-agent-stops-<k>, at most 150 agents and 150 grants each, for the
-// given routes. An empty list is one policy that allows everyone, so a policy that once existed stays. A list over
-// MaxStopEntries, or an expression over maxStopExpr characters, is an error: the caller keeps what is in force.
+// StopChunkSize is how many names one policy lists: 150 when only keys name an agent; with tokens (an issuer) every name
+// is in two clauses, so 70.
+func StopChunkSize(issuer string) int {
+	if issuer != "" {
+		return 70
+	}
+	return StopChunk
+}
+
+// stopPolicies renders the list as policies ambit-agent-stops-<k> for the given routes. An entry is in the policy
+// Slot/chunk size, so entries never move between policies (a change of one policy never takes a name out of the block
+// before another policy has it). A chunk without entries renders as `true` (everyone passes), so that a policy that once
+// existed stays while an entry exists. An empty list is one such policy. A list over MaxStopEntries, or an expression
+// over maxStopExpr characters, is an error: the caller keeps what is in force.
 func stopPolicies(cm *corev1.ConfigMap, l StopList, routes []string, issuer string) ([]*unstructured.Unstructured, error) {
-	var agents, grants []string
+	size := StopChunkSize(issuer)
+	if len(l.Entries) > MaxStopEntries {
+		return nil, fmt.Errorf("the stop list has %d entries; at most %d are rendered", len(l.Entries), MaxStopEntries)
+	}
+	type chunk struct{ agents, grants []string }
+	var chunks []chunk
+	used := map[int]string{}
 	for _, e := range l.Entries {
+		if e.Slot < 0 || e.Slot >= MaxStopEntries {
+			return nil, fmt.Errorf("stop list entry %q has the slot %d", e.Name, e.Slot)
+		}
+		if other, ok := used[e.Slot]; ok && other != e.Name {
+			return nil, fmt.Errorf("stop list entries %q and %q have the same slot %d", other, e.Name, e.Slot)
+		}
+		used[e.Slot] = e.Name
+		k := e.Slot / size
+		for len(chunks) <= k {
+			chunks = append(chunks, chunk{})
+		}
 		switch e.Kind {
 		case "agent":
-			agents = append(agents, e.Name)
+			chunks[k].agents = append(chunks[k].agents, e.Name)
 		case "grant":
-			grants = append(grants, e.Name)
+			chunks[k].grants = append(chunks[k].grants, e.Name)
 		default:
 			return nil, fmt.Errorf("stop list entry %q has the unknown kind %q", e.Name, e.Kind)
 		}
 	}
-	if len(agents)+len(grants) > MaxStopEntries {
-		return nil, fmt.Errorf("the stop list has %d entries; at most %d are rendered", len(agents)+len(grants), MaxStopEntries)
+	if len(chunks) == 0 {
+		chunks = append(chunks, chunk{})
 	}
-	sort.Strings(agents)
-	agents = slices.Compact(agents)
-	sort.Strings(grants)
-	grants = slices.Compact(grants)
-	chunks := max((len(agents)+StopChunk-1)/StopChunk, (len(grants)+StopChunk-1)/StopChunk, 1)
 	var refs []any
 	for _, r := range routes {
 		refs = append(refs, map[string]any{"group": "gateway.networking.k8s.io", "kind": "HTTPRoute", "name": r})
 	}
 	var out []*unstructured.Unstructured
-	for k := 0; k < chunks; k++ {
-		part := func(l []string) []string { return l[min(k*StopChunk, len(l)):min((k+1)*StopChunk, len(l))] }
-		expr := identity.StopList(part(agents), part(grants), issuer)
+	for k, c := range chunks {
+		sort.Strings(c.agents)
+		sort.Strings(c.grants)
+		expr := identity.StopList(slices.Compact(c.agents), slices.Compact(c.grants), issuer)
 		if len(expr) > maxStopExpr {
 			return nil, fmt.Errorf("stop policy %d needs %d characters; at most %d fit", k, len(expr), maxStopExpr)
 		}
@@ -179,8 +214,9 @@ type StopReconciler struct {
 	Settle time.Duration
 	Now    func() time.Time
 
-	mu   sync.Mutex
-	seen map[string]time.Time // "<policy>/<generation>" -> first time seen accepted
+	mu       sync.Mutex
+	seen     map[string]time.Time // "<policy>/<uid>/<generation>/<gateway>" -> first time seen accepted
+	nackBase map[string]int32     // the NACK Events of the Gateways when the policies were last written
 }
 
 func (r *StopReconciler) now() time.Time {
@@ -249,6 +285,21 @@ func ancestorsAccept(o *unstructured.Unstructured, gateway string, routes []stri
 	return len(routes) > 0
 }
 
+// currentNacks: the NACK Events of the given Gateways now, by Event name with their count (see Reconciler.nacksSeen).
+func (r *StopReconciler) currentNacks(ctx context.Context, gateways map[string][]string) (map[string]int32, error) {
+	var events corev1.EventList
+	if err := r.Live.List(ctx, &events, client.InNamespace(r.Namespace), client.MatchingFields{"reason": nackReason}); err != nil {
+		return nil, err
+	}
+	out := map[string]int32{}
+	for _, e := range events.Items {
+		if _, ok := gateways[e.InvolvedObject.Name]; ok && e.Type == corev1.EventTypeWarning && e.Reason == nackReason && e.InvolvedObject.Kind == "Gateway" {
+			out[e.Name] = e.Count
+		}
+	}
+	return out, nil
+}
+
 func (r *StopReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconcile.Result, error) {
 	logger := log.FromContext(ctx)
 	var cm corev1.ConfigMap
@@ -261,13 +312,17 @@ func (r *StopReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (re
 	if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: StopsAckConfigMap}, &old); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, err
 	}
-	ack := ParseStopAck(&old)
+	ack, _ := ParseStopAck(&old)
 	if ack.Gateways == nil {
 		ack.Gateways = map[string]GatewayAck{}
 	}
+	if ack.ListUID != string(cm.UID) { // an answer for another list (it was recreated) says nothing about this one
+		ack = StopAck{Gateways: map[string]GatewayAck{}}
+	}
+	ack.ListUID = string(cm.UID)
 	list, err := ParseStopList(&cm)
 	if err != nil {
-		return r.degraded(ctx, ack, err.Error(), 10*time.Second)
+		return r.degraded(ctx, &old, ack, err.Error(), 10*time.Second)
 	}
 	stopEntries.Set(float64(len(list.Entries)))
 	gws, err := r.gatewayRoutes(ctx)
@@ -286,20 +341,34 @@ func (r *StopReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (re
 	for gw := range ack.Gateways { // a Gateway that has no route any more is not waited for
 		if _, ok := gws[gw]; !ok {
 			delete(ack.Gateways, gw)
+			stopUnconfirmed.DeleteLabelValues(gw)
 		}
 	}
 	policies, err := stopPolicies(&cm, list, allRoutes, r.Issuer)
 	if err != nil { // fail closed: what is applied stays, and the console and the alert say so
 		logger.Error(err, "the stop list was not rendered; the last stop policies stay in force")
-		return r.degraded(ctx, ack, err.Error(), 10*time.Second)
+		return r.degraded(ctx, &old, ack, err.Error(), 10*time.Second)
 	}
 	if len(allRoutes) > 0 {
 		for _, p := range policies {
+			live := &unstructured.Unstructured{}
+			live.SetGroupVersionKind(AgentgatewayPolicyGVK)
+			changed := r.Live.Get(ctx, client.ObjectKeyFromObject(p), live) != nil
 			if err := r.Patch(ctx, p, client.Apply, fieldOwner, client.ForceOwnership); err != nil {
-				return r.degraded(ctx, ack, "applying "+p.GetName()+": "+err.Error(), 5*time.Second)
+				return r.degraded(ctx, &old, ack, "applying "+p.GetName()+": "+err.Error(), 5*time.Second)
+			}
+			if changed || p.GetGeneration() != live.GetGeneration() { // a new write: the NACKs before it are not its
+				base, err := r.currentNacks(ctx, gws)
+				if err != nil {
+					return reconcile.Result{}, err
+				}
+				r.mu.Lock()
+				r.nackBase = base
+				r.mu.Unlock()
 			}
 		}
-		// Policies of chunks that are no longer needed (the list got shorter). Chunk 0 always stays.
+		// Policies of chunks that are no longer used (the highest slots are free again). Chunk 0 always stays. An entry never
+		// moves between policies, so a deleted chunk lists nobody that is still listed.
 		var all unstructured.UnstructuredList
 		all.SetGroupVersionKind(AgentgatewayPolicyGVK)
 		if err := r.Live.List(ctx, &all, client.InNamespace(r.Namespace)); err != nil {
@@ -318,12 +387,26 @@ func (r *StopReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (re
 			}
 		}
 	}
-	// Acknowledgment: per Gateway, every policy accepted at its current generation, rendered from this list generation.
+	// Acknowledgment: per Gateway, every policy accepted at its current generation, rendered from this list generation,
+	// not rejected by a proxy since it was written, and settled. Ready says so for now; AckedGen only ever rises.
 	pending := false
 	now := r.now()
 	ack.Gen, ack.Degraded = list.Gen, ""
+	nacks, err := r.currentNacks(ctx, gws)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	r.mu.Lock()
+	nacked := false
+	for name, n := range nacks {
+		if base, ok := r.nackBase[name]; !ok || n > base {
+			nacked = true
+		}
+	}
+	r.mu.Unlock()
+	seenNow := map[string]bool{}
 	for gw, routes := range gws {
-		ok := len(allRoutes) > 0
+		ok := len(allRoutes) > 0 && !nacked
 		for _, p := range policies {
 			live := &unstructured.Unstructured{}
 			live.SetGroupVersionKind(AgentgatewayPolicyGVK)
@@ -333,9 +416,10 @@ func (r *StopReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (re
 			}
 			if live.GetAnnotations()[StopsGenAnnotation] != strconv.FormatInt(list.Gen, 10) || !ancestorsAccept(live, gw, routes) {
 				ok = false
-				break
+				continue
 			}
-			key := fmt.Sprintf("%s/%d/%s", live.GetName(), live.GetGeneration(), gw)
+			key := fmt.Sprintf("%s/%s/%d/%s", live.GetName(), live.GetUID(), live.GetGeneration(), gw)
+			seenNow[key] = true
 			r.mu.Lock()
 			if r.seen == nil {
 				r.seen = map[string]time.Time{}
@@ -350,41 +434,52 @@ func (r *StopReconciler) Reconcile(ctx context.Context, _ reconcile.Request) (re
 			}
 		}
 		cur := ack.Gateways[gw]
+		cur.Ready = ok
 		if ok && cur.AckedGen < list.Gen {
-			cur = GatewayAck{AckedGen: list.Gen, At: now.UTC()}
+			cur.AckedGen, cur.At = list.Gen, now.UTC()
 		}
 		if !ok {
 			pending = true
 		}
 		ack.Gateways[gw] = cur
-		// seconds the oldest unacknowledged request has waited
+		// seconds the oldest request this Gateway has not confirmed has waited
 		wait := 0.0
 		for _, e := range list.Entries {
-			if e.Gen > cur.AckedGen {
+			if e.Gen > cur.AckedGen || (e.Gen == list.Gen && !cur.Ready) {
 				wait = max(wait, now.Sub(e.RequestedAt).Seconds())
 			}
 		}
 		stopUnconfirmed.WithLabelValues(gw).Set(wait)
 	}
+	r.mu.Lock() // a policy that lost its acceptance starts its settle time again
+	for k := range r.seen {
+		if !seenNow[k] {
+			delete(r.seen, k)
+		}
+	}
+	r.mu.Unlock()
 	stopDegraded.Set(0)
 	if err := r.writeAck(ctx, &old, ack); err != nil {
 		return reconcile.Result{}, err
 	}
-	if pending {
+	switch {
+	case pending:
 		return reconcile.Result{RequeueAfter: 2 * time.Second}, nil
+	case len(list.Entries) > 0:
+		return reconcile.Result{RequeueAfter: 30 * time.Second}, nil // a safety net: routes and Gateways are watched too
 	}
 	return reconcile.Result{}, nil
 }
 
-// degraded records why the list was not rendered. The policies in force stay.
-func (r *StopReconciler) degraded(ctx context.Context, ack StopAck, why string, again time.Duration) (reconcile.Result, error) {
+// degraded records why the list was not rendered. The policies in force stay, and no Gateway is ready.
+func (r *StopReconciler) degraded(ctx context.Context, old *corev1.ConfigMap, ack StopAck, why string, again time.Duration) (reconcile.Result, error) {
 	stopDegraded.Set(1)
 	ack.Degraded = why
-	var old corev1.ConfigMap
-	if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: StopsAckConfigMap}, &old); client.IgnoreNotFound(err) != nil {
-		return reconcile.Result{}, err
+	for g, v := range ack.Gateways {
+		v.Ready = false
+		ack.Gateways[g] = v
 	}
-	if err := r.writeAck(ctx, &old, ack); err != nil {
+	if err := r.writeAck(ctx, old, ack); err != nil {
 		return reconcile.Result{}, err
 	}
 	return reconcile.Result{RequeueAfter: again}, nil
@@ -397,7 +492,7 @@ func (r *StopReconciler) writeAck(ctx context.Context, old *corev1.ConfigMap, ac
 	}
 	if old.Name == "" {
 		cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: StopsAckConfigMap, Namespace: r.Namespace,
-			Labels: map[string]string{"app.kubernetes.io/managed-by": accessLogManager}}, Data: map[string]string{"ack.json": string(b)}}
+			Labels: map[string]string{"app.kubernetes.io/managed-by": accessLogManager, StopsAckLabel: "true"}}, Data: map[string]string{"ack.json": string(b)}}
 		return r.Create(ctx, cm)
 	}
 	next := old.DeepCopy()
@@ -416,6 +511,9 @@ func (r *StopReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	})
 	b := ctrl.NewControllerManagedBy(mgr).Named("ambit-agent-stops").
 		Watches(&corev1.ConfigMap{}, one, builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool { return o.GetName() == StopsConfigMap })))
+	rt := &unstructured.Unstructured{}
+	rt.SetGroupVersionKind(httpRouteGVK)
+	b = b.Watches(rt, one) // a route that gains or loses a parent Gateway changes who must acknowledge
 	p := &unstructured.Unstructured{}
 	p.SetGroupVersionKind(AgentgatewayPolicyGVK)
 	b = b.Watches(p, one, builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool { return strings.HasPrefix(o.GetName(), StopPolicyPrefix) })))

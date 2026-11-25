@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -21,15 +22,18 @@ import (
 )
 
 // playController writes the acknowledgment the controller would: the list generation each Gateway has accepted.
+// notReady names the Gateways whose policies are not accepted right now (drift), although they acknowledged the generation before.
+var notReady = map[string]bool{}
+
 func playController(t *testing.T, s *KeyService, ackedGen map[string]int64, degraded string) {
 	t.Helper()
-	l, _, err := s.stopList(context.Background())
+	l, lcm, err := s.stopList(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := controller.StopAck{Gen: l.Gen, Gateways: map[string]controller.GatewayAck{}, Degraded: degraded}
+	a := controller.StopAck{ListUID: string(lcm.UID), Gen: l.Gen, Gateways: map[string]controller.GatewayAck{}, Degraded: degraded}
 	for g, n := range ackedGen {
-		a.Gateways[g] = controller.GatewayAck{AckedGen: n, At: s.now()}
+		a.Gateways[g] = controller.GatewayAck{AckedGen: n, At: s.now(), Ready: !notReady[g]}
 	}
 	b, _ := json.Marshal(a)
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: controller.StopsAckConfigMap, Namespace: s.Namespace}, Data: map[string]string{"ack.json": string(b)}}
@@ -91,7 +95,12 @@ func TestStopStateMachine(t *testing.T) {
 		acked    map[string]int64
 		degraded string
 	}{"no ConfigMap": {nil, ""}, "one Gateway behind": {map[string]int64{"ambit": 1, "ambit-public": 0}, ""},
-		"degraded": {map[string]int64{"ambit": 1, "ambit-public": 1}, "too many entries"}, "old generation": {map[string]int64{"ambit": 0}, ""}} {
+		"degraded": {map[string]int64{"ambit": 1, "ambit-public": 1}, "too many entries"}, "old generation": {map[string]int64{"ambit": 0}, ""},
+		"not ready right now": {map[string]int64{"ambit": 1, "ambit-public": 1}, "notready"}} {
+		notReady = map[string]bool{}
+		if c.degraded == "notready" {
+			notReady["ambit-public"], c.degraded = true, ""
+		}
 		if name != "no ConfigMap" {
 			playController(t, s, c.acked, c.degraded)
 		}
@@ -124,6 +133,7 @@ func TestStopStateMachine(t *testing.T) {
 		t.Errorf("%d not-confirmed events", nc)
 	}
 	// every Gateway acknowledged: S6
+	notReady = map[string]bool{}
 	playController(t, s, map[string]int64{"ambit": 1, "ambit-public": 1}, "")
 	if more, err := s.AdvanceStops(ctx); err != nil || !more {
 		t.Fatalf("advance: %v %v", more, err)
@@ -151,7 +161,7 @@ func TestStopStateMachine(t *testing.T) {
 }
 
 func TestStartAgent(t *testing.T) {
-	s, _ := newAgentSvc(t)
+	s, clk := newAgentSvc(t)
 	ctx := context.Background()
 	a := mustAgent(t, s, user01("eng"), AgentInput{DisplayName: "bot"})
 	if _, err := s.StartAgent(ctx, user01(), a.Name); err != nil {
@@ -166,6 +176,10 @@ func TestStartAgent(t *testing.T) {
 	if _, err := s.StartAgent(ctx, Session{Email: "user02@acme.com", SignedIn: t0.Unix()}, a.Name); !errors.Is(err, ErrNoAgent) {
 		t.Errorf("another person starts: %v", err)
 	}
+	if _, err := s.StartAgent(ctx, user01(), a.Name); !errors.Is(err, ErrStartTooSoon) { // the gateways may still know the old keys
+		t.Errorf("start at once: %v", err)
+	}
+	clk.Set(clk.Now().Add(2 * time.Minute))
 	b, err := s.StartAgent(ctx, user01(), a.Name)
 	if err != nil || b.State != StateActive || b.StoppedAt != nil || b.StopRequestedAt != nil {
 		t.Fatalf("%+v %v", b, err)
@@ -181,6 +195,7 @@ func TestStartAgent(t *testing.T) {
 	_, _ = s.StopAgent(ctx, Session{Email: "gone@acme.com", SignedIn: t0.Unix()}, c.Name)
 	playController(t, s, map[string]int64{"ambit": 3}, "")
 	_, _ = s.AdvanceStops(ctx)
+	clk.Set(clk.Now().Add(2 * time.Minute))
 	cm := blockList(`["gone@acme.com"]`)
 	if err := s.Client.Create(ctx, cm); err != nil {
 		t.Fatal(err)
@@ -218,7 +233,7 @@ func TestStopWithAFullList(t *testing.T) {
 	ctx := context.Background()
 	l := controller.StopList{Gen: 7}
 	for i := 0; i < controller.MaxStopEntries; i++ {
-		l.Entries = append(l.Entries, controller.StopEntry{Kind: "agent", Name: fmt.Sprintf("old-%04d", i), Gen: 7, RequestedAt: t0})
+		l.Entries = append(l.Entries, controller.StopEntry{Kind: "agent", Name: fmt.Sprintf("old-%04d", i), Gen: 7, Slot: i, RequestedAt: t0})
 	}
 	b, _ := json.Marshal(l)
 	if err := s.Client.Create(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: controller.StopsConfigMap, Namespace: s.Namespace, Labels: map[string]string{agentStopsLabel: "true"}},
@@ -299,9 +314,9 @@ func TestOffboardingAgents(t *testing.T) {
 	n := mustAgent(t, s, adminA, AgentInput{DisplayName: "n", Mode: ModeItself, Name: "nightly", Group: "ops", Owner: "user01@acme.com"})
 	g := mustAgent(t, s, adminA, AgentInput{DisplayName: "g", Mode: ModeItself, Name: "grouped", Group: "ops", Owner: "group:platform"})
 	other := mustAgent(t, s, Session{Email: "user02@acme.com", SignedIn: t0.Unix()}, AgentInput{DisplayName: "theirs"})
-	stopped, orphaned, err := s.OffboardAgents(ctx, "User01@Acme.com", "scim")
-	if err != nil || stopped != 2 || orphaned != 1 {
-		t.Fatalf("%d %d %v", stopped, orphaned, err)
+	requested, stopped, orphaned, err := s.OffboardAgents(ctx, "User01@Acme.com", "scim")
+	if err != nil || requested != 2 || stopped != 0 || orphaned != 1 { // none is confirmed yet: no Gateway answered
+		t.Fatalf("%d %d %d %v", requested, stopped, orphaned, err)
 	}
 	if got, _ := s.GetAgent(ctx, mine.Name); got.State != StateStopping {
 		t.Errorf("%+v", got)
@@ -318,8 +333,8 @@ func TestOffboardingAgents(t *testing.T) {
 		t.Error("the itself-mode agent of the leaver is not marked orphaned")
 	}
 	// repeated: nothing changes
-	if st, or, _ := s.OffboardAgents(ctx, "user01@acme.com", "scim"); or != 0 || st > 2 {
-		t.Errorf("repeat: %d %d", st, or)
+	if _, _, or, _ := s.OffboardAgents(ctx, "user01@acme.com", "scim"); or != 0 {
+		t.Errorf("repeat: %d orphaned", or)
 	}
 	// it keeps working for 7 days; then it is stopped
 	clk.Set(clk.Now().Add(6 * 24 * time.Hour))
@@ -334,7 +349,7 @@ func TestOffboardingAgents(t *testing.T) {
 	}
 	// an admin who moves it in time keeps it
 	m := mustAgent(t, s, adminA, AgentInput{DisplayName: "m", Mode: ModeItself, Name: "moved", Group: "ops", Owner: "user01@acme.com"})
-	_, _, _ = s.OffboardAgents(ctx, "user01@acme.com", "scim again")
+	_, _, _, _ = s.OffboardAgents(ctx, "user01@acme.com", "scim again")
 	if got, _ := s.GetAgent(ctx, m.Name); got.OrphanedAt == nil {
 		t.Fatal("not orphaned")
 	}
@@ -409,4 +424,133 @@ func (s *KeyService) mustAgent(t *testing.T, name string) Agent {
 		t.Fatal(err)
 	}
 	return a
+}
+
+// Review (Codex): S2 deletes every credential Secret that names the agent, also one the console cannot decode, and does
+// not report the keys gone while one is left.
+func TestStopDeletesSecretsTheConsoleCannotDecode(t *testing.T) {
+	s, _ := newAgentSvc(t)
+	ctx := context.Background()
+	a := mustAgent(t, s, user01("eng"), AgentInput{DisplayName: "bot"})
+	_, k, _ := s.CreateAgentKey(ctx, user01(), a.Name, "k", 30, nil)
+	// a Secret with the gateway's data and the labels, but none of the console's annotations
+	sec := secretOf(t, s, k.ID)
+	odd := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "ambit-key-oddoddoddodd", Namespace: s.Namespace, Labels: sec.Labels}, Data: sec.Data}
+	if err := s.Client.Create(ctx, odd); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.StopAgent(ctx, user01(), a.Name); err != nil {
+		t.Fatal(err)
+	}
+	var l corev1.SecretList
+	_ = s.Client.List(ctx, &l, client.MatchingLabels{agentLabel: a.Name})
+	if len(l.Items) != 0 {
+		t.Errorf("%d key Secrets of the agent are left", len(l.Items))
+	}
+}
+
+// Review (Codex): a stop whose list write fails is still on record (state stopping), so no key can be issued and the loop
+// repeats the step; the API answers 503, not 202.
+func TestStopRecordedBeforeTheListWrite(t *testing.T) {
+	failList := true
+	s, _ := newAgentSvcWith(t, interceptor.Funcs{Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+		if obj.GetName() == controller.StopsConfigMap && failList {
+			return errors.New("unavailable")
+		}
+		return c.Create(ctx, obj, opts...)
+	}})
+	ctx := context.Background()
+	a := mustAgent(t, s, user01("eng"), AgentInput{DisplayName: "bot"})
+	_, k, _ := s.CreateAgentKey(ctx, user01(), a.Name, "k", 30, nil)
+	got, err := s.StopAgent(ctx, user01(), a.Name)
+	if err == nil || got.State != StateStopping {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if _, _, err := s.CreateAgentKey(ctx, user01(), a.Name, "late", 30, nil); !errors.Is(err, ErrAgentNotActive) {
+		t.Errorf("a key while the stop is half done: %v", err)
+	}
+	failList = false
+	_, _ = s.AdvanceStops(ctx) // the loop finishes S1 and S2 from the record
+	if entryIndex(listOf(t, s), a.Name) < 0 {
+		t.Error("the loop did not list the agent")
+	}
+	if _, err := s.getKey(ctx, k.ID); !apierrors.IsNotFound(err) {
+		t.Error("the key lives")
+	}
+}
+
+// Review (Codex): an answer for another list is not an acknowledgment; a malformed answer is none.
+func TestAcknowledgmentMustBeForThisList(t *testing.T) {
+	s, _ := newAgentSvc(t)
+	ctx := context.Background()
+	a := mustAgent(t, s, user01("eng"), AgentInput{DisplayName: "bot"})
+	_, _ = s.StopAgent(ctx, user01(), a.Name)
+	playController(t, s, map[string]int64{"ambit": 1}, "")
+	var cm corev1.ConfigMap
+	_ = s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: controller.StopsAckConfigMap}, &cm)
+	good := cm.Data["ack.json"]
+	cm.Data["ack.json"] = strings.Replace(good, `"listUID":"`, `"listUID":"x`, 1) // another list's answer
+	_ = s.Client.Update(ctx, &cm)
+	_, _ = s.AdvanceStops(ctx)
+	if got, _ := s.GetAgent(ctx, a.Name); got.State != StateStopping {
+		t.Fatalf("an answer for another list stopped the agent: %s", got.State)
+	}
+	cm.Data["ack.json"] = `{"gen":1,"gateways":"none"}`
+	_ = s.Client.Update(ctx, &cm)
+	_, _ = s.AdvanceStops(ctx)
+	if got, _ := s.GetAgent(ctx, a.Name); got.State != StateStopping {
+		t.Fatalf("a malformed answer stopped the agent: %s", got.State)
+	}
+	cm.Data["ack.json"] = good
+	_ = s.Client.Update(ctx, &cm)
+	_, _ = s.AdvanceStops(ctx)
+	if got, _ := s.GetAgent(ctx, a.Name); got.State != StateStopped || got.StopAcks["ambit"].IsZero() {
+		t.Fatalf("%+v", got)
+	}
+}
+
+// Review (Codex): the entry of an agent that was deleted before its credentials were gone is finished from the list.
+func TestEntryOfADeletedAgentFinishesItsCredentials(t *testing.T) {
+	s, _ := newAgentSvc(t)
+	ctx := context.Background()
+	a := mustAgent(t, s, user01("eng"), AgentInput{DisplayName: "bot"})
+	_, k, _ := s.CreateAgentKey(ctx, user01(), a.Name, "k", 30, nil)
+	if err := s.TestListOnly(ctx, a.Name, true); err != nil { // an entry with no S2 done
+		t.Fatal(err)
+	}
+	if err := s.DeleteAgent(ctx, user01(), a.Name); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = s.AdvanceStops(ctx)
+	if l := listOf(t, s); l.Entries[0].KeysDeletedAt == nil {
+		t.Error("the entry of the deleted agent was not finished")
+	}
+	if _, err := s.getKey(ctx, k.ID); !apierrors.IsNotFound(err) {
+		t.Error("the key lives")
+	}
+}
+
+// Slots: the lowest free one; a full list has none.
+func TestStopListSlots(t *testing.T) {
+	s, _ := newAgentSvc(t)
+	ctx := context.Background()
+	for _, n := range []string{"a", "b", "c"} {
+		if _, err := s.addEntry(ctx, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.changeStopList(ctx, func(l *controller.StopList) (bool, bool) {
+		l.Entries = slices.Delete(l.Entries, 1, 2)
+		return true, false
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = s.addEntry(ctx, "d")
+	slots := map[string]int{}
+	for _, e := range listOf(t, s).Entries {
+		slots[e.Name] = e.Slot
+	}
+	if slots["a"] != 0 || slots["c"] != 2 || slots["d"] != 1 {
+		t.Errorf("slots %v: a removed entry's slot is reused, and nobody else moves", slots)
+	}
 }

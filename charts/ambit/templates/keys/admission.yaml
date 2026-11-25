@@ -92,3 +92,35 @@ spec:
   validationActions: [Deny]
   matchResources:
     namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ $ns }} } }
+---
+# The stop acknowledgment (docs/agents.md, "Stopping an agent"): what each Gateway has accepted. The console reports an agent
+# stopped only from it, so only the controller may write it; the console and everything else may only read it.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: ambit-agent-ack-writer
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [configmaps]
+  validations:
+    - expression: >-
+        request.userInfo.username == "system:serviceaccount:{{ $ns }}:ambit-controller" ||
+        (request.operation == "DELETE" &&
+        request.userInfo.username in ["system:serviceaccount:kube-system:namespace-controller", "system:serviceaccount:kube-system:generic-garbage-collector"])
+      message: "only the Ambit controller may write the agent stop acknowledgment"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ambit-agent-ack-writer
+spec:
+  policyName: ambit-agent-ack-writer
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ $ns }} } }
+    objectSelector: { matchExpressions: [{ key: ambitproject.dev/agent-stops-ack, operator: Exists }] }

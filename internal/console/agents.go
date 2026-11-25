@@ -116,10 +116,12 @@ type Agent struct {
 	StoppedAt          *time.Time `json:"stoppedAt,omitempty"`
 	StopUnlisted       bool       `json:"stopUnlisted,omitempty"`
 	StopNotConfirmedAt *time.Time `json:"stopNotConfirmedAt,omitempty"`
-	OrphanedAt         *time.Time `json:"orphanedAt,omitempty"`
-	Rev                int        `json:"rev"` // changes with the scope and the platform; keys carry the revision they were written from
-	Created            time.Time  `json:"created"`
-	CreatedBy          string     `json:"createdBy"`
+	// StopAcks: when each Gateway acknowledged the stop, kept for the evidence after the list entry is pruned.
+	StopAcks   map[string]time.Time `json:"stopAcks,omitempty"`
+	OrphanedAt *time.Time           `json:"orphanedAt,omitempty"`
+	Rev        int                  `json:"rev"` // changes with the scope and the platform; keys carry the revision they were written from
+	Created    time.Time            `json:"created"`
+	CreatedBy  string               `json:"createdBy"`
 
 	UID, ResourceVersion string `json:"-"`
 }

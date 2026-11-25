@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 type agentAnswer struct {
@@ -138,7 +139,7 @@ func TestAgentsAPI(t *testing.T) {
 }
 
 func TestAgentStopAPI(t *testing.T) {
-	f, _ := saFixture(t, nil)
+	f, clk := saFixture(t, nil)
 	f.keys.Agents, f.keys.RecordKey = defaultAgents, testRecordKey
 	if err := f.keys.Client.Create(context.Background(), scopeReady()); err != nil {
 		t.Fatal(err)
@@ -176,6 +177,7 @@ func TestAgentStopAPI(t *testing.T) {
 	if r := f.call(t, "GET", "/api/agents/"+a.Name, ana, nil); !strings.Contains(r.Body.String(), `"state":"stopped"`) || !strings.Contains(r.Body.String(), `"stoppedAt"`) {
 		t.Errorf("detail: %s", r.Body)
 	}
+	clk.Set(clk.Now().Add(2 * time.Minute))
 	if r := f.call(t, "POST", "/api/agents/"+a.Name+"/start", ana, map[string]any{}); r.Code != 200 || !strings.Contains(r.Body.String(), `"state":"active"`) {
 		t.Errorf("start: %d %s", r.Code, r.Body)
 	}

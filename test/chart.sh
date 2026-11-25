@@ -79,7 +79,7 @@ noemail=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.
 grep -q -- '--require-email=false' <<<"$noemail" || { echo "FAIL chart: controller flag"; exit 1; }
 check_qs "pols={x['metadata']['name']:x['spec'] for x in docs if x['kind']=='ValidatingAdmissionPolicy'}
 # No Lease-holder check in admission: the API server's parameter cache can go stale and lock out every key write.
-assert set(pols)=={'ambit-keys-writer','ambit-key-lease'}, list(pols)
+assert set(pols)=={'ambit-keys-writer','ambit-key-lease','ambit-agent-ack-writer'}, list(pols)
 assert all('paramKind' not in p for p in pols.values()), pols
 w=pols['ambit-keys-writer']
 assert w['failurePolicy']=='Fail', w
@@ -93,9 +93,9 @@ assert [v['expression'] for v in w['validations']]==['variables.console || varia
 assert w['validations'][0]['message']=='only the Ambit console may write personal API key objects', w
 sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event','ambitproject.dev/agent','ambitproject.dev/agent-stops']
 bs={x['metadata']['name']:x['spec'] for x in docs if x['kind']=='ValidatingAdmissionPolicyBinding'}
-assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(5)}|{'ambit-key-lease'}, list(bs)
+assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(5)}|{'ambit-key-lease','ambit-agent-ack-writer'}, list(bs)
 assert all('paramRef' not in b for b in bs.values()), bs
-bs.pop('ambit-key-lease')
+bs.pop('ambit-key-lease'); bs.pop('ambit-agent-ack-writer')
 for n,b in bs.items():
   i=int(n[-1])
   assert b['policyName']=='ambit-keys-writer' and b['validationActions']==['Deny'], b

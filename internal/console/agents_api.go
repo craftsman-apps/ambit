@@ -235,7 +235,8 @@ func (c *Catalog) moveAgent(w http.ResponseWriter, r *http.Request, s Session) {
 // had confirmed already). The state changes to stopped when every Gateway acknowledged the stop: poll the agent.
 func (c *Catalog) stopAgent(w http.ResponseWriter, r *http.Request, s Session) {
 	a, err := c.Keys.StopAgent(r.Context(), s, r.PathValue("name"))
-	if err != nil && a.Name == "" {
+	// 202 only when the stop is on record (state stopping or stopped): then every step is repeated until it works
+	if err != nil && a.State != StateStopping && a.State != StateStopped {
 		keyErr(w, err)
 		return
 	}

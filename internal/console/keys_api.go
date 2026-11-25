@@ -157,6 +157,9 @@ func keyErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, ErrKeysOff), errors.Is(err, ErrServicesOff), errors.Is(err, ErrNameTaken), errors.Is(err, ErrAgentsOff),
 		errors.Is(err, ErrAgentLimit), errors.Is(err, ErrAgentNotActive):
 		writeErr(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrStartTooSoon):
+		w.Header().Set("Retry-After", "30")
+		writeErr(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrNotStopped):
 		writeErr(w, http.StatusConflict, err.Error())
 	case errors.Is(err, ErrNoAgent):

@@ -112,7 +112,7 @@ func main() {
 	}
 	// The stop list of agents: policies on every MCP and LLM route, and the acknowledgment per Gateway.
 	if err := (&controller.StopReconciler{Client: mgr.GetClient(), Live: mgr.GetAPIReader(), Namespace: ns,
-		Routes: []string{"ambit-mcp", *route}, Issuer: *agentIssuer, Settle: *activationSettle}).SetupWithManager(mgr); err != nil {
+		Routes: []string{"ambit-mcp", *route, "ambit-llm-codex-models"}, Issuer: *agentIssuer, Settle: *activationSettle}).SetupWithManager(mgr); err != nil {
 		log.Error(err, "set up the agent stop controller")
 		os.Exit(1)
 	}

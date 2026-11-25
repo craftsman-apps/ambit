@@ -42,7 +42,7 @@ rules:
   # The stop policies are attached to the Gateways' routes: the controller reads which Gateway each route belongs to.
   - apiGroups: [gateway.networking.k8s.io]
     resources: [httproutes]
-    verbs: [get, list]
+    verbs: [get, list, watch]
   # agentgateway's xDS certificate: when it was not renewed, an annotation makes agentgateway renew it.
   - apiGroups: [""]
     resources: [secrets]

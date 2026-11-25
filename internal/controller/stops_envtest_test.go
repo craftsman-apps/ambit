@@ -39,7 +39,7 @@ func TestStopReconcilerAgainstAPIServer(t *testing.T) {
 		t.Helper()
 		l := StopList{Gen: gen}
 		for i := 0; i < n; i++ {
-			l.Entries = append(l.Entries, StopEntry{Kind: "agent", Name: fmt.Sprintf("agent-%04d", i), Gen: gen, RequestedAt: time.Now().Add(-5 * time.Second)})
+			l.Entries = append(l.Entries, StopEntry{Kind: "agent", Name: fmt.Sprintf("agent-%04d", i), Gen: gen, Slot: i, RequestedAt: time.Now().Add(-5 * time.Second)})
 		}
 		b, _ := json.Marshal(l)
 		cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: StopsConfigMap, Namespace: ns}}
@@ -68,7 +68,11 @@ func TestStopReconcilerAgainstAPIServer(t *testing.T) {
 		if err := envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: StopsAckConfigMap}, &cm); err != nil {
 			t.Fatal(err)
 		}
-		return ParseStopAck(&cm)
+		a, ok := ParseStopAck(&cm)
+		if !ok {
+			t.Fatalf("the acknowledgment does not parse: %v", cm.Data)
+		}
+		return a
 	}
 	policy := func(k int) (*unstructured.Unstructured, error) {
 		o := &unstructured.Unstructured{}
@@ -133,7 +137,7 @@ func TestStopReconcilerAgainstAPIServer(t *testing.T) {
 		t.Fatalf("one of two policies on the public Gateway: %+v", a)
 	}
 	accept(1, "ambit-mcp", "ambit-llm", "ambit-mcp-public")
-	if res := reconcileOnce(); res.RequeueAfter != 0 {
+	if res := reconcileOnce(); res.RequeueAfter != 30*time.Second { // confirmed: only the safety-net pass remains
 		t.Errorf("all acknowledged: %+v", res)
 	}
 	if a := ackOf(); a.Gateways["ambit"].AckedGen != 1 || a.Gateways["ambit-public"].AckedGen != 1 || a.Gateways["ambit-public"].At.IsZero() {
@@ -156,6 +160,39 @@ func TestStopReconcilerAgainstAPIServer(t *testing.T) {
 	if a := ackOf(); a.Gateways["ambit"].AckedGen != 2 || a.Gateways["ambit-public"].AckedGen != 2 {
 		t.Fatalf("generation 2: %+v", a)
 	}
+
+	// drift: a stop policy is edited by hand (or deleted) while the list stays: the Gateway is not ready until it is put
+	// back and accepted again; the acknowledged generation stays (it only rises), but Ready is what the console checks
+	if a := ackOf(); !a.Gateways["ambit"].Ready || a.ListUID == "" {
+		t.Fatalf("ready before the drift: %+v", a)
+	}
+	drift, _ := policy(0)
+	_ = unstructured.SetNestedSlice(drift.Object, []any{"false"}, "spec", "traffic", "authorization", "policy", "matchExpressions")
+	if err := envClient.Update(ctx, drift); err != nil {
+		t.Fatal(err)
+	}
+	reconcileOnce() // the controller puts its own spec back; the new generation has no verdict yet
+	if a := ackOf(); a.Gateways["ambit"].Ready || a.Gateways["ambit-public"].Ready {
+		t.Fatalf("a changed policy is still ready: %+v", a)
+	}
+	accept(0, "ambit-mcp", "ambit-llm", "ambit-mcp-public")
+	reconcileOnce()
+	if a := ackOf(); !a.Gateways["ambit"].Ready {
+		t.Fatalf("not ready after the verdict: %+v", a)
+	}
+	// a stop list that is recreated is a new list: the old answer does not count for it
+	oldUID := ackOf().ListUID
+	var lcm corev1.ConfigMap
+	_ = envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: StopsConfigMap}, &lcm)
+	_ = envClient.Delete(ctx, &lcm)
+	list(2, 160)
+	reconcileOnce()
+	if a := ackOf(); a.ListUID == oldUID || a.Gateways["ambit"].AckedGen != 0 && a.Gateways["ambit"].AckedGen != 2 {
+		t.Fatalf("a recreated list kept the old answer: %+v", a)
+	}
+	accept(0, "ambit-mcp", "ambit-llm", "ambit-mcp-public")
+	accept(1, "ambit-mcp", "ambit-llm", "ambit-mcp-public")
+	reconcileOnce()
 
 	// 1,001 entries: not rendered; the last policies stay, the answer says why
 	list(3, 1001)

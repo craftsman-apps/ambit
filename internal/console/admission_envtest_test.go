@@ -184,6 +184,28 @@ func TestAdmissionFencesKeyObjects(t *testing.T) {
 	if err := podA.CoreV1().ConfigMaps(admNS).Delete(ctx, "ag-console", metav1.DeleteOptions{}); err != nil {
 		t.Errorf("the console deletes an agent record: %v", err)
 	}
+	// The stop acknowledgment: only the controller writes it (the console reports a stop from it).
+	ackCM := func(name string) *corev1.ConfigMap {
+		return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: admNS, Labels: map[string]string{"ambitproject.dev/agent-stops-ack": "true"}}, Data: map[string]string{"ack.json": "{}"}}
+	}
+	const msgAck = "only the Ambit controller may write the agent stop acknowledgment"
+	waitUntil("ack binding", func() bool {
+		name := fresh("probe")
+		_, err := podA.CoreV1().ConfigMaps(admNS).Create(ctx, ackCM(name), metav1.CreateOptions{})
+		if err == nil {
+			_ = admClient(t, cfg, "system:serviceaccount:ambit-system:ambit-controller", "").CoreV1().ConfigMaps(admNS).Delete(ctx, name, metav1.DeleteOptions{})
+		}
+		return refused(err, msgAck)
+	})
+	ctl := admClient(t, cfg, "system:serviceaccount:ambit-system:ambit-controller", "")
+	if _, err := ctl.CoreV1().ConfigMaps(admNS).Create(ctx, ackCM("ambit-agent-stops-ack"), metav1.CreateOptions{}); err != nil {
+		t.Errorf("the controller writes the acknowledgment: %v", err)
+	}
+	for who, c := range map[string]kubernetes.Interface{"the console": podA, "an admin": adm} {
+		if _, err := c.CoreV1().ConfigMaps(admNS).Update(ctx, ackCM("ambit-agent-stops-ack"), metav1.UpdateOptions{}); !refused(err, msgAck) {
+			t.Errorf("%s changes the acknowledgment: %v", who, err)
+		}
+	}
 	if _, err := sec(other).Create(ctx, keySecret("plain", nil), metav1.CreateOptions{}); err != nil {
 		t.Errorf("unlabelled Secret by any user must succeed: %v", err)
 	}

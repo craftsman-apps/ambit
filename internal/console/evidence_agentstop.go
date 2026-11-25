@@ -2,7 +2,6 @@ package console
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -65,7 +64,7 @@ func (c *Catalog) prepareAgentStopExport(ctx context.Context, name string) (*exp
 		notes: []string{
 			noteUTC, noteSigned,
 			"timeline.csv: the steps of the stop, from the agent's record, the stop list and the controller's acknowledgment. S1 request, S2 keys deleted, S3 grants revoked (empty without OAuth), S5 the time each Gateway accepted the stop policy, S6 stopped.",
-			"calls-after-request.csv: every gateway record that carries this agent's name from the request on. A call is accepted when its status is below 400. Ambit does not promise that no call is accepted after a stop request: this file counts the ones that were.",
+			"calls-after-request.csv: every gateway record that carries this agent's name from the request on. A call is accepted when its status is below 400, refused when it is 401 or 403, and other (a server error) when neither. Ambit does not promise that no call is accepted after a stop request: this file counts the ones that were.",
 			"A call made with a key that was already deleted is logged as an invalid key without the agent's name, so it is not in this file. A call refused by the stop policy while the key still existed is (status 403).",
 			"summary.csv: the measured counts and times. The time to the first refusal is the first refused call of this file; without one it is empty.",
 		},
@@ -97,13 +96,23 @@ func (c *Catalog) prepareAgentStopExport(ctx context.Context, name string) (*exp
 			if err := row("S3", "grants revoked", grants, ""); err != nil {
 				return err
 			}
+			for g := range a.StopAcks { // Gateways that are gone from the answer since
+				if _, ok := ack.Gateways[g]; !ok {
+					t := a.StopAcks[g]
+					if err := row("S5", "stop policy accepted by the Gateway (no longer a Gateway)", &t, g); err != nil {
+						return err
+					}
+				}
+			}
 			for _, g := range sortedKeys(ack.Gateways) {
 				v := ack.Gateways[g]
 				var at *time.Time
-				if entry != nil && v.AckedGen >= entry.Gen && !v.At.IsZero() {
+				if t, ok := a.StopAcks[g]; ok { // the times kept when the agent was stopped
+					at = &t
+				} else if entry != nil && v.AckedGen >= entry.Gen && !v.At.IsZero() {
 					at = &v.At
 				}
-				if err := row("S5", "stop policy accepted by the Gateway (generation "+fmt.Sprint(v.AckedGen)+")", at, g); err != nil {
+				if err := row("S5", "stop policy accepted by the Gateway", at, g); err != nil {
 					return err
 				}
 			}
@@ -124,11 +133,7 @@ func (c *Catalog) prepareAgentStopExport(ctx context.Context, name string) (*exp
 					return err
 				}
 				calls = append(calls, k)
-				n, _ := strconv.Atoi(k.stat)
-				outcome := "accepted"
-				if n >= 400 {
-					outcome = "refused"
-				}
+				outcome := callOutcomeOf(k.stat)
 				if err := w.Row(csvTime(k.at), secs(k.at), k.ingress, k.identity, k.keyID, k.method, k.stat, outcome); err != nil {
 					return err
 				}
@@ -140,14 +145,15 @@ func (c *Catalog) prepareAgentStopExport(ctx context.Context, name string) (*exp
 			var lastAcc *call
 			for i := range calls {
 				k := &calls[i]
-				if n, _ := strconv.Atoi(k.stat); n >= 400 {
+				switch callOutcomeOf(k.stat) {
+				case "refused":
 					if ref[k.ingress] == nil {
 						ref[k.ingress] = k
 					}
-					continue
+				case "accepted":
+					acc[k.ingress]++
+					lastAcc = k
 				}
-				acc[k.ingress]++
-				lastAcc = k
 			}
 			for _, g := range []string{"private", "public"} {
 				if err := w.Row("accepted_calls_after_request", g, acc[g]); err != nil {
@@ -169,6 +175,21 @@ func (c *Catalog) prepareAgentStopExport(ctx context.Context, name string) (*exp
 		}},
 	}
 	return job, nil
+}
+
+// callOutcomeOf: 401 and 403 are the gateway's refusals (the stop policy, a key that is not valid); a status below 400 is an
+// accepted call; anything else (a server error, no status) is neither, and is shown as "other".
+func callOutcomeOf(stat string) string {
+	n, err := strconv.Atoi(stat)
+	switch {
+	case err != nil:
+		return "other"
+	case n == 401 || n == 403:
+		return "refused"
+	case n < 400:
+		return "accepted"
+	}
+	return "other"
 }
 
 func sortedKeys[V any](m map[string]V) []string {

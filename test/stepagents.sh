@@ -96,6 +96,7 @@ after=$(policy_expr | wc -c | tr -d ' ')
 big=$(python3 -c 'import json;print(json.dumps({"displayName":"big","scope":["s%d"%i for i in range(51)]}))')
 c=$(ag POST /api/agents "$big"); [[ "$c" == 400 ]] || fail "5 51 scope entries: HTTP $c"
 c=$(ag POST "/api/agents/$A1/keys" '{"name":"year","days":365}'); [[ "$c" == 400 ]] || fail "5 a 365-day agent key: HTTP $c"
+for n in "${AGENTS[@]:2}"; do [[ $(ag DELETE "/api/agents/$n") == 204 ]] || true; done   # the fillers (and the agents after them): free the slots
 pass "5 10 agents per person (the 11th: 409); the access policy is $after characters with 1 agent and with 10; 51 scope entries 400; a 365-day key 400"
 
 # 6 · itself mode: only admins; the agent is a service account with an owner, a platform and a scope
@@ -156,57 +157,65 @@ new_agent_key() {
   wait_for 90 '[[ $(init_code "$K") == 200 ]]' || fail "$1 a new agent key is not accepted: $(cat "$W/init")"
 }
 # poll KEY OUTFILE: calls the MCP URL with the key every 25 ms in the background; sets POLLPID
-poll() { go run ./test/stopmeasure -url "$MCP" -key "$1" -connect "$CONNECT" > "$2" & POLLPID=$!; sleep 1; }
-# measure FILE T0: first refusal (status >= 400 or no answer) at or after T0, as "<ms from T0> <accepted calls after T0>"
+go build -o "$W/stopmeasure" ./test/stopmeasure || fail "build stopmeasure"
+poll() { "$W/stopmeasure" -url "$MCP" -key "$1" -connect "$CONNECT" > "$2" & POLLPID=$!; sleep 1; }
+# admin_hook PATH BODY: a test hook as the bootstrap admin (the hooks are admin-only); signs user09 in again after it
+admin_hook() { sign_in local admin@ambit.local "$PW" >/dev/null || fail "admin sign-in"; local c; c=$(api POST "$1" "$2"); sign_in keycloak user09 user09-test-pass >/dev/null || fail "user09 sign-in"; echo "$c"; }
+# measure FILE T0: "<first refusal in ms from T0, -1 if none> <accepted calls after T0> <calls with no answer or a server error>".
+# A refusal is 401 or 403; no answer and 5xx are counted apart, never as a refusal.
 measure() {
   python3 - "$1" "$2" <<'PY'
 import sys
-t0 = int(sys.argv[2]); first = None; acc = 0
+t0 = int(sys.argv[2]); first = None; acc = 0; err = 0
 for line in open(sys.argv[1]):
     p = line.split()
     if len(p) != 2: continue
     t, st = int(p[0]), int(p[1])
     if t < t0: continue
-    if st == 0 or st >= 400:
+    if st in (401, 403):
         if first is None: first = t - t0
-    else:
+    elif st == 0 or st >= 500:
+        err += 1
+    elif st < 400:
         acc += 1
-print(first if first is not None else -1, acc)
+print(first if first is not None else -1, acc, err)
 PY
 }
 await_state() { wait_for "$3" '[[ $(agent_state '"$1"') == '"$2"' ]]'; }
 
 # 10 · the stop list alone refuses a key that is still valid: the gateway's policy is the authoritative check
 sign_in keycloak user09 user09-test-pass; new_agent_key 10
-[[ $(api POST "/api/test/agents/$AGENT/list-only" '{"on":true}') == 204 ]] || fail "10 list-only hook: $(cat "$W/api")"
+[[ $(admin_hook "/api/test/agents/$AGENT/list-only" '{"on":true}') == 204 ]] || fail "10 list-only hook: $(cat "$W/api")"
 wait_for 60 '[[ $(init_code "$K") == 403 ]]' || fail "10 a key of a listed agent was not refused by the stop policy: $(cat "$W/init")"
 kubectl -n "$NS" get secret "ambit-key-$KID" >/dev/null || fail "10 the key Secret is gone: the refusal came from the key, not from the stop policy"
-[[ $(api POST "/api/test/agents/$AGENT/list-only" '{"on":false}') == 204 ]] || fail "10 unlist: $(cat "$W/api")"
+[[ $(admin_hook "/api/test/agents/$AGENT/list-only" '{"on":false}') == 204 ]] || fail "10 unlist: $(cat "$W/api")"
 wait_for 90 '[[ $(init_code "$K") == 200 ]]' || fail "10 the key is not accepted again after the entry was removed"
 pass "10 the agent on the stop list: its still-valid key is refused (403) by the gateway policy; off the list it works again"
 
 # 11 · a list of 151 entries is two policies; both are accepted and the policy still refuses
-[[ $(api POST /api/test/agents/stop-fill '{"n":151}') == 204 ]] || fail "11 fill hook: $(cat "$W/api")"
+[[ $(admin_hook /api/test/agents/stop-fill '{"n":151}') == 204 ]] || fail "11 fill hook: $(cat "$W/api")"
 wait_for 60 'kubectl -n "$NS" get agentgatewaypolicy ambit-agent-stops-0 ambit-agent-stops-1 >/dev/null' || fail "11 two stop policies were not created"
-[[ $(api POST "/api/test/agents/$AGENT/list-only" '{"on":true}') == 204 ]] || fail "11 list-only hook"
+[[ $(admin_hook "/api/test/agents/$AGENT/list-only" '{"on":true}') == 204 ]] || fail "11 list-only hook"
 wait_for 90 '[[ $(init_code "$K") == 403 ]]' || fail "11 with 152 entries in 2 policies the listed agent's key is still accepted"
 for i in 0 1; do
   [[ $(kubectl -n "$NS" get agentgatewaypolicy "ambit-agent-stops-$i" -o jsonpath='{.status.ancestors[*].conditions[?(@.type=="Accepted")].status}') == *True* ]] || fail "11 policy $i is not accepted"
 done
-[[ $(api POST /api/test/agents/stop-fill '{"n":0}') == 204 ]] && [[ $(api POST "/api/test/agents/$AGENT/list-only" '{"on":false}') == 204 ]] || fail "11 clean up"
+[[ $(admin_hook /api/test/agents/stop-fill '{"n":0}') == 204 && $(admin_hook "/api/test/agents/$AGENT/list-only" '{"on":false}') == 204 ]] || fail "11 clean up"
 wait_for 90 '! kubectl -n "$NS" get agentgatewaypolicy ambit-agent-stops-1 >/dev/null 2>&1' || fail "11 the second policy stays after the list got short"
+[[ $(ag DELETE "/api/agents/$AGENT") == 204 ]] || fail "11 delete the probe agent"
 pass "11 152 entries: two stop policies, both accepted, the listed agent is refused; back to one policy when the list is short"
 
 # 12 · measured: stop request to first refusal, 20 runs with keys on the private Gateway
 RUNS=${STOP_RUNS:-20}; : > "$W/runs"
 for i in $(seq 1 "$RUNS"); do
+  [[ $(admin_hook /api/test/keys/reset-limits '{}') == 204 ]] || fail "12.$i reset-limits"   # 10 keys per person and hour
   new_agent_key "12.$i"; poll "$K" "$W/poll"
   T0=$(now_ms); c=$(ag POST "/api/agents/$AGENT/stop" '{}'); T1=$(now_ms); [[ "$c" == 202 ]] || fail "12.$i stop: HTTP $c $(cat "$W/api")"
   await_state "$AGENT" stopped 120 || fail "12.$i the agent is not reported stopped in 120 s: $(cat "$W/api")"
   T2=$(now_ms); sleep 1; kill "$POLLPID" 2>/dev/null; wait "$POLLPID" 2>/dev/null || true
-  read -r first acc < <(measure "$W/poll" "$T0")
+  read -r first acc errs < <(measure "$W/poll" "$T0")
   [[ "$first" -ge 0 ]] || fail "12.$i the key was never refused after the stop: $(tail -3 "$W/poll")"
-  echo "$first $acc $((T2 - T0))" >> "$W/runs"
+  echo "$first $acc $((T2 - T0)) $errs" >> "$W/runs"
   [[ $(ag DELETE "/api/agents/$AGENT") == 204 ]] || fail "12.$i delete: $(cat "$W/api")"
 done
 python3 - "$W/runs" <<'PY' | tee "$W/summary"
@@ -216,8 +225,9 @@ def pct(v, p):
     v = sorted(v); k = (len(v) - 1) * p / 100; lo = int(k); hi = min(lo + 1, len(v) - 1)
     return v[lo] + (v[hi] - v[lo]) * (k - lo)
 f = [r[0] for r in rows]; a = [r[1] for r in rows]; s = [r[2] for r in rows]
-print("MEASURED stop request to first refusal, keys, private Gateway, %d runs: p50 %.0f ms, p95 %.0f ms, p99 %.0f ms, max %d ms; accepted calls after the request (25 ms polling): median %.0f, max %d; request to 'stopped': p50 %.1f s, max %.1f s"
-      % (len(rows), pct(f, 50), pct(f, 95), pct(f, 99), max(f), pct(a, 50), max(a), pct(s, 50) / 1000, max(s) / 1000))
+e = [r[3] for r in rows]
+print("MEASURED stop request to first refusal, keys, private Gateway, %d runs: p50 %.0f ms, p95 %.0f ms, p99 %.0f ms, max %d ms; accepted calls after the request (25 ms polling): median %.0f, max %d; calls with no answer or a server error: %d; request to 'stopped': p50 %.1f s, max %.1f s"
+      % (len(rows), pct(f, 50), pct(f, 95), pct(f, 99), max(f), pct(a, 50), max(a), sum(e), pct(s, 50) / 1000, max(s) / 1000))
 PY
 pass "12 $(cat "$W/summary")"
 
@@ -230,7 +240,7 @@ sleep 70
 [[ $(agent_state "$AGENT") == stopping ]] || fail "13 the agent is reported $(agent_state "$AGENT") while no Gateway confirmed the stop"
 [[ $(field 'bool(d.get("stopNotConfirmedAt"))') == True ]] || fail "13 no report that the stop is not confirmed after 60 s: $(cat "$W/api")"
 kill "$POLLPID" 2>/dev/null; wait "$POLLPID" 2>/dev/null || true
-read -r f13 a13 < <(measure "$W/poll13" "$T0")
+read -r f13 a13 e13 < <(measure "$W/poll13" "$T0")
 kubectl -n "$NS" scale deploy/ambit-controller --replicas=1 >/dev/null
 await_state "$AGENT" stopped 180 || fail "13 the agent is not stopped 180 s after the controller came back"
 pass "13 controller down: key refused after $f13 ms ($a13 accepted calls in between), stop not confirmed for 70 s (reported), confirmed after it returned"
@@ -251,11 +261,11 @@ if [[ -n "$AGW" ]]; then
   T0=$(now_ms); c=$(ag POST "/api/agents/$AGENT/stop" '{}'); [[ "$c" == 202 ]] || fail "15 stop: HTTP $c"
   sleep 20
   [[ $(agent_state "$AGENT") == stopping ]] || fail "15 the agent is reported $(agent_state "$AGENT") while the gateway control plane is down"
-  read -r f15 a15 < <(measure "$W/poll15" "$T0")
+  read -r f15 a15 e15 < <(measure "$W/poll15" "$T0")
   kubectl -n "$NS" scale "$AGW" --replicas=1 >/dev/null
   await_state "$AGENT" stopped 300 || fail "15 the agent is not stopped after the control plane came back"
   sleep 1; kill "$POLLPID" 2>/dev/null; wait "$POLLPID" 2>/dev/null || true
-  read -r g15 b15 < <(measure "$W/poll15" "$T0")
+  read -r g15 b15 e15b < <(measure "$W/poll15" "$T0")
   [[ "$g15" -ge 0 ]] || fail "15 the key was never refused"
   pass "15 gateway control plane down: in the first 20 s the first refusal was $f15 ms ($a15 calls accepted; -1 = none refused); after it returned the first refusal was $g15 ms after the request ($b15 accepted in all)"
 else

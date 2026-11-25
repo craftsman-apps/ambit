@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/oauth"
@@ -243,5 +244,18 @@ func TestOAuthClientsAdminAPI(t *testing.T) {
 	c.deleteOAuthClient(w, r, Session{Role: RoleAdmin, Email: "admin@acme.com"})
 	if w.Code != 204 || deleted != "c1" {
 		t.Fatalf("delete: %d %q", w.Code, deleted)
+	}
+}
+
+// With OAuth the stop machine waits the whole retention before it lets an agent start again (an access token that was issued
+// before the stop lives up to 15 minutes); without OAuth one minute is enough for the proxies to drop deleted keys.
+func TestStartWaitIsTheRetentionWithOAuth(t *testing.T) {
+	s := &KeyService{Agents: AgentSettings{StopRetention: 25 * time.Minute}}
+	if s.startWait() != time.Minute {
+		t.Fatalf("without OAuth: %v", s.startWait())
+	}
+	s.RevokeGrants = func(context.Context, Agent) error { return nil }
+	if s.startWait() != 25*time.Minute {
+		t.Fatalf("with OAuth: %v", s.startWait())
 	}
 }

@@ -211,6 +211,60 @@ kube("rollout", "status", "deploy/ambit-console", "--timeout=300s")
 ok = wait(lambda: token(cid1, grant_type="refresh_token", refresh_token=tokr["refresh_token"])[0] == 200, 120, 3)
 check("6 console back: the same refresh token works", ok)
 
+# ---------------------------------------------------------------------------------------------------------------------
+# 7 · stop: the production path (the console's stop API, the stop list, the real controller, the gateway's policy), measured. The agent of
+# one connection is stopped: its token is refused on every pod, its refresh is refused, the person's other connection keeps working, and the
+# agent cannot be started again before the retention is over (an access token lives up to 15 minutes).
+STOPCTL = os.environ.get("STOPCTL")
+if STOPCTL:
+    def ctl(*a):
+        r = subprocess.run([STOPCTL, *a], capture_output=True, text=True, timeout=180)
+        return r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
+    cidA, tokA = connect("alice", ("time",), "StopMe")
+    cidB, tokB = connect("alice", ("time",), "KeepMe")
+    agentA = jwt_claims(tokA["access_token"])["ambit_agent"]
+    check("7 two connections, two agents", agentA != jwt_claims(tokB["access_token"])["ambit_agent"])
+    check("7 both tokens work on every pod before the stop", accepted_everywhere(tokA["access_token"], 120) and accepted_everywhere(tokB["access_token"], 120))
+    t_stop = time.time()
+    code = ctl("stop", agentA)
+    check("7 the console accepts the stop request (202)", code == "202", code)
+    seen = {}
+    while time.time() - t_stop < 120 and len(seen) < len(PORTS):
+        for p in PORTS:
+            if p not in seen and tools(p, tokA["access_token"])[0] in (401, 403):
+                seen[p] = time.time() - t_stop
+        time.sleep(0.1)
+    check("7 stop: the stopped agent's token is refused on every pod", len(seen) == len(PORTS), seen)
+    t_gw = max(seen.values()) if seen else float("nan")
+    t_r = time.time()
+    refused = False
+    while time.time() - t_r < 60:
+        st, j = token(cidA, grant_type="refresh_token", refresh_token=tokA["refresh_token"])
+        if st in (400, 401, 403) and "access_token" not in j:
+            refused = True
+            break
+        time.sleep(0.5)
+    t_ref = time.time() - t_stop
+    check("7 stop: the refresh of the stopped agent's grant is refused", refused)
+    check("7 stop: the person's other connection still works on every pod", all(tools(p, tokB["access_token"])[0] == 200 for p in PORTS))
+    st, j = token(cidB, grant_type="refresh_token", refresh_token=tokB["refresh_token"])
+    check("7 stop: the other connection can refresh", st == 200 and j.get("access_token"), (st, j))
+    state, t_state = "", None
+    while time.time() - t_stop < 240:
+        state = ctl("state", agentA)
+        if state == "stopped":
+            t_state = time.time() - t_stop
+            break
+        time.sleep(1)
+    check("7 stop: the console reports the agent stopped (every Gateway acknowledged)", state == "stopped", state)
+    print(f"   stop measured: token refused on every pod {t_gw:.1f} s, refresh refused {t_ref:.1f} s, console says stopped {t_state if t_state is None else round(t_state, 1)} s (counted from the stop request)", flush=True)
+    code = ctl("start", agentA)
+    check("7 start: refused for now (409), the retention is not over", code == "409", code)
+    kube("rollout", "restart", "deploy/ambit-controller")
+    kube("rollout", "status", "deploy/ambit-controller", "--timeout=300s")
+    check("7 after a restart of the controller the stopped agent's token is still refused on every pod", all(tools(p, tokA["access_token"])[0] in (401, 403) for p in PORTS))
+    check("7 ... and the other connection still works", all(tools(p, tokB["access_token"])[0] == 200 for p in PORTS))
+
 print()
 print("FAILED: " + ", ".join(fails) if fails else "all checks passed")
 sys.exit(1 if fails else 0)

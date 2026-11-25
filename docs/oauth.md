@@ -190,7 +190,8 @@ takes the key rule, exactly as without OAuth: a request with a wrong key gets **
 rule**: without a valid token it gets **401** with the `resource_metadata` challenge above, so that a platform can start a sign-in.
 
 The token rule accepts a JWT only if: the issuer is Ambit's sign-in host (`https://<authHost>`), the signature fits a key that Hydra
-publishes (the gateway reads them inside the cluster and keeps them for 5 minutes), the audience is exactly this MCP URL, `exp`, `aud`
+publishes (the gateway reads them inside the cluster and keeps them for 5 minutes; after an install the first token was accepted on every
+pod within 31 seconds in the test, and Ambit does not wait for the key set before it serves), the audience is exactly this MCP URL, `exp`, `aud`
 and `sub` are there, the person has an email that is not a service account, and the token carries an agent, a grant and a scope list
 (the consent page writes all three into every token). The same checks of every call as for a key then follow: the offboarding list, the
 stop list, the person's AccessRules **and** the scope of the token (`ambit_scope`): a tool outside the scope is not listed and not callable,
@@ -205,8 +206,13 @@ Tokens do not work on the private route (it takes tokens of your company's provi
   stop state machine of [Agents](agents.md#stopping-an-agent) (an agent that is not active makes the hook refuse its refresh for good, also after
   a reactivation).
 - **Ending one connection**: the person (or an admin) deletes or stops the agent of the platform ([Agents](agents.md): a connection is a
-  person-mode agent, listed with its platform). The hook refuses its refresh at once. A token that was already issued is refused by the
-  gateway through the stop list as soon as the agent is stopped; without the stop list it expires within 15 minutes.
+  person-mode agent, listed with its platform). The hook refuses its refresh within a few seconds (it reads the stop list every 3 seconds, and
+  it asks the console whether the agent is active). A token that was already issued is refused by the gateway through the stop list as
+  soon as the Gateway has the policy of the stop. The person's other connections are not touched. A stopped agent can be started again only
+  after the retention of the stop entry (`agents.stopRetentionMinutes`, 25 minutes by default, longer than a token lives), so that an old token
+  cannot work again when the entry goes. Hydra cannot revoke one grant, so nothing is revoked there: the agent's state does it. The test
+  `test/stepoauth.sh` (check 14) stops an agent through the console's API with the real controller and prints the measured times
+  (the token refused on every pod, the refresh refused, the console saying "stopped").
 - **Keeping a platform out**: an admin deletes the platform's OAuth client (`GET /api/admin/oauth/clients`, `DELETE
   /api/admin/oauth/clients/{id}`): its codes and refresh tokens go with it and no new sign-in works.
 

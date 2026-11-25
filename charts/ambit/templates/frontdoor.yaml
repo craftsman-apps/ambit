@@ -21,6 +21,7 @@
 {{- if lt (int $fd.replicas) 1 }}{{ fail "frontDoor.replicas must be 1 or more" }}{{ end }}
 {{- $svc := $fd.service | default dict }}
 {{- $port := int ($fd.port | default 8443) }}
+{{- $oauth := (.Values.oauth | default dict).enabled }}
 # The public Gateway: its own pods, Service and load balancer, so the console, Dex and the LLM host are never reachable
 # on it. HTTPS only (there is no HTTP listener), one listener bound to one host name, and only the routes named below.
 apiVersion: agentgateway.dev/v1alpha1
@@ -112,20 +113,41 @@ spec:
   hostnames: [{{ $fd.host | quote }}]
   rules:
     - name: keys
+      {{- if $oauth }}
+      # With OAuth: a request that carries an Ambit key takes this rule (a key is in x-api-key, or in Authorization after "Bearer ambit_");
+      # every other request to /mcp takes the oauth rule below. The more specific match wins.
+      matches:
+        - { path: { type: Exact, value: /mcp }, headers: [{ name: x-api-key, type: RegularExpression, value: ".+" }] }
+        - { path: { type: Exact, value: /mcp }, headers: [{ name: Authorization, type: RegularExpression, value: "^Bearer ambit_.+" }] }
+      {{- else }}
       matches: [{ path: { type: Exact, value: /mcp } }]
+      {{- end }}
       # The key must never reach an MCP server, and the token broker trusts X-Ambit-User from gateway pods only.
       filters:
         - type: RequestHeaderModifier
           requestHeaderModifier: { remove: [X-Ambit-User, x-api-key, authorization] }
       backendRefs: [{ group: agentgateway.dev, kind: AgentgatewayBackend, name: ambit-mcp-public }]
+    {{- if $oauth }}
+    # OAuth: a hosted platform's token (a JWT of Ambit's sign-in host, docs/oauth.md). Without a token the answer is 401 with
+    # the address of the protected resource metadata, so that the platform can start a sign-in. The metadata document itself
+    # is served by the gateway for the second path.
+    - name: oauth
+      matches:
+        - { path: { type: Exact, value: /mcp } }
+        - { method: GET, path: { type: Exact, value: /.well-known/oauth-protected-resource/mcp } }
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier: { remove: [X-Ambit-User, x-api-key, authorization] }
+      backendRefs: [{ group: agentgateway.dev, kind: AgentgatewayBackend, name: ambit-mcp-public }]
+    {{- end }}
 ---
-# Keys only: a request without a valid MCP key gets 403. No JWT is accepted on this Gateway.
+# Keys only: a request without a valid MCP key gets 403. A token is accepted on the oauth rule only (below, with OAuth).
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata:
   name: ambit-mcp-public-auth
 spec:
-  targetRefs: [{ group: gateway.networking.k8s.io, kind: HTTPRoute, name: ambit-mcp-public }]
+  targetRefs: [{ group: gateway.networking.k8s.io, kind: HTTPRoute, name: ambit-mcp-public{{ if $oauth }}, sectionName: keys{{ end }} }]
   traffic:
     authorization:
       action: Require
@@ -140,6 +162,42 @@ spec:
         matchLabels: { ambitproject.dev/key: "true", ambitproject.dev/key-mcp: "true" }
       location:
         expression: '"x-api-key" in request.headers ? request.headers["x-api-key"] : request.headers["authorization"].replace("Bearer ", "")'
+{{- if $oauth }}
+---
+# The token rule: a JWT of Ambit's sign-in host (Hydra), for this MCP URL, and nothing else. The gateway reads Hydra's
+# public keys inside the cluster and keeps them 5 minutes. Without a valid token: 401 with the resource_metadata challenge.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: ambit-mcp-public-oauth
+spec:
+  targetRefs: [{ group: gateway.networking.k8s.io, kind: HTTPRoute, name: ambit-mcp-public, sectionName: oauth }]
+  traffic:
+    jwtAuthentication:
+      mode: Strict
+      providers:
+        - issuer: {{ printf "https://%s" $fd.authHost | quote }}
+          audiences: [{{ printf "https://%s/mcp" $fd.host | quote }}]
+          jwks:
+            remote:
+              url: {{ printf "http://ambit-hydra-public.%s.svc:4444/.well-known/jwks.json" .Release.Namespace | quote }}
+              cacheDuration: 5m
+          validation:
+            requiredClaims: [aud, exp, sub]
+      mcp:
+        resourceMetadata:
+          resource: {{ printf "https://%s/mcp" $fd.host | quote }}
+          authorization_servers: [{{ printf "https://%s" $fd.authHost | quote }}]
+          bearer_methods_supported: [header]
+          scopes_supported: [mcp, offline_access]
+    authorization:
+      action: Require
+      policy:
+        matchExpressions:
+          # A person (an email, not a service account) and an agent and a grant: what the consent page writes into every token.
+          - {{ include "ambit.identity.jwtGate" (dict "requireEmail" true "services" (ne (toString (.Values.serviceAccounts | default dict).enabled) "false")) | quote }}
+          - 'has(jwt.ambit_agent) && has(jwt.ambit_grant) && type(jwt.ambit_scope) == list'
+{{- end }}
 ---
 # Two limits on every request of the public Gateway: shared by all gateway pods (the ratelimit service counts in Valkey;
 # its limits are in ConfigMap ambit-ratelimit-front-door), and per pod as a second line if that service is down.
@@ -216,6 +274,16 @@ spec:
         !variables.onPublic || (object.kind == "HTTPRoute" && object.metadata.name == "ambit-mcp-public" &&
         size(object.spec.parentRefs) == 1 &&
         has(object.spec.hostnames) && object.spec.hostnames == [{{ $fd.host | quote }}] &&
+{{- if $oauth }}
+        has(object.spec.rules) && size(object.spec.rules) == 2 &&
+        has(object.spec.rules[0].name) && object.spec.rules[0].name == "keys" && has(object.spec.rules[1].name) && object.spec.rules[1].name == "oauth" &&
+        object.spec.rules.all(r, has(r.matches) && size(r.matches) >= 1 && size(r.matches) <= 2 &&
+        r.matches.all(m, has(m.path) && m.path.type == "Exact" &&
+        ((m.path.value == "/mcp") || (m.path.value == "/.well-known/oauth-protected-resource/mcp" && has(m.method) && m.method == "GET"))) &&
+        has(r.backendRefs) && size(r.backendRefs) == 1 && r.backendRefs[0].name == "ambit-mcp-public" &&
+        has(r.backendRefs[0].kind) && r.backendRefs[0].kind == "AgentgatewayBackend" &&
+        (!has(r.filters) || r.filters.all(f, f.type == "RequestHeaderModifier")) && !has(r.timeouts)))
+{{- else }}
         has(object.spec.rules) && size(object.spec.rules) == 1 &&
         has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) == 1 &&
         has(object.spec.rules[0].matches[0].path) && object.spec.rules[0].matches[0].path.type == "Exact" &&
@@ -223,6 +291,7 @@ spec:
         has(object.spec.rules[0].backendRefs) && size(object.spec.rules[0].backendRefs) == 1 &&
         object.spec.rules[0].backendRefs[0].name == "ambit-mcp-public" &&
         has(object.spec.rules[0].backendRefs[0].kind) && object.spec.rules[0].backendRefs[0].kind == "AgentgatewayBackend")
+{{- end }}
 {{- if (.Values.oauth | default dict).enabled }}
         || (object.kind == "HTTPRoute" && object.metadata.name == "ambit-auth-hydra" &&
         size(object.spec.parentRefs) == 1 &&

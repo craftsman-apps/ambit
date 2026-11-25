@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -35,9 +34,11 @@ type AgentInput struct {
 
 // Backend is the console's internal API (docs/oauth.md, "Internal API"): agent records are written by the console only.
 type Backend interface {
-	Servers(ctx context.Context, email string) ([]ServerChoice, error)
+	// Servers: what the person may offer a platform. groups are the groups the identity provider gave at sign-in.
+	Servers(ctx context.Context, email string, groups []string) ([]ServerChoice, error)
 	CreateAgent(ctx context.Context, in AgentInput) (name string, err error)
-	Groups(ctx context.Context, email string) ([]string, error)
+	// Active: the agent exists, is not stopped or being deleted, and this grant is one of its grants. A refresh is allowed only then.
+	Active(ctx context.Context, agent, grant string) (bool, error)
 }
 
 // ErrRefused: the console refused (for example the person has too many agents). The text is for the log; the person and
@@ -101,11 +102,11 @@ func (c *ConsoleBackend) call(ctx context.Context, method, path string, body, ou
 	return nil
 }
 
-func (c *ConsoleBackend) Servers(ctx context.Context, email string) ([]ServerChoice, error) {
+func (c *ConsoleBackend) Servers(ctx context.Context, email string, groups []string) ([]ServerChoice, error) {
 	var o struct {
 		Servers []ServerChoice `json:"servers"`
 	}
-	err := c.call(ctx, "GET", "/internal/oauth/v1/servers?email="+url.QueryEscape(email), nil, &o)
+	err := c.call(ctx, "POST", "/internal/oauth/v1/servers", map[string]any{"email": email, "groups": groups}, &o)
 	return o.Servers, err
 }
 
@@ -117,12 +118,12 @@ func (c *ConsoleBackend) CreateAgent(ctx context.Context, in AgentInput) (string
 	return o.Name, err
 }
 
-func (c *ConsoleBackend) Groups(ctx context.Context, email string) ([]string, error) {
+func (c *ConsoleBackend) Active(ctx context.Context, agent, grant string) (bool, error) {
 	var o struct {
-		Groups []string `json:"groups"`
+		Active bool `json:"active"`
 	}
-	err := c.call(ctx, "GET", "/internal/oauth/v1/groups?email="+url.QueryEscape(email), nil, &o)
-	return o.Groups, err
+	err := c.call(ctx, "POST", "/internal/oauth/v1/active", map[string]string{"agent": agent, "grant": grant}, &o)
+	return o.Active, err
 }
 
 // Deny is what the token hook asks: is this person offboarded, is this agent or grant stopped. Stale data is an error,

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -272,7 +273,7 @@ func (s *Server) consentPage(w http.ResponseWriter, r *http.Request) {
 		s.rejectConsent(w, r, ch, "invalid_target", "the resource parameter must be given once and be this server's MCP URL")
 		return
 	}
-	servers, err := s.Backend.Servers(r.Context(), cr.Subject)
+	servers, err := s.Backend.Servers(r.Context(), cr.Subject, consentGroups(cr))
 	if err != nil {
 		s.log().Error("consent: the console did not answer", "err", err)
 		plain(w, 503, "Consent is not available now. Try again in a minute.")
@@ -354,7 +355,7 @@ func (s *Server) consentSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	// What was ticked must be what the person may offer now (AccessRules ∩ the front door's servers): the console
 	// answers again; a name that is not in that answer is refused, and nothing is created.
-	allowed, err := s.Backend.Servers(r.Context(), cr.Subject)
+	allowed, err := s.Backend.Servers(r.Context(), cr.Subject, consentGroups(cr))
 	if err != nil {
 		plain(w, 503, "Consent is not available now. Try again in a minute.")
 		return
@@ -404,7 +405,7 @@ func (s *Server) consentSubmit(w http.ResponseWriter, r *http.Request) {
 	if id, _ := cr.Context["bind"].(string); id != "" {
 		setCookie(w, bindName(id), "", -1)
 	}
-	grant := "g-" + random(12)
+	grant := NewGrantID(s.now())
 	platform := Platform(requestRedirect(cr).Hostname())
 	agent, err := s.Backend.CreateAgent(r.Context(), AgentInput{Owner: cr.Subject, Platform: platform,
 		DisplayName: printable(cr.Client.Name, 60), Scope: scope, Connections: conns, GrantID: grant})
@@ -453,4 +454,37 @@ func (s *Server) touchClient(r *http.Request, id string) {
 	if err := s.Hydra.SetClientMetadata(r.Context(), id, c.Metadata); err != nil {
 		s.log().Warn("could not write the client's last use", "err", err)
 	}
+}
+
+// consentGroups are the groups the identity provider gave at sign-in (ambit-auth put them into the login context).
+func consentGroups(cr ConsentRequest) []string {
+	var out []string
+	if l, ok := cr.Context["groups"].([]any); ok {
+		for _, g := range l {
+			if s, ok := g.(string); ok {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
+}
+
+// NewGrantID is "g-<seconds since 1970 in base 36>-<random>": the age of a grant can be read from its name, which the token
+// hook uses to end a grant after oauth.maxGrantDays (the groups in a token are those of the sign-in, so a long grant would
+// keep a permission that was taken away at the identity provider).
+func NewGrantID(now time.Time) string {
+	return "g-" + strconv.FormatInt(now.Unix(), 36) + "-" + random(9)
+}
+
+// GrantAge reads the age of a grant from its name; ok is false for a name that was not made by NewGrantID.
+func GrantAge(id string, now time.Time) (time.Duration, bool) {
+	parts := strings.Split(id, "-")
+	if len(parts) < 3 || parts[0] != "g" {
+		return 0, false
+	}
+	secs, err := strconv.ParseInt(parts[1], 36, 64)
+	if err != nil || secs <= 0 {
+		return 0, false
+	}
+	return now.Sub(time.Unix(secs, 0)), true
 }

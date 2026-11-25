@@ -23,6 +23,7 @@ type Config struct {
 	RegistrationHosts []string // redirect hosts that dynamic registration accepts
 	MaxClients        int      // dynamic clients (the cap)
 	UnusedClientDays  int      // a dynamic client not used for this many days is deleted
+	MaxGrantDays      int      // a grant is refreshed for at most this many days; then the person connects again (0: no limit)
 }
 
 // Platforms maps the redirect host of a client to the platform name that the agent declares. A host that is not here
@@ -83,6 +84,9 @@ func (c *Config) Validate() error {
 	}
 	if !c.NoRegistration && c.UnusedClientDays < 1 {
 		errs = append(errs, errors.New("unused client days must be 1 or more"))
+	}
+	if c.MaxGrantDays < 0 || c.MaxGrantDays > 365 {
+		errs = append(errs, errors.New("the longest grant must be 0 to 365 days"))
 	}
 	if c.GroupsClaim == "" {
 		c.GroupsClaim = "groups"

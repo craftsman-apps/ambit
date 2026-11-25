@@ -284,7 +284,10 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 	// The decoded form is the only copy we need. Release the raw message now: a large result is held
 	// several times over while it is masked and encoded again, and the guard has a small memory limit.
 	resp.McpResponse = nil
-	compressed := resp.Method == "tools/call" && g.compressContent(ctx, resp.ServiceNames, resp.MetadataContext, result)
+	// The records of compressed texts are written only when the result is sent: a result that is withheld later (masking
+	// failed, the injection guard refused it) saved nobody anything.
+	var pendingRecords []func()
+	compressed := resp.Method == "tools/call" && g.compressContent(ctx, resp.ServiceNames, resp.MetadataContext, result, &pendingRecords)
 	var texts, keys []string
 	var set []func(string)
 	var renames []func(string) bool // false: the masked key is taken
@@ -364,8 +367,14 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 			masked, changed = inj.Texts, true
 		}
 	}
+	sent := func() { // the result goes to the client
+		for _, f := range pendingRecords {
+			f()
+		}
+		g.reportInjection(resp, inj)
+	}
 	if !changed {
-		g.reportInjection(resp, inj) // findings of the audit mode, and a failed webhook
+		sent() // also the findings of the audit mode, and a failed webhook
 		return passResp(), nil
 	}
 	for i := range texts {
@@ -381,7 +390,7 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 			return withhold("has two keys that mask to the same text, so it was withheld")
 		}
 	}
-	g.reportInjection(resp, inj)
+	sent()
 	if total > 0 {
 		slog.Info("guard: masked personal data", "server", strings.Join(resp.ServiceNames, ","), "method", resp.Method, "count", total)
 	}
@@ -425,7 +434,7 @@ func (g *Guard) maskTexts(ctx context.Context, texts []string) ([]string, int, e
 // compressContent compresses content[].text of a result in place, for a server that opted in, and reports
 // whether any text changed. Results with isError, non-text content and structuredContent (it must keep the
 // tool's output schema) are not touched. A problem in a compressor never fails the call: the original text stays.
-func (g *Guard) compressContent(ctx context.Context, services []string, meta *structpb.Struct, result map[string]any) bool {
+func (g *Guard) compressContent(ctx context.Context, services []string, meta *structpb.Struct, result map[string]any, pending *[]func()) bool {
 	if g.Compression == nil || len(services) != 1 {
 		return false
 	}
@@ -465,7 +474,8 @@ func (g *Guard) compressContent(ctx context.Context, services []string, meta *st
 		compressBytesOut.WithLabelValues(server, typ).Add(float64(len(out)))
 		compressOmitted.WithLabelValues(server, typ).Add(float64(omitted))
 		slog.Info("guard: compressed tool result", "server", server, "type", typ, "mode", cfg.Mode, "bytes_in", len(text), "bytes_out", len(out), "omitted", omitted)
-		g.record(meta, CompressionRecord{Server: server, Type: typ, Mode: cfg.Mode, Part: part, BytesIn: len(text), BytesOut: len(out), Omitted: omitted})
+		rec := CompressionRecord{Server: server, Type: typ, Mode: cfg.Mode, Part: part, BytesIn: len(text), BytesOut: len(out), Omitted: omitted}
+		*pending = append(*pending, func() { g.record(meta, rec) })
 		m["text"], changed = out, true
 	}
 	return changed

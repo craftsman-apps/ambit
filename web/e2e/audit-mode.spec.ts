@@ -437,6 +437,8 @@ const injected = [
   call("2026-10-15T09:57:00Z", { method: "tools/call", server: "web", tool: "fetch_page", model: "", route: "ambit/mcp", accessMode: "enforce", mark: "", outcome: "n/a", inputTokens: 0, outputTokens: 0 }),
   call("2026-10-15T09:56:00Z", { method: "tools/call", server: "web", tool: "read_file", model: "", route: "ambit/mcp", accessMode: "enforce", mark: "", outcome: "n/a", inputTokens: 0, outputTokens: 0,
     injection: { action: "rejected", mode: "reject", rules: ["hide-from-user"] } }),
+  // the search waits for this row (see search())
+  call("2026-10-15T09:55:00Z", { method: "tools/call", server: "github", tool: "create_issue", model: "", route: "ambit/mcp", accessMode: "enforce", mark: "", outcome: "n/a", inputTokens: 0, outputTokens: 0 }),
 ];
 
 test("an injection finding is tagged on its own row, with the rule names", async ({ page }) => {
@@ -454,7 +456,7 @@ test("an injection finding is tagged on its own row, with the rule names", async
 test("the injection filter keeps only the results with a finding", async ({ page }) => {
   await setup(page, { config: enforce, calls: injected });
   await search(page);
-  await expect(page.getByRole("row", { name: /tools\/call/ })).toHaveCount(3);
+  await expect(page.getByRole("row", { name: /tools\/call/ })).toHaveCount(4);
   await page.getByLabel("Only results with an injection finding").check();
   await expect(page.getByRole("row", { name: /tools\/call/ })).toHaveCount(2);
   await expect(page.getByTestId("injection-tag")).toHaveCount(2);

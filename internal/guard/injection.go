@@ -123,11 +123,8 @@ func (r *injRule) matches(t string, n int) (ms [][]int, over bool) {
 	if n > 0 && len(all) > n {
 		over, all = true, all[:n]
 	}
-	if r.must == nil {
-		return all, over
-	}
 	for _, m := range all {
-		if r.must.MatchString(t[m[0]:m[1]]) {
+		if m[1] > m[0] && (r.must == nil || r.must.MatchString(t[m[0]:m[1]])) { // an empty match (a word boundary) is no finding
 			ms = append(ms, m)
 		}
 	}
@@ -392,7 +389,37 @@ const (
 	maxSpansPerResult = 100_000
 	// maxWordWalk is how far a window moves to leave a word whole. A longer word is cut: no rule word is that long.
 	maxWordWalk = 64
+	// maxSpaceWalk is how far a window follows a run of white space (and then reads a margin more).
+	maxSpaceWalk = 512
 )
+
+// near says if the text between two words is at most gap bytes, a run of white space counting as one byte (as the scanner reads
+// it). Words that overlap are near.
+func near(text string, from, to, gap int) bool {
+	if to <= from {
+		return true
+	}
+	if to-from > gap+maxSpaceWalk {
+		return false
+	}
+	n, space := 0, false
+	for i := from; i < to; i++ {
+		if isSpaceByte(text[i]) {
+			if space {
+				continue
+			}
+			space = true
+		} else {
+			space = false
+		}
+		n++
+	}
+	return n <= gap
+}
+
+func isSpaceByte(c byte) bool {
+	return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v'
+}
 
 // window is the part of text that the rule r reads for the words [ws, we): it starts and ends between words and at a
 // character boundary, so it holds no half word or half character that could make a match that the whole text does not
@@ -406,6 +433,17 @@ func window(text string, r *injRule, ws, we int) (lo, hi int, ok bool) {
 		fwd = r.fwd
 	}
 	lo, hi = max(0, ws-back), min(len(text), we+fwd)
+	// White space between the words of a match can be long (an instruction wrapped onto an indented line): when the window ends
+	// in it, it goes on to the next word and a margin more, and the same before the first word.
+	for n := 0; hi < len(text) && n < maxSpaceWalk && isSpaceByte(text[hi-1]) && isSpaceByte(text[hi]); n++ {
+		hi++
+	}
+	if hi < len(text) && isSpaceByte(text[hi-1]) {
+		hi = min(len(text), hi+fwd)
+	}
+	for n := 0; lo > 0 && lo < ws && n < maxSpaceWalk && isSpaceByte(text[lo]) && isSpaceByte(text[lo-1]); n++ {
+		lo--
+	}
 	if r.lineStart { // the match starts at the start of a line, at most 8 blanks before the word
 		from := max(0, ws-16)
 		if nl := strings.LastIndexByte(text[from:ws], '\n'); nl >= 0 {
@@ -442,11 +480,8 @@ func window(text string, r *injRule, ws, we int) (lo, hi int, ok bool) {
 // hiddenOnly looks for the rules with invisible text only (StripHidden).
 func (in *Injector) spans(text string, seen map[string]bool, hiddenOnly bool) (out []injSpan, over bool) {
 	find := func(r *injRule, base int, t string) {
-		if in.mode != InjectionMask && !hiddenOnly && r.must == nil {
-			if r.re.MatchString(t) {
-				seen[r.name] = true
-			}
-			return
+		if in.mode != InjectionMask && !hiddenOnly && r.must == nil && !r.re.MatchString(t) {
+			return // the usual case: no match, and no list of matches is made
 		}
 		ms, more := r.matches(t, maxMatches)
 		over = over || more
@@ -500,7 +535,7 @@ func (in *Injector) spans(text string, seen map[string]bool, hiddenOnly bool) (o
 				mine, other = 1, 0
 			}
 			last[ri][mine], seenWord[ri][mine] = me, true
-			if o := last[ri][other]; seenWord[ri][other] && me.start-o.end <= r.gap {
+			if o := last[ri][other]; seenWord[ri][other] && near(text, o.end, me.start, r.gap) {
 				add(ri, min(o.start, me.start), me.end)
 			}
 		}

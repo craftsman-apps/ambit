@@ -110,7 +110,7 @@ export function AuditPage() {
   const hasVerdicts = all.some((c) => c.outcome === "would-refuse" || c.outcome === "other-model" || c.outcome === "mark-missing");
   // Audit-only verdicts belong to people's calls; requests with an invalid key have none, so that filter is off there.
   const shown = (protocol ? all : all.filter(isCall)).filter((c) => !onlyWouldRefuse || q?.invalidKey || c.outcome === "would-refuse")
-    .filter((c) => !onlyInjection || c.injection);
+    .filter((c) => !onlyInjection || q?.invalidKey || c.injection);
   const search = (e: React.FormEvent) => {
     e.preventDefault();
     // The same search again must ask again (after an error, or for new calls), not reuse the answer.

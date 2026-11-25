@@ -18,12 +18,14 @@ cleanup() {
   for p in $(cat "$W/pids" 2>/dev/null); do kill "$p" 2>/dev/null || true; done
   kubectl -n "$NS" delete pod -l "$L" --ignore-not-found --wait=false >/dev/null 2>&1 || true
   kubectl -n "$NS" delete secret -l "$L" --ignore-not-found >/dev/null 2>&1 || true
-  kubectl -n "$NS" delete statefulset,service,configmap -l "$L" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete statefulset,deployment,service,configmap -l "$L" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete configmap ambit-offboarded ambit-agent-stops --ignore-not-found >/dev/null 2>&1 || true
 }
 trap 'rc=$?; cleanup; on_exit "$rc"' EXIT
 rnd() { openssl rand -hex "${1:-16}"; }
 oaset() { helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/frontdoor/values.yaml -f test/oauth/values.yaml \
-  --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 "$@" >/dev/null; }
+  --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 \
+  --set "oauth.signIn.issuer=https://ambit-oauth-idp.$NS.svc" --set "oauth.auth.consoleURL=http://ambit-oauth-console.$NS.svc:8085" "$@" >/dev/null; }
 freeport() { "${PY[@]}" -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'; }
 # adm POD METHOD PATH [json]: Hydra's admin API in one pod, through a port-forward. Prints the HTTP status; the body is in $W/adm.
 adm() {
@@ -80,9 +82,22 @@ dsn() {
   echo "postgres://$role:$pw@ambit-pg$v$host:5432/$db?$extra"
 }
 sec ambit-oauth-db --from-literal=dsn="$(dsn 17)"
+# the company's identity provider and the console's internal API: stand-ins (test/oauthtest), with a certificate of the test CA
+IDPH="ambit-oauth-idp.$NS.svc"
+openssl req -newkey rsa:2048 -nodes -keyout "$W/idp.key" -out "$W/idp.csr" -subj "/CN=$IDPH" >/dev/null 2>&1
+printf 'subjectAltName=DNS:%s\nextendedKeyUsage=serverAuth\nbasicConstraints=CA:FALSE\n' "$IDPH" > "$W/idp.ext"
+openssl x509 -req -in "$W/idp.csr" -CA "$W/dbca.pem" -CAkey "$W/dbca.key" -CAcreateserial -out "$W/idp.crt" -days 1 -extfile "$W/idp.ext" >/dev/null 2>&1
+kubectl -n "$NS" create secret tls ambit-oauth-idp-tls --cert="$W/idp.crt" --key="$W/idp.key" --dry-run=client -o yaml | kubectl label --local -f - "$L" -o yaml | kubectl apply -f - >/dev/null
+sec ambit-oauth-idp --from-literal=client-secret="$(rnd 24)"
+sec ambit-oauth-cookie --from-literal=cookie="$(rnd 32)"
+sec ambit-oauth-idp-ca --from-file=ca.crt="$W/dbca.pem"
+kubectl -n "$NS" create configmap ambit-oauth-test --from-literal=issuer="https://$IDPH" --from-literal=redirect="https://$AUTH/callback" --dry-run=client -o yaml | kubectl label --local -f - "$L" -o yaml | kubectl apply -f - >/dev/null
+kubectl -n "$NS" apply -f test/oauth/auth-test.yaml >/dev/null
+for d in ambit-oauth-idp ambit-oauth-console; do kubectl -n "$NS" rollout status "deploy/$d" --timeout=300s >/dev/null; done
 oaset --wait --timeout 8m
+kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
 kubectl -n "$NS" rollout status sts/ambit-hydra --timeout=300s >/dev/null
-pass "0 installed: PostgreSQL 17 and 15 with TLS only, Hydra on 17 (2 pods), the public Gateway with the sign-in host"
+pass "0 installed: PostgreSQL 17 and 15 with TLS only, Hydra on 17 (2 pods), ambit-auth (2 pods), the public Gateway with the sign-in host"
 
 # --- 1 · the pods start one at a time, and each key set holds exactly one key that Ambit created
 t0=$(kubectl -n "$NS" get pod ambit-hydra-0 -o jsonpath='{.status.conditions[?(@.type=="Ready")].lastTransitionTime}')
@@ -111,8 +126,8 @@ for p in /oauth2/token /oauth2/revoke; do
   c=$(auth "$PA" POST "$p" -d x=y); [[ "$c" == 400 || "$c" == 401 ]] && grep -q '"error"' "$W/au" || fail "2 POST $p without a client: HTTP $c $(head -c 200 "$W/au")"
 done
 for p in /oauth2/register /.well-known/openid-configuration /userinfo /oauth2/device/auth /oauth2/device/verify /oauth2/sessions/logout /oauth2/fallbacks/error \
-         /oauth2/fallbacks/consent /admin/keys/hydra.jwt.access-token /admin/clients /health/ready /health/alive /version /metrics/prometheus / /error /mcp \
-         /oauth2//token /oauth2/token/ /OAUTH2/token '/oauth2/%74oken' /oauth2/./token /oauth2/x/../token /oauth2/auth /login /consent /callback /register; do
+         /oauth2/fallbacks/consent /admin/keys/hydra.jwt.access-token /admin/clients /health/ready /health/alive /version /metrics/prometheus / /mcp /hooks/token /internal/stop /metrics /healthz \
+         /oauth2//token /oauth2/token/ /OAUTH2/token '/oauth2/%74oken' /oauth2/./token /oauth2/x/../token /LOGIN /login/ /callback/ /consent/ /register/ /oauth2/auth/; do
   for m in GET POST; do
     c=$(auth "$PA" "$m" "$p" -d x=y)
     # /oauth2/./token and /oauth2/x/../token are the same path as /oauth2/token to a proxy that normalises; the others are not
@@ -321,13 +336,31 @@ pass "9 one pod restarted, then both: the signing key is the same, and Hydra cre
 for s in "$HP" "$SU" "$SP" "$SYS"; do ! grep -q "$s" "$W/everything" || fail "10 a password or key shows in the chart's objects or in a log"; done
 pass "10 the database password, the superuser password and the system secret are in no ConfigMap, StatefulSet, pod spec, Helm manifest or log"
 
-# --- 11 · off again: everything of OAuth goes, the front door stays
+# --- 12 · the sign-in itself: discovery, registration, the code flow at the company's identity provider, consent, tokens, refresh,
+#         stop and offboarding of a refresh, two sign-ins in one browser, what is refused, the limits, a restart (test/oauthtest/flow.py)
+kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
+PODS=($(pubpods)); PA=$(forward "${PODS[0]}")
+IDPP=$(freeport); kubectl -n "$NS" port-forward svc/ambit-oauth-idp "$IDPP:443" >/dev/null 2>&1 & echo $! >> "$W/pids"
+CONP=$(freeport); kubectl -n "$NS" port-forward svc/ambit-oauth-console "$CONP:8085" >/dev/null 2>&1 & echo $! >> "$W/pids"
+wait_for 60 '(exec 3<>"/dev/tcp/127.0.0.1/$IDPP") 2>/dev/null && (exec 3<>"/dev/tcp/127.0.0.1/$CONP") 2>/dev/null' || fail "12 port-forwards"
+cat "$W/ca.pem" "$W/dbca.pem" > "$W/allca.pem"
+flow() { GW_PORT=$PA IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" KUBECTL_CONSOLE="kubectl -n $NS --as=system:serviceaccount:$NS:ambit-console --as-user-extra=authentication.kubernetes.io/pod-name=oauth-test" \
+  "${PY[@]}" test/oauthtest/flow.py "$@" || fail "12 the sign-in checks failed (see FAIL lines above)"; }
+# the registration limit first, at its default of 10 per hour and address (the counter is per hour: nothing registered before)
+flow limits
+# then the limit is raised, so that the many registrations of the other checks pass
+oaset --set oauth.registration.dynamic.perSourcePerHour=1000 --wait --timeout 8m
+kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
+flow
+pass "12 the sign-in flow and its refusals"
+
+# --- 13 · off again: everything of OAuth goes, the front door stays
 helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/frontdoor/values.yaml \
   --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 --wait --timeout 5m >/dev/null
-wait_for 120 '[[ -z "$(kubectl -n "$NS" get sts ambit-hydra -o name 2>/dev/null)" ]]' || fail "11 Hydra is still there with oauth.enabled=false"
-for o in service/ambit-hydra-public service/ambit-hydra-admin networkpolicy/ambit-hydra configmap/ambit-hydra httproute/ambit-auth-hydra; do
-  [[ -z "$(kubectl -n "$NS" get "$o" -o name 2>/dev/null)" ]] || fail "11 $o is still there"
+wait_for 120 '[[ -z "$(kubectl -n "$NS" get sts ambit-hydra -o name 2>/dev/null)" ]]' || fail "13 Hydra is still there with oauth.enabled=false"
+for o in service/ambit-hydra-public service/ambit-hydra-admin networkpolicy/ambit-hydra configmap/ambit-hydra httproute/ambit-auth-hydra httproute/ambit-auth-app deploy/ambit-auth; do
+  [[ -z "$(kubectl -n "$NS" get "$o" -o name 2>/dev/null)" ]] || fail "13 $o is still there"
 done
-l=$(kubectl -n "$NS" get gateway ambit-public -o jsonpath='{.spec.listeners[*].name}'); [[ "$l" == https ]] || fail "11 the sign-in listener is still on the Gateway: $l"
-pass "11 oauth.enabled=false removes Hydra, its Services, its policy, its route and the sign-in listener; the front door's own listener stays"
+l=$(kubectl -n "$NS" get gateway ambit-public -o jsonpath='{.spec.listeners[*].name}'); [[ "$l" == https ]] || fail "13 the sign-in listener is still on the Gateway: $l"
+pass "13 oauth.enabled=false removes Hydra, ambit-auth, their Services, policies, routes and the sign-in listener; the front door's own listener stays"
 done_step oauth

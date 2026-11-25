@@ -11,15 +11,15 @@ import (
 	"time"
 )
 
-// fakeHydra is the part of Hydra's admin API the checker uses: key sets, and the readiness.
-type fakeHydra struct {
+// fakeKeyHydra is the part of Hydra's admin API the checker uses: key sets, and the readiness.
+type fakeKeyHydra struct {
 	mu      sync.Mutex
 	sets    map[string]int
 	ready   bool
 	creates int
 }
 
-func (f *fakeHydra) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (f *fakeKeyHydra) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if r.URL.Path == "/health/ready" {
@@ -48,13 +48,13 @@ func (f *fakeHydra) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func checker(f *fakeHydra) (*KeyChecker, func()) {
+func checker(f *fakeKeyHydra) (*KeyChecker, func()) {
 	s := httptest.NewServer(f)
 	return &KeyChecker{Admin: s.URL, Client: s.Client(), Sets: SigningSets}, s.Close
 }
 
 func TestEnsureCreatesMissingSetsOnce(t *testing.T) {
-	f := &fakeHydra{sets: map[string]int{}, ready: true}
+	f := &fakeKeyHydra{sets: map[string]int{}, ready: true}
 	k, stop := checker(f)
 	defer stop()
 	for i := 0; i < 3; i++ {
@@ -68,7 +68,7 @@ func TestEnsureCreatesMissingSetsOnce(t *testing.T) {
 }
 
 func TestEnsureRefusesTwoKeysAndNeverDeletes(t *testing.T) {
-	f := &fakeHydra{sets: map[string]int{"hydra.jwt.access-token": 2, "hydra.openid.id-token": 1}, ready: true}
+	f := &fakeKeyHydra{sets: map[string]int{"hydra.jwt.access-token": 2, "hydra.openid.id-token": 1}, ready: true}
 	k, stop := checker(f)
 	defer stop()
 	err := k.Ensure(t.Context())
@@ -78,7 +78,7 @@ func TestEnsureRefusesTwoKeysAndNeverDeletes(t *testing.T) {
 }
 
 func TestEnsureRefusesAnEmptySet(t *testing.T) {
-	f := &fakeHydra{sets: map[string]int{"hydra.jwt.access-token": 0, "hydra.openid.id-token": 1}, ready: true}
+	f := &fakeKeyHydra{sets: map[string]int{"hydra.jwt.access-token": 0, "hydra.openid.id-token": 1}, ready: true}
 	k, stop := checker(f)
 	defer stop()
 	if err := k.Ensure(t.Context()); err == nil || !strings.Contains(err.Error(), "holds 0 keys") {
@@ -98,7 +98,7 @@ func TestEnsureErrorOnServerError(t *testing.T) {
 // Two pods that see the same gap: the jitter and the second look make one creation the usual outcome; if both create,
 // the checker reports it and the pods stay out of the Service.
 func TestEnsureJitterLooksAgain(t *testing.T) {
-	f := &fakeHydra{sets: map[string]int{}, ready: true}
+	f := &fakeKeyHydra{sets: map[string]int{}, ready: true}
 	k, stop := checker(f)
 	defer stop()
 	k.Jitter = 50 * time.Millisecond
@@ -113,7 +113,7 @@ func TestEnsureJitterLooksAgain(t *testing.T) {
 }
 
 func TestWatchFollowsHydraAndTheKeys(t *testing.T) {
-	f := &fakeHydra{sets: map[string]int{}, ready: false}
+	f := &fakeKeyHydra{sets: map[string]int{}, ready: false}
 	k, stop := checker(f)
 	defer stop()
 	var ready atomic.Bool

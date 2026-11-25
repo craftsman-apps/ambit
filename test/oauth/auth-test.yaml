@@ -1,0 +1,58 @@
+# Test-only stand-ins for test/stepoauth.sh: the company's identity provider and the console's internal OAuth API
+# (image ambit-oauthtest:dev, test/oauthtest). The certificate Secret ambit-oauth-idp-tls, the client secret
+# ambit-oauth-idp and the registered address are made by the step. Never for a real install.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: ambit-oauth-idp, labels: { ambitproject.dev/oauth-test: "true" } }
+spec:
+  selector: { matchLabels: { app: ambit-oauth-idp } }
+  template:
+    metadata: { labels: { app: ambit-oauth-idp } }
+    spec:
+      containers:
+        - name: idp
+          image: ambit-oauthtest:dev
+          imagePullPolicy: Never
+          args: [idp]
+          env:
+            - { name: ISSUER, valueFrom: { configMapKeyRef: { name: ambit-oauth-test, key: issuer } } }
+            - { name: CLIENT_ID, value: ambit-auth }
+            - { name: REDIRECT_URI, valueFrom: { configMapKeyRef: { name: ambit-oauth-test, key: redirect } } }
+            - { name: CLIENT_SECRET, valueFrom: { secretKeyRef: { name: ambit-oauth-idp, key: client-secret } } }
+          ports: [{ containerPort: 8443 }]
+          readinessProbe: { tcpSocket: { port: 8443 }, periodSeconds: 2 }
+          volumeMounts: [{ name: tls, mountPath: /tls, readOnly: true }]
+      volumes: [{ name: tls, secret: { secretName: ambit-oauth-idp-tls } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: ambit-oauth-idp, labels: { ambitproject.dev/oauth-test: "true" } }
+spec:
+  selector: { app: ambit-oauth-idp }
+  ports: [{ port: 443, targetPort: 8443 }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: ambit-oauth-console, labels: { ambitproject.dev/oauth-test: "true" } }
+spec:
+  selector: { matchLabels: { app: ambit-oauth-console } }
+  template:
+    metadata: { labels: { app: ambit-oauth-console } }
+    spec:
+      containers:
+        - name: console
+          image: ambit-oauthtest:dev
+          imagePullPolicy: Never
+          args: [console]
+          env:
+            - name: SERVERS
+              value: '{"alice@acme.test":[{"name":"time","display":"Time"},{"name":"wiki","display":"Wiki","connection":"wiki-login"}],"bob@acme.test":[{"name":"time","display":"Time"}]}'
+          ports: [{ containerPort: 8085 }]
+          readinessProbe: { tcpSocket: { port: 8085 }, periodSeconds: 2 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: ambit-oauth-console, labels: { ambitproject.dev/oauth-test: "true" } }
+spec:
+  selector: { app: ambit-oauth-console }
+  ports: [{ port: 8085 }]

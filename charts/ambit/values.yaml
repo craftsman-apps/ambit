@@ -265,6 +265,40 @@ oauth:
     resources:
       requests: { cpu: 50m, memory: 64Mi }
       limits: { memory: 256Mi }
+  # Sign in at your company's OIDC identity provider (Okta, Entra ID, Google, Keycloak). One issuer per install.
+  # Register ONE confidential web client there: authorization code flow only, PKCE S256 required, the redirect URI exactly
+  # https://<frontDoor.authHost>/callback, scopes openid email profile, a groups claim in the ID token, client
+  # authentication client_secret_basic.
+  signIn:
+    # The issuer exactly as the provider writes it in its discovery document (https, no final slash).
+    issuer: ""
+    clientID: ""
+    # A Secret with the client secret under the key.
+    clientSecret: { name: "", key: client-secret }
+    # The ID token claim that lists the person's groups.
+    groupsClaim: groups
+    # Optional Secret with the CA of a provider whose certificate your clusters do not trust by default (key ca.crt).
+    caSecret: ""
+  # A Secret with a random string of 32 or more characters under the key: protects the pending sign-ins in the browser.
+  # Several replicas and restarts share it. Changing it ends the sign-ins that are open at that moment, nothing else.
+  cookieSecret: { name: "", key: cookie }
+  registration:
+    dynamic:
+      # Hosted platforms that have no pre-registered client register themselves (RFC 7591). Only redirect addresses on
+      # these hosts (and loopback addresses for native clients) are accepted. false: no /register.
+      enabled: true
+      redirectHosts: [chatgpt.com, claude.ai]
+      # Registrations allowed per caller address and hour (counted in Valkey, shared by all replicas).
+      perSourcePerHour: 10
+      # At most this many registered clients; one that nobody used for unusedClientDays is deleted.
+      maxClients: 500
+      unusedClientDays: 30
+  auth:
+    # ambit-auth pods (stateless: a pending sign-in is in the browser, counters are in Valkey).
+    replicas: 2
+    resources:
+      requests: { cpu: 25m, memory: 32Mi }
+      limits: { memory: 128Mi }
 
 access:
   # enforce: AccessRules decide (default).

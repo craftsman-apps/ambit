@@ -142,6 +142,9 @@ spec:
     - from:
         - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-ratelimit } }
         - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-console } }
+        {{- if (.Values.oauth | default dict).enabled }}
+        - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-auth } }
+        {{- end }}
       ports: [{ port: 6379 }]
 {{- end }}
 {{- end }}

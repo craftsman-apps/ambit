@@ -4,9 +4,13 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/identity"
+	"github.com/google/cel-go/cel"
+	celtypes "github.com/google/cel-go/common/types"
+	"github.com/google/cel-go/ext"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -417,6 +421,72 @@ func TestEndpointOfImageServerIsItsProxy(t *testing.T) {
 	if Endpoint(r) != "https://mcp.example.com/mcp" {
 		t.Fatal(Endpoint(r))
 	}
+}
+
+// The connection policy tells the broker which agent calls, from the verified credential only; "-" is a person's own key
+// or token. A header of the client is never copied (allowedRequestHeaders is empty).
+func TestConnectionPolicyNamesTheAgentFromTheCredential(t *testing.T) {
+	r := Compile(nil, []v1.Server{{ObjectMeta: metav1.ObjectMeta{Name: "gh", Namespace: "ns"}, Spec: v1.ServerSpec{URL: "https://mcp.example.com/mcp", Connection: "github"}}}, nil, route)
+	var p *unstructured.Unstructured
+	for _, o := range r.Objects {
+		if o.GetName() == "ambit-conn-gh" {
+			p = o
+		}
+	}
+	if p == nil {
+		t.Fatal("no connection policy")
+	}
+	h, _, _ := unstructured.NestedMap(p.Object, "spec", "backend", "extAuth", "http", "addRequestHeaders")
+	if h["x-ambit-agent"] != agentHeader() {
+		t.Errorf("headers %v", h)
+	}
+	if allowed, _, _ := unstructured.NestedSlice(p.Object, "spec", "backend", "extAuth", "http", "allowedRequestHeaders"); len(allowed) != 0 {
+		t.Errorf("a client's headers reach the broker: %v", allowed)
+	}
+	m := cel.MapType(cel.StringType, cel.DynType)
+	env, err := cel.NewEnv(ext.Strings(), cel.Variable("jwt", m), cel.Variable("apiKey", m), cel.Variable("request", m))
+	if err != nil {
+		t.Fatal(err)
+	}
+	future := "2027-01-01T00:00:00Z"
+	const issuer = "https://auth.example.com"
+	type credential struct {
+		key, jwt map[string]any
+		want     string
+	}
+	cases := map[string]credential{
+		"agent key":                         {map[string]any{"keyId": "k", "until": future, "agent": "grok-y"}, map[string]any{}, "grok-y"},
+		"a person's key":                    {map[string]any{"keyId": "k", "until": future}, map[string]any{}, "-"},
+		"a person's token":                  {map[string]any{}, map[string]any{"iss": "https://dex", "email": "a@b.co"}, "-"},
+		"an expired agent key":              {map[string]any{"keyId": "k", "until": "2020-01-01T00:00:00Z", "agent": "grok-y"}, map[string]any{}, "-"},
+		"an agent key with an odd name":     {map[string]any{"keyId": "k", "until": future, "agent": "-"}, map[string]any{}, "?"},
+		"an agent key with a name too long": {map[string]any{"keyId": "k", "until": future, "agent": "a" + strings.Repeat("b", 60)}, map[string]any{}, "?"},
+	}
+	run := func(issuer string, cases map[string]credential) {
+		AgentTokenIssuer = issuer
+		defer func() { AgentTokenIssuer = "" }()
+		ast, iss := env.Compile(agentHeader())
+		if iss.Err() != nil {
+			t.Fatal(iss.Err())
+		}
+		prog, _ := env.Program(ast)
+		for name, c := range cases {
+			v, _, err := prog.Eval(map[string]any{"jwt": c.jwt, "apiKey": c.key, "request": map[string]any{"startTime": celtypes.Timestamp{Time: time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)}}})
+			if err != nil || v.Value() != c.want {
+				t.Errorf("issuer %q, %s: %v %v, want %q", issuer, name, v, err, c.want)
+			}
+		}
+	}
+	run("", cases)
+	// With an agent issuer: a token of that issuer is an agent's, and a doubtful claim is never the person's marker.
+	cases["an agent token"] = credential{map[string]any{}, map[string]any{"iss": issuer, "ambit_agent": "chatgpt-y"}, "chatgpt-y"}
+	cases["an agent token without the claim"] = credential{map[string]any{}, map[string]any{"iss": issuer}, "?"}
+	cases["an agent token with an empty claim"] = credential{map[string]any{}, map[string]any{"iss": issuer, "ambit_agent": ""}, "?"}
+	cases["an agent token whose claim is the marker"] = credential{map[string]any{}, map[string]any{"iss": issuer, "ambit_agent": "-"}, "?"}
+	cases["an agent token whose claim is not a string"] = credential{map[string]any{}, map[string]any{"iss": issuer, "ambit_agent": 7}, "?"}
+	cases["a token of another issuer naming an agent"] = credential{map[string]any{}, map[string]any{"iss": "https://dex", "ambit_agent": "chatgpt-y"}, "-"}
+	cases["a valid key and an agent token: the key decides"] = credential{map[string]any{"keyId": "k", "until": future}, map[string]any{"iss": issuer, "ambit_agent": "chatgpt-y"}, "-"}
+	run(issuer, cases)
 }
 
 func onDoor(s v1.Server) v1.Server {

@@ -101,7 +101,8 @@ func mcpBackend(name string, servers []v1.Server, access map[string]*serverAcces
 	}
 	expr := "false"
 	if len(clauses) > 0 {
-		expr = strings.Join(clauses, " || ")
+		// An agent's credential carries its own scope (a list of servers and tools): it narrows what the owner's rules allow.
+		expr = "(" + strings.Join(clauses, " || ") + ") && (" + agentScope() + ")"
 	}
 	// ponytail: one expression for every server and tool; CRD limit is 16384 characters, so split
 	// into several Allow policies if a catalog ever grows past a few hundred rule entries.

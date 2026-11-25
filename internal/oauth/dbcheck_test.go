@@ -60,13 +60,22 @@ func TestParseDSN(t *testing.T) {
 }
 
 func TestProblems(t *testing.T) {
-	d := DSN{MaxConns: 8}
-	ok := Facts{VersionNum: 170012, TLS: true, ConnLimit: -1, Role: "hydra"}
-	if p := ok.Problems(d, 2); len(p) != 0 {
+	// fix fills the roles of a fact: the role the DSN names is the one that logged in and is in effect, unless the case says otherwise
+	fix := func(f Facts) (Facts, DSN) {
+		if f.Role == "" {
+			f.Role = "hydra"
+		}
+		if f.Effective == "" {
+			f.Effective = f.Role
+		}
+		return f, DSN{MaxConns: 8, User: f.Role}
+	}
+	check := func(f Facts, replicas int) []string { f, d := fix(f); return f.Problems(d, replicas) }
+	if p := check(Facts{VersionNum: 170012, TLS: true, ConnLimit: -1}, 2); len(p) != 0 {
 		t.Fatalf("a good database has problems: %v", p)
 	}
 	for _, v := range []int{150000, 160009, 170012} {
-		if p := (Facts{VersionNum: v, TLS: true, ConnLimit: -1}).Problems(d, 2); len(p) != 0 {
+		if p := check(Facts{VersionNum: v, TLS: true, ConnLimit: -1}, 2); len(p) != 0 {
 			t.Errorf("version %d is supported but has problems: %v", v, p)
 		}
 	}
@@ -74,20 +83,30 @@ func TestProblems(t *testing.T) {
 		f    Facts
 		want string
 	}{
-		"14":         {Facts{VersionNum: 140012, TLS: true, ConnLimit: -1}, "PostgreSQL 14 is not supported"},
-		"18":         {Facts{VersionNum: 180001, TLS: true, ConnLimit: -1}, "PostgreSQL 18 is not supported"},
-		"no TLS":     {Facts{VersionNum: 170012, ConnLimit: -1}, "does not use TLS"},
-		"superuser":  {Facts{VersionNum: 170012, TLS: true, Superuser: true, ConnLimit: -1, Role: "postgres"}, `"postgres" is a superuser`},
-		"limit":      {Facts{VersionNum: 170012, TLS: true, ConnLimit: 16, Role: "hydra"}, "need 17"},
-		"other role": {Facts{VersionNum: 170012, TLS: true, ConnLimit: -1, Role: "hydra", Effective: "other"}, `runs as "other"`},
+		"14":                    {Facts{VersionNum: 140012, TLS: true, ConnLimit: -1}, "PostgreSQL 14 is not supported"},
+		"18":                    {Facts{VersionNum: 180001, TLS: true, ConnLimit: -1}, "PostgreSQL 18 is not supported"},
+		"no TLS":                {Facts{VersionNum: 170012, ConnLimit: -1}, "does not use TLS"},
+		"superuser":             {Facts{VersionNum: 170012, TLS: true, Superuser: true, ConnLimit: -1, Role: "postgres"}, `"postgres" is a superuser`},
+		"limit":                 {Facts{VersionNum: 170012, TLS: true, ConnLimit: 16, Role: "hydra"}, "need 17"},
+		"session authorization": {Facts{VersionNum: 170012, TLS: true, ConnLimit: -1, Role: "hydra", Effective: "other"}, `runs as "other"`},
 	} {
-		p := tc.f.Problems(d, 2)
+		p := check(tc.f, 2)
 		if len(p) != 1 || !strings.Contains(p[0], tc.want) {
 			t.Errorf("%s: %v, want one problem containing %q", name, p, tc.want)
 		}
 	}
+	// the role that logged in is not the one the DSN names (a server-side default of SESSION AUTHORIZATION), both sessions alike
+	f := Facts{VersionNum: 170012, TLS: true, ConnLimit: -1, Role: "other", Effective: "other"}
+	if p := f.Problems(DSN{MaxConns: 8, User: "hydra"}, 2); len(p) != 1 || !strings.Contains(p[0], `names "hydra"`) {
+		t.Errorf("another login than the DSN's: %v", p)
+	}
+	// a name from the server with odd characters is not repeated
+	f = Facts{VersionNum: 170012, TLS: true, ConnLimit: -1, Role: "x\ny s3cr3t", Effective: "x\ny s3cr3t"}
+	if p := f.Problems(DSN{MaxConns: 8, User: "hydra"}, 2); len(p) != 1 || strings.Contains(p[0], "s3cr3t") {
+		t.Errorf("an odd role name is repeated: %v", p)
+	}
 	// exactly enough connections: replicas x max_conns + 1 for the check itself
-	if p := (Facts{VersionNum: 170012, TLS: true, ConnLimit: 17}).Problems(d, 2); len(p) != 0 {
+	if p := check(Facts{VersionNum: 170012, TLS: true, ConnLimit: 17}, 2); len(p) != 0 {
 		t.Errorf("a limit of 17 is enough for 2 pods of 8: %v", p)
 	}
 }
@@ -121,5 +140,8 @@ func TestConnectErrorIsFixedText(t *testing.T) {
 	}
 	if got := ConnectError(&pq.Error{Code: "28P01"}).Error(); !strings.Contains(got, "SQLSTATE 28P01") {
 		t.Errorf("the SQLSTATE is the one useful fact: %s", got)
+	}
+	if got := ConnectError(&pq.Error{Code: pq.ErrorCode("x " + secret)}).Error(); strings.Contains(got, secret) || !strings.Contains(got, "SQLSTATE unknown") {
+		t.Errorf("a malformed SQLSTATE is repeated: %s", got)
 	}
 }

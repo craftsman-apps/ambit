@@ -222,12 +222,12 @@ done
 want nomode refused 'sslmode=verify-full (it says (not set))' "$(dsn 17 hydra "$HP" hydra .$NS.svc 'sslrootcert=/ca/ca.crt&max_conns=8')"
 want noca refused 'sslrootcert' "$(dsn 17 hydra "$HP" hydra .$NS.svc 'sslmode=verify-full&max_conns=8')"
 want nopool refused 'max_conns' "$(dsn 17 hydra "$HP" hydra .$NS.svc 'sslmode=verify-full&sslrootcert=/ca/ca.crt')"
-want wrongca refused 'x509' "$(dsn 17)" 2 ambit-oauth-wrong-ca
-want wrongname refused 'certificate is valid for' "$(dsn 17 hydra "$HP" hydra '')"          # the short Service name is not in the certificate
+want wrongca refused 'certificate was not accepted' "$(dsn 17)" 2 ambit-oauth-wrong-ca
+want wrongname refused 'certificate was not accepted' "$(dsn 17 hydra "$HP" hydra '')"          # the short Service name is not in the certificate
 want superuser refused 'is a superuser' "$(dsn 17 postgres "$SU")"
 want limit refused 'CONNECTION LIMIT' "$(dsn 17 hydra_small "$SP" hydra_small)" 2
 want limitok ok 'database ok' "$(dsn 17 hydra_small "$SP" hydra_small)" 1
-want badpw refused 'password authentication failed' "$(dsn 17 hydra WRONG$HP)"
+want badpw refused 'SQLSTATE 28P01' "$(dsn 17 hydra WRONG$HP)"
 pass "4 the database check: 17 and 15 pass; sslmode disable, allow, prefer, require, verify-ca and none, no CA file, no pool limit, a wrong CA, a name that is not in the certificate, a superuser, too few connections and a wrong password are refused; no log repeats a password"
 
 # --- 5 · a bad database address stops one pod, not the service

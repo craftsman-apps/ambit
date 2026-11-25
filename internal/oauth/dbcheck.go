@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -24,10 +25,10 @@ const (
 	MaxPostgres = 17
 )
 
-// The query parameters of the DSN that the check accepts: the TLS rule, Hydra's own pool limits, and two harmless driver options.
+// The query parameters of the DSN that the check accepts: the TLS rule, Hydra's own pool limits, and the connect timeout.
 // Anything else (host, options, a startup parameter such as session_authorization, a secret in the wrong place) is refused.
 var (
-	dsnParamList = []string{"sslmode", "sslrootcert", "max_conns", "max_idle_conns", "max_conn_lifetime", "max_idle_conn_time", "connect_timeout", "application_name"}
+	dsnParamList = []string{"sslmode", "sslrootcert", "max_conns", "max_idle_conns", "max_conn_lifetime", "max_idle_conn_time", "connect_timeout"}
 	dsnParams    = func() map[string]bool {
 		m := map[string]bool{}
 		for _, k := range dsnParamList {
@@ -41,6 +42,7 @@ var (
 type DSN struct {
 	URL      string // the address for the driver (without Hydra's pool parameters): never log it
 	Host     string
+	User     string // the login name the DSN gives (the role that must log in)
 	Database string
 	MaxConns int
 }
@@ -62,6 +64,15 @@ func ParseDSN(raw string) (DSN, error) {
 	// u.Query() drops a malformed pair without a word, and the driver writes the decoded names back without escaping them: a
 	// name such as "x=y&host" could then change the server the check connects to. So: a strict parse, and only names that this
 	// check knows. A name that is not known is not repeated in the message: it may be a secret in the wrong place.
+	// A NUL byte ends a startup field of the PostgreSQL protocol: one in a decoded value could add fields of its own.
+	pw, _ := u.User.Password()
+	if strings.ContainsRune(u.User.Username()+pw+u.Host+u.Path, 0) || strings.Contains(u.RawQuery, "%00") {
+		return DSN{}, errors.New("the DSN holds a NUL character")
+	}
+	user := u.User.Username()
+	if user == "" {
+		return DSN{}, errors.New("the DSN names no user")
+	}
 	q, err := url.ParseQuery(u.RawQuery)
 	if err != nil {
 		return DSN{}, errors.New("the DSN has a malformed parameter list")
@@ -100,7 +111,7 @@ func ParseDSN(raw string) (DSN, error) {
 		q.Del(k)
 	}
 	u.RawQuery = q.Encode()
-	return DSN{URL: u.String(), Host: u.Host, Database: db, MaxConns: n}, nil
+	return DSN{URL: u.String(), Host: u.Host, User: user, Database: db, MaxConns: n}, nil
 }
 
 // Facts of the server and of the role that connected, read in one session.
@@ -111,6 +122,18 @@ type Facts struct {
 	ConnLimit  int // the role's connection limit; -1: none
 	Role       string
 	Effective  string // the role in effect (current_user); it differs from Role after SET SESSION AUTHORIZATION or SET ROLE
+}
+
+var sqlstate = regexp.MustCompile(`^[0-9A-Z]{5}$`)
+
+var plainName = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,63}$`)
+
+// say returns a role name for a message only when it is plain: a name that comes from the server is not repeated as it is.
+func say(n string) string {
+	if plainName.MatchString(n) {
+		return n
+	}
+	return "(a name with unusual characters)"
 }
 
 // Major is the major version: 170012 -> 17.
@@ -126,20 +149,20 @@ func (f Facts) Problems(d DSN, replicas int) []string {
 	if !f.TLS {
 		p = append(p, "the session does not use TLS: the server must require TLS (hostssl in pg_hba.conf)")
 	}
-	if f.Effective != "" && f.Effective != f.Role {
-		p = append(p, fmt.Sprintf("the session runs as %q, but the login role is %q: Hydra's role must be the role that logs in", f.Effective, f.Role))
+	if f.Effective != f.Role || f.Role != d.User {
+		p = append(p, fmt.Sprintf("the session runs as %q and logged in as %q, but the DSN names %q: all three must be one role (no SET SESSION AUTHORIZATION, no role in effect other than the login)", say(f.Effective), say(f.Role), say(d.User)))
 	}
 	if f.Superuser {
-		p = append(p, fmt.Sprintf("the role %q is a superuser: use an owner role of the Hydra database only, without CREATEROLE or SUPERUSER", f.Role))
+		p = append(p, fmt.Sprintf("the role %q is a superuser: use an owner role of the Hydra database only, without CREATEROLE or SUPERUSER", say(d.User)))
 	}
 	if need := replicas*d.MaxConns + 1; f.ConnLimit >= 0 && f.ConnLimit < need {
-		p = append(p, fmt.Sprintf("the role %q may open %d connections, but %d Hydra pods with max_conns=%d need %d (CONNECTION LIMIT)", f.Role, f.ConnLimit, replicas, d.MaxConns, need))
+		p = append(p, fmt.Sprintf("the role %q may open %d connections, but %d Hydra pods with max_conns=%d need %d (CONNECTION LIMIT)", say(d.User), f.ConnLimit, replicas, d.MaxConns, need))
 	}
 	return p
 }
 
 // ReadFacts asks the server about itself over an open connection.
-func ReadFacts(ctx context.Context, db *sql.DB) (Facts, error) {
+func ReadFacts(ctx context.Context, db *sql.DB, user string) (Facts, error) {
 	var f Facts
 	var ver string
 	if err := db.QueryRowContext(ctx, `SHOW server_version_num`).Scan(&ver); err != nil {
@@ -147,17 +170,17 @@ func ReadFacts(ctx context.Context, db *sql.DB) (Facts, error) {
 	}
 	var err error
 	if f.VersionNum, err = strconv.Atoi(ver); err != nil {
-		return f, fmt.Errorf("the server version %q is not a number", ver)
+		return f, errors.New("the server version is not a number")
 	}
 	// A session's own row in pg_stat_ssl is readable by any role.
 	if err := db.QueryRowContext(ctx, `SELECT COALESCE((SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()), false)`).Scan(&f.TLS); err != nil {
 		return f, errors.New("read the TLS state: the server's answer could not be read")
 	}
-	// The role that logged in (session_user) and the role in effect (current_user): either may not be a superuser, and the
-	// connection limit that counts is the login role's.
-	if err := db.QueryRowContext(ctx, `SELECT l.rolname, e.rolname, l.rolsuper OR e.rolsuper, l.rolconnlimit
-		FROM pg_catalog.pg_roles l, pg_catalog.pg_roles e WHERE l.rolname = session_user AND e.rolname = current_user`).Scan(&f.Role, &f.Effective, &f.Superuser, &f.ConnLimit); err != nil {
-		return f, errors.New("read the role: the server's answer could not be read")
+	// The role the DSN names (its privileges and connection limit are the ones that count), the role that logged in (session_user)
+	// and the role in effect (current_user): Problems requires all three to be one.
+	if err := db.QueryRowContext(ctx, `SELECT session_user::text, current_user::text, r.rolsuper, r.rolconnlimit
+		FROM pg_catalog.pg_roles r WHERE r.rolname = $1`, user).Scan(&f.Role, &f.Effective, &f.Superuser, &f.ConnLimit); err != nil {
+		return f, errors.New("read the role: the server has no login role of the name that the DSN gives, or its answer could not be read")
 	}
 	return f, nil
 }
@@ -180,7 +203,7 @@ func CheckDatabase(ctx context.Context, raw string, replicas int) ([]string, Fac
 	if err := db.PingContext(ctx); err != nil {
 		return nil, Facts{}, ConnectError(err)
 	}
-	f, err := ReadFacts(ctx, db)
+	f, err := ReadFacts(ctx, db, d.User)
 	if err != nil {
 		return nil, f, err
 	}
@@ -197,7 +220,11 @@ func ConnectError(err error) error {
 	var ne net.Error
 	switch {
 	case errors.As(err, &pe):
-		return fmt.Errorf("connect to the database: the server refused the connection (SQLSTATE %s): check the user, the password and the database name", pe.Code)
+		code := string(pe.Code)
+		if !sqlstate.MatchString(code) {
+			code = "unknown"
+		}
+		return fmt.Errorf("connect to the database: the server refused the connection (SQLSTATE %s): check the user, the password and the database name", code)
 	case errors.Is(err, pq.ErrSSLNotSupported):
 		return errors.New("connect to the database: the server does not offer TLS")
 	case errors.As(err, &ua), errors.As(err, &he), errors.As(err, &ci):

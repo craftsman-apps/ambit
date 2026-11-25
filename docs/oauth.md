@@ -139,7 +139,7 @@ another policy in this namespace that admits more pods to Hydra's pods widens th
 NetworkPolicies, or run a process on the nodes of Hydra's pods, can read the signing key.
 
 The Kubernetes API refuses any route on the public Gateway that the chart did not write (`ValidatingAdmissionPolicy ambit-public-routes`):
-the name, the exact paths, the backend, the listener, and the exact header filter of each route. A route may not rewrite a path, mirror a
+the name, the exact paths, the backend, the listener, and the exact header filter of each route. The policy checks a route when it is created or changed: a route that already named `ambit-public` before the policy existed is not checked (see "Before you turn it on" in [front-door.md](front-door.md)). A route may not rewrite a path, mirror a
 request or edit other headers. The policy does not pin the sign-in host of the Hydra route (the host comes from `frontDoor.authHost`, which
 the policy cannot know when you enable OAuth in the same upgrade); it refuses a wildcard host, and the listener `https-auth` admits only the
 host `frontDoor.authHost` whatever the route says.

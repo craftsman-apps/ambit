@@ -13,9 +13,10 @@ seen=" "
 while :; do
   for id in $(docker ps --filter "label=$label" --format '{{.ID}}' 2>/dev/null); do
     case "$seen" in *" $id "*) continue ;; esac
+    # written to a temporary name and renamed, so containerd never reads a half-written file
     if docker exec "$id" sh -c 'mkdir -p /etc/containerd/certs.d/docker.io && printf "%s\n" \
         "server = \"https://registry-1.docker.io\"" "[host.\"https://mirror.gcr.io\"]" "  capabilities = [\"pull\", \"resolve\"]" \
-        > /etc/containerd/certs.d/docker.io/hosts.toml' 2>/dev/null; then
+        > /etc/containerd/certs.d/docker.io/hosts.toml.tmp && mv /etc/containerd/certs.d/docker.io/hosts.toml.tmp /etc/containerd/certs.d/docker.io/hosts.toml' 2>/dev/null; then
       echo "mirror set on kind node $id"
       seen="$seen$id "
     fi

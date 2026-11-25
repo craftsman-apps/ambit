@@ -71,7 +71,12 @@ pass "1c other written forms masked, ordinary numbers kept: $(uv run --no-projec
 idx=$(raw_call crm_get_index '{}')
 [[ "$idx" != *minsu.kim* && "$idx" != *4111111111111111* && "$idx" == *'"<EMAIL>"'* && "$idx" == *'"<CARD_NUMBER>"'* && "$idx" == *1763372401127* ]] ||
   fail "1e structured content: $idx"
-pass "1e email key and card number masked in structured content, Unix time kept"
+# issue 360: a 19-digit card number (more than 2^53) is masked; a long number that is no card stays exact. The tool writes
+# them as plain integers: agentgateway reads those exactly (up to 2^64), and would read a decimal or an exponent as a float.
+big=$(raw_call crm_get_big_numbers '{}')
+[[ "$big" != *4111111111111111110* && "$big" == *'"card19":"<CARD_NUMBER>"'* && "$big" == *'"big":12345678901234567890'* ]] ||
+  fail "1e long numbers: $big"
+pass "1e email key and card number masked in structured content, Unix time kept; 19-digit card numbers masked, long numbers exact"
 
 # 1d · issue 335: the text of a server's JSON-RPC error is not stored in the audit log; its code is. (The client still
 #      receives the error text unmasked: the gateway does not send errors to the guard, issue 333.)
@@ -86,6 +91,13 @@ wait_for 120 '[[ -n $(ch "$q") ]]' || fail "1d no audit record of the failed cal
 rec=$(ch "$q")
 [[ "$rec" == $'-32000\t0\t0' ]] || fail "1d audit record (error code, has error text, holds personal data): $rec"
 pass "1d the failed call is recorded with mcp.error.code -32000 and without the error text"
+
+# 1f · issue 333: a tool that fails with an error RESULT (isError true, as the MCP specification asks) is masked like any
+#      result. Only a JSON-RPC error (1d) and notifications and server requests are not (docs/concepts.md, Masking).
+errres=$(raw_call crm_lookup_fail_result '{"id":"42"}')
+[[ "$errres" == *'"isError":true'* && "$errres" == *'lookup 42 failed for customer RRN <NATIONAL_ID>, email <EMAIL>'* && "$errres" == *'<NATIONAL_ID>'* && "$errres" == *'<EMAIL>'* && "$errres" != *900101-1234567* && "$errres" != *minsu.kim* ]] ||
+  fail "1f an error result was not masked: $errres"
+pass "1f a tool error returned as a result (isError true) came back masked"
 
 # 2 · U6 fail closed: with the guard down, the call fails and nothing unmasked comes back
 kubectl -n "$NS" scale deploy/ambit-guard --replicas=0 >/dev/null

@@ -116,7 +116,6 @@ With `protection.enabled`, `ambit-guard` masks personal data in the results of M
   | A JSON-RPC **error** (`error.message`, `error.data`) | **No** | The gateway does not send errors to the guard. |
   | Log notifications (`notifications/message`) and progress notifications (`notifications/progress`, its `message`) | **No** | The gateway does not send notifications to the guard. |
   | Requests from the server to the client: `sampling/createMessage` and `elicitation/create` | **No** | The gateway does not send server requests to the guard. |
-  | The `_meta` object of the result itself (next to `content`) | **No** | The guard does not read it yet (issue [#374](https://github.com/craftsman-apps/ambit/issues/374)). |
   | Tool arguments, and the answers a client gives to a server request | **No** | The guard masks what comes back from a server, not what goes to it. Access rules can limit arguments (see [AccessRule](#accessrule)). |
 
   What you can do today: use only MCP servers that you trust not to put personal data in errors or notifications, and prefer servers that report a tool failure as a result with `isError: true` (these are masked). The audit log does not store the text of errors (see [Compliance](compliance.md#limits)). A result that is not a JSON object cannot be checked, so the guard withholds it. Ambit tracks this as issue [#333](https://github.com/craftsman-apps/ambit/issues/333); masking these messages needs a change in agentgateway.

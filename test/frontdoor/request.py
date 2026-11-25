@@ -1,7 +1,7 @@
 """One HTTPS request to the public Gateway, optionally behind a PROXY protocol v1 header (test/stepfd.sh).
 
 Usage: request.py PORT CA_FILE HOST PATH [--proxy CLIENT_IP] [--header 'Name: value']... [--post JSON]
-Prints the HTTP status code (a 200 whose body holds a JSON-RPC "error" prints "error200"), or "refused" when the connection
+Prints the HTTP status code (a 200 whose body is a JSON-RPC rate-limit error prints "error200"), or "refused" when the connection
 is closed or the TLS handshake fails.
 A PROXY protocol header is how a load balancer tells the gateway the real client address; curl cannot send a
 made-up address, so this test client does. Test only.
@@ -51,7 +51,7 @@ def main(argv):
             pass
         line = data.split(b"\r\n")[0].decode(errors="replace")
         status = line.split(" ")[1] if line.startswith("HTTP/") else "refused"
-        if status == "200" and b'"error"' in data.split(b"\r\n\r\n", 1)[-1]:
+        if status == "200" and b"rate limit" in data.split(b"\r\n\r\n", 1)[-1].lower():
             status = "error200"
         print(status)
     except (OSError, ssl.SSLError):

@@ -12,17 +12,26 @@ forward() { # forward POD -> prints the local port. kubectl port-forward ends wh
   for _ in $(seq 1 30); do (exec 3<>"/dev/tcp/127.0.0.1/$port") 2>/dev/null && break; sleep 0.5; done
   echo "$port"
 }
-stop_forwards() { # each id is a loop; kill its kubectl first, then the loop
-  local p c; for p in $(cat "$W/forward.pids" 2>/dev/null); do
+stop_forwards() { # each id is a loop: note its kubectl, stop the loop (or it starts another), then stop the kubectl
+  local p c kids; for p in $(cat "$W/forward.pids" 2>/dev/null); do
+    kids=$(pgrep -P "$p" 2>/dev/null || true)
     kill "$p" 2>/dev/null || true
-    for c in $(pgrep -P "$p" 2>/dev/null); do kill "$c" 2>/dev/null || true; done
+    for c in $kids; do kill "$c" 2>/dev/null || true; done
   done
   : > "$W/forward.pids"
+}
+# public_pods: PODS = the running public gateway pods that are not being deleted (an old pod of a rollout is still "Running")
+public_pods() {
+  PODS=($(kubectl -n "$NS" get pods -l gateway.networking.k8s.io/gateway-name=ambit-public -o json | "${PY[@]}" -c '
+import json, sys
+for p in json.load(sys.stdin)["items"]:
+    if p["status"].get("phase") == "Running" and not p["metadata"].get("deletionTimestamp") and all(c.get("ready") for c in p["status"].get("containerStatuses", [])):
+        print(p["metadata"]["name"])'))
 }
 # reforward: new forwards to the running public gateway pods; sets PODS, PA and PB
 reforward() {
   stop_forwards
-  PODS=($(kubectl -n "$NS" get pods -l gateway.networking.k8s.io/gateway-name=ambit-public --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}'))
+  public_pods
   PA=$(forward "${PODS[0]}"); PB=$(forward "${PODS[${#PODS[@]}-1]}")
 }
 pub() { # pub PORT PATH [curl args]: HTTP status of one request to the public Gateway; body in $W/pub, headers in $W/pubh
@@ -65,7 +74,7 @@ pubk() {
   case $c in
     429) echo limited ;;
     403) echo refused ;;
-    200) if grep -q '"error"' "$out"; then echo limited; else echo ok; fi ;;
+    200) if grep -qi 'rate limit' "$out"; then echo limited; elif grep -q '"error"' "$out"; then echo "other:200-error"; else echo ok; fi ;;
     *) echo "other:$c" ;;
   esac
   rm -f "$out"

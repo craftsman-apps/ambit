@@ -46,19 +46,29 @@ func ParseDSN(raw string) (DSN, error) {
 	}
 	q := u.Query()
 	// The driver reads the last value of a repeated parameter, a reader may read the first: one value only.
-	for k, v := range q {
+	for _, v := range q {
 		if len(v) != 1 {
-			return DSN{}, fmt.Errorf("the DSN repeats the parameter %q", k)
+			return DSN{}, errors.New("the DSN repeats a parameter (each may appear once)") // the name is not repeated: it may be a secret in the wrong place
 		}
 	}
+	if strings.Contains(u.Host, ",") || q.Has("host") || q.Has("hostaddr") || q.Has("port") {
+		return DSN{}, errors.New("the DSN must name one server in its address (no host list, no host= or port= parameter)")
+	}
 	if m := q.Get("sslmode"); m != "verify-full" {
-		if m == "" {
+		switch m { // only a known mode is repeated
+		case "":
 			m = "(not set)"
+		case "disable", "allow", "prefer", "require", "verify-ca":
+		default:
+			m = "(not a PostgreSQL mode)"
 		}
 		return DSN{}, fmt.Errorf("the DSN must say sslmode=verify-full (it says %s): the connection must use TLS and prove the server's name", m)
 	}
-	if q.Get("sslrootcert") == "" {
+	if q.Get("sslrootcert") != "/ca/ca.crt" {
 		return DSN{}, errors.New("the DSN must name the CA file with sslrootcert=/ca/ca.crt (the chart mounts oauth.database.caSecret there)")
+	}
+	if q.Has("sslcert") || q.Has("sslkey") || q.Has("sslpassword") || q.Has("service") || q.Has("options") {
+		return DSN{}, errors.New("the DSN may not use sslcert, sslkey, sslpassword, service or options")
 	}
 	n, err := strconv.Atoi(q.Get("max_conns"))
 	if err != nil || n < 1 || n > 64 {
@@ -108,7 +118,7 @@ func ReadFacts(ctx context.Context, db *sql.DB) (Facts, error) {
 	var f Facts
 	var ver string
 	if err := db.QueryRowContext(ctx, `SHOW server_version_num`).Scan(&ver); err != nil {
-		return f, fmt.Errorf("read the server version: %w", err)
+		return f, errors.New("read the server version: the server's answer could not be read")
 	}
 	var err error
 	if f.VersionNum, err = strconv.Atoi(ver); err != nil {
@@ -116,10 +126,13 @@ func ReadFacts(ctx context.Context, db *sql.DB) (Facts, error) {
 	}
 	// A session's own row in pg_stat_ssl is readable by any role.
 	if err := db.QueryRowContext(ctx, `SELECT COALESCE((SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()), false)`).Scan(&f.TLS); err != nil {
-		return f, fmt.Errorf("read the TLS state: %w", err)
+		return f, errors.New("read the TLS state: the server's answer could not be read")
 	}
-	if err := db.QueryRowContext(ctx, `SELECT rolname, rolsuper, rolconnlimit FROM pg_roles WHERE rolname = current_user`).Scan(&f.Role, &f.Superuser, &f.ConnLimit); err != nil {
-		return f, fmt.Errorf("read the role: %w", err)
+	// The role that logged in (session_user) and the role in effect (current_user): either may not be a superuser, and the
+	// connection limit that counts is the login role's.
+	if err := db.QueryRowContext(ctx, `SELECT l.rolname, l.rolsuper OR e.rolsuper, l.rolconnlimit
+		FROM pg_catalog.pg_roles l, pg_catalog.pg_roles e WHERE l.rolname = session_user AND e.rolname = current_user`).Scan(&f.Role, &f.Superuser, &f.ConnLimit); err != nil {
+		return f, errors.New("read the role: the server's answer could not be read")
 	}
 	return f, nil
 }

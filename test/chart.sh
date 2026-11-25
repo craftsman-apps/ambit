@@ -91,16 +91,16 @@ for s in ['system:serviceaccount:ambit-system:ambit-console','authentication.kub
   assert s in we, s
 assert [v['expression'] for v in w['validations']]==['variables.console || variables.cleanup'], w['validations']
 assert w['validations'][0]['message']=='only the Ambit console may write personal API key objects', w
-sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event']
+sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event','ambitproject.dev/agent']
 bs={x['metadata']['name']:x['spec'] for x in docs if x['kind']=='ValidatingAdmissionPolicyBinding'}
-assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(3)}|{'ambit-key-lease'}, list(bs)
+assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(4)}|{'ambit-key-lease'}, list(bs)
 assert all('paramRef' not in b for b in bs.values()), bs
 bs.pop('ambit-key-lease')
 for n,b in bs.items():
   i=int(n[-1])
   assert b['policyName']=='ambit-keys-writer' and b['validationActions']==['Deny'], b
   assert b['matchResources']['namespaceSelector']=={'matchLabels':{'kubernetes.io/metadata.name':'ambit-system'}}, b
-  assert b['matchResources']['objectSelector']=={'matchExpressions':[{'key':sel[i],'operator':'Exists'}]}, b" "admission: console-only writes to key objects (three label bindings), cleanup exempt, no Lease-holder check"
+  assert b['matchResources']['objectSelector']=={'matchExpressions':[{'key':sel[i],'operator':'Exists'}]}, b" "admission: console-only writes to key objects (four label bindings), cleanup exempt, no Lease-holder check"
 check_qs "p=one('ValidatingAdmissionPolicy','ambit-key-lease')['spec']
 assert p['failurePolicy']=='Fail' and 'paramKind' not in p, p
 r=p['matchConstraints']['resourceRules'][0]
@@ -165,7 +165,7 @@ assert m=={"tools/list":"Response","tools/call":"Full","resources/read":"Respons
 check_qs 'assert not [x for x in docs if x["kind"]=="AgentgatewayPolicy" and x["metadata"]["name"]=="ambit-access-log"]
 s=yaml.safe_load(one("ConfigMap","ambit-access-log-base")["data"]["spec.yaml"])
 assert s["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"Gateway","name":"ambit"}], s
-assert [x["name"] for x in s["frontend"]["accessLog"]["attributes"]["add"]]==["jwt.email","jwt.groups","jwt.sub","ambit.key_id","ambit.identity","ambit.router","ambit.route","ambit.routeReason","ambit.classifier.input_tokens","ambit.classifier.output_tokens"], s
+assert [x["name"] for x in s["frontend"]["accessLog"]["attributes"]["add"]]==["jwt.email","jwt.groups","jwt.sub","ambit.key_id","ambit.identity","ambit.agent","ambit.agent_mode","ambit.agent_owner_at_issue","ambit.platform_declared","ambit.grant_id","ambit.token_issuer","ambit.router","ambit.route","ambit.routeReason","ambit.classifier.input_tokens","ambit.classifier.output_tokens"], s
 assert s["frontend"]["accessLog"]["attributes"]["remove"]==["mcp.error.message"], s
 assert s["frontend"]["accessLog"]["otlp"]=={"protocol":"GRPC","backendRef":{"name":"ambit-otel-collector","port":4317}}, s' "access-log base ConfigMap, no chart AgentgatewayPolicy ambit-access-log"
 noev=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set evidence.enabled=false)

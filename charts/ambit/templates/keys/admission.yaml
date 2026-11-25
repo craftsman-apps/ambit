@@ -2,6 +2,10 @@
 {{- fail "Ambit needs Kubernetes 1.30 or later (ValidatingAdmissionPolicy, service-account pod names)" }}
 {{- end }}
 {{- if not (has (int .Values.apiKeys.maxDays) (list 30 90 365)) }}{{ fail "apiKeys.maxDays must be 30, 90 or 365" }}{{ end }}
+{{- $ag := .Values.agents | default dict }}
+{{- if not (has (int ($ag.keyMaxDays | default 90)) (list 30 90 365)) }}{{ fail "agents.keyMaxDays must be 30, 90 or 365" }}{{ end }}
+{{- if or (lt (int ($ag.maxTotal | default 2000)) 1) (gt (int ($ag.maxTotal | default 2000)) 2000) }}{{ fail "agents.maxTotal must be 1-2000" }}{{ end }}
+{{- if or (lt (int ($ag.maxPerPerson | default 10)) 1) (gt (int ($ag.maxPerPerson | default 10)) 10) }}{{ fail "agents.maxPerPerson must be 1-10" }}{{ end }}
 {{- if or (lt (int .Values.apiKeys.inactivityDays) 1) (gt (int .Values.apiKeys.inactivityDays) 365) }}{{ fail "apiKeys.inactivityDays must be 1-365" }}{{ end }}
 {{- /* serviceAccounts is missing after helm upgrade --reuse-values from a release before 0.5.0: the defaults apply */ -}}
 {{- $sa := .Values.serviceAccounts | default dict }}
@@ -9,9 +13,9 @@
 {{- if or (lt (int ($sa.exposureDays | default 0)) 0) (gt (int ($sa.exposureDays | default 0)) 30) }}{{ fail "serviceAccounts.exposureDays must be 0-30" }}{{ end }}
 {{- $ns := .Release.Namespace }}
 {{- $console := printf "system:serviceaccount:%s:ambit-console" $ns }}
-{{- $labels := list "ambitproject.dev/key" "ambitproject.dev/key-owner-record" "ambitproject.dev/key-event" }}
+{{- $labels := list "ambitproject.dev/key" "ambitproject.dev/key-owner-record" "ambitproject.dev/key-event" "ambitproject.dev/agent" }}
 # Personal API keys: key Secrets, owner records (Secrets) and key events (ConfigMaps) carry a label that starts with
-# ambitproject.dev/key. ambit-keys-writer lets only the console's service account (with a pod name) write them, and
+# ambitproject.dev/key. Agent records (ConfigMaps, label ambitproject.dev/agent) are fenced the same way. ambit-keys-writer lets only the console's service account (with a pod name) write them, and
 # lets the namespace controller and the garbage collector delete them (so a namespace with keys can always be
 # deleted). Which console pod writes is decided by the key Lease inside the console (leader election, one replica,
 # maxSurge 0, hourly repair). A holder check against the Lease in admission was removed: the API server's parameter

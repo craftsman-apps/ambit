@@ -60,6 +60,9 @@ type KeyService struct {
 	Namespace string
 	Settings  KeySettings
 	Services  ServiceSettings
+	Agents    AgentSettings
+	// RecordKey signs agent records (AgentRecordKey); without it no record is trusted.
+	RecordKey []byte
 	Now       func() time.Time
 	PerHour   int // creations per person per hour; 0 means 10
 
@@ -166,6 +169,13 @@ func (s *KeyService) opCtx(req context.Context) (context.Context, context.Cancel
 func (s *KeyService) Create(ctx context.Context, sess Session, name string, scope Scope, days int) (string, Key, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.createLocked(ctx, sess, name, scope, days, nil)
+}
+
+// createLocked creates a person's key; with agent set, the key of that person-mode agent (MCP only, with the
+// agent's metadata, read from its record now).
+// Call it holding s.mu.
+func (s *KeyService) createLocked(ctx context.Context, sess Session, name string, scope Scope, days int, agent *agentKeyRequest) (string, Key, error) {
 	if !s.Settings.Enabled {
 		return "", Key{}, ErrKeysOff
 	}
@@ -188,6 +198,16 @@ func (s *KeyService) Create(ctx context.Context, sess Session, name string, scop
 	} else if blocked[email] {
 		return "", Key{}, ErrOffboarded
 	}
+	var meta *KeyAgent
+	if agent != nil {
+		if scope != ScopeMCP || days > s.Agents.KeyMaxDays {
+			return "", Key{}, ErrBadInput
+		}
+		if meta, err = s.agentKeyMeta(ctx, agent.name, ModePerson, email, ""); err != nil {
+			return "", Key{}, err
+		}
+		meta.SourceRanges = agent.ranges
+	}
 	now := s.now()
 	recent := s.recent(email, now)
 	if len(recent) >= s.perHour() {
@@ -205,6 +225,11 @@ func (s *KeyService) Create(ctx context.Context, sess Session, name string, scop
 	}
 	if live >= maxKeysPerOwner {
 		return "", Key{}, ErrTooMany
+	}
+	if meta != nil {
+		if err := s.checkAgentKeyRoom(keys, meta.Name, now); err != nil {
+			return "", Key{}, err
+		}
 	}
 	signed := time.Unix(sess.SignedIn, 0).UTC()
 	// owner record first; a planted (unlabelled) record is overwritten, never trusted
@@ -242,7 +267,7 @@ func (s *KeyService) Create(ctx context.Context, sess Session, name string, scop
 	}
 	ceiling := now.AddDate(0, 0, days)
 	k := Key{ID: id, Name: name, Prefix: prefix, Email: email, Groups: o.Groups, Scope: scope, Created: now,
-		Expires: ceiling, SignedIn: o.SignedIn, Ceiling: ceiling, Until: until(ceiling, o.SignedIn, s.Settings.InactivityDays), Hash: hash}
+		Expires: ceiling, SignedIn: o.SignedIn, Ceiling: ceiling, Until: until(ceiling, o.SignedIn, s.Settings.InactivityDays), Hash: hash, Agent: meta}
 	sec := k.Secret(s.Namespace)
 	if err := s.Client.Create(ctx, sec); err != nil {
 		return "", Key{}, err
@@ -880,6 +905,12 @@ func (s *KeyService) repairLocked(ctx context.Context) (rep RepairReport, objErr
 			}
 		}
 	}
+	if err := s.repairAgentRecords(ctx); err != nil { // before the keys: a finished delete removes its keys too
+		errs = append(errs, err)
+	}
+	if err := s.repairAgentKeys(ctx, secs, &rep); err != nil {
+		errs = append(errs, err)
+	}
 	if err := s.cleanupEvents(ctx); err != nil {
 		errs = append(errs, err)
 	}
@@ -931,4 +962,48 @@ func (s *KeyService) blockedEmails(ctx context.Context) (map[string]bool, error)
 		}
 	}
 	return out, nil
+}
+
+// repairAgentKeys deletes agent keys whose agent has no readable record or is not active, and copies the record's
+// scope, platform and revision to keys that differ (an interrupted scope change). A failed listing of the records
+// changes nothing. Call it holding s.mu.
+func (s *KeyService) repairAgentKeys(ctx context.Context, secs []corev1.Secret, rep *RepairReport) error {
+	agents, err := s.agentRecords(ctx, client.MatchingLabels{agentLabel: "true"})
+	if err != nil {
+		return err
+	}
+	byName := make(map[string]Agent, len(agents))
+	for _, a := range agents {
+		byName[a.Name] = a
+	}
+	var errs []error
+	for _, k := range decodeKeys(secs, "") {
+		if k.Agent == nil {
+			continue
+		}
+		a, ok := byName[k.Agent.Name]
+		op, err := s.changeKey(ctx, k.ID, func(cur *Key) (keyOp, error) {
+			switch {
+			case cur.Agent == nil:
+				return keyKeep, nil
+			case !ok || a.State != StateActive || cur.Agent.Mode != a.Mode:
+				return keyDelete, nil // fail closed: no record, a stopped agent, or a record of another kind
+			case keyBehind(*cur, a):
+				cur.Agent.Scope, cur.Agent.Platform, cur.Agent.Rev = a.Scope, a.Platform, a.Rev
+				return keyUpdate, nil
+			}
+			return keyKeep, nil
+		}, "agent-repair-delete", consoleActor)
+		switch {
+		case apierrors.IsNotFound(err):
+		case err != nil:
+			errs = append(errs, err)
+		case op == keyDelete:
+			rep.Deleted++
+		case op == keyUpdate:
+			rep.Updated++
+			s.event(ctx, consoleActor, "repair", k.ID, k.Email, "agent="+k.Agent.Name)
+		}
+	}
+	return errors.Join(errs...)
 }

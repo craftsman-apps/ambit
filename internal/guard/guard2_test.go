@@ -85,6 +85,20 @@ func respond(t *testing.T, g *Guard, method, body string) (out string, withheld 
 
 // Issue 298: object keys, JSON numbers and uri values are masked; type and mimeType of content items are structure.
 // Issue 297: resources/read and prompts/get results are masked like tool results.
+// Issue 374: the _meta of the result itself (next to content, contents or messages) is masked, with its keys unchanged.
+func TestMaskingCoversResultMeta(t *testing.T) {
+	g := &Guard{Pins: pins, Masker: Builtin{}}
+	for _, c := range []struct{ method, body, want string }{
+		{"tools/call", `{"content":[],"_meta":{"a":"kim@acme.com"}}`, `{"_meta":{"a":"<EMAIL>"},"content":[]}`},
+		{"resources/read", `{"contents":[],"_meta":{"kim@acme.com":{"owner":"kim@acme.com"}}}`, `{"_meta":{"kim@acme.com":{"owner":"<EMAIL>"}},"contents":[]}`},
+		{"prompts/get", `{"messages":[],"_meta":{"a":["kim@acme.com"]}}`, `{"_meta":{"a":["<EMAIL>"]},"messages":[]}`},
+	} {
+		if got, withheld := respond(t, g, c.method, c.body); withheld || got != c.want {
+			t.Errorf("%s: got %q (withheld %v), want %q", c.method, got, withheld, c.want)
+		}
+	}
+}
+
 func TestMaskingCoversKeysNumbersURIsResourcesAndPrompts(t *testing.T) {
 	g := &Guard{Pins: pins, Masker: Builtin{}}
 	for _, c := range []struct{ method, body, want string }{

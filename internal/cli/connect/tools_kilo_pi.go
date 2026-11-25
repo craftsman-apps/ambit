@@ -124,11 +124,14 @@ func PiDir(getenv func(string) string, home string) string {
 // piKeyCommand is the apiKey value with which pi runs ambit key print. pi reads $NAME in the value as a variable,
 // so a $ is written as $$.
 func piKeyCommand(in Input) string {
-	return "!" + strings.ReplaceAll(Quote(in.GOOS, in.AmbitPath)+" key print --url "+Quote(in.GOOS, in.URL), "$", "$$")
+	return "!" + strings.ReplaceAll(QuoteCmd(in.GOOS, in.AmbitPath)+" key print --url "+QuoteCmd(in.GOOS, in.URL), "$", "$$")
 }
 
 // PlanPiModels plans the provider "ambit" in pi's models.json. pi runs the key command for each request.
 func PlanPiModels(in Input) (*Plan, error) {
+	if err := CheckCmdSafe(in.GOOS, "pi", in.AmbitPath, in.URL); err != nil {
+		return nil, err
+	}
 	return planJSON(in, []Set{{Path: []string{"providers", "ambit"}, Value: `{"baseUrl":` + marshalString(in.URL+"/v1") +
 		`,"api":"openai-completions","apiKey":` + marshalString(piKeyCommand(in)) + `,"models":[{"id":` + marshalString(in.Model) + `}]}`}}, "pi")
 }

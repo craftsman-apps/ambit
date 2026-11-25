@@ -88,6 +88,19 @@ func TestWriteAllRefusesAFileChangedWhileWeWorked(t *testing.T) {
 	}
 }
 
+// A file that already changed before the backup is not backed up with the old content (#257).
+func TestWriteAllNoBackupOfAStaleRead(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "settings.json")
+	os.WriteFile(p, []byte("the tool wrote this"), 0o600)
+	_, err := WriteAll([]FileChange{{Path: p, Before: []byte("one"), Exists: true, After: []byte("two")}})
+	if err == nil || !strings.Contains(err.Error(), "changed") {
+		t.Fatalf("err = %v", err)
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(p)); len(entries) != 1 || read(t, p) != "the tool wrote this" {
+		t.Fatalf("a backup was written: %v", entries)
+	}
+}
+
 func TestWriteAllRefusesAFileThatAppearedWhileWeWorked(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "settings.json")
 	writeHook = func() { os.WriteFile(p, []byte("new"), 0o600) }
@@ -280,12 +293,13 @@ func TestWriteAllSaysWhatItCouldNotPutBack(t *testing.T) {
 	writeHook = func() {
 		if calls++; calls == 2 { // the second file is being checked: make the first one impossible to restore
 			os.Chmod(locked, 0o500)
+			os.WriteFile(second, []byte("different"), 0o600) // and the second file changes just before its check
 		}
 	}
 	defer func() { writeHook = nil; os.Chmod(locked, 0o700) }()
 	_, err := WriteAll([]FileChange{
 		{Path: first, Before: []byte("one"), Exists: true, After: []byte("two")},
-		{Path: second, Before: []byte("different"), Exists: true, After: []byte("y")}, // fails: it changed
+		{Path: second, Before: []byte("s"), Exists: true, After: []byte("y")}, // fails: it changed
 	})
 	var e *out.Error
 	if !errors.As(err, &e) || !strings.Contains(e.Why, "changed while") || !strings.Contains(e.Why, first) || !strings.Contains(e.Why, first+".ambit.bak") {

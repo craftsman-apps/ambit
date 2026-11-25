@@ -6,6 +6,7 @@
 {{- if not .Values.mcp.enabled }}{{ fail "frontDoor.enabled=true needs mcp.enabled=true: the front door serves MCP only" }}{{ end }}
 {{- if not .Values.apiKeys.enabled }}{{ fail "frontDoor.enabled=true needs apiKeys.enabled=true: the front door accepts API keys only" }}{{ end }}
 {{- if not .Values.limits.enabled }}{{ fail "frontDoor.enabled=true needs limits.enabled=true: the front door's shared rate limits are counted by the ratelimit service" }}{{ end }}
+{{- if not .Values.protection.enabled }}{{ fail "frontDoor.enabled=true needs protection.enabled=true: the public route must go through ambit-guard (tool pinning, argument limits and masking, fail closed)" }}{{ end }}
 {{- if not .Values.evidence.enabled }}{{ fail "frontDoor.enabled=true needs evidence.enabled=true: every call through the public Gateway must be recorded" }}{{ end }}
 {{- range $other := list .Values.console.host .Values.llm.host .Values.mcp.host }}
 {{- if eq $other $fd.host }}{{ fail (printf "frontDoor.host %q is also a private host name: the public Gateway must not share a name with the console, the LLM host or the private MCP host" $fd.host) }}{{ end }}
@@ -130,6 +131,8 @@ spec:
       action: Require
       policy:
         matchExpressions:
+          # An agent key may name source ranges (at most 10 CIDRs): it is accepted only from them, as on the private route.
+          - {{ include "ambit.identity.sourceRanges" . | quote }}
           - {{ printf "(%s) && (%s)%s" (include "ambit.identity.presented" .) (include "ambit.identity.validKey" .) (ternary "" " && !apiKey.email.endsWith(\"@svc.ambit.internal\")" (ne (toString (.Values.serviceAccounts | default dict).enabled) "false")) | quote }}
     apiKeyAuthentication:
       mode: Permissive
@@ -221,10 +224,22 @@ spec:
         object.spec.rules[0].matches[0].path.value == "/mcp" &&
         has(object.spec.rules[0].backendRefs) && size(object.spec.rules[0].backendRefs) == 1 &&
         object.spec.rules[0].backendRefs[0].name == "ambit-mcp-public" &&
-        has(object.spec.rules[0].backendRefs[0].kind) && object.spec.rules[0].backendRefs[0].kind == "AgentgatewayBackend")
+        has(object.spec.rules[0].backendRefs[0].kind) && object.spec.rules[0].backendRefs[0].kind == "AgentgatewayBackend" &&
+        has(object.spec.rules[0].backendRefs[0].group) && object.spec.rules[0].backendRefs[0].group == "agentgateway.dev" &&
+        !has(object.spec.rules[0].backendRefs[0].namespace) &&
+        (!has(object.spec.rules[0].backendRefs[0].filters) || size(object.spec.rules[0].backendRefs[0].filters) == 0) &&
+        has(object.spec.parentRefs[0].sectionName) && object.spec.parentRefs[0].sectionName == "https" && !has(object.spec.parentRefs[0].namespace) &&
+        !has(object.spec.rules[0].timeouts) && !has(object.spec.rules[0].sessionPersistence) &&
+        has(object.spec.rules[0].filters) && size(object.spec.rules[0].filters) == 1 &&
+        object.spec.rules[0].filters[0].type == "RequestHeaderModifier" && has(object.spec.rules[0].filters[0].requestHeaderModifier) &&
+        !has(object.spec.rules[0].filters[0].requestHeaderModifier.set) && !has(object.spec.rules[0].filters[0].requestHeaderModifier.add) &&
+        has(object.spec.rules[0].filters[0].requestHeaderModifier.remove) &&
+        object.spec.rules[0].filters[0].requestHeaderModifier.remove.size() == 3 &&
+        ["X-Ambit-User", "x-api-key", "authorization"].all(h, h in object.spec.rules[0].filters[0].requestHeaderModifier.remove))
         || (object.kind == "HTTPRoute" && object.metadata.name == "ambit-auth-hydra" &&
         size(object.spec.parentRefs) == 1 &&
-        has(object.spec.hostnames) && size(object.spec.hostnames) == 1 &&
+        has(object.spec.hostnames) && size(object.spec.hostnames) == 1 && !object.spec.hostnames[0].startsWith("*") &&
+        !has(object.spec.parentRefs[0].namespace) &&
         has(object.spec.rules) && size(object.spec.rules) == 1 &&
         has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) == 3 &&
         object.spec.rules[0].matches.all(m, has(m.path) && m.path.type == "Exact" && has(m.method) &&
@@ -233,7 +248,12 @@ spec:
         object.spec.rules[0].matches.exists(m, m.method == "POST" && m.path.value == "/oauth2/revoke") &&
         object.spec.rules[0].matches.exists(m, m.method == "GET" && m.path.value == "/.well-known/jwks.json") &&
         has(object.spec.parentRefs[0].sectionName) && object.spec.parentRefs[0].sectionName == "https-auth" &&
-        (!has(object.spec.rules[0].filters) || object.spec.rules[0].filters.all(f, f.type == "RequestHeaderModifier")) &&
+        has(object.spec.rules[0].filters) && size(object.spec.rules[0].filters) == 1 &&
+        object.spec.rules[0].filters[0].type == "RequestHeaderModifier" && has(object.spec.rules[0].filters[0].requestHeaderModifier) &&
+        !has(object.spec.rules[0].filters[0].requestHeaderModifier.add) && !has(object.spec.rules[0].filters[0].requestHeaderModifier.remove) &&
+        has(object.spec.rules[0].filters[0].requestHeaderModifier.set) && size(object.spec.rules[0].filters[0].requestHeaderModifier.set) == 1 &&
+        object.spec.rules[0].filters[0].requestHeaderModifier.set[0].name == "X-Forwarded-Proto" &&
+        object.spec.rules[0].filters[0].requestHeaderModifier.set[0].value == "https" &&
         !has(object.spec.rules[0].timeouts) && !has(object.spec.rules[0].sessionPersistence) &&
         has(object.spec.rules[0].backendRefs) && size(object.spec.rules[0].backendRefs) == 1 &&
         object.spec.rules[0].backendRefs[0].name == "ambit-hydra-public" &&

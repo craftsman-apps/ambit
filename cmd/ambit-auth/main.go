@@ -60,7 +60,7 @@ func checkDatabase(ctx context.Context, args []string) error {
 		}
 		return fmt.Errorf("%d problem(s) with the database", len(problems))
 	}
-	slog.Info("database ok", "postgresMajor", f.Major(), "tls", f.TLS, "role", f.Role)
+	slog.Info("database ok", "postgresMajor", f.Major(), "tls", f.TLS)
 	return nil
 }
 

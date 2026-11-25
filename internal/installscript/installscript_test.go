@@ -141,8 +141,11 @@ func runSh(t *testing.T, base string, env ...string) (string, string, error) {
 		t.Skip("install.sh is for macOS and Linux")
 	}
 	dir := t.TempDir()
+	// A fake sysctl that reports no Rosetta, so a test run under Rosetta still asks for the build it serves.
+	stub := t.TempDir()
+	os.WriteFile(filepath.Join(stub, "sysctl"), []byte("#!/bin/sh\nexit 1\n"), 0o755)
 	cmd := exec.Command(sh, "../../site/static/install.sh")
-	cmd.Env = append(os.Environ(), append([]string{"AMBIT_DOWNLOAD_BASE=" + base, "AMBIT_INSTALL_DIR=" + dir}, env...)...)
+	cmd.Env = append(os.Environ(), append([]string{"PATH=" + stub + string(os.PathListSeparator) + os.Getenv("PATH"), "AMBIT_DOWNLOAD_BASE=" + base, "AMBIT_INSTALL_DIR=" + dir}, env...)...)
 	out, err := cmd.CombinedOutput()
 	return string(out), dir, err
 }
@@ -155,6 +158,47 @@ func TestInstallShPinnedVersion(t *testing.T) {
 	}
 	if fi, err := os.Stat(filepath.Join(dir, "ambit")); err != nil || fi.Mode().Perm()&0o111 == 0 {
 		t.Fatalf("binary: %v %v", fi, err)
+	}
+}
+
+// The PATH hint stays one safe word when the directory has a quote, a space or a $ (#108).
+func TestInstallShPathHintQuotesTheDirectory(t *testing.T) {
+	base := release(t, map[string][]byte{unixArchive(): targz(t, "ambit", fakeBinary)}, false)
+	dir := filepath.Join(t.TempDir(), "it's $HOME dir\n")
+	sh := need(t, "sh")
+	if runtime.GOOS == "windows" {
+		t.Skip("install.sh is for macOS and Linux")
+	}
+	cmd := exec.Command(sh, "../../site/static/install.sh")
+	cmd.Env = append(os.Environ(), "AMBIT_DOWNLOAD_BASE="+base, "AMBIT_INSTALL_DIR="+dir, "AMBIT_VERSION=v0.2.0")
+	out, err := cmd.CombinedOutput()
+	want := `export PATH='` + strings.ReplaceAll(dir, `'`, `'\''`) + `':"$PATH"`
+	if err != nil || !strings.Contains(string(out), want) {
+		t.Fatalf("err %v, want %q in:\n%s", err, want, out)
+	}
+}
+
+// Under Rosetta, uname says x86_64 on an Apple silicon Mac; the script takes the arm64 build.
+func TestInstallShRosettaTakesTheNativeBuild(t *testing.T) {
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "uname"), []byte("#!/bin/sh\ncase \"$1\" in -s) echo Darwin;; -m) echo x86_64;; esac\n"), 0o755)
+	os.WriteFile(filepath.Join(bin, "sysctl"), []byte("#!/bin/sh\n[ \"$1 $2\" = \"-n sysctl.proc_translated\" ] && echo 1 || exit 1\n"), 0o755)
+	base := release(t, map[string][]byte{"ambit_darwin_arm64.tar.gz": targz(t, "ambit", fakeBinary)}, false)
+	out, _, err := runSh(t, base, "AMBIT_VERSION=v0.2.0", "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err != nil || !strings.Contains(out, "✓ installed ambit") {
+		t.Fatalf("err %v, output:\n%s", err, out)
+	}
+}
+
+// Intel Mac, no Rosetta: the sysctl key does not exist, and the amd64 build is kept.
+func TestInstallShIntelMacKeepsAmd64(t *testing.T) {
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "uname"), []byte("#!/bin/sh\ncase \"$1\" in -s) echo Darwin;; -m) echo x86_64;; esac\n"), 0o755)
+	os.WriteFile(filepath.Join(bin, "sysctl"), []byte("#!/bin/sh\nexit 1\n"), 0o755)
+	base := release(t, map[string][]byte{"ambit_darwin_amd64.tar.gz": targz(t, "ambit", fakeBinary)}, false)
+	out, _, err := runSh(t, base, "AMBIT_VERSION=v0.2.0", "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err != nil || !strings.Contains(out, "✓ installed ambit") {
+		t.Fatalf("err %v, output:\n%s", err, out)
 	}
 }
 

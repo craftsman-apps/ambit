@@ -17,6 +17,7 @@ import (
 type DockerInfo struct {
 	Reachable     bool
 	Err           string // why Docker is not reachable
+	TimedOut      bool   // Docker did not answer in time: it may be busy, not stopped
 	ServerVersion string
 	OS            string // e.g. "Docker Desktop", "OrbStack", "Ubuntu 24.04 LTS"
 	MemTotal      int64  // bytes available to Docker (the Docker Desktop VM's memory on macOS and Windows)
@@ -24,11 +25,20 @@ type DockerInfo struct {
 	Podman        bool
 }
 
-// dockerTimeout bounds `docker info`, which hangs when the daemon is stuck.
-const dockerTimeout = 10 * time.Second
+// dockerTimeout bounds one `docker info`, which hangs when the daemon is stuck. A busy machine (a CI runner)
+// can answer slowly, so a timeout is tried once more (#352).
+const dockerTimeout = 15 * time.Second
 
 // ReadDockerInfo runs `docker info`. kind itself runs the docker command, so it must be on PATH.
-func ReadDockerInfo() DockerInfo { return readDockerInfo("docker", dockerTimeout) }
+func ReadDockerInfo() DockerInfo { return readDockerInfoRetry("docker", dockerTimeout) }
+
+func readDockerInfoRetry(command string, timeout time.Duration) DockerInfo {
+	d := readDockerInfo(command, timeout)
+	if d.TimedOut {
+		d = readDockerInfo(command, timeout)
+	}
+	return d
+}
 
 func readDockerInfo(command string, timeout time.Duration) DockerInfo {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -45,7 +55,7 @@ func readDockerInfo(command string, timeout time.Duration) DockerInfo {
 			msg = "the docker command is not installed"
 		}
 		if ctx.Err() == context.DeadlineExceeded {
-			msg = fmt.Sprintf("Docker did not answer in %s", timeout)
+			return DockerInfo{Err: fmt.Sprintf("Docker did not answer in %s", timeout), TimedOut: true}
 		}
 		return DockerInfo{Err: msg}
 	}
@@ -88,6 +98,15 @@ func ParseDockerInfo(raw []byte) DockerInfo {
 		d.Reachable = true
 	}
 	return d
+}
+
+// dockerProblem is the L1 message and next step when Docker cannot be reached. Docker that did not answer in
+// time is probably busy, not stopped: starting it again would be the wrong advice.
+func dockerProblem(d DockerInfo) (msg, next string) {
+	if d.TimedOut {
+		return d.Err + " (it may be busy)", "run `docker info`; when it answers, run this command again"
+	}
+	return "Docker is not running: " + d.Err, dockerNext()
 }
 
 // dockerNext is the next step of L1 for this platform.
@@ -134,7 +153,8 @@ func Preflight(in PreflightInput) []checks.Result {
 	var out []checks.Result
 	d := in.Docker
 	if !d.Reachable {
-		out = append(out, r("L1", checks.Fail, "Docker is not running: "+d.Err, dockerNext(), "docker"))
+		msg, next := dockerProblem(d)
+		out = append(out, r("L1", checks.Fail, msg, next, "docker"))
 		return out // without Docker nothing else can be checked
 	}
 	out = append(out, r("L1", checks.Pass, "Docker "+d.ServerVersion+" is running", "", "docker"))

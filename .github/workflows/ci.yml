@@ -1,11 +1,21 @@
 name: ci
-# Cost: a pull request runs the full check; a merge to main does not run it again (the merge script merges only a
-# PR that already contains the current main). Draft PRs skip quickstart and e2e. Each job runs only when a file it
-# builds or tests changes (.github/scripts/changes.sh; a file no rule names runs everything), so a documentation-only
-# change still gets a green check in seconds: a job skipped by its `if:` reports success.
+# Where the jobs run (docs/maintainers/merging.md):
+#  - A pull request runs the quick checks: changes, build, image, cli-unit, the cli-* jobs, quickstart. The full e2e
+#    (the five parts of the matrix below) does NOT run on a pull request once the repository variable MERGE_QUEUE is
+#    "true" (the owner sets it when the merge queue is on). Without that variable, e2e runs on pull requests as before.
+#  - GitHub's merge queue (event merge_group) runs every job, e2e included, on the queue's branch: the branch plus the
+#    queued pull request(s). Its draft check is empty, so quickstart and e2e run.
+#  - A person can run everything on a pull request branch before the queue: `gh workflow run ci.yml --ref <branch>`
+#    (event workflow_dispatch; there is no base to compare with, so every job runs).
+# Draft pull requests skip quickstart and e2e. Each job runs only when a file it builds or tests changes
+# (.github/scripts/changes.sh; a file no rule names runs everything), so a documentation-only change still gets a green
+# check in seconds: a job skipped by its `if:` reports success. The job `merge-gate` at the end is the one check a
+# merge needs; it fails when e2e was skipped on a merge group or a manual run although the change needs it.
 on:
   push: { branches: ["step-*"] }
   pull_request: { types: [opened, synchronize, reopened, ready_for_review] }
+  merge_group: { types: [checks_requested] }
+  workflow_dispatch: {}
 permissions: { contents: read }
 concurrency:
   group: ci-${{ github.ref }}
@@ -25,14 +35,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0 }
-      # No base (a push), or a diff that fails: an empty list, which runs every job.
+      # No base (a push), or a diff that fails: an empty list, which runs every job. A merge group is compared with the
+      # branch it merges into (changed-files.sh).
       - name: Which jobs does the change need?
         id: changes
-        env: { BASE: "${{ github.event.pull_request.base.sha }}", HEAD: "${{ github.event.pull_request.head.sha }}" }
-        run: |
-          : > "$RUNNER_TEMP/files"
-          if [ -n "$BASE" ]; then git diff --name-only "$BASE...$HEAD" > "$RUNNER_TEMP/files" || : > "$RUNNER_TEMP/files"; fi
-          .github/scripts/changes.sh < "$RUNNER_TEMP/files" | tee -a "$GITHUB_OUTPUT"
+        env:
+          BASE: "${{ github.event.pull_request.base.sha }}"
+          HEAD: "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}"
+          MERGE_GROUP_BASE_REF: "${{ github.event.merge_group.base_ref }}"
+        run: .github/scripts/changed-files.sh | .github/scripts/changes.sh | tee -a "$GITHUB_OUTPUT"
 
   # Its own job: a failure here must not skip the jobs that need `changes` (a skipped required job reports success).
   changes-test:
@@ -43,6 +54,10 @@ jobs:
         run: .github/scripts/changes_test.sh
       - name: The release workflow's highest-tag guard passes its tests
         run: .github/scripts/highest-tag_test.sh
+      - name: A merge group runs the same jobs as a pull request, and the merge gate counts skipped jobs correctly
+        run: |
+          .github/scripts/merge-gate_test.sh
+          .github/scripts/changed-files_test.sh
       - name: The Scoop and winget steps of the release skip, with exit 0, without their secrets
         run: .github/scripts/release-skip_test.sh
 
@@ -216,7 +231,8 @@ jobs:
   e2e:
     name: e2e (${{ matrix.part.name }})
     needs: [changes, image]
-    if: ${{ !github.event.pull_request.draft && needs.changes.outputs.e2e == 'true' }}
+    # Not on a pull request while the merge queue runs it (MERGE_QUEUE is "true"): the queue and a manual run do.
+    if: ${{ !github.event.pull_request.draft && needs.changes.outputs.e2e == 'true' && (github.event_name != 'pull_request' || vars.MERGE_QUEUE != 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
@@ -225,9 +241,10 @@ jobs:
         part:
           - { name: a, steps: "0 1 2 3 3b 3c args", ui: true }
           - { name: b, steps: "8 fallback", ui: false }
-          - { name: c, steps: "10 keys 9 compress sa agents", ui: false }
+          - { name: c, steps: "10 keys 9 compress sa", ui: false }
+          - { name: f, steps: "agents", ui: false }
           - { name: d, steps: "12 ext savings evidence", ui: false }
-          - { name: e, steps: "4a 4b 4c 4d 5 6 7 guard fd", ui: false }
+          - { name: e, steps: "4a 4b 4c 4d 5 6 7 guard fd platforms", ui: false }
           - { name: f, steps: "oauth", ui: false }
     steps:
       # The runner's disk held the kind images, the build cache and Go's caches until "no space left on device"
@@ -239,7 +256,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # test/stepsavings.sh and test/stepevidence.sh build the console's ClickHouse tests and run them in the ClickHouse pod.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        if: contains(matrix.part.steps, 'savings') || contains(matrix.part.steps, 'evidence')
+        if: contains(matrix.part.steps, 'savings') || contains(matrix.part.steps, 'evidence') || contains(matrix.part.steps, 'agents')
         with: { go-version-file: go.mod }
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: 26, cache: npm, cache-dependency-path: web/package-lock.json }
@@ -582,3 +599,49 @@ jobs:
           node scripts/homebrew/formula.mjs --checksums dist/checksums.txt --version "$(jq -r .version dist/metadata.json)" --out "$RUNNER_TEMP/ambit.rb" --allow-prerelease
           ruby -c "$RUNNER_TEMP/ambit.rb"
           [ "$(grep -cE '^ +sha256 "[0-9a-f]{64}"$' "$RUNNER_TEMP/ambit.rb")" = 4 ]
+
+  # The one check a merge needs (a branch rule or the merge queue requires this name). It waits for every job, and
+  # fails when one failed, was cancelled, or was skipped although changes.sh said it is needed. A job skipped on purpose
+  # (for example e2e for a documentation-only change) counts as passed. The matrix job e2e cannot be required by its
+  # part names: skipped, it reports only as "e2e (${{ matrix.part.name }})", and the part names would never arrive.
+  merge-gate:
+    needs: [changes, changes-test, build, image, cli-helm-interop, cli-unit, cli-local, cli-install, cli-gitops-init, cli-install-k3s, cli-partial, cli-snapshot, quickstart, e2e]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: { contents: read, actions: read }
+    env:
+      GH_TOKEN: ${{ github.token }}
+      R_CHANGES: ${{ needs.changes.result }}
+      R_CHANGES_TEST: ${{ needs.changes-test.result }}
+      R_BUILD: ${{ needs.build.result }}
+      R_IMAGE: ${{ needs.image.result }}
+      R_INTEROP: ${{ needs.cli-helm-interop.result }}
+      R_CLI_UNIT: ${{ needs.cli-unit.result }}
+      R_CLI_LOCAL: ${{ needs.cli-local.result }}
+      R_CLI_INSTALL: ${{ needs.cli-install.result }}
+      R_CLI_GITOPS: ${{ needs.cli-gitops-init.result }}
+      R_CLI_K3S: ${{ needs.cli-install-k3s.result }}
+      R_CLI_PARTIAL: ${{ needs.cli-partial.result }}
+      R_CLI_SNAPSHOT: ${{ needs.cli-snapshot.result }}
+      R_QUICKSTART: ${{ needs.quickstart.result }}
+      R_E2E: ${{ needs.e2e.result }}
+      W_BUILD: ${{ needs.changes.outputs.build }}
+      W_INTEROP: ${{ needs.changes.outputs.interop }}
+      W_CLI_KIND: ${{ needs.changes.outputs.cli_kind }}
+      W_SNAPSHOT: ${{ needs.changes.outputs.snapshot }}
+      W_QUICKSTART: ${{ needs.changes.outputs.quickstart }}
+      W_E2E: ${{ needs.changes.outputs.e2e }}
+      DRAFT: ${{ github.event.pull_request.draft && 'true' || 'false' }}
+      EVENT: ${{ github.event_name }}
+      QUEUE: ${{ vars.MERGE_QUEUE }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { sparse-checkout: .github/scripts }
+      # GitHub has reported a matrix job as passed when one leg was cancelled before it got a runner. The gate therefore
+      # also reads the legs themselves.
+      - name: The jobs of this run, leg by leg
+        run: gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?per_page=100" --paginate --jq '.jobs[] | "\(.name)|\(.conclusion)"' > "$RUNNER_TEMP/jobs.txt"
+      - name: Every job that must run ran and passed
+        env: { JOBS_FILE: "${{ runner.temp }}/jobs.txt" }
+        run: .github/scripts/merge-gate.sh

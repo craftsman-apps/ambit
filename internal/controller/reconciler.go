@@ -225,6 +225,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		return reconcile.Result{}, err
 	}
 	boundServers, refusedServers := BindServers(servers.Items, conns.Items)
+	boundServers, frontDoorRefused := GateFrontDoor(boundServers)
 	var routers v1.ModelRouterList
 	if err := r.Live.List(ctx, &routers, client.InNamespace(r.Namespace)); err != nil {
 		return reconcile.Result{}, err
@@ -239,6 +240,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		compiled, dropped = WithoutArgumentLimits(rules.Items)
 	}
 	res := Compile(models.Items, boundServers, compiled, r.Route, routerNames...)
+	// A server marked for the front door without being ready is not served, and its proxy pod must not keep the label
+	// that the public Gateway's network policy admits (it was labelled while it was acknowledged).
+	for _, s := range servers.Items {
+		if _, refused := frontDoorRefused[s.Name]; refused && s.Spec.URL == "" {
+			unmarked := s.DeepCopy()
+			unmarked.Spec.FrontDoor = nil
+			res.Objects = append(res.Objects, mcpServer(*unmarked))
+		}
+	}
 	SetBrokerPaths(res.Objects, boundServers, conns.Items)
 	ApplyDropped(&res, dropped)
 	var budgets v1.BudgetList
@@ -346,6 +356,11 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 				return err
 			}
 		}
+		for name := range frontDoorRefused {
+			if err := r.deleteGenerated(ctx, "AgentgatewayPolicy", "ambit-conn-"+name); err != nil {
+				return err
+			}
+		}
 		if len(servers.Items) > 0 { // every Server refused, or none running: no shared backend (or policy) either
 			for _, o := range [][2]string{{"AgentgatewayBackend", MCPBackendName}, {"AgentgatewayPolicy", MCPBackendName + "-access"}} {
 				if generates(res.Objects, o[0], o[1]) {
@@ -354,6 +369,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 				if err := r.deleteGenerated(ctx, o[0], o[1]); err != nil {
 					return err
 				}
+			}
+		}
+		// No server on the front door (or none acknowledged, or running): no public backend and no public policy. This
+		// runs with no Server at all too: the last front-door server may just have been deleted.
+		for _, o := range [][2]string{{"AgentgatewayBackend", PublicMCPBackendName}, {"AgentgatewayPolicy", PublicMCPBackendName + "-access"}} {
+			if generates(res.Objects, o[0], o[1]) {
+				continue
+			}
+			if err := r.deleteGenerated(ctx, o[0], o[1]); err != nil {
+				return err
 			}
 		}
 		// No budgets (or budgets off): stop asking the ratelimit service on every request. No Model with failover: stop
@@ -513,6 +538,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		}
 		if msg, ok := refusedServers[s.Name]; ok {
 			c = cond(metav1.ConditionFalse, "ConnectionBound", msg)
+		} else if fc, ok := frontDoorRefused[s.Name]; ok {
+			c = fc
 		}
 		// Ready means its tools are available: an image server ToolHive runs is listed only once it has answered.
 		if s.Spec.URL == "" && c.Status == metav1.ConditionTrue && !meta.IsStatusConditionTrue(s.Status.Conditions, "Serving") {

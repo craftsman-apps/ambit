@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 type agentAnswer struct {
@@ -134,5 +135,50 @@ func TestAgentsAPI(t *testing.T) {
 	f.keys.Agents.Enabled = false
 	if r := f.call(t, "POST", "/api/agents", ana, map[string]any{"displayName": "x"}); r.Code != http.StatusConflict {
 		t.Errorf("agents off: %d", r.Code)
+	}
+}
+
+func TestAgentStopAPI(t *testing.T) {
+	f, clk := saFixture(t, nil)
+	f.keys.Agents, f.keys.RecordKey = defaultAgents, testRecordKey
+	if err := f.keys.Client.Create(context.Background(), scopeReady()); err != nil {
+		t.Fatal(err)
+	}
+	admin, ana, bob := f.cookie("admin@example.com", RoleAdmin), f.cookie("ana@acme.com", RoleViewer), f.cookie("bob@acme.com", RoleViewer)
+	r := f.call(t, "POST", "/api/agents", ana, map[string]any{"displayName": "Bot", "scope": []string{"crm"}})
+	var a agentView
+	_ = json.Unmarshal(r.Body.Bytes(), &a)
+	f.call(t, "POST", "/api/agents/"+a.Name+"/keys", ana, map[string]any{"name": "k", "days": 30})
+	if r := f.call(t, "POST", "/api/agents/"+a.Name+"/stop", bob, map[string]any{}); r.Code != http.StatusNotFound {
+		t.Errorf("bob stops: %d", r.Code)
+	}
+	r = f.call(t, "POST", "/api/agents/"+a.Name+"/stop", ana, map[string]any{})
+	var got agentView
+	_ = json.Unmarshal(r.Body.Bytes(), &got)
+	if r.Code != http.StatusAccepted || got.State != StateStopping || got.StopRequestedAt == nil {
+		t.Fatalf("stop: %d %s", r.Code, r.Body)
+	}
+	if r := f.call(t, "POST", "/api/agents/"+a.Name+"/start", ana, map[string]any{}); r.Code != http.StatusConflict {
+		t.Errorf("start while stopping: %d %s", r.Code, r.Body)
+	}
+	if r := f.call(t, "POST", "/api/agents/"+a.Name+"/keys", ana, map[string]any{"name": "late", "days": 30}); r.Code != http.StatusConflict {
+		t.Errorf("a key while stopping: %d", r.Code)
+	}
+	if r := f.call(t, "POST", "/api/agents/"+a.Name+"/stop", admin, map[string]any{}); r.Code != http.StatusAccepted {
+		t.Errorf("admin stops again: %d", r.Code)
+	}
+	if r := f.call(t, "POST", "/api/agents/nope/stop", ana, map[string]any{}); r.Code != http.StatusNotFound {
+		t.Errorf("unknown agent: %d", r.Code)
+	}
+	playController(t, f.keys, map[string]int64{"ambit": 1}, "")
+	if _, err := f.keys.AdvanceStops(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.call(t, "GET", "/api/agents/"+a.Name, ana, nil); !strings.Contains(r.Body.String(), `"state":"stopped"`) || !strings.Contains(r.Body.String(), `"stoppedAt"`) {
+		t.Errorf("detail: %s", r.Body)
+	}
+	clk.Set(clk.Now().Add(2 * time.Minute))
+	if r := f.call(t, "POST", "/api/agents/"+a.Name+"/start", ana, map[string]any{}); r.Code != 200 || !strings.Contains(r.Body.String(), `"state":"active"`) {
+		t.Errorf("start: %d %s", r.Code, r.Body)
 	}
 }

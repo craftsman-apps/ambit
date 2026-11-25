@@ -158,11 +158,23 @@ for patch in '[{"op":"add","path":"/spec/rules/0/filters/-","value":{"type":"URL
   '[{"op":"replace","path":"/spec/rules/0/backendRefs/0/name","value":"ambit-hydra-admin"}]' \
   '[{"op":"add","path":"/spec/rules/0/matches/-","value":{"method":"GET","path":{"type":"Exact","value":"/oauth2/sessions/logout"}}}]' \
   '[{"op":"remove","path":"/spec/rules/0/matches/2"}]' \
-  '[{"op":"replace","path":"/spec/parentRefs/0/sectionName","value":"https"}]'; do
+  '[{"op":"replace","path":"/spec/parentRefs/0/sectionName","value":"https"}]' \
+  '[{"op":"add","path":"/spec/rules/0/filters/0/requestHeaderModifier/remove","value":["authorization"]}]' \
+  '[{"op":"replace","path":"/spec/hostnames/0","value":"*.example.com"}]'; do
   out=$(kubectl -n "$NS" patch httproute ambit-auth-hydra --type json -p "$patch" --dry-run=server 2>&1) && fail "2 the admission policy admitted a change of the Hydra route: $patch"
-  grep -q "ambit-public-routes\|denied" <<<"$out" || fail "2 the change was refused, but not by the route policy: $patch: $(head -c 200 <<<"$out")"
+  grep -q "ambit-public-routes" <<<"$out" || fail "2 the change was refused, but not by the route policy: $patch: $(head -c 200 <<<"$out")"
 done
-pass "2 the route policy refuses a rewrite, another backend or port, an extra or a missing path, and another listener on the Hydra route"
+for patch in '[{"op":"add","path":"/spec/rules/0/filters/-","value":{"type":"RequestMirror","requestMirror":{"backendRef":{"name":"ambit-hydra-admin","port":4445}}}}]' \
+  '[{"op":"add","path":"/spec/rules/0/filters/-","value":{"type":"URLRewrite","urlRewrite":{"path":{"type":"ReplaceFullPath","replaceFullPath":"/admin/keys/hydra.jwt.access-token"}}}}]' \
+  '[{"op":"remove","path":"/spec/rules/0/filters"}]' \
+  '[{"op":"replace","path":"/spec/rules/0/filters/0/requestHeaderModifier/remove","value":["X-Ambit-User"]}]' \
+  '[{"op":"replace","path":"/spec/rules/0/backendRefs/0/group","value":"other.example"}]'; do
+  out=$(kubectl -n "$NS" patch httproute ambit-mcp-public --type json -p "$patch" --dry-run=server 2>&1) && fail "2 the admission policy admitted a change of the MCP route: $patch"
+  grep -q "ambit-public-routes" <<<"$out" || fail "2 the change was refused, but not by the route policy: $patch: $(head -c 200 <<<"$out")"
+done
+# a change that keeps what the chart wrote is admitted: the policy refuses the change, not the route
+kubectl -n "$NS" patch httproute ambit-auth-hydra --type json -p '[{"op":"replace","path":"/spec/rules/0/name","value":"token"}]' --dry-run=server >/dev/null 2>&1 || fail "2 a change that keeps the chart's route was refused"
+pass "2 the route policy refuses a rewrite, a mirror, another header edit, another backend or port, an extra or a missing path, a wildcard host and another listener"
 
 # --- 3 · who may reach Hydra (NetworkPolicy)
 probe() { # probe NAME [label=value ...]: a pod that can run Python, with the given labels
@@ -225,12 +237,12 @@ done
 want nomode refused 'sslmode=verify-full (it says (not set))' "$(dsn 17 hydra "$HP" hydra .$NS.svc 'sslrootcert=/ca/ca.crt&max_conns=8')"
 want noca refused 'sslrootcert' "$(dsn 17 hydra "$HP" hydra .$NS.svc 'sslmode=verify-full&max_conns=8')"
 want nopool refused 'max_conns' "$(dsn 17 hydra "$HP" hydra .$NS.svc 'sslmode=verify-full&sslrootcert=/ca/ca.crt')"
-want wrongca refused 'x509' "$(dsn 17)" 2 ambit-oauth-wrong-ca
-want wrongname refused 'certificate is valid for' "$(dsn 17 hydra "$HP" hydra '')"          # the short Service name is not in the certificate
+want wrongca refused 'certificate was not accepted' "$(dsn 17)" 2 ambit-oauth-wrong-ca
+want wrongname refused 'certificate was not accepted' "$(dsn 17 hydra "$HP" hydra '')"          # the short Service name is not in the certificate
 want superuser refused 'is a superuser' "$(dsn 17 postgres "$SU")"
 want limit refused 'CONNECTION LIMIT' "$(dsn 17 hydra_small "$SP" hydra_small)" 2
 want limitok ok 'database ok' "$(dsn 17 hydra_small "$SP" hydra_small)" 1
-want badpw refused 'password authentication failed' "$(dsn 17 hydra WRONG$HP)"
+want badpw refused 'SQLSTATE 28P01' "$(dsn 17 hydra WRONG$HP)"
 pass "4 the database check: 17 and 15 pass; sslmode disable, allow, prefer, require, verify-ca and none, no CA file, no pool limit, a wrong CA, a name that is not in the certificate, a superuser, too few connections and a wrong password are refused; no log repeats a password"
 
 # --- 5 · a bad database address stops one pod, not the service
@@ -276,7 +288,7 @@ echo "  two at the same time: $pa and $pb"
 for m in mig-a mig-b; do [[ $(phase_of $m) == Succeeded ]] || kubectl -n "$NS" logs $m 2>&1 | grep -iE "SQLSTATE|level=error" | head -2 | cut -c1-200; done
 mig mig-c
 [[ $(await mig-c) == Succeeded ]] || fail "6 a repeat of the migration must succeed whatever the first two did: $(kubectl -n "$NS" logs mig-c | tail -c 400)"
-pass "6 two migrations of an empty PostgreSQL 15 database at the same time: $pa and $pb (Hydra may fail one or both: the pods start one at a time); a run on its own then succeeds"
+pass "6 two migrations of an empty PostgreSQL 15 database started together: $pa and $pb (they may fail if they overlap: the pods start one at a time); a run on its own then succeeds"
 
 # --- 7 · another database: PostgreSQL 15 (a new, empty database gets its own key), then back to 17 (its key is still there)
 sec ambit-oauth-db-15 --from-literal=dsn="$(dsn 15)"

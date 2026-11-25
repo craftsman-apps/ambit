@@ -305,7 +305,8 @@ pass "9 one pod restarted, then both: the signing key is the same, and Hydra cre
 # --- 10 · no secret outside a Secret: not in any object of the chart, not in a log
 {
   helm get manifest ambit -n "$NS"
-  kubectl -n "$NS" get configmap,statefulset,pod -o yaml
+  # not the test's own pods: check pods of step 4 carry a DSN as a plain value on purpose
+  kubectl -n "$NS" get configmap,statefulset,deployment,pod -l '!ambitproject.dev/oauth-test' -o yaml
   for p in ambit-hydra-0 ambit-hydra-1; do for c in check-database migrate hydra hydra-keys; do kubectl -n "$NS" logs "$p" -c "$c" 2>&1 || true; done; done
 } > "$W/everything"
 for s in "$HP" "$SU" "$SP" "$SYS"; do ! grep -q "$s" "$W/everything" || fail "10 a password or key shows in the chart's objects or in a log"; done

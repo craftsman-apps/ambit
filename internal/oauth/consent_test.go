@@ -727,3 +727,96 @@ func TestRegistrationOff(t *testing.T) {
 		t.Fatal("the metadata must not advertise registration")
 	}
 }
+
+// Hydra v26.2.0 lets a rejected consent request be read and accepted again. Ambit decides each challenge once.
+func TestConsentChallengeIsDecidedOnce(t *testing.T) {
+	e := newEnv(t)
+	e.hydra.addConsent("C1", "alice@acme.test", goodRequestURL(""))
+	b := e.browser()
+	f := consentForm(t, b, "C1")
+	f.Set("action", "deny")
+	if w := b.do("POST", "/consent", f, origin); w.Code != 302 {
+		t.Fatalf("deny: %d", w.Code)
+	}
+	// the page can be fetched again (Hydra still serves the request); allowing it now is refused and creates nothing
+	e.hydra.mu.Lock()
+	delete(e.hydra.used, "C1") // what the real Hydra does: the request stays readable
+	e.hydra.mu.Unlock()
+	f = consentForm(t, b, "C1")
+	f.Set("action", "allow")
+	if w := b.do("POST", "/consent", f, origin); w.Code != 400 || len(e.be.created) != 0 {
+		t.Fatalf("allow after deny: %d, agents %d", w.Code, len(e.be.created))
+	}
+}
+
+func TestConsentDoubleSubmitMakesOneAgent(t *testing.T) {
+	e := newEnv(t)
+	e.hydra.addConsent("C1", "alice@acme.test", goodRequestURL(""))
+	b := e.browser()
+	f := consentForm(t, b, "C1")
+	f.Set("action", "allow")
+	f.Add("server", "crm")
+	codes := make(chan int, 8)
+	for i := 0; i < 8; i++ {
+		go func() {
+			bb := &browser{h: e.handler, cookies: map[string]string{}, addr: b.addr}
+			for k, v := range b.cookies {
+				bb.cookies[k] = v
+			}
+			codes <- bb.do("POST", "/consent", f, origin).Code
+		}()
+	}
+	ok := 0
+	for i := 0; i < 8; i++ {
+		if <-codes == 302 {
+			ok++
+		}
+	}
+	e.be.mu.Lock()
+	n := len(e.be.created)
+	e.be.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("%d agents for one consent (%d answers 302)", n, ok)
+	}
+}
+
+func TestFormCanBeSentAgainAfterARefusedChoice(t *testing.T) {
+	e := newEnv(t)
+	e.hydra.addConsent("C1", "alice@acme.test", goodRequestURL(""))
+	b := e.browser()
+	f := consentForm(t, b, "C1")
+	f.Set("action", "allow")
+	bad := url.Values{}
+	for k, v := range f {
+		bad[k] = v
+	}
+	bad.Add("server", "payroll")
+	if w := b.do("POST", "/consent", bad, origin); w.Code != 400 {
+		t.Fatalf("a tool that is not open: %d", w.Code)
+	}
+	if w := b.do("POST", "/consent", f, origin); w.Code != 302 || len(e.be.created) != 1 {
+		t.Fatalf("the corrected form: %d, agents %d", w.Code, len(e.be.created))
+	}
+}
+
+func TestLoginChallengeIsDecidedOnce(t *testing.T) {
+	e := newEnv(t)
+	e.hydra.addLogin("A", goodRequestURL(""))
+	b := e.browser()
+	st := e.startLogin(t, b, "A")
+	saved := map[string]string{}
+	for k, v := range b.cookies {
+		saved[k] = v
+	}
+	cb := "/callback?code=alice|" + url.QueryEscape(st) + "&state=" + url.QueryEscape(st)
+	if w := b.do("GET", cb, nil, nil); w.Code != 302 {
+		t.Fatalf("first: %d", w.Code)
+	}
+	b.cookies = saved // an attacker who got the cookie value presents it again
+	e.hydra.mu.Lock()
+	delete(e.hydra.used, "A")
+	e.hydra.mu.Unlock()
+	if w := b.do("GET", cb, nil, nil); w.Code != 400 {
+		t.Fatalf("replay with the cookie: %d", w.Code)
+	}
+}

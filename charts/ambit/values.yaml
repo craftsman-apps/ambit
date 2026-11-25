@@ -265,6 +265,8 @@ oauth:
       # these hosts (and loopback addresses for native clients) are accepted. false: no /register.
       enabled: true
       redirectHosts: [chatgpt.com, claude.ai]
+      # Registrations allowed per caller address and hour (counted in Valkey, shared by all replicas).
+      perSourcePerHour: 10
       # At most this many registered clients; one that nobody used for unusedClientDays is deleted.
       maxClients: 500
       unusedClientDays: 30

@@ -21,6 +21,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 func env(k string) string { return strings.TrimSpace(os.Getenv(k)) }
@@ -81,11 +82,13 @@ func serve(ctx context.Context) error {
 	vc := redis.NewClient(vopt)
 	defer vc.Close()
 
-	rest, err := rest.InClusterConfig()
-	if err != nil {
-		return fmt.Errorf("in-cluster config: %w", err)
+	rc, err := rest.InClusterConfig()
+	if err != nil { // outside a cluster (a developer's machine): the usual KUBECONFIG
+		if rc, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(clientcmd.NewDefaultClientConfigLoadingRules(), nil).ClientConfig(); err != nil {
+			return fmt.Errorf("no Kubernetes configuration: %w", err)
+		}
 	}
-	kc, err := kubernetes.NewForConfig(rest)
+	kc, err := kubernetes.NewForConfig(rc)
 	if err != nil {
 		return err
 	}
@@ -118,11 +121,17 @@ func serve(ctx context.Context) error {
 	}
 	cancel()
 
+	rates := oauth.DefaultRates()
+	perHour, err := envInt("AMBIT_AUTH_REGISTER_PER_HOUR", 10)
+	if err != nil || perHour < 1 {
+		return errors.New("AMBIT_AUTH_REGISTER_PER_HOUR must be 1 or more")
+	}
+	rates[oauth.BucketRegister] = oauth.Rate{Limit: perHour, Window: time.Hour}
 	local := &oauth.MemLimiter{}
 	s := &oauth.Server{Cfg: cfg, Sealer: sealer, Hydra: &oauth.HydraAdmin{Base: env("AMBIT_AUTH_HYDRA_ADMIN")}, HydraPub: env("AMBIT_AUTH_HYDRA_PUBLIC"),
 		Backend: &oauth.ConsoleBackend{Base: env("AMBIT_AUTH_CONSOLE_URL"), TokenFile: env("AMBIT_AUTH_CONSOLE_TOKEN_FILE")},
 		Deny:    deny, IdP: idp, Clients: &oauth.ValkeyRegistry{C: vc, Prefix: "ambit:oauth:"},
-		Limits: &oauth.Limits{Shared: &oauth.ValkeyLimiter{C: vc, Prefix: "ambit:oauth:"}, Local: local, Rates: oauth.DefaultRates()}}
+		Limits: &oauth.Limits{Shared: &oauth.ValkeyLimiter{C: vc, Prefix: "ambit:oauth:"}, Local: local, Rates: rates}}
 	go s.RunJanitor(ctx, 10*time.Minute)
 
 	var ready atomic.Bool
@@ -149,7 +158,13 @@ func serve(ctx context.Context) error {
 	ops.Handle("GET /metrics", promhttp.Handler())
 
 	errc := make(chan error, 3)
-	for addr, h := range map[string]http.Handler{":8080": s.Public(), ":8081": s.Internal(), ":8082": ops} {
+	addr := func(k, def string) string {
+		if env(k) != "" {
+			return env(k)
+		}
+		return def
+	}
+	for addr, h := range map[string]http.Handler{addr("AMBIT_AUTH_ADDR_PUBLIC", ":8080"): s.Public(), addr("AMBIT_AUTH_ADDR_HOOK", ":8081"): s.Internal(), addr("AMBIT_AUTH_ADDR_OPS", ":8082"): ops} {
 		srv := &http.Server{Addr: addr, Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 120 * time.Second}
 		go func() {
 			<-ctx.Done()

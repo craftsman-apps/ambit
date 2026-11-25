@@ -17,6 +17,7 @@ Hydra's token hook. Stateless: a pending sign-in is in the person's browser, cou
 {{- if $dcr.enabled }}
 {{- if not $dcr.redirectHosts }}{{ fail "oauth.registration.dynamic.redirectHosts must name at least one host, or set oauth.registration.dynamic.enabled=false" }}{{ end }}
 {{- range $h := $dcr.redirectHosts }}{{ if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$" $h) }}{{ fail (printf "oauth.registration.dynamic.redirectHosts: %q must be a lower-case host name (no scheme, port, path or wildcard)" $h) }}{{ end }}{{ end }}
+{{- if or (lt (int $dcr.perSourcePerHour) 1) (gt (int $dcr.perSourcePerHour) 100000) }}{{ fail "oauth.registration.dynamic.perSourcePerHour must be 1 to 100000" }}{{ end }}
 {{- if or (lt (int $dcr.maxClients) 1) (gt (int $dcr.maxClients) 5000) }}{{ fail "oauth.registration.dynamic.maxClients must be 1 to 5000" }}{{ end }}
 {{- if lt (int $dcr.unusedClientDays) 1 }}{{ fail "oauth.registration.dynamic.unusedClientDays must be 1 or more" }}{{ end }}
 {{- end }}
@@ -96,6 +97,7 @@ spec:
             {{- if $dcr.enabled }}
             - { name: AMBIT_AUTH_REGISTRATION_HOSTS, value: {{ join "," $dcr.redirectHosts | quote }} }
             - { name: AMBIT_AUTH_MAX_CLIENTS, value: {{ $dcr.maxClients | quote }} }
+            - { name: AMBIT_AUTH_REGISTER_PER_HOUR, value: {{ $dcr.perSourcePerHour | quote }} }
             - { name: AMBIT_AUTH_UNUSED_CLIENT_DAYS, value: {{ $dcr.unusedClientDays | quote }} }
             {{- else }}
             - { name: AMBIT_AUTH_REGISTRATION, value: "off" }

@@ -408,7 +408,7 @@ c=p["containers"][0]; assert c["command"]==["/ambit-auth","serve"] and c["securi
 env={e["name"]:e for e in c["env"]}
 for n in ("AMBIT_AUTH_IDP_CLIENT_SECRET","AMBIT_AUTH_COOKIE_SECRET"): assert "secretKeyRef" in env[n]["valueFrom"] and "value" not in env[n], n
 assert env["AMBIT_AUTH_PUBLIC_URL"]["value"]=="https://auth.localtest.me" and env["AMBIT_AUTH_RESOURCE"]["value"]=="https://mcp-public.localtest.me/mcp", env
-assert env["AMBIT_AUTH_REGISTRATION_HOSTS"]["value"]=="chatgpt.com,claude.ai" and env["AMBIT_AUTH_MAX_CLIENTS"]["value"]=="500", env
+assert env["AMBIT_AUTH_REGISTRATION_HOSTS"]["value"]=="chatgpt.com,claude.ai" and env["AMBIT_AUTH_MAX_CLIENTS"]["value"]=="500" and env["AMBIT_AUTH_REGISTER_PER_HOUR"]["value"]=="10", env
 assert env["AMBIT_AUTH_VALKEY_ADDRESS"]["value"]=="ambit-valkey:6379" and "AMBIT_AUTH_VALKEY_TLS" not in env, env
 pr=p["volumes"][0]["projected"]["sources"][0]["serviceAccountToken"]; assert pr["audience"]=="ambit-console", pr
 role=one("Role","ambit-auth")["rules"]
@@ -431,6 +431,7 @@ MSG='limits.enabled' refuse "OAuth without shared limits" --set limits.enabled=f
 MSG='redirectHosts' refuse "dynamic registration without hosts" --set 'oauth.registration.dynamic.redirectHosts={}'
 MSG='lower-case host name' refuse "a wildcard registration host" --set 'oauth.registration.dynamic.redirectHosts={*.example.com}'
 MSG='lower-case host name' refuse "a registration host with a scheme" --set 'oauth.registration.dynamic.redirectHosts={https://chatgpt.com}'
+MSG='perSourcePerHour' refuse "a registration limit of 0" --set oauth.registration.dynamic.perSourcePerHour=0
 MSG='maxClients' refuse "a client cap of 0" --set oauth.registration.dynamic.maxClients=0
 one_r=$(oat --set oauth.hydra.replicas=1)
 ! grep -q 'name: ambit-hydra$' <(sed -n '/kind: PodDisruptionBudget/,/^---/p' <<<"$one_r") || { echo "FAIL chart: one Hydra pod needs no PodDisruptionBudget"; exit 1; }

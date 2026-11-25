@@ -1,6 +1,7 @@
 package oauth
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -15,6 +16,14 @@ import (
 
 	"golang.org/x/oauth2"
 )
+
+// claim marks a Hydra login or consent challenge as decided, once. Hydra v26.2.0 lets a consent request that was rejected
+// be read and even accepted again until its verifier is used, so "single use" is kept here, in the store the replicas
+// share. false: it was decided before.
+func (s *Server) claim(ctx context.Context, kind, challenge string) (bool, error) {
+	h := sha256.Sum256([]byte(challenge))
+	return s.Clients.Once(ctx, "challenge:"+kind+":"+hex.EncodeToString(h[:16]), 20*time.Minute)
+}
 
 func redirect(w http.ResponseWriter, r *http.Request, to string) {
 	http.Redirect(w, r, to, http.StatusFound)
@@ -70,6 +79,14 @@ func (s *Server) callback(w http.ResponseWriter, r *http.Request) {
 		mSignins.WithLabelValues("no_transaction").Inc()
 		s.log().Info("callback refused", "reason", err.Error())
 		plain(w, 400, "This sign-in has expired, or was started in another browser. Start again from the platform you are connecting.")
+		return
+	}
+	if first, err := s.claim(r.Context(), "login", t.Login); err != nil {
+		plain(w, 503, "Sign-in is not available now. Try again in a minute.")
+		return
+	} else if !first {
+		mSignins.WithLabelValues("challenge_used").Inc()
+		plain(w, 400, "This sign-in link is not valid any more. Start again from the platform you are connecting.")
 		return
 	}
 	deny := func(result, why string) {
@@ -244,18 +261,40 @@ func (s *Server) consentSubmit(w http.ResponseWriter, r *http.Request) {
 		plain(w, 403, "This request did not come from the consent page.")
 		return
 	}
-	setCookie(w, csrfName(ch), "", -1)
 	cr, err := s.Hydra.GetConsent(r.Context(), ch)
 	if err != nil {
+		setCookie(w, csrfName(ch), "", -1)
 		plain(w, 400, "This consent link is not valid any more. Start again from the platform you are connecting.")
 		return
 	}
+	// The form's cookie ends with the decision: a form that is refused (a tool the person may not offer) can be sent again.
+	decide := func() bool { // exactly one decision per challenge, even if two requests race
+		first, err := s.claim(r.Context(), "consent", ch)
+		if err != nil {
+			plain(w, 503, "Consent is not available now. Try again in a minute.")
+			return false
+		}
+		if !first {
+			mConsent.WithLabelValues("challenge_used").Inc()
+			plain(w, 400, "This consent link is not valid any more. Start again from the platform you are connecting.")
+			return false
+		}
+		return true
+	}
 	if !s.resourceOK(cr.RequestURL) {
+		if !decide() {
+			return
+		}
+		setCookie(w, csrfName(ch), "", -1)
 		mConsent.WithLabelValues("bad_resource").Inc()
 		s.rejectConsent(w, r, ch, "invalid_target", "the resource parameter must be given once and be this server's MCP URL")
 		return
 	}
 	if r.PostForm.Get("action") != "allow" {
+		if !decide() {
+			return
+		}
+		setCookie(w, csrfName(ch), "", -1)
 		mConsent.WithLabelValues("denied").Inc()
 		s.rejectConsent(w, r, ch, "access_denied", "the person did not allow the connection")
 		return
@@ -305,6 +344,10 @@ func (s *Server) consentSubmit(w http.ResponseWriter, r *http.Request) {
 	if scope == nil {
 		scope, conns = []string{}, []string{}
 	}
+	if !decide() {
+		return
+	}
+	setCookie(w, csrfName(ch), "", -1)
 	grant := "g-" + random(12)
 	host := ""
 	if u, err := url.Parse(firstOf(cr.Client.RedirectURIs)); err == nil {

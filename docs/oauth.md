@@ -115,8 +115,15 @@ Consent creates a **person-mode agent** for the person (see [Agents](agents.md))
 parameter may appear twice. Scopes are `mcp` and `offline_access` (a refresh token needs the second; if a client sends no
 scope it gets both). The `resource` is checked again at login and at consent, from the request Hydra stored.
 
-**Two sign-ins in one browser** work: each has its own short-lived cookie (`__Host-ambit_tx_<handle>`, encrypted and
-authenticated, bound to its own name, deleted when used). At most six are kept per browser.
+**Two sign-ins in one browser** (two platform tabs) work: each has its own short-lived cookie (`__Host-ambit_tx_<handle>`,
+encrypted and authenticated, bound to its own name, deleted when used), and each consent form its own cookie. At most six
+sign-ins are kept per browser. One limit comes from Hydra: it keeps one CSRF cookie per client, so a second sign-in of
+the **same client** in the same browser makes the first one fail (the platform shows an error, and the person connects
+again). Different platforms do not disturb each other.
+
+**Each Hydra challenge is decided once.** Hydra v26.2.0 lets a rejected consent request be read and accepted again. Ambit
+marks a login or consent challenge as decided in Valkey, so a second decision (a replay, or two clicks at once) is refused
+and creates no agent.
 
 ## Registering clients
 
@@ -129,7 +136,7 @@ are accepted:
   response type `code`, scopes `mcp` and `offline_access`;
 - `client_name` of at most 100 characters (control characters and angle brackets are removed).
 
-Each registration is limited per caller address (10 per hour), and at most `maxClients` clients exist (500). A client
+Each registration is limited per caller address (`perSourcePerHour`, 10 by default), and at most `maxClients` clients exist (500). A client
 that nobody used for `unusedClientDays` (30) is deleted; every consent and every refresh counts as use, written at most
 once a day. Clients that an admin creates in Hydra by hand are never touched.
 

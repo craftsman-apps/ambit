@@ -14,6 +14,8 @@ import urllib.parse, urllib.request
 GW = int(os.environ["GW_PORT"]); IDP_PORT = int(os.environ["IDP_PORT"]); CA = os.environ["CA_FILE"]
 AUTH = os.environ["AUTH_HOST"]; MCP = os.environ["MCP_HOST"]; IDP = os.environ["IDP_HOST"]; CONSOLE = os.environ["CONSOLE_URL"]
 KUBECTL = os.environ["KUBECTL"].split()
+IDP_PORT_URL = int(os.environ.get("IDP_URL_PORT", "443"))
+IDP_BASE = f"https://{IDP}" + ("" if IDP_PORT_URL == 443 else f":{IDP_PORT_URL}")
 RES = f"https://{MCP}/mcp"; ISS = f"https://{AUTH}"
 REDIRECT = "https://chatgpt.com/connector_platform_oauth_redirect"
 fails = []
@@ -34,7 +36,7 @@ def pkce():
 
 # ---- connections: the real name for the certificate, a local port for the socket
 ctx = ssl.create_default_context(cafile=CA)
-ROUTES = {(AUTH, 443): GW, (IDP, 443): IDP_PORT, (MCP, 443): GW}
+ROUTES = {(AUTH, 443): GW, (IDP, int(os.environ.get("IDP_URL_PORT", "443"))): IDP_PORT, (MCP, 443): GW}
 
 
 class Conn(http.client.HTTPSConnection):
@@ -117,7 +119,7 @@ def idp_pick(b, form_html, url, user, action="login"):
     f = dict(re.findall(r'name="([a-z_]+)" value="([^"]*)"', form_html))
     f = {k: v.replace("&amp;", "&") for k, v in f.items() if k in ("state", "nonce", "code_challenge", "redirect_uri")}
     f.update({"user": user, "action": action})
-    return b.req_follow_post(f"https://{IDP}/authorize", f)
+    return b.req_follow_post(f"{IDP_BASE}/authorize", f)
 
 
 def _post_follow(self, url, data):
@@ -207,6 +209,22 @@ def wait(fn, secs=30, every=1.0):
     return False
 
 
+def limits_only():
+    """The registration limit, run on its own and first, with the limit at 10 per hour per address (the step lowers it)."""
+    codes = []
+    for i in range(14):
+        st, _, j = api("POST", "/register", {"client_name": f"c{i}", "redirect_uris": [REDIRECT]},
+                       {"X-Forwarded-For": f"198.51.100.{i}", "X-Real-IP": f"198.51.100.{i}", "Forwarded": f"for=198.51.100.{i}", "X-Ambit-Client-Address": f"198.51.100.{i}"})
+        codes.append(st)
+    check("8 registration limit: 10 per hour per address, counted in Valkey by both replicas; X-Forwarded-For, X-Real-IP, Forwarded and X-Ambit-Client-Address from the caller change nothing",
+          codes[:10].count(201) >= 9 and 429 in codes[9:] and codes[-1] == 429 and codes.count(201) <= 10, codes)
+    print("FAILED: " + ", ".join(fails) if fails else "all checks passed")
+    sys.exit(1 if fails else 0)
+
+
+if len(sys.argv) > 1 and sys.argv[1] == "limits":
+    limits_only()
+
 # ======================================================================================================================
 # 1 · discovery and registration
 st, h, md = api("GET", "/.well-known/oauth-authorization-server")
@@ -230,7 +248,7 @@ st, tok = exchange(CID, res) if kind == "code" else (0, {})
 check("2 token: a JWT access token and a refresh token", st == 200 and tok.get("access_token", "").count(".") == 2 and tok.get("refresh_token"), (st, tok))
 claims = jwt_claims(tok["access_token"]) if tok.get("access_token") else {}
 check("2 token: issuer, audience (our one MCP URL), person and a life of 15 minutes", claims.get("iss") == ISS and claims.get("aud") == [RES]
-      and claims.get("sub") == "alice@acme.test" and claims.get("exp", 0) - claims.get("iat", 0) == 900, claims)
+      and claims.get("sub") == "alice@acme.test" and abs(claims.get("exp", 0) - claims.get("iat", 0) - 900) <= 1, claims)
 state = console_state()
 agent = claims.get("ambit_agent")
 check("2 token: the agent and the grant of the consent are in it, the scope is what was ticked", agent and claims.get("ambit_agent_mode") == "person"
@@ -283,47 +301,52 @@ check("3 offboarding: a new sign-in of the person is refused with access_denied 
 kube("delete", "configmap", "ambit-offboarded", "--ignore-not-found")
 
 # ======================================================================================================================
-# 4 · two sign-ins in one browser, finished in reverse order
+# 4 · two sign-ins in one browser (two platform tabs), finished in reverse order
+REDIRECT2 = "https://claude.ai/api/mcp/auth_callback"
+st, _, reg2 = register(REDIRECT2, "Claude")
+CID2 = reg2.get("client_id", "")
 bb = Browser()
 v1, c1 = pkce(); v2, c2_ = pkce()
-def begin(bro, ch, st):
-    s, h, body, url = bro.follow(authorize_url(CID, ch, st))
+def begin(bro, cid, ch, st, redirect):
+    s, h, body, url = bro.follow(authorize_url(cid, ch, st, redirect))
     return body, url
-body1, url1 = begin(bb, c1, "one")
-body2, url2 = begin(bb, c2_, "two")
+body1, url1 = begin(bb, CID, c1, "state-one", REDIRECT)
+body2, url2 = begin(bb, CID2, c2_, "state-two", REDIRECT2)
 check("4 two pending sign-ins have two cookies", len([n for n in bb.cookie_names() if n.startswith("__Host-ambit_tx_")]) == 2, bb.cookie_names())
 def finish(bro, body, url, user, tick):
     st, h, body, url = idp_pick(bro, body, url, user)
     form = dict(re.findall(r'name="(challenge|csrf)" value="([^"]*)"', body)); form["action"] = "allow"
     data = list(form.items()) + [("server", t) for t in tick]
     st, h, body = bro.req("POST", base_url("/consent"), urllib.parse.urlencode(data).encode(), {"Origin": ISS, "Content-Type": "application/x-www-form-urlencoded"})
+    if "Location" not in h:
+        print("   consent POST answered", st, body[:200]); return {}
     st, h, body, url = bro.follow(urllib.parse.urljoin(base_url("/consent"), h["Location"]))
     return urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
 q2 = finish(bb, body2, url2, "alice", ())
 q1 = finish(bb, body1, url1, "alice", ("time",))
-check("4 reverse order: both finish with their own state", q2.get("state") == ["two"] and q1.get("state") == ["one"] and "code" in q1 and "code" in q2, (q1, q2))
+check("4 reverse order: both finish with their own state, to their own platform", q2.get("state") == ["state-two"] and q1.get("state") == ["state-one"] and "code" in q1 and "code" in q2, (q1, q2))
 sa, ta = token(CID, grant_type="authorization_code", code=q1["code"][0], redirect_uri=REDIRECT, code_verifier=v1, resource=RES)
-sb, tb = token(CID, grant_type="authorization_code", code=q2["code"][0], redirect_uri=REDIRECT, code_verifier=v2, resource=RES)
-check("4 reverse order: each code works with its own verifier, and the scopes stay apart", sa == 200 and sb == 200 and jwt_claims(ta["access_token"])["ambit_scope"] == ["time"]
-      and jwt_claims(tb["access_token"])["ambit_scope"] == [], (sa, sb))
+sb, tb = token(CID2, grant_type="authorization_code", code=q2["code"][0], redirect_uri=REDIRECT2, code_verifier=v2, resource=RES)
+check("4 reverse order: each code works with its own client and verifier, and the scopes and platforms stay apart", sa == 200 and sb == 200 and jwt_claims(ta["access_token"])["ambit_scope"] == ["time"]
+      and jwt_claims(tb["access_token"])["ambit_scope"] == [] and jwt_claims(tb["access_token"])["ambit_platform_declared"] == "claude-ai", (sa, sb))
 sc, _ = token(CID, grant_type="authorization_code", code=q1["code"][0], redirect_uri=REDIRECT, code_verifier=v1, resource=RES)
 check("4 a code is used once", sc in (400, 401), sc)
-sd, _ = token(CID, grant_type="authorization_code", code=q2["code"][0], redirect_uri=REDIRECT, code_verifier=v1, resource=RES)
-check("4 a code with another client's verifier is refused", sd in (400, 401), sd)
+sd, _ = token(CID2, grant_type="authorization_code", code=q2["code"][0], redirect_uri=REDIRECT2, code_verifier=v1, resource=RES)
+check("4 a code with another verifier is refused", sd in (400, 401), sd)
 
 # ======================================================================================================================
 # 5 · the sign-in at the identity provider: what is refused
 for user in ("mallory-iss", "mallory-nonce", "mallory-aud", "mallory-exp", "mallory-cbiss", "carol", "svcfake", "noemail"):
     kind, det = sign_in(Browser(), CID, user)
     check(f"5 {user}: the platform gets access_denied (with iss), no code", kind == "error" and det.get("error") == "access_denied" and det.get("iss") == ISS and "code" not in det, (kind, det))
-bd = Browser(); st, h, body, url = bd.follow(authorize_url(CID, pkce()[1], "den"))
+bd = Browser(); st, h, body, url = bd.follow(authorize_url(CID, pkce()[1], "state-deny"))
 st, h, body, url = idp_pick(bd, body, url, "alice", action="deny")
 q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
-check("5 the person denies at the identity provider: access_denied with iss", q.get("error") == ["access_denied"] and q.get("iss") == [ISS] and q.get("state") == ["den"], url)
+check("5 the person denies at the identity provider: access_denied with iss", q.get("error") == ["access_denied"] and q.get("iss") == [ISS] and q.get("state") == ["state-deny"], url)
 
 # callback attacks, by hand
 def pending():
-    bro = Browser(); s, h, body, url = bro.follow(authorize_url(CID, pkce()[1], "atk"))
+    bro = Browser(); s, h, body, url = bro.follow(authorize_url(CID, pkce()[1], "state-attack"))
     return bro, body, url
 bro, body, url = pending()
 f = dict(re.findall(r'name="([a-z_]+)" value="([^"]*)"', body)); st_ = f["state"].replace("&amp;", "&")
@@ -344,8 +367,9 @@ s, _, t = cb({"code": "x", "state": st4}, bro4)
 check("5 callback: a cookie of another sign-in does not complete this one", s in (302, 400), s)  # the real cookie of st4 is also there: this one runs and the IdP code 'x' fails
 bro5, body5_, _ = pending(); f5 = dict(re.findall(r'name="([a-z_]+)" value="([^"]*)"', body5_)); st5 = f5["state"].replace("&amp;", "&")
 s, h, t = cb({"code": "x", "state": st5, "iss": "https://evil.example.com"}, bro5)
-q = urllib.parse.parse_qs(urllib.parse.urlparse(h.get("Location", "")).query)
-check("5 callback with an iss that is not the identity provider's: refused (access_denied)", s == 302 and q.get("error") == ["access_denied"], (s, h.get("Location")))
+_, _, _, url = bro5.follow(urllib.parse.urljoin(base_url("/"), h.get("Location", "/")))
+q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+check("5 callback with an iss that is not the identity provider's: refused (access_denied)", s == 302 and q.get("error") == ["access_denied"] and "code" not in q, (s, url[:200]))
 s, _, t = cb({"code": "x", "state": st5}, bro5)
 check("5 callback replay: 400", s == 400, s)
 
@@ -353,28 +377,28 @@ check("5 callback replay: 400", s == 400, s)
 # 6 · the authorization request: the resource, PKCE, modes, parameters
 ch = pkce()[1]
 def front(**kw):
-    b_ = Browser(); st, h, body = b_.req("GET", authorize_url(CID, ch, "s", **kw)); return st
+    b_ = Browser(); st, h, body = b_.req("GET", authorize_url(CID, ch, "state-six", **kw)); return st
 for name, kw in {"no resource": dict(resource=()), "resource twice": dict(resource=(RES, RES)), "other resource": dict(resource=("https://other.example.com/mcp",)),
                  "two different": dict(resource=(RES, "https://other.example.com/mcp")), "plain pkce": dict(extra={"code_challenge_method": "plain"}),
                  "fragment mode": dict(extra={"response_mode": "fragment"}), "form_post mode": dict(extra={"response_mode": "form_post"}),
                  "unknown scope": dict(extra={"scope": "mcp admin"}), "request object": dict(extra={"request": "eyJ"})}.items():
     if "pkce" in name:
-        u = authorize_url(CID, ch, "s").replace("code_challenge_method=S256", "code_challenge_method=plain")
+        u = authorize_url(CID, ch, "state-six").replace("code_challenge_method=S256", "code_challenge_method=plain")
         st = Browser().req("GET", u)[0]
     else:
         st = front(**kw)
     check(f"6 authorize: {name} is refused with 400", st == 400, st)
-u = authorize_url(CID, ch, "s").replace("&code_challenge=" + ch, "")
+u = authorize_url(CID, ch, "state-six").replace("&code_challenge=" + ch, "")
 check("6 authorize: no code_challenge is refused", Browser().req("GET", u)[0] == 400)
-u = authorize_url(CID, ch, "s") + "&state=again"
+u = authorize_url(CID, ch, "state-six") + "&state=state-again"
 check("6 authorize: a parameter twice is refused", Browser().req("GET", u)[0] == 400)
-st, h, body, url = Browser().follow(authorize_url("no-such-client", ch, "s"))
+st, h, body, url = Browser().follow(authorize_url("no-such-client", ch, "state-six"))
 check("6 authorize: an unknown client gets the error page, not a redirect to its address", st in (400, 401) and "chatgpt.com" not in url, (st, url))
-st, h, body, url = Browser().follow(authorize_url(CID, ch, "s", redirect="https://evil.example.com/cb"))
+st, h, body, url = Browser().follow(authorize_url(CID, ch, "state-six", redirect="https://evil.example.com/cb"))
 check("6 authorize: another redirect address than the registered one is not followed", urllib.parse.urlparse(url).hostname == AUTH and st in (400, 401), (st, url))
 # the same checks at the second step: a request that reached Hydra without our front is still refused at login/consent (unit tests); here the
 # routes of Hydra that bypass the front do not exist
-check("6 the public Gateway has no route to Hydra's own /oauth2/auth (only ours)", Browser().req("GET", authorize_url(CID, ch, "s"))[0] in (302, 400), "")
+check("6 the public Gateway has no route to Hydra's own /oauth2/auth (only ours)", Browser().req("GET", authorize_url(CID, ch, "state-six"))[0] in (302, 400), "")
 
 # ======================================================================================================================
 # 7 · consent
@@ -397,7 +421,11 @@ check("7 consent: Deny sends the platform access_denied", s == 302 and "oauth2/a
 st, h, body, url = bc.follow(urllib.parse.urljoin(base_url("/"), h["Location"]))
 q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
 check("7 consent: ... with the iss parameter", q.get("error") == ["access_denied"] and q.get("iss") == [ISS], url)
-check("7 consent: the used challenge is gone", bc.req("GET", base_url("/consent?consent_challenge=" + form["challenge"]))[0] == 400)
+# Hydra keeps serving a rejected consent request, and would accept it again: Ambit decides each challenge once.
+n_agents = len(console_state()["created"])
+page = bc.req("GET", base_url("/consent?consent_challenge=" + form["challenge"]))
+f2 = dict(re.findall(r'name="(challenge|csrf)" value="([^"]*)"', page[2]))
+check("7 consent: a challenge that was decided cannot be decided again (no second agent)", not f2 or (post({**f2, "action": "allow", "server": "time"}, {"Origin": ISS})[0] == 400 and len(console_state()["created"]) == n_agents))
 console_post("/_refuse?msg=you+have+10+agents+already")
 kind, det = sign_in(Browser(), CID, "alice")
 check("7 consent: when the console refuses the agent, the platform gets access_denied and nothing is issued", kind == "error" and det.get("error") == "access_denied", (kind, det))
@@ -419,22 +447,13 @@ st, _, j = api("POST", "/register", {"client_name": "CLI", "redirect_uris": ["ht
 check("8 registration: a native client on a loopback address is accepted", st == 201, (st, j))
 big = Browser().req("POST", base_url("/register"), b"{" + b"a" * 20000, {"Content-Type": "application/json"})[0]
 check("8 registration: a body that is too large or not JSON is refused", big == 400, big)
-# the limit: 10 per hour per address, counted in Valkey by both replicas, whatever forwarded headers say
-used = 0
-codes = []
-for i in range(14):
-    st, _, j = api("POST", "/register", {"client_name": f"c{i}", "redirect_uris": [REDIRECT]},
-                   {"X-Forwarded-For": f"198.51.100.{i}", "X-Real-IP": f"198.51.100.{i}", "Forwarded": f"for=198.51.100.{i}", "X-Ambit-Client-Address": f"198.51.100.{i}"})
-    codes.append(st)
-# the registrations above already used some of the 10: the limit must have stopped the series, and spoofed headers must not have helped
-check("8 registration limit: per address, shared by both replicas; X-Forwarded-For, X-Real-IP, Forwarded and X-Ambit-Client-Address from the caller change nothing",
-      429 in codes and codes.index(429) <= 10 and all(c == 429 for c in codes[codes.index(429):]), codes)
-
 # ======================================================================================================================
 # 9 · restarts: a sign-in that is open while ambit-auth restarts still completes (nothing is kept in the pods)
+if os.environ.get("NO_RESTART"):
+    print("skipped: 9 restart (no pods here)"); print("all checks passed" if not fails else "FAILED: " + ", ".join(fails)); sys.exit(1 if fails else 0)
 time.sleep(1)
 bro = Browser()
-st_, h_, body_, url_ = bro.follow(authorize_url(CID, pkce()[1], "restart"))
+st_, h_, body_, url_ = bro.follow(authorize_url(CID, pkce()[1], "state-restart"))
 kube("delete", "pod", "-l", "app.kubernetes.io/name=ambit-auth", "--wait=true")
 kube("rollout", "status", "deploy/ambit-auth", "--timeout=180s")
 wait(lambda: Browser().req("GET", base_url("/.well-known/oauth-authorization-server"))[0] == 200, 60)

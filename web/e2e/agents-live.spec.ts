@@ -100,6 +100,7 @@ test("Audit has the agent, platform and entrance filters", async ({ page }) => {
 });
 
 test("agents: stop is confirmed by the gateways, then start; the connection boxes are there", async ({ page }) => {
+  test.setTimeout(300_000); // a stop is confirmed in seconds, but the console refuses a start for 60 seconds after it
   await signInAsAdmin(page);
   const display = uniqueName();
   try {
@@ -115,6 +116,7 @@ test("agents: stop is confirmed by the gateways, then start; the connection boxe
     const consent = page.getByTestId("consent");
     await expect(consent).toContainText("Nothing is ticked by default.");
     await expect(consent.getByRole("checkbox", { checked: true })).toHaveCount(0);
+    await expect(consent.getByRole("alert")).toHaveCount(0); // the list of connections arrived
 
     // Stop: the page says Stopping, then Stopped only after the console reports every gateway confirmed it.
     await detail.getByRole("button", { name: "Stop agent" }).click();

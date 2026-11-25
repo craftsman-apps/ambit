@@ -28,7 +28,7 @@ const useKeyUse = (admin: boolean) => useQuery({ queryKey: [...agentsKey, "keys"
   queryFn: () => getJSON<KeyList>(admin ? "/api/admin/keys" : "/api/keys") });
 // While a stop is not confirmed, ask again every 2 seconds: the console reports Stopped only after every gateway confirmed.
 const useAgent = (name?: string) => useQuery({ queryKey: [...agentsKey, "one", name], enabled: !!name, retry: false,
-  refetchInterval: (q) => (q.state.data?.state === "stopping" ? 2_000 : false),
+  refetchInterval: (q) => (q.state.data?.state === "stopping" && q.state.errorUpdateCount < 3 ? 2_000 : false),
   queryFn: () => getJSON<AgentDetailData>(`/api/agents/${encodeURIComponent(name!)}`) });
 
 const th = "py-1.5 pr-3 font-normal";
@@ -255,12 +255,17 @@ function ToolsUsed({ name }: { name: string }) {
 
 // Stop and start. A stop is complete only when every gateway has confirmed it; the page shows what the console measured and
 // never promises that no call is accepted after the request.
-function StopPanel({ a, admin }: { a: AgentView; admin: boolean }) {
+function StopPanel({ a, admin, enabled }: { a: AgentView; admin: boolean; enabled: boolean }) {
   const qc = useQueryClient();
   const [confirm, setConfirm] = useState(false);
-  const refresh = () => qc.invalidateQueries({ queryKey: agentsKey });
-  const stop = useMutation({ mutationFn: () => sendJSON("POST", `/api/agents/${encodeURIComponent(a.name)}/stop`, {}), onSuccess: () => { setConfirm(false); refresh(); } });
-  const start = useMutation({ mutationFn: () => sendJSON("POST", `/api/agents/${encodeURIComponent(a.name)}/start`, {}), onSuccess: refresh });
+  // The answer of stop and start is the agent as it is now: put it in the page at once (no moment with the old controls),
+  // then ask again.
+  const seed = (now: unknown) => {
+    qc.setQueryData([...agentsKey, "one", a.name], (old: AgentDetailData | undefined) => ({ ...old, ...(now as AgentView) }));
+    qc.invalidateQueries({ queryKey: agentsKey });
+  };
+  const stop = useMutation({ mutationFn: () => sendJSON("POST", `/api/agents/${encodeURIComponent(a.name)}/stop`, {}), onSuccess: (now) => { setConfirm(false); seed(now); } });
+  const start = useMutation({ mutationFn: () => sendJSON("POST", `/api/agents/${encodeURIComponent(a.name)}/start`, {}), onSuccess: seed });
   const mayAct = a.manageable || admin; // the owner (person mode) or an admin
   const notes = stopNotes(a);
   return (
@@ -271,24 +276,24 @@ function StopPanel({ a, admin }: { a: AgentView; admin: boolean }) {
         <p><a className="text-accent underline" href={`/api/evidence/agent-stop/${encodeURIComponent(a.name)}.zip`} download>Download the stop evidence (agent-stop.zip)</a>
           <span className="block text-small text-muted">Times of each step, the confirmation of each gateway, and the calls that were accepted after the request, counted. It needs evidence to be switched on.</span></p>)}
       {start.isError && <p className="text-bad" role="alert">{start.error.message}</p>}
-      {mayAct && a.state === "stopped" && <Button variant="outline" className="w-auto py-1" disabled={start.isPending} onClick={() => start.mutate()}>Start agent</Button>}
+      {mayAct && a.state === "stopped" && <Button variant="outline" className="w-auto py-1" disabled={start.isPending || !enabled} title={enabled ? "" : "Agents are switched off by your administrator"} onClick={() => start.mutate()}>Start agent</Button>}
       {mayAct && a.state === "active" && (confirm ? (
         <div role="alertdialog" aria-label="Stop agent" aria-describedby="stop-agent-text" className="space-y-2 rounded-md border border-bad p-3">
-          <p id="stop-agent-text">Stop <strong>{a.displayName}</strong>? Its keys are deleted now and cannot be brought back; Start gives the agent new keys. The page shows Stopped only after every gateway has confirmed the stop. A call that is already on its way can still be accepted until then.</p>
+          <p id="stop-agent-text">Stop <strong>{a.displayName}</strong>? Its keys are deleted and cannot be brought back; Start gives the agent new keys. The page shows Stopped only after every gateway has confirmed the stop. A call that is already on its way can still be accepted until then.</p>
           {stop.isError && <p className="text-bad" role="alert">{stop.error.message}</p>}
           <div className="flex gap-2">
             <Button className="w-auto py-1" disabled={stop.isPending} onClick={() => stop.mutate()}>Stop agent</Button>
-            <Button variant="outline" className="w-auto py-1" autoFocus onClick={() => setConfirm(false)}>Keep it running</Button>
+            <Button variant="outline" className="w-auto py-1" autoFocus onClick={() => { setConfirm(false); setTimeout(() => document.getElementById("stop-agent-button")?.focus()); }}>Keep it running</Button>
           </div>
         </div>
-      ) : <Button variant="outline" className="w-auto py-1" onClick={() => setConfirm(true)}>Stop agent</Button>)}
+      ) : <Button id="stop-agent-button" variant="outline" className="w-auto py-1" onClick={() => setConfirm(true)}>Stop agent</Button>)}
     </div>
   );
 }
 
 // The owner left (offboarding or a change at the identity provider): the agent keeps working for a limited time (Helm value
 // agents.orphanDays, 7 by default), then it is stopped. An admin moves it to a new owner.
-function OrphanBanner({ a, admin }: { a: AgentView; admin: boolean }) {
+function OrphanBanner({ a, admin, enabled }: { a: AgentView; admin: boolean; enabled: boolean }) {
   const qc = useQueryClient();
   const [owner, setOwner] = useState("");
   const move = useMutation({ mutationFn: () => sendJSON("PUT", `/api/agents/${encodeURIComponent(a.name)}/owner`, { owner: owner.trim() }),
@@ -296,8 +301,10 @@ function OrphanBanner({ a, admin }: { a: AgentView; admin: boolean }) {
   if (!a.orphanedAt) return null;
   return (
     <div role="status" data-testid="orphan-banner" className="space-y-2 rounded-md bg-warn-soft p-3 text-warn">
-      <p>The owner of this agent left on {utcTime(a.orphanedAt)}. The agent keeps working for a limited time (the Helm value agents.orphanDays, 7 by default). Then it is stopped. An admin can move it to a new owner.</p>
-      {admin && a.mode === "itself" && (
+      <p>The owner of this agent left on {utcTime(a.orphanedAt)}.{" "}
+        {a.state === "active" || a.state === "pending" ? "The agent keeps working for a limited time (the Helm value agents.orphanDays, 7 by default). Then it is stopped. An admin can move it to a new owner."
+          : `The agent is now ${stateText[a.state].toLowerCase()}.`}</p>
+      {admin && enabled && a.mode === "itself" && (a.state === "active" || a.state === "pending") && (
         <form className="flex flex-wrap items-end gap-2 text-ink" aria-label="Owner change" onSubmit={(e) => { e.preventDefault(); move.mutate(); }}>
           <label><span className="mb-1 block text-muted">New owner</span><input className={field} value={owner} required onChange={(e) => setOwner(e.target.value)} placeholder="a person's email, or group:platform" /></label>
           <Button type="submit" className="w-auto" disabled={move.isPending}>Move agent</Button>
@@ -314,11 +321,14 @@ function ConsentSection({ a, canChange }: { a: AgentView; canChange: boolean }) 
   const qc = useQueryClient();
   const conns = useConnections();
   const [picked, setPicked] = useState(a.connectionConsent);
+  // What the console has is the truth: when it changes (another session, a save), the boxes show it, so an old draft cannot grant again.
+  const served = a.connectionConsent.join(",");
+  useEffect(() => { setPicked(a.connectionConsent); }, [served]); // eslint-disable-line react-hooks/exhaustive-deps
   const save = useMutation({ mutationFn: () => sendJSON("PATCH", `/api/agents/${encodeURIComponent(a.name)}`, { connectionConsent: picked }),
     onSuccess: () => qc.invalidateQueries({ queryKey: agentsKey }) });
   if (a.mode === "itself") return <p className="text-small text-muted" data-testid="consent-itself">An itself-mode agent gets no app connections in 0.6.0.</p>;
   const known = new Set((conns.data ?? []).map((c) => c.name));
-  const gone = picked.filter((n) => !known.has(n));
+  const gone = conns.data ? picked.filter((n) => !known.has(n)) : []; // unknown only once the connection list has arrived
   const changed = JSON.stringify([...picked].sort()) !== JSON.stringify([...a.connectionConsent].sort());
   return (
     <div className="space-y-1" data-testid="consent">
@@ -367,6 +377,8 @@ function AgentDetail({ name, list, onClose }: { name: string; list: AgentList | 
     onSuccess: () => { qc.invalidateQueries({ queryKey: agentsKey }); onClose(); },
   });
   // The list shows the state too: when the detail learns of a new state (Stopped, after the poll), the list asks again.
+  const listState = list?.agents.find((x) => x.name === name)?.state;
+  useEffect(() => { if (listState && q.data && listState !== q.data.state) void q.refetch(); }, [listState]); // eslint-disable-line react-hooks/exhaustive-deps
   const seenState = q.data?.state;
   useEffect(() => { if (seenState) qc.invalidateQueries({ queryKey: [...agentsKey, "list"] }); }, [seenState, qc]);
   if (q.isError) return <p className="text-muted" role="status">This agent does not exist, or it is not yours.</p>;
@@ -392,8 +404,8 @@ function AgentDetail({ name, list, onClose }: { name: string; list: AgentList | 
         {facts.map(([t, v]) => <div key={t} className="contents"><dt className="text-muted">{t}</dt>
           <dd data-testid={`agent-${t.toLowerCase().replace(/ /g, "-")}`}>{v}</dd></div>)}
       </dl>
-      <OrphanBanner a={a} admin={admin} />
-      <StopPanel a={a} admin={admin} />
+      <OrphanBanner a={a} admin={admin} enabled={list?.settings.enabled ?? true} />
+      <StopPanel a={a} admin={admin} enabled={list?.settings.enabled ?? true} />
       {a.state === "pending" && <p role="status" className="rounded-md bg-warn-soft px-2 py-1 text-warn">The service account of this agent is not ready yet. Keys can be made when the state is Active.</p>}
       <div className="space-y-1">
         <div className="flex items-center justify-between"><h3 className="text-muted">Tools it may use</h3>
@@ -402,14 +414,14 @@ function AgentDetail({ name, list, onClose }: { name: string; list: AgentList | 
           ? <p data-testid="agent-scope">None. With an empty scope the agent can use no tool. Change it to add servers or tools.</p>
           : <ul data-testid="agent-scope" className="space-y-0.5">{a.scope.map((e) => <li key={e} className="font-mono text-small">{e.includes("/") ? e : `${e} (all tools)`}</li>)}</ul>}
       </div>
-      {editing && <EditAgent a={a} onClose={() => setEditing(false)} />}
+      {editing && usable && <EditAgent a={a} onClose={() => setEditing(false)} />}
       <ConsentSection a={a} canChange={a.manageable && a.mode === "person" && usable} />
       <div className="space-y-2">
         <div className="flex items-center justify-between"><h3 className="text-muted">Keys</h3>
           {a.manageable && usable && !addingKey && live.length < 2 && <Button variant="outline" className="w-auto py-1" onClick={() => setAddingKey(true)}>New key</Button>}</div>
-        {addingKey && <NewKey a={a} maxDays={maxDays} admin={admin} onClose={() => setAddingKey(false)} onBusy={setKeyBusy} />}
+        {addingKey && usable && <NewKey a={a} maxDays={maxDays} admin={admin} onClose={() => setAddingKey(false)} onBusy={setKeyBusy} />}
         {revoke.isError && <p className="text-bad" role="alert">{revoke.error.message}</p>}
-        {keys.length === 0 ? <p className="text-muted">No keys. The agent cannot call anything until it has a key.</p> : (
+        {keys.length === 0 ? <p className="text-muted">{a.state === "stopping" ? "No keys are listed." : "No keys. The agent cannot call anything until it has a key."}</p> : (
           <table className="w-full border-collapse text-left">
             <thead><tr className="border-b border-line text-muted"><th className={th}>Name</th><th className={th}>Starts with</th><th className={th}>Status</th><th className={th}>Stops on</th>
               <th className={th}>Last used</th><th className={th}>Source ranges</th><th /></tr></thead>

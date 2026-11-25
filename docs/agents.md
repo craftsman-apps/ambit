@@ -66,7 +66,7 @@ date and, if you want, source address ranges. The key is shown **once**, togethe
 ### Stop and start
 
 **Stop agent** is on the detail page, for the owner (person mode) and for admins. The page asks first, and says what a stop
-is: the keys are deleted at once, and the page shows **Stopped** only after every gateway has confirmed the stop. While it
+is: the console starts to delete the keys at once, and the page shows **Stopped** only after every gateway has confirmed the stop. While it
 waits, the agent is **Stopping**, the page asks again every 2 seconds, and it says that a call that is already on its way can
 still be accepted. It never says that no call is accepted: the console measures the calls that were accepted after the request
 (see [Stopping an agent](#stopping-an-agent)).

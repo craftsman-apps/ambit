@@ -64,6 +64,7 @@ test("stopNotes: an active agent has none; stopping says calls may still be acce
   const s = stopNotes(agent({ state: "stopping", stopRequestedAt: "2026-11-26T09:00:00Z" }));
   assert.equal(s.length, 1);
   assert.match(s[0].text, /Stopping since 2026-11-26 09:00:00 UTC/);
+  assert.match(s[0].text, /keys are being deleted/);
   assert.match(s[0].text, /only after every gateway has confirmed/);
   assert.match(s[0].text, /a call can still be accepted/);
   const w = stopNotes(agent({ state: "stopping", stopRequestedAt: "2026-11-26T09:00:00Z", stopNotConfirmedAt: "2026-11-26T09:01:00Z", stopUnlisted: true }));

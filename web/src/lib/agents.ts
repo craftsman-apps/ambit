@@ -73,7 +73,7 @@ export type StopNote = { tone: "info" | "warn" | "ok"; text: string };
 export function stopNotes(a: AgentView): StopNote[] {
   const out: StopNote[] = [];
   if (a.state === "stopping") {
-    out.push({ tone: "info", text: `Stopping since ${a.stopRequestedAt ? utcTime(a.stopRequestedAt) : "a moment ago"}. The keys are deleted. The agent is shown as Stopped only after every gateway has confirmed the stop. Until then a call can still be accepted.` });
+    out.push({ tone: "info", text: `Stopping since ${a.stopRequestedAt ? utcTime(a.stopRequestedAt) : "a moment ago"}. The keys are being deleted. The agent is shown as Stopped only after every gateway has confirmed the stop. Until then a call can still be accepted.` });
     if (a.stopNotConfirmedAt) out.push({ tone: "warn", text: `Not confirmed on every gateway after 60 seconds (since ${utcTime(a.stopNotConfirmedAt)}). The steps are repeated until every gateway confirms. Ask your administrator to check the alert “stop not confirmed” and the controllers.` });
     if (a.stopUnlisted) out.push({ tone: "warn", text: "The stop list is full (1,000 agents). The keys are deleted, but the stop is not complete until there is room on the list." });
   }

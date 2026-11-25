@@ -502,6 +502,8 @@ test("stop: confirmed on every gateway before it says Stopped, with the measured
   await expect(stopping).toContainText("Until then a call can still be accepted.");
   await expect(page.getByTestId("agent-state")).toHaveText("Stopping");
   await expect(detail.getByRole("button", { name: "New key" })).toHaveCount(0);
+  await expect(stopping).toContainText("The keys are being deleted.");
+  await expect(detail).not.toContainText("cannot call anything");
   await snap(page, "agents-stopping");
 
   // the page asks again and shows Stopped when the console says so

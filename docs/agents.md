@@ -32,9 +32,40 @@ There is **no delegation**: an agent never acts for a person other than its owne
 assistant uses one itself-mode agent, which Audit shows as that service account, never as a person. If every person
 should act as themselves, each makes their own person-mode agent.
 
-## Create an agent and a key
+## The Agents page
 
-In the API (the console page for agents comes in a later 0.6.0 change):
+**You → Agents** in the console lists the agents you may see: your own, and for admins every agent. Each row shows the
+owner, the **declared platform**, the kind (person or itself), the last use, the tools the agent may use (its scope) and
+its state.
+
+![You → Agents: three agents with their owner, declared platform, kind, last use, scope and state.](assets/console/agents-list.png)
+
+- **Declared platform** is what the owner said the agent is. Ambit does not check it, and no rule, limit or bill uses it.
+  The console and Audit always call it "declared".
+- **Last used** is the newest call made with a key of the agent that still exists (a revoked key is not counted). If the console has no audit trail (ClickHouse is not set
+  up), it says "unknown", and says why.
+- **Tools used** (the calls of the last 30 days, counted per tool) are on the agent's detail page, for admins, because
+  they come from the audit trail, which only admins may read. A person sees a note that admins can look it up in Audit.
+- **No agents yet** shows a short explanation and the **New agent** button. When your administrator has switched agents
+  off, the page says so and has no button.
+
+**New agent** asks for a name, a declared platform and the tools the agent may use. Nothing ticked means no tool. A
+person makes agents for themselves only. Admins also see the choice **Itself**, which makes a service account with an
+owner (a person or `group:name`), a group and an account name.
+
+![The New agent form: name, declared platform and the servers the agent may use.](assets/console/agents-new.png)
+
+The detail page shows the agent's facts, its scope (with **Change**), and its keys. **New key** asks for a key name, an end
+date and, if you want, source address ranges. The key is shown **once**, together with the MCP URL and the two header forms
+(`Authorization: Bearer` and `x-api-key`). The page never shows it again: it keeps only the start of the key.
+
+![A new key, shown once, with the MCP URL and the header lines.](assets/console/agents-key-shown.png)
+
+**Revoke** deletes one key. **Delete agent** deletes the agent, its keys and (itself mode) its service account.
+
+## Create an agent and a key in the API
+
+The same, with the API:
 
 ```sh
 # as a signed-in person: an agent for yourself (the name is made from the display name)
@@ -99,6 +130,95 @@ agent key (503, "agents are not ready"). So a console that is upgraded before th
 agentgateway rejected (for example because it grew over the 16,384-character limit), never gives out a key that the
 gateway would not limit.
 
+## Stopping an agent
+
+Stop an agent when it misbehaves, when its platform is compromised, or when its owner leaves. **A stop is a state machine, not
+a switch**: Ambit reports an agent as stopped only after every Gateway has confirmed the stop. It never promises that no call
+is accepted after the request; it measures how many were.
+
+```sh
+curl -s -b "$COOKIES" -X POST "$CONSOLE/api/agents/grok-bot-for-sales-x7k2pq/stop" -H 'Content-Type: application/json' -d '{}'   # 202
+curl -s -b "$COOKIES" "$CONSOLE/api/agents/grok-bot-for-sales-x7k2pq"                                                       # "state": "stopped" when confirmed
+curl -s -b "$COOKIES" -X POST "$CONSOLE/api/agents/grok-bot-for-sales-x7k2pq/start" -H 'Content-Type: application/json' -d '{}' # a stopped agent gets new keys again
+```
+
+The owner (person mode) or an admin stops an agent; admins also stop itself-mode agents. Stopping works when `agents.enabled` is
+`false`.
+
+```
+ active --Stop--> stopping --S2, S3 done, every Gateway confirmed--> stopped --Start--> active
+                  |  ^
+                  |  +-- the steps are repeated every 2 s until they work
+                  +-- after 60 s without confirmation: event, alert "stop not confirmed on <Gateway>"
+```
+
+| Step | Who | What |
+|---|---|---|
+| S1 | console | Writes the agent to the stop list (ConfigMap `ambit-agent-stops`, a new list generation) and records state `stopping` |
+| S2 | console | Deletes every key of the agent (also a key made while it is stopping) |
+| S3 | console | Revokes the agent's OAuth grants (none before OAuth) |
+| S4 | controller | Renders the list into Require policies `ambit-agent-stops-<k>` on **every MCP and LLM route of every Gateway** (at most 150 agents per policy) |
+| S5 | controller | Reads each policy's status per route: a Gateway **acknowledges** the list generation when all its routes accepted every policy at its current generation (plus the settle time, `--activation-settle`). The answer is in ConfigMap `ambit-agent-stops-ack` |
+| S6 | console | State `stopped` when S2 and S3 are done and every Gateway acknowledged the entry's generation. Writes the History event |
+
+The **stop policy is the authoritative check for every credential the gateway accepts**: a key of a listed agent is refused
+(403) by the gateway even while its Secret still exists, and so is a token that names the agent or its grant. Deleting the keys
+(S2) is the second line.
+
+**Where the acknowledgment comes from.** Each policy is attached to routes, and agentgateway reports per route whether it accepted
+and attached the policy at its current generation. A Gateway is **ready** only while every policy of the list's current generation
+is accepted on its routes, has not been rejected by a proxy since it was written (the Gateway's NACK events) and has
+settled (`--activation-settle`, 3 s: agentgateway v1.7.0 has no acknowledgment from the proxies that a controller can read).
+If a stop policy is edited, deleted or rejected afterwards, the Gateway is no longer ready, and the console neither completes nor
+prunes a stop until it is. The answer is bound to the stop list it was made for (its UID) and only the controller may write it
+(admission policy `ambit-agent-ack-writer`). A route that is attached to more than one Gateway counts for each of them.
+
+The controller renews its answer every 30 s while the list has entries; the console treats an answer older than two minutes as no
+answer, so a controller that is down cannot leave an old "ready" in force (the agent stays `stopping`). Both stop ConfigMaps
+(`ambit-agent-stops`, `ambit-agent-stops-ack`) are fenced by name: only the console writes the list and only the controller the answer, labelled or
+not. The names `stops` and `stops-ack` are reserved and cannot be the name of an itself-mode agent (their records would be these ConfigMaps).
+
+**The list is stable.** An entry has a fixed slot (0 to 999) and is in policy slot ÷ 150; adding or removing an entry never moves
+another one to another policy, so a change of one policy never takes a still-listed agent out of the block.
+
+**Start.** `start` removes the entry. It is refused (409) for one minute after the keys were deleted, so that the proxies have dropped
+them; with OAuth it waits for the whole retention, because an access token already issued stays valid until it expires.
+
+**Retention.** An entry stays in the list until the agent's credentials are gone, every Gateway acknowledged it, and
+`agents.stopRetentionMinutes` (25: the access token life of 15 minutes and 10 minutes of leeway) have passed. Then it is
+pruned; the agent record keeps `state: stopped`. Start removes the entry at once.
+
+**Fail closed.**
+- The controller never deletes a stop policy while an entry exists. If the list cannot be rendered (more than 1,000 entries, an unreadable list), it keeps the policies in force, writes `degraded` into the acknowledgment and sets the alert `AmbitStopPolicyDegraded`.
+- A partial rollout (one Gateway confirmed, another not) stays `stopping`, and the alert and the event name the Gateway that is late.
+- If the list is **full** (1,000 entries), the stop still runs S2 and S3, the agent is marked `stopUnlisted`, and it stays `stopping` until there is room (the console tries every 2 s). Keys are gone; tokens (with OAuth) expire within 15 minutes.
+
+**The limits, stated honestly.** What a stop can and cannot do depends on what is working:
+
+| Failure | Keys | Measured |
+|---|---|---|
+| none | refused after the proxies learn of the policy and the key deletion | refused **0.92 s** after the request (p50; p95 0.94 s, p99 0.94 s, max 0.94 s in 20 runs); a client calling every 25 ms had 36 calls accepted after the request (max 37); reported `stopped` after 8.3 s |
+| Ambit controller down | refused after S2 as usual; the stop is not confirmed (state stays `stopping`) until it is back | key refused after 0.73 s (29 accepted calls in between); the agent stayed `stopping` and was reported "not confirmed" after 60 s; confirmed after the controller was back |
+| agentgateway controller down | **not refused until it is back**: the proxies keep their last configuration | in the first 20 s **874 calls with the deleted key were accepted** (none refused); the first refusal came 30.7 s after the request, when the control plane was back |
+| console down | a stop cannot be requested. Emergency stops: the Helm values `apiKeys.enabled: false` (all keys) and `agents.enabled: false` | not applicable |
+
+Measured on kind with agentgateway v1.7.0, one gateway pod, a polling client with the key (`test/stepagents.sh`, 2026-11-25). Real clusters
+with more proxy pods, a network and a load balancer will differ; run the test on yours before you rely on a number. A controller restart during
+a stop delayed the confirmation to 26.4 s. A partial rollout across two Gateways is covered by the controller's tests (one Gateway ready, the other not: the agent stays `stopping`).
+
+An OAuth access token is checked offline by the gateway; once OAuth exists, a token stays valid until it expires (at most 15 minutes) when
+no stop policy applies.
+
+**Evidence.** `GET /api/evidence/agent-stop/<agent>.zip` (admins, needs `evidence.enabled`) holds `timeline.csv` (request, keys deleted,
+grants revoked, each Gateway's acknowledgment, stopped, with seconds from the request), `calls-after-request.csv` (every call that
+carries the agent's name from the request on, with its status) and `summary.csv`: **the measured number of accepted calls after the
+request, and the time to the first refused call**, per Gateway. There is no "expected 0" column. A call with a key that was already
+deleted is logged as an invalid key without the agent's name, so it is not in the file; a refusal by the stop policy is.
+
+**When the owner leaves.** [Offboarding](offboarding.md) stops all of the person's person-mode agents with this state machine.
+Their itself-mode agents are marked **orphaned**: they keep working for `agents.orphanDays` (7), with `orphanedAt` in the
+record, so that an admin can move them (`PUT /api/agents/{name}/owner`); then they are stopped.
+
 ## Audit
 
 Every record of a call made with an agent's key has these attributes in `otel_logs` (`LogAttributes`), taken only from
@@ -116,7 +236,17 @@ the verified key:
 
 Records written before this release do not have them, and keep exporting with empty cells.
 
-The **Audit** API accepts `agent=`, `platform_declared=` and `ingress=` (`private` or `public`) next to `email=`. An agent or a
+The **Audit** page (**Evidence → Audit**, admins) has the fields **Agent**, **Declared platform** and **Entrance** (private
+or public) next to **Email**. An agent or a declared platform alone selects calls the way an email does, and then the email
+is optional; the entrance only narrows one of them, so it is off until one of them is filled in. A call made with an agent's
+key has an **agent** badge. Under it the row says which agent (and its mode), the declared platform, the owner when the key
+was issued and, if the agent was moved since, the owner now. A call that came in through the public entrance has a
+**public** badge. **Export CSV** has the same eight columns as `calls.csv`, after the columns it had before. **Search Audit for
+this agent** on the agent's page opens the search for it.
+
+![Audit, searched by declared platform and entrance: two calls of agents with the agent badge, the declared platform and the owner at issue and now.](assets/console/audit-agent.png)
+
+The Audit API accepts `agent=`, `platform_declared=` and `ingress=` (`private` or `public`) next to `email=`. An agent or a
 platform alone selects calls the way an email does; `ingress` only narrows another filter.
 
 ```sh
@@ -200,12 +330,15 @@ attributes above, and the columns appended to `calls.csv`.
 |---|---|
 | `GET /api/agents` (add `?all=true` for every agent) | The caller's agents; admins for all |
 | `POST /api/agents` | Any signed-in person (person mode); admins (itself mode) |
+| `POST /api/agents/{name}/stop`, `POST /api/agents/{name}/start`, `GET /api/evidence/agent-stop/{agent}.zip` | The owner (person mode) or an admin; admins for itself mode and the export |
 | `GET /api/agents/{name}`, `PATCH /api/agents/{name}`, `DELETE /api/agents/{name}` | The owner (person mode), admins (itself mode; and delete for any agent) |
 | `POST /api/agents/{name}/keys` | The owner (person mode), admins (itself mode) |
 | `PUT /api/agents/{name}/owner` | Admins, itself-mode agents |
 | `GET /api/audit?agent=&platform_declared=&ingress=` | Admins |
 
 Answers to people who may not see an agent are `404`, not `403`, so a name is not confirmed.
+
+The Agents page and the Audit filters use only the endpoints on this page and the key endpoints of [Personal API keys](api-keys.md) (`GET /api/keys`, `GET /api/admin/keys`, `DELETE /api/keys/{id}`, `DELETE /api/admin/keys/{id}`). They have no private API.
 
 ## Measured
 

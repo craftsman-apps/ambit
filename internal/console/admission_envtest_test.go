@@ -184,6 +184,39 @@ func TestAdmissionFencesKeyObjects(t *testing.T) {
 	if err := podA.CoreV1().ConfigMaps(admNS).Delete(ctx, "ag-console", metav1.DeleteOptions{}); err != nil {
 		t.Errorf("the console deletes an agent record: %v", err)
 	}
+	// The stop acknowledgment: only the controller writes it (the console reports a stop from it).
+	ackCM := func(name string) *corev1.ConfigMap {
+		return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: admNS, Labels: map[string]string{"ambitproject.dev/agent-stops-ack": "true"}}, Data: map[string]string{"ack.json": "{}"}}
+	}
+	const msgAck = "only the Ambit controller may write the agent stop acknowledgment"
+	ctl := admClient(t, cfg, "system:serviceaccount:ambit-system:ambit-controller", "")
+	waitUntil("ack binding", func() bool { // the name is fenced, labelled or not
+		_, err := podA.CoreV1().ConfigMaps(admNS).Create(ctx, ackCM("ambit-agent-stops-ack"), metav1.CreateOptions{})
+		if err == nil {
+			_ = ctl.CoreV1().ConfigMaps(admNS).Delete(ctx, "ambit-agent-stops-ack", metav1.DeleteOptions{})
+		}
+		return refused(err, msgAck)
+	})
+	if _, err := adm.CoreV1().ConfigMaps(admNS).Create(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "ambit-agent-stops-ack", Namespace: admNS}}, metav1.CreateOptions{}); !refused(err, msgAck) {
+		t.Errorf("an unlabelled ConfigMap with the acknowledgment's name must be refused, got %v", err)
+	}
+	if _, err := ctl.CoreV1().ConfigMaps(admNS).Create(ctx, ackCM("ambit-agent-stops-ack"), metav1.CreateOptions{}); err != nil {
+		t.Errorf("the controller writes the acknowledgment: %v", err)
+	}
+	for who, c := range map[string]kubernetes.Interface{"the console": podA, "an admin": adm} {
+		if _, err := c.CoreV1().ConfigMaps(admNS).Update(ctx, ackCM("ambit-agent-stops-ack"), metav1.UpdateOptions{}); !refused(err, msgAck) {
+			t.Errorf("%s changes the acknowledgment: %v", who, err)
+		}
+	}
+	// By name too: an unlabelled ConfigMap with a reserved name is fenced.
+	waitUntil("stop list by name", func() bool {
+		cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "ambit-agent-stops", Namespace: admNS}, Data: map[string]string{"list.json": "{}"}}
+		_, err := adm.CoreV1().ConfigMaps(admNS).Create(ctx, cm, metav1.CreateOptions{})
+		if err == nil {
+			_ = adm.CoreV1().ConfigMaps(admNS).Delete(ctx, "ambit-agent-stops", metav1.DeleteOptions{})
+		}
+		return refused(err, msgWriter)
+	})
 	if _, err := sec(other).Create(ctx, keySecret("plain", nil), metav1.CreateOptions{}); err != nil {
 		t.Errorf("unlabelled Secret by any user must succeed: %v", err)
 	}

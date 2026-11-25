@@ -208,7 +208,7 @@ test("CSV has the outcome, the mark and the rules version", async ({ page }) => 
   await search(page);
   const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Export CSV" }).click()]);
   const lines = readFileSync(await download.path(), "utf8").trim().split("\n");
-  expect(lines[0]).toBe("time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version,result_bytes_in,result_bytes_out,compression,injection");
+  expect(lines[0]).toBe("time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version,result_bytes_in,result_bytes_out,compression,injection,agent,agent_mode,agent_owner_at_issue,agent_owner_now,platform_declared,grant_id,token_issuer,ingress");
   expect(lines[1]).toContain('"Would be refused","200"');
   expect(lines[1]).toContain('"refuse:model","3f9a1c2b7d10"');
   expect(lines.find((l) => l.includes("authorization failed"))).toContain('"Refused","403"');
@@ -423,10 +423,10 @@ test("CSV has the compression columns at the end", async ({ page }) => {
   await search(page);
   const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Export CSV" }).click()]);
   const lines = readFileSync(await download.path(), "utf8").trim().split("\n");
-  expect(lines[0]).toBe("time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version,result_bytes_in,result_bytes_out,compression,injection");
-  expect(lines[1]).toMatch(/"38093","10035","shorten logs 14",""$/);
-  expect(lines[2]).toMatch(/"","","",""$/);
-  expect(lines[3]).toMatch(/"3000","1800","lossless json 0; lossless yaml 0",""$/);
+  expect(lines[0]).toBe("time_utc,email,what,server_or_model,outcome,status,reason,input_tokens,output_tokens,mark,rules_version,result_bytes_in,result_bytes_out,compression,injection,agent,agent_mode,agent_owner_at_issue,agent_owner_now,platform_declared,grant_id,token_issuer,ingress");
+  expect(lines[1]).toMatch(/"38093","10035","shorten logs 14",""(?:,"[^"]*"){8}$/);
+  expect(lines[2]).toMatch(/"","","",""(?:,"[^"]*"){8}$/);
+  expect(lines[3]).toMatch(/"3000","1800","lossless json 0; lossless yaml 0",""(?:,"[^"]*"){8}$/);
 });
 
 // #82: what the injection guard found in a tool result is tagged on the row of its call (rule names, never the text),
@@ -473,7 +473,7 @@ test("CSV has the injection column at the end", async ({ page }) => {
   await search(page);
   const [download] = await Promise.all([page.waitForEvent("download"), page.getByRole("button", { name: "Export CSV" }).click()]);
   const lines = readFileSync(await download.path(), "utf8").trim().split("\n");
-  expect(lines[1]).toMatch(/"masked: chatml-marker; ignore-previous-instructions"$/);
-  expect(lines[2]).toMatch(/""$/);
-  expect(lines[3]).toMatch(/"rejected: hide-from-user"$/);
+  expect(lines[1]).toMatch(/"masked: chatml-marker; ignore-previous-instructions"(?:,"[^"]*"){8}$/);
+  expect(lines[2]).toMatch(/""(?:,"[^"]*"){8}$/);
+  expect(lines[3]).toMatch(/"rejected: hide-from-user"(?:,"[^"]*"){8}$/);
 });

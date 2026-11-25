@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -33,6 +34,35 @@ func (c Charts) Ref(name string) string {
 		return filepath.Join(c.Dir, name)
 	}
 	return c.Repo + "/" + name
+}
+
+// DepsBuilt reports whether charts/ambit/charts holds every dependency that Chart.yaml declares: a packed
+// <name>-<version>.tgz (what `helm dependency build` writes) or an unpacked <name> folder. Only a chart directory
+// (--chart-dir) has them to check.
+func (c Charts) DepsBuilt() bool {
+	raw, err := os.ReadFile(filepath.Join(c.Ref("ambit"), "Chart.yaml"))
+	if err != nil {
+		return false
+	}
+	var chart struct {
+		Dependencies []struct{ Name string }
+	}
+	if yaml.Unmarshal(raw, &chart) != nil {
+		return false
+	}
+	es, _ := os.ReadDir(filepath.Join(c.Ref("ambit"), "charts")) // not Glob: [ ] in a folder name would be a pattern
+	for _, d := range chart.Dependencies {
+		found := false
+		for _, e := range es {
+			if e.Name() == d.Name || !e.IsDir() && strings.HasPrefix(e.Name(), d.Name+"-") && strings.HasSuffix(e.Name(), ".tgz") {
+				found = true
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }
 
 // Ops are the actions local up runs inside the cluster. Every Ops talks to the context kind-<name> only.

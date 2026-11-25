@@ -13,7 +13,7 @@
 {{- if or (lt (int ($sa.exposureDays | default 0)) 0) (gt (int ($sa.exposureDays | default 0)) 30) }}{{ fail "serviceAccounts.exposureDays must be 0-30" }}{{ end }}
 {{- $ns := .Release.Namespace }}
 {{- $console := printf "system:serviceaccount:%s:ambit-console" $ns }}
-{{- $labels := list "ambitproject.dev/key" "ambitproject.dev/key-owner-record" "ambitproject.dev/key-event" "ambitproject.dev/agent" }}
+{{- $labels := list "ambitproject.dev/key" "ambitproject.dev/key-owner-record" "ambitproject.dev/key-event" "ambitproject.dev/agent" "ambitproject.dev/agent-stops" }}
 # Personal API keys: key Secrets, owner records (Secrets) and key events (ConfigMaps) carry a label that starts with
 # ambitproject.dev/key. Agent records (ConfigMaps, label ambitproject.dev/agent) are fenced the same way. ambit-keys-writer lets only the console's service account (with a pod name) write them, and
 # lets the namespace controller and the garbage collector delete them (so a namespace with keys can always be
@@ -92,3 +92,52 @@ spec:
   validationActions: [Deny]
   matchResources:
     namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ $ns }} } }
+---
+# The stop acknowledgment (docs/agents.md, "Stopping an agent"): what each Gateway has accepted. The console reports an agent
+# stopped only from it, so only the controller may write it; the console and everything else may only read it.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: ambit-agent-ack-writer
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [configmaps]
+        resourceNames: [ambit-agent-stops-ack] # by name, not only by label: an unlabelled ConfigMap of this name is fenced too
+  validations:
+    - expression: >-
+        request.userInfo.username == "system:serviceaccount:{{ $ns }}:ambit-controller" ||
+        (request.operation == "DELETE" &&
+        request.userInfo.username in ["system:serviceaccount:kube-system:namespace-controller", "system:serviceaccount:kube-system:generic-garbage-collector"])
+      message: "only the Ambit controller may write the agent stop acknowledgment"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ambit-agent-ack-writer
+spec:
+  policyName: ambit-agent-ack-writer
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ $ns }} } }
+---
+# The stop list by its name too (the console writes it): an unlabelled ConfigMap of this name is fenced like a labelled one.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ambit-keys-writer-stops-name
+spec:
+  policyName: ambit-keys-writer
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ $ns }} } }
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [configmaps]
+        resourceNames: [ambit-agent-stops]

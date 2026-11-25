@@ -108,7 +108,7 @@ func hermesProviderLines(in Input) []string {
 	return []string{"ambit:",
 		"  base_url: " + marshalString(in.URL+"/v1"),
 		`  api_mode: "chat_completions"`,
-		"  key_cmd: " + marshalString(Quote(in.GOOS, in.AmbitPath)+" key print --url "+Quote(in.GOOS, in.URL)),
+		"  key_cmd: " + marshalString(QuoteCmd(in.GOOS, in.AmbitPath)+" key print --url "+QuoteCmd(in.GOOS, in.URL)),
 	}
 }
 
@@ -132,6 +132,9 @@ func hermesMCPLines(in Input, headerPath string) []string {
 // server "ambit" in config.yaml. A parse error, a block the person edited, and an entry the scanner cannot edit
 // are errors and change nothing.
 func PlanHermes(in Input, headerPath string) (*Plan, error) {
+	if err := CheckCmdSafe(in.GOOS, "Hermes Agent", in.AmbitPath, in.URL); err != nil {
+		return nil, err
+	}
 	if in.Exists {
 		if _, err := decodeYAML(in.Path, in.File); err != nil {
 			return nil, err
@@ -285,7 +288,7 @@ func PlanHermes(in Input, headerPath string) (*Plan, error) {
 		want[key] = m
 	}
 	add("providers", map[string]any{"base_url": in.URL + "/v1", "api_mode": "chat_completions",
-		"key_cmd": Quote(in.GOOS, in.AmbitPath) + " key print --url " + Quote(in.GOOS, in.URL)})
+		"key_cmd": QuoteCmd(in.GOOS, in.AmbitPath) + " key print --url " + QuoteCmd(in.GOOS, in.URL)})
 	if in.MCPURL != "" {
 		var args []any
 		for _, a := range hermesMCPArgs(in, headerPath) {

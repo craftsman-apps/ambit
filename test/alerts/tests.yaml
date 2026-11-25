@@ -146,3 +146,37 @@ tests:
             exp_annotations:
               summary: "The console could not send 3 MCP app request or approval records to the collector in 30 minutes"
               description: "The requests and decisions happened; the Audit page and otel_logs miss these records. The ServerRequest objects still hold them (kubectl -n ambit-system get serverrequests). Read why: kubectl -n ambit-system logs deploy/ambit-console | grep 'not delivered to the collector'; check the collector: kubectl -n ambit-system logs deploy/ambit-otel-collector"
+  # Agents: a stop that a Gateway has not confirmed for more than a minute fires, naming the Gateway; a confirmed one does not.
+  - interval: 1m
+    input_series:
+      - series: 'ambit_agent_stop_unconfirmed_seconds{namespace="ambit-system",gateway="ambit-public"}'
+        values: '0x5 90x5'
+      - series: 'ambit_agent_stop_unconfirmed_seconds{namespace="ambit-system",gateway="ambit"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AmbitAgentStopNotConfirmed
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: AmbitAgentStopNotConfirmed
+        exp_alerts:
+          - exp_labels: { severity: critical, namespace: ambit-system, gateway: ambit-public }
+            exp_annotations:
+              summary: "A stop is not confirmed on the Gateway ambit-public for 90 seconds"
+              description: "The agent's keys are deleted, but the Gateway has not accepted the stop policy that blocks its tokens and any key still in use. Check agentgateway: kubectl -n ambit-system get agentgatewaypolicy | grep ambit-agent-stops; kubectl -n ambit-system logs deploy/ambit-controller. The agent stays in state stopping until the Gateway confirms."
+  # A stop list that cannot be rendered fires after a minute.
+  - interval: 1m
+    input_series:
+      - series: 'ambit_agent_stop_policy_degraded{namespace="ambit-system"}'
+        values: '0x3 1x5'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AmbitStopPolicyDegraded
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: AmbitStopPolicyDegraded
+        exp_alerts:
+          - exp_labels: { severity: critical, namespace: ambit-system }
+            exp_annotations:
+              summary: "The stop list was not turned into gateway policies"
+              description: "The last stop policies stay in force, but new stops are not applied. Read why: kubectl -n ambit-system get configmap ambit-agent-stops-ack -o yaml (field degraded). A list over 1,000 entries or an unreadable list is the usual cause."

@@ -522,4 +522,5 @@ func (c *Catalog) registerEvidence(mux *http.ServeMux, admin func(func(http.Resp
 	mux.HandleFunc("GET /api/evidence", admin(c.evidenceInfo))
 	mux.HandleFunc("GET /api/evidence/access/snapshots", admin(c.accessSnapshots))
 	mux.HandleFunc("GET /api/evidence/{file}", admin(c.evidenceExport))
+	mux.HandleFunc("GET /api/evidence/agent-stop/{file}", admin(c.evidenceAgentStop))
 }

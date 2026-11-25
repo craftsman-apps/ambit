@@ -27,16 +27,17 @@ RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache
  && GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /ambit-controller ./cmd/ambit-controller \
  && GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /ambit ./cmd/ambit \
  && GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /ambit-guard ./cmd/ambit-guard \
- && GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /ambit-router ./cmd/ambit-router
+ && GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /ambit-router ./cmd/ambit-router \
+ && GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /ambit-auth ./cmd/ambit-auth
 
 # CI: the build job compiles the binaries with Go's cache warm (setup-go) into bin/ and builds this target, so the
 # e2e jobs do not compile again. Same base and layout as the default image below.
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5 AS prebuilt
-COPY bin/ambit-console bin/ambit-controller bin/ambit bin/ambit-guard bin/ambit-router /
+COPY bin/ambit-console bin/ambit-controller bin/ambit bin/ambit-guard bin/ambit-router bin/ambit-auth /
 USER 65532:65532
 ENTRYPOINT ["/ambit-console"]
 
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:8ce6dd87e9823c5b48dcfb2c8604714ccb351ce59607327bcc4957448da279b5
-COPY --from=build /ambit-console /ambit-controller /ambit /ambit-guard /ambit-router /
+COPY --from=build /ambit-console /ambit-controller /ambit /ambit-guard /ambit-router /ambit-auth /
 USER 65532:65532
 ENTRYPOINT ["/ambit-console"]

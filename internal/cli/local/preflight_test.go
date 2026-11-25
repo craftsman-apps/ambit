@@ -1,6 +1,7 @@
 package local
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/craftsman-apps/ambit/internal/cli/checks"
+	"github.com/craftsman-apps/ambit/internal/cli/out"
 )
 
 const (
@@ -143,12 +145,37 @@ func TestReadDockerInfoTimesOut(t *testing.T) {
 	if time.Since(start) > 5*time.Second {
 		t.Fatal("did not stop at the timeout")
 	}
-	if d.Reachable || d.Err != "Docker did not answer in 200ms" {
+	if d.Reachable || !d.TimedOut || d.Err != "Docker did not answer in 200ms" {
 		t.Fatalf("info = %+v", d)
 	}
 	rs := Preflight(PreflightInput{Name: "ambit", Docker: d})
-	if len(rs) != 1 || rs[0].Status != checks.Fail || !strings.Contains(rs[0].Message, "Docker did not answer in") {
+	if len(rs) != 1 || rs[0].Status != checks.Fail || !strings.Contains(rs[0].Message, "Docker did not answer in") ||
+		strings.Contains(rs[0].Message, "not running") || !strings.Contains(rs[0].Next, "docker info") {
 		t.Fatalf("results = %+v", rs)
+	}
+}
+
+// A slow first answer is asked for again once (#352): the fake docker command answers only on its second call.
+func TestReadDockerInfoRetriesOnce(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake docker command is a shell script")
+	}
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "docker")
+	marker := filepath.Join(dir, "first-call-done")
+	script := "#!/bin/sh\nif [ ! -e " + marker + " ]; then touch " + marker + "; exec sleep 30; fi\necho '{\"ServerVersion\":\"29.0.0\"}'\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if d := readDockerInfoRetry(fake, 500*time.Millisecond); !d.Reachable {
+		t.Fatalf("info = %+v", d)
+	}
+	// Two timeouts are reported as a timeout.
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if d := readDockerInfoRetry(fake, 200*time.Millisecond); d.Reachable || !d.TimedOut {
+		t.Fatalf("info = %+v", d)
 	}
 }
 
@@ -160,5 +187,14 @@ func TestPreflightBusyPortKeepsName(t *testing.T) {
 		if r.ID == "L4" && r.Next != "ambit local up --name demo --port 18080 --https-port 18443" {
 			t.Fatalf("L4 next = %q", r.Next)
 		}
+	}
+}
+
+func TestReadyDockerBusyIsNotNotRunning(t *testing.T) {
+	e := &Env{Docker: func() DockerInfo { return DockerInfo{Err: "Docker did not answer in 15s", TimedOut: true} }}
+	_, err := e.ReadyDocker()
+	var oe *out.Error
+	if !errors.As(err, &oe) || oe.What != "Docker is not responding" || !strings.Contains(oe.Next, "docker info") {
+		t.Fatalf("err = %#v", err)
 	}
 }

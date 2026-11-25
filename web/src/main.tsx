@@ -18,6 +18,7 @@ import { SavingsPage } from "@/routes/savings";
 import { BudgetsPage } from "@/routes/budgets";
 import { DependenciesPage } from "@/routes/dependencies";
 import { KeysPage } from "@/routes/keys";
+import { AgentsPage } from "@/routes/agents";
 import { SettingsKeysPage } from "@/routes/settings-keys";
 import { ServiceAccountsPage } from "@/routes/service-accounts";
 import "@fontsource/ibm-plex-sans/400.css";
@@ -50,9 +51,17 @@ const routeTree = rootRoute.addChildren([
     getParentRoute: () => rootRoute, path: "/keys", component: KeysPage,
     validateSearch: (s: Record<string, unknown>): { key?: string } => ({ key: typeof s.key === "string" ? s.key : undefined }),
   }),
+  createRoute({
+    getParentRoute: () => rootRoute, path: "/agents", component: AgentsPage,
+    validateSearch: (s: Record<string, unknown>): { agent?: string } => ({ agent: typeof s.agent === "string" ? s.agent : undefined }),
+  }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/keys", component: SettingsKeysPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/settings/service-accounts", component: ServiceAccountsPage }),
-  createRoute({ getParentRoute: () => rootRoute, path: "/audit", component: AuditPage }),
+  createRoute({ getParentRoute: () => rootRoute, path: "/audit", component: AuditPage,
+    validateSearch: (s: Record<string, unknown>): { agent?: string; platform?: string } => ({
+      agent: typeof s.agent === "string" ? s.agent : undefined, platform: typeof s.platform === "string" ? s.platform : undefined,
+    }),
+  }),
   createRoute({ getParentRoute: () => rootRoute, path: "/usage", component: UsagePage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/savings", component: SavingsPage }),
   createRoute({ getParentRoute: () => rootRoute, path: "/budgets", component: BudgetsPage }),

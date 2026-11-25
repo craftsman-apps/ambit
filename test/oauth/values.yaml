@@ -1,0 +1,12 @@
+# OAuth sign-in (docs/oauth.md) on the kind test cluster and in test/chart.sh. Not for production: a ClusterIP Service
+# for the public Gateway (the test reaches it through a port-forward). The Secrets and the certificate Secret are made
+# by test/stepoauth.sh. Needs the values of test/frontdoor/values.yaml too.
+frontDoor:
+  authHost: auth.localtest.me
+oauth:
+  enabled: true
+  database:
+    dsnSecret: { name: ambit-oauth-db, key: dsn }
+    caSecret: { name: ambit-oauth-db-ca, key: ca.crt }
+  hydra:
+    systemSecret: { name: ambit-oauth-hydra, key: system }

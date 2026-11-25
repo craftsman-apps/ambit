@@ -114,12 +114,11 @@ With `protection.enabled`, `ambit-guard` masks personal data in the results of M
 
   | What a server sends | Masked? | Why |
   |---|---|---|
-  | The result of `tools/call`, `resources/read` and `prompts/get`: text, structured content, object keys, numbers, links, and the `_meta` of each content item | Yes | The gateway sends the result to the guard. |
+  | The result of `tools/call`, `resources/read` and `prompts/get`: text, structured content, object keys, numbers, links, the `_meta` of each content item, and the `_meta` object of the result itself (its values; its keys stay as they are) | Yes | The gateway sends the result to the guard. |
   | A tool failure that the server reports **as a result** (`isError: true`, which is what the MCP specification asks a tool to do) | Yes | It is a result. Tested on kind. |
   | A JSON-RPC **error** (`error.message`, `error.data`) | **No** | The gateway does not send errors to the guard. |
   | Log notifications (`notifications/message`) and progress notifications (`notifications/progress`, its `message`) | **No** | The gateway does not send notifications to the guard. |
   | Requests from the server to the client: `sampling/createMessage` and `elicitation/create` | **No** | The gateway does not send server requests to the guard. |
-  | The `_meta` object of the result itself (next to `content`) | **No** | The guard does not read it yet (issue [#374](https://github.com/craftsman-apps/ambit/issues/374)). |
   | Tool arguments, and the answers a client gives to a server request | **No** | The guard masks what comes back from a server, not what goes to it. Access rules can limit arguments (see [AccessRule](#accessrule)). |
 
   What you can do today: use only MCP servers that you trust not to put personal data in errors or notifications, and prefer servers that report a tool failure as a result with `isError: true` (these are masked). The audit log does not store the text of errors (see [Compliance](compliance.md#limits)). A result that is not a JSON object cannot be checked, so the guard withholds it. Ambit tracks this as issue [#333](https://github.com/craftsman-apps/ambit/issues/333); masking these messages needs a change in agentgateway. On the [public front door](front-door.md#what-the-guard-does-not-mask), whose callers are outside your network, an admin must acknowledge this for each server (`Server` `spec.frontDoor.acceptUnmaskedServerMessages`).

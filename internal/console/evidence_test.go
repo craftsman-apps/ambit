@@ -30,26 +30,27 @@ import (
 
 // fakeCH answers the export's queries the way ClickHouse would, by query text. Calls rows come from callRow.
 type fakeCH struct {
-	mu        sync.Mutex
-	engine    string    // system.tables.engine_full of otel_logs
-	total     int64     // records in otel_logs
-	oldest    time.Time // the oldest record
-	count     int64     // the answer of the export's count
-	countErr  error
-	calls     int // rows of the calls query
-	callRow   func(i int) []driver.Value
-	failAfter int           // > 0: the calls query fails after this many rows
-	blockAt   int           // > 0: the calls query waits for its context to end after this many rows
-	blocked   chan struct{} // closed when it starts waiting
-	canceled  chan struct{} // closed when a query saw its context end
-	app       [][]driver.Value
-	compress  [][]driver.Value // rows of evidenceCompressionSQL: the first (day's) query gets them all
-	subjects  []string
-	queries   []string
-	snapshots [][]driver.Value   // access snapshots: time, rules version, hash, mode, body (oldest first)
-	seen      [][]driver.Value   // rows of peopleSeenSQL
-	stats     [][]driver.Value   // answers of offboardStatsSQL, in call order
-	after     [][][]driver.Value // rows of offboardCallsAfterSQL, in call order
+	mu         sync.Mutex
+	engine     string    // system.tables.engine_full of otel_logs
+	total      int64     // records in otel_logs
+	oldest     time.Time // the oldest record
+	count      int64     // the answer of the export's count
+	countErr   error
+	calls      int // rows of the calls query
+	callRow    func(i int) []driver.Value
+	failAfter  int           // > 0: the calls query fails after this many rows
+	blockAt    int           // > 0: the calls query waits for its context to end after this many rows
+	blocked    chan struct{} // closed when it starts waiting
+	canceled   chan struct{} // closed when a query saw its context end
+	app        [][]driver.Value
+	compress   [][]driver.Value // rows of evidenceCompressionSQL: the first (day's) query gets them all
+	subjects   []string
+	queries    []string
+	snapshots  [][]driver.Value   // access snapshots: time, rules version, hash, mode, body (oldest first)
+	seen       [][]driver.Value   // rows of peopleSeenSQL
+	stats      [][]driver.Value   // answers of offboardStatsSQL, in call order
+	after      [][][]driver.Value // rows of offboardCallsAfterSQL, in call order
+	agentCalls [][]driver.Value   // rows of the agent-stop calls query
 }
 
 // snapshotsIn are the snapshots before the query's {end} parameter, and from its {start} parameter when withStart
@@ -142,6 +143,8 @@ func (c fakeConn) QueryContext(ctx context.Context, q string, _ []driver.NamedVa
 		f.compress = nil
 		f.mu.Unlock()
 		return &fakeRows{ctx: ctx, f: f, cols: len(compressionHeader), n: len(rows), row: func(i int) []driver.Value { return rows[i] }}, nil
+	case strings.Contains(q, "LogAttributes['ambit.agent'] = {agent:String}"):
+		return &fakeRows{ctx: ctx, f: f, cols: 6, n: len(f.agentCalls), row: func(i int) []driver.Value { return f.agentCalls[i] }}, nil
 	case q == evidenceAppSQL:
 		return &fakeRows{ctx: ctx, f: f, cols: 13, n: len(f.app), row: func(i int) []driver.Value { return f.app[i] }}, nil
 	}

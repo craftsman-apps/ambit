@@ -160,6 +160,30 @@ func TestAdmissionFencesKeyObjects(t *testing.T) {
 		}
 		return refused(err, msgWriter)
 	})
+	// Agent records (ConfigMaps labelled ambitproject.dev/agent) are fenced the same way.
+	agentRecord := func(name string) *corev1.ConfigMap {
+		return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: admNS, Labels: map[string]string{"ambitproject.dev/agent": "true"}}, Data: map[string]string{"agent.json": "{}"}}
+	}
+	waitUntil("agent-record binding", func() bool {
+		name := fresh("probe")
+		_, err := adm.CoreV1().ConfigMaps(admNS).Create(ctx, agentRecord(name), metav1.CreateOptions{})
+		if err == nil {
+			_ = adm.CoreV1().ConfigMaps(admNS).Delete(ctx, name, metav1.DeleteOptions{})
+		}
+		return refused(err, msgWriter)
+	})
+	if _, err := other.CoreV1().ConfigMaps(admNS).Create(ctx, agentRecord(fresh("ag")), metav1.CreateOptions{}); !refused(err, msgWriter) {
+		t.Errorf("anyone writing an agent record must be refused, got %v", err)
+	}
+	if _, err := podA.CoreV1().ConfigMaps(admNS).Create(ctx, agentRecord("ag-console"), metav1.CreateOptions{}); err != nil {
+		t.Errorf("the console writes an agent record: %v", err)
+	}
+	if err := adm.CoreV1().ConfigMaps(admNS).Delete(ctx, "ag-console", metav1.DeleteOptions{}); !refused(err, msgWriter) {
+		t.Errorf("admin deleting an agent record must be refused, got %v", err)
+	}
+	if err := podA.CoreV1().ConfigMaps(admNS).Delete(ctx, "ag-console", metav1.DeleteOptions{}); err != nil {
+		t.Errorf("the console deletes an agent record: %v", err)
+	}
 	if _, err := sec(other).Create(ctx, keySecret("plain", nil), metav1.CreateOptions{}); err != nil {
 		t.Errorf("unlabelled Secret by any user must succeed: %v", err)
 	}

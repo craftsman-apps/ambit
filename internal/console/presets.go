@@ -501,7 +501,12 @@ func (c *Catalog) removeUnfinished(w http.ResponseWriter, r *http.Request, s Ses
 				serverErr(w, err)
 				return
 			}
-			if err := c.Client.Delete(ctx, o, client.Preconditions{UID: ptrUID(o.GetUID())}); err != nil && !apierrors.IsNotFound(err) {
+			if srv, ok := o.(*v1.Server); ok {
+				err = c.deleteServer(ctx, srv, s)
+			} else {
+				err = c.Client.Delete(ctx, o, client.Preconditions{UID: ptrUID(o.GetUID())})
+			}
+			if err != nil && !apierrors.IsNotFound(err) {
 				apiErr(w, err)
 				return
 			}

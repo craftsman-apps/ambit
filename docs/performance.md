@@ -9,60 +9,62 @@ This page shows how much time the Ambit gateway adds to one request. The numbers
 
 ## Results
 
-Measured on 2026-11-10 at commit `d5e432c` (main after pull request #271), in the [reference environment](#reference-environment).
+Measured on 2026-11-25 on main at `feb597b` (after pull request #315) plus the two changes of pull request #389 (the benchmark script), in the [reference environment](#reference-environment). The first measurement, on 2026-11-10 at commit `d5e432c` (main after pull request #271), gave the same picture; the differences between the two are listed under Repeatability.
 
 **These are reference numbers on one machine, not a guarantee.**
 
-In plain words: with a personal API key or a company token, the gateway added about 1.5 ms at the median (p50) and 2.5 to 3 ms at p95 when requests came 100 ms apart (10 per second). At 50 and 100 requests per second the added time of a model call was smaller than the difference between two runs of the same direct request, so this method cannot measure it. An MCP tool call through the guard added 1.4 to 4.3 ms at p50.
+In plain words: at 10 requests per second (100 ms apart) the gateway added about 1.3 ms at the median (p50) to a model call with a personal API key. With a company token the added time was below what this method can measure (under 1.4 ms). At 50 and 100 requests per second the added p50 of a model call was smaller than the difference between two runs of the same direct request, so this method cannot measure it (the p95 of the company token was 0.8 and 0.4 ms). An MCP tool call through the guard added 1.5 to 4.0 ms at p50, and 1.5 to 3.8 ms with compression on.
 
 Added time in milliseconds: the median of 3 runs of the case, minus the median of 3 runs of its direct baseline at the same rate. **Below noise (< X)** means the added time was smaller than X, the larger spread (highest minus lowest run) of the case and of its direct baseline in that cell; the method cannot tell such a time from 0, and it is not 0.
 
 | Case | Rate (req/s) | Added p50 | Added p95 | Added p99 |
 |---|---|---|---|---|
-| llm-jwt | 10 | 1.4 | 3.0 | 3.6 |
-| llm-jwt | 50 | below noise (< 0.6) | below noise (< 0.6) | below noise (< 1.4) |
-| llm-jwt | 100 | below noise (< 0.8) | below noise (< 0.9) | below noise (< 1.9) |
-| llm-key | 10 | 1.3 | 2.5 | below noise (< 5.0) |
-| llm-key | 50 | below noise (< 0.3) | below noise (< 0.4) | below noise (< 1.4) |
-| llm-key | 100 | below noise (< 0.8) | below noise (< 0.9) | below noise (< 1.9) |
-| mcp-mask | 10 | 4.3 | 6.1 | below noise (< 6.6) |
-| mcp-mask | 50 | 2.2 | 2.3 | 2.4 |
-| mcp-mask | 100 | 1.5 | 1.6 | 1.5 |
-| mcp-compress | 10 | 3.1 | 5.2 | below noise (< 6.6) |
-| mcp-compress | 50 | 2.0 | 2.6 | below noise (< 22.0) |
-| mcp-compress | 100 | 1.4 | 1.4 | 0.9 |
+| llm-jwt | 10 | below noise (< 1.4) | below noise (< 2.3) | below noise (< 42.9) |
+| llm-jwt | 50 | below noise (< 0.6) | 0.8 | below noise (< 1.0) |
+| llm-jwt | 100 | below noise (< 0.5) | 0.4 | below noise (< 1.3) |
+| llm-key | 10 | 1.3 | below noise (< 2.3) | below noise (< 42.9) |
+| llm-key | 50 | below noise (< 0.6) | below noise (< 0.7) | below noise (< 1.0) |
+| llm-key | 100 | below noise (< 0.6) | below noise (< 0.3) | below noise (< 0.8) |
+| mcp-mask | 10 | 4.0 | 4.9 | 5.8 |
+| mcp-mask | 50 | 2.2 | 3.0 | 3.1 |
+| mcp-mask | 100 | 1.5 | 1.8 | 2.1 |
+| mcp-compress | 10 | 3.8 | 5.2 | 6.8 |
+| mcp-compress | 50 | 2.3 | 3.1 | 3.3 |
+| mcp-compress | 100 | 1.5 | 1.8 | 2.2 |
 
 All measurements, in milliseconds; the median of 3 runs, with the lowest and highest run in brackets:
 
 | Case | Rate (req/s) | p50 | p95 | p99 | Throughput (req/s) | Errors |
 |---|---|---|---|---|---|---|
-| llm-direct | 10 | 3.8 [3.4-4.0] | 7.5 [7.5-7.8] | 10.3 [9.0-10.5] | 10.0 | 0 |
-| llm-direct | 50 | 3.0 [2.8-3.1] | 5.9 [5.6-6.0] | 8.0 [7.3-8.7] | 50.0 | 0 |
-| llm-direct | 100 | 2.5 [2.0-2.8] | 4.9 [4.3-5.2] | 7.1 [5.7-7.6] | 99.9 | 0 |
-| llm-jwt | 10 | 5.2 [4.9-6.1] | 10.5 [10.1-11.4] | 13.9 [12.1-14.9] | 10.0 | 0 |
-| llm-jwt | 50 | 3.2 [3.1-3.7] | 6.2 [6.0-6.6] | 8.1 [7.9-8.5] | 50.0 | 0 |
-| llm-jwt | 100 | 2.5 [2.4-3.0] | 4.6 [4.3-4.9] | 6.3 [6.1-7.0] | 100.0 | 0 |
-| llm-key | 10 | 5.1 [4.9-5.5] | 10.0 [9.9-10.4] | 12.5 [11.1-16.1] | 10.0 | 0 |
-| llm-key | 50 | 3.2 [3.0-3.2] | 6.1 [6.0-6.1] | 8.0 [8.0-8.2] | 50.0 | 0 |
-| llm-key | 100 | 2.4 [2.4-3.2] | 4.6 [4.3-4.9] | 6.5 [5.7-6.5] | 100.0 | 0 |
-| mcp-direct | 10 | 2.5 [2.4-2.7] | 6.0 [5.7-6.5] | 8.9 [7.4-14.0] | 10.0 | 0 |
-| mcp-direct | 50 | 2.1 [1.9-2.1] | 4.9 [4.7-5.1] | 7.1 [7.1-7.2] | 50.0 | 0 |
-| mcp-direct | 100 | 1.9 [1.6-2.3] | 4.4 [4.2-4.8] | 6.5 [6.5-6.5] | 100.0 | 0 |
-| mcp-mask | 10 | 6.8 [5.8-6.9] | 12.1 [11.8-12.9] | 15.4 [14.6-17.7] | 10.0 | 0 |
-| mcp-mask | 50 | 4.3 [3.9-4.4] | 7.2 [7.2-7.5] | 9.5 [8.9-9.5] | 50.0 | 0 |
-| mcp-mask | 100 | 3.4 [3.1-3.9] | 6.0 [5.8-6.3] | 8.0 [7.4-8.0] | 100.0 | 0 |
-| mcp-compress | 10 | 5.6 [5.5-6.3] | 11.2 [10.5-11.6] | 13.8 [12.3-15.1] | 10.0 | 0 |
-| mcp-compress | 50 | 4.1 [4.1-4.2] | 7.5 [7.4-7.9] | 9.8 [9.1-31.1] | 50.0 | 0 |
-| mcp-compress | 100 | 3.3 [3.2-3.6] | 5.8 [5.7-6.1] | 7.4 [7.2-7.8] | 100.0 | 0 |
+| llm-direct | 10 | 3.9 [3.6-4.7] | 7.4 [7.2-9.5] | 11.3 [8.2-51.1] | 10.0 | 0 |
+| llm-direct | 50 | 3.3 [2.9-3.5] | 5.6 [5.0-5.7] | 7.4 [6.9-7.9] | 50.0 | 0 |
+| llm-direct | 100 | 2.6 [2.3-2.7] | 4.5 [4.3-4.6] | 6.4 [5.9-6.6] | 99.9 | 0 |
+| llm-jwt | 10 | 5.0 [4.5-5.9] | 9.0 [8.9-9.9] | 11.8 [10.8-11.9] | 10.0 | 0 |
+| llm-jwt | 50 | 3.9 [3.6-3.9] | 6.4 [6.1-6.7] | 7.8 [7.7-8.4] | 50.0 | 0 |
+| llm-jwt | 100 | 3.0 [2.6-3.1] | 4.9 [4.8-5.0] | 5.8 [5.8-7.1] | 100.0 | 0 |
+| llm-key | 10 | 5.2 [5.1-5.6] | 9.3 [9.1-9.3] | 11.0 [10.8-11.0] | 10.0 | 0 |
+| llm-key | 50 | 3.6 [3.4-3.9] | 6.2 [6.0-6.3] | 7.7 [7.7-7.7] | 50.0 | 0 |
+| llm-key | 100 | 2.6 [2.4-3.0] | 4.6 [4.4-4.7] | 5.6 [5.4-5.7] | 99.9 | 0 |
+| mcp-direct | 10 | 2.8 [2.5-2.9] | 5.6 [5.6-6.1] | 7.1 [7.0-8.3] | 10.0 | 0 |
+| mcp-direct | 50 | 2.3 [2.1-2.4] | 5.0 [4.8-5.1] | 6.7 [6.4-7.0] | 50.0 | 0 |
+| mcp-direct | 100 | 2.0 [1.7-2.3] | 4.6 [4.1-4.8] | 6.2 [5.9-6.3] | 100.0 | 0 |
+| mcp-mask | 10 | 6.8 [6.5-6.8] | 10.5 [10.4-10.9] | 12.9 [12.9-13.1] | 10.0 | 0 |
+| mcp-mask | 50 | 4.5 [4.4-4.8] | 8.0 [7.8-8.0] | 9.8 [9.7-9.9] | 50.0 | 0 |
+| mcp-mask | 100 | 3.5 [3.4-3.5] | 6.4 [6.3-6.4] | 8.3 [8.2-8.5] | 100.0 | 0 |
+| mcp-compress | 10 | 6.6 [5.5-6.9] | 10.8 [10.1-11.3] | 13.9 [12.4-15.9] | 10.0 | 0 |
+| mcp-compress | 50 | 4.6 [4.1-4.7] | 8.1 [7.5-8.2] | 10.0 [9.4-10.5] | 50.0 | 0 |
+| mcp-compress | 100 | 3.5 [3.4-3.5] | 6.4 [6.4-6.7] | 8.4 [8.4-9.4] | 100.0 | 0 |
 
 How to read the tables:
 
 - **Every case is faster at 100 requests per second than at 10, the direct cases too**, and so the added time is also smaller at the higher rates. The cause was not measured. Because the direct requests, which do not pass Ambit, slow down in the same way, the likely cause is the test machine and not Ambit: with 100 ms between requests the CPUs of the Docker virtual machine can go idle, and connections between the parts are less often in use. This is a guess, not a result.
-- **Masking and compression together was not slower than masking alone.** At 10 req/s the medians (3.1 and 4.3 ms added) differ by less than the spread of the runs: the runs of `mcp-mask` lay between 5.8 and 6.9 ms, the runs of `mcp-compress` between 5.5 and 6.3 ms. In the first full run (below) the two were 0.1 ms apart. So the difference is within the run-to-run spread; it does not show that compression makes a call faster.
-- **p99 is the value that 1 request in 100 exceeds.** In one run of 600 requests (10 req/s) it rests on 6 requests, so one pause of the laptop moves it, as in the run of 31.1 ms in `mcp-compress` at 50 req/s and the baseline run of 14.0 ms in `mcp-direct` at 10 req/s.
+- **Masking and compression together was not slower than masking alone.** At 10 req/s the added p50 (3.8 and 4.0 ms) differ by less than the spread of the runs: the runs of `mcp-mask` lay between 6.5 and 6.8 ms, the runs of `mcp-compress` between 5.5 and 6.9 ms. At 50 and 100 req/s the two were 0.1 and 0 ms apart. So the difference is within the run-to-run spread; it does not show that compression makes a call faster.
+- **p99 is the value that 1 request in 100 exceeds.** In one run of 600 requests (10 req/s) it rests on 6 requests, so one pause of the laptop moves it, as in the run of 51.1 ms in `llm-direct` at 10 req/s.
 - Every measured request got HTTP 200: 0 errors in the 54 runs, and the gateway answered at the rate it was sent (Throughput). The sender checks the HTTP status only; one tool call of each MCP session is checked for a result before the run starts.
 
-Repeatability: in a first full run on the same cluster, the p50 of every cell was within 0.4 ms of the value above (the largest relative difference was 16 %: 2.9 ms against 2.5 ms). In one run of that first run (`mcp-mask` at 50 req/s) all 3,000 requests failed, and the logs did not show why. `test/bench.sh` now checks each MCP session with one call before it measures, and stops when more than 1 % of the requests of a run fail; the published numbers come from the second full run, in which no request failed.
+Repeatability: this run and the first one (2026-11-10, commit `d5e432c`) were made on the same machine with the same method. The p50 of every cell was within 1.0 ms of the first run (the largest: `mcp-compress` at 10 req/s, 6.6 ms against 5.6 ms), and within 22 % in relative terms. The added p50 of the MCP cases agree within 0.7 ms (for example `mcp-mask` at 10 req/s: 4.0 ms against 4.3 ms). For the model cases at 10 req/s the personal key gave 1.3 ms in both runs, and the company token gave 1.4 ms in the first run and was below noise (under 1.4 ms) in this one; the other model cells are below noise in both runs.
+
+On 2026-11-10, in a first full run that was not published, one run (`mcp-mask` at 50 req/s) lost all 3,000 requests, and the logs did not show why. The cause (found 2026-11-25, issue #274) was in the test script, not in Ambit: `kubectl exec -i ... cat > file`, which copies the access token into the sender pod, delivers an empty file about once in 75 times (4 of 300 copies in a test for pull request #389). The run of 2026-11-10 recorded no status codes, so the cause cannot be proven for that one run; the symptoms are the same (no answer at all, and in the test 403 and no session id). With no token the gateway answered 403 to the MCP `initialize`, no session was opened, and every call of the run failed the same way. The same token works from outside the pod. `test/bench.sh` now checks the size of every file it copies into the pod with `put` and copies again, and `test/load` prints why requests failed. In this run the check repeated one copy (the log says so), and no request of the 54 runs failed. The numbers published on 2026-11-10 came from a second full run, in which no request failed, so they were not affected.
 
 ## Prompt guard
 
@@ -123,9 +125,9 @@ Method:
 | Operating system | macOS 27.0 |
 | Docker | Docker Desktop, Docker Engine 29.6.1; the Linux virtual machine has 4 CPUs and 5.8 GiB memory |
 | Kubernetes | kind v0.33.0, one node, Kubernetes v1.37.0 |
-| Ambit | commit `d5e432c`, chart values `charts/ambit/values-kind.yaml` and `test/keycloak/values-sso.yaml` (audit, budgets and MCP protection on), one gateway replica |
+| Ambit | `feb597b` plus the benchmark script of pull request #389, chart values `charts/ambit/values-kind.yaml` and `test/keycloak/values-sso.yaml` (audit, budgets and MCP protection on), one gateway replica |
 | agentgateway | v1.7.0 |
-| Other load | A second, idle kind cluster ran in the same Docker virtual machine. No other tests or builds ran during the measurement. |
+| Other load | The owner's kind cluster (idle) and, for part of the time, test clusters of other work ran in the same Docker virtual machine. This is more noise than in the first measurement, and the results are close to it. |
 
 ## Repeat the measurement
 

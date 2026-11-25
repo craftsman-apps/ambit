@@ -117,6 +117,8 @@ spec:
       action: Require
       policy:
         matchExpressions:
+          # An agent key may name source ranges (at most 10 CIDRs): it is accepted only from them, as on the private route.
+          - {{ include "ambit.identity.sourceRanges" . | quote }}
           - {{ printf "(%s) && (%s)%s" (include "ambit.identity.presented" .) (include "ambit.identity.validKey" .) (ternary "" " && !apiKey.email.endsWith(\"@svc.ambit.internal\")" (ne (toString (.Values.serviceAccounts | default dict).enabled) "false")) | quote }}
     apiKeyAuthentication:
       mode: Permissive

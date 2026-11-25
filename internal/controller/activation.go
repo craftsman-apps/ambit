@@ -191,6 +191,14 @@ func (r *Reconciler) activated(ctx context.Context, objs []gated, seen nackSeen)
 			live := &unstructured.Unstructured{}
 			live.SetGroupVersionKind(AgentgatewayPolicyGVK.GroupVersion().WithKind(g.kind))
 			if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: g.name}, live); apierrors.IsNotFound(err) {
+				if g.kind == AgentgatewayPolicyGVK.Kind && g.name == AccessLogPolicy {
+					// Deleted by someone: urgent writes it again on the next poll, and the step must not pass
+					// until agentgateway has accepted that one. (A race: urgent can run just before the delete
+					// reaches the cache, and this check just after.)
+					if first == "" {
+						first = fmt.Sprintf("waiting for agentgateway to apply %s/%s generation %d: the object is missing", g.kind, g.name, g.generation)
+					}
+				}
 				continue
 			} else if err != nil {
 				return "", err

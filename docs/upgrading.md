@@ -18,6 +18,11 @@ lists the sections below that apply to your upgrade. It writes ordinary Helm rel
   policy admits the public gateway pods, the controller starts with `--public-gateway=ambit-public`, and the audit
   records of both gateways carry `ambit.ingress` (`private` or `public`). Records written before the upgrade have none.
 - The front door is experimental: its values and objects may change in 0.7.0 with an upgrade note, never silently inside 0.6.x.
+- **New field `Server.spec.frontDoor`** (experimental, additive). Apply the new `ambit-crds` chart first, as always. A server
+  without the field is unchanged. With `enabled: true` and without `acceptUnmaskedServerMessages: true`, the server is not
+  served at all (`Ready` `False`, reason `FrontDoorNotAcknowledged`).
+- **The guard withholds a tool list that is not an object with a list of tools** (it passed such a list before). A
+  correct MCP server never sends one.
 
 ## To the release with service accounts (0.5.0)
 

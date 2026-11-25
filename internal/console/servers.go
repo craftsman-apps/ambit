@@ -16,6 +16,7 @@ import (
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	"github.com/craftsman-apps/ambit/internal/apprecord"
 	"github.com/craftsman-apps/ambit/internal/identity"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -25,9 +26,9 @@ import (
 
 // Annotations on a Server created by approving a ServerRequest.
 const (
-	requestedByKey = "ambitproject.dev/requested-by"
-	approvedByKey  = "ambitproject.dev/approved-by"
-	requestKey     = "ambitproject.dev/server-request"
+	requestedByKey = apprecord.AnnRequestedBy
+	approvedByKey  = apprecord.AnnApprovedBy
+	requestKey     = apprecord.AnnRequest
 )
 
 var (

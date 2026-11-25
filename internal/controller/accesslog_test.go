@@ -141,3 +141,63 @@ func TestRulesVersionFollowsRouterLines(t *testing.T) {
 		t.Error("a change of who may use the router kept the rules version")
 	}
 }
+
+// The public Gateway's policy (frontDoor.enabled) is the private one aimed at that Gateway, with ambit.ingress "public"
+// as a constant of the policy: no request header can set it. Every other attribute is the same, so a public request is
+// recorded with the same identity and MCP fields as a private one.
+func TestPublicAccessLogPolicyIsAimedAtThePublicGatewayAndSaysPublic(t *testing.T) {
+	base := baseConfigMap(testBase + "")
+	base.Data["spec.yaml"] = `targetRefs: [{ group: gateway.networking.k8s.io, kind: Gateway, name: ambit }]
+frontend:
+  accessLog:
+    attributes:
+      add:
+        - { name: jwt.email, expression: "jwt.email" }
+        - { name: ambit.ingress, expression: '"private"' }
+    otlp:
+      protocol: GRPC
+      backendRef: { name: ambit-otel-collector, port: 4317 }
+`
+	ps, err := accessLogPolicies(base, "audit", "abc", []any{map[string]any{"name": "ambit.wouldRefuse", "expression": `"n/a"`}}, "ambit-public")
+	if err != nil || len(ps) != 2 {
+		t.Fatalf("policies %d (%v)", len(ps), err)
+	}
+	private, public := ps[0], ps[1]
+	if private.GetName() != AccessLogPolicy || public.GetName() != PublicAccessLogPolicy {
+		t.Fatalf("names %s, %s", private.GetName(), public.GetName())
+	}
+	for _, p := range ps {
+		if p.GetLabels()["app.kubernetes.io/managed-by"] != accessLogManager || len(p.GetOwnerReferences()) != 1 {
+			t.Errorf("%s: labels %v owners %v", p.GetName(), p.GetLabels(), p.GetOwnerReferences())
+		}
+	}
+	target := func(p *unstructured.Unstructured) string {
+		refs, _, _ := unstructured.NestedSlice(p.Object, "spec", "targetRefs")
+		if len(refs) != 1 {
+			t.Fatalf("%s: targetRefs %v", p.GetName(), refs)
+		}
+		return refs[0].(map[string]any)["kind"].(string) + "/" + refs[0].(map[string]any)["name"].(string)
+	}
+	if target(private) != "Gateway/ambit" || target(public) != "Gateway/ambit-public" {
+		t.Errorf("targets %s, %s", target(private), target(public))
+	}
+	pa, qa := attributes(private), attributes(public)
+	if pa["ambit.ingress"] != `"private"` || qa["ambit.ingress"] != `"public"` {
+		t.Errorf("ingress %q, %q", pa["ambit.ingress"], qa["ambit.ingress"])
+	}
+	// Audit-only mode relaxes the private rules only: the public record says "enforce" and has no "would be refused" field.
+	if pa["ambit.accessMode"] != `"audit"` || qa["ambit.accessMode"] != `"enforce"` || pa["ambit.wouldRefuse"] == "" || qa["ambit.wouldRefuse"] != "" {
+		t.Errorf("audit fields: private %v, public %v", pa, qa)
+	}
+	if pa["jwt.email"] != qa["jwt.email"] || pa["ambit.rulesVersion"] != qa["ambit.rulesVersion"] {
+		t.Errorf("other attributes differ: %v vs %v", pa, qa)
+	}
+	// A base without ambit.ingress (an older chart) still gives exactly one, "public".
+	if q, err := publicAccessLogPolicy(baseConfigMap(testBase), "x", "ambit-public"); err != nil || attributes(q)["ambit.ingress"] != `"public"` {
+		t.Errorf("without the base's ambit.ingress: %v %v", attributes(q), err)
+	}
+	// The public policy never changes the private one.
+	if ps, _ := accessLogPolicies(base, "enforce", "abc", nil, ""); len(ps) != 1 {
+		t.Errorf("no public Gateway: %d policies", len(ps))
+	}
+}

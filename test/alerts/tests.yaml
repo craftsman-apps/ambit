@@ -131,9 +131,12 @@ tests:
   # The console could not send MCP app request or approval records (issue #112); a console with no failures is quiet.
   - interval: 1m
     input_series:
-      - series: 'ambit_console_audit_send_failures_total{namespace="ambit-system",pod="ambit-console-1"}'
+      # The console exposes every reason at 0 from its start, so the first loss is an increase.
+      - series: 'ambit_console_audit_send_failures_total{namespace="ambit-system",pod="ambit-console-1",reason="send_failed"}'
         values: '0x5 3x30'
-      - series: 'ambit_console_audit_send_failures_total{namespace="ambit-system",pod="ambit-console-2"}'
+      - series: 'ambit_console_audit_send_failures_total{namespace="ambit-system",pod="ambit-console-1",reason="queue_full"}'
+        values: '0x35'
+      - series: 'ambit_console_audit_send_failures_total{namespace="ambit-system",pod="ambit-console-2",reason="send_failed"}'
         values: '0x35'
     alert_rule_test:
       - eval_time: 10m
@@ -177,3 +180,4 @@ tests:
             exp_annotations:
               summary: "The stop list was not turned into gateway policies"
               description: "The last stop policies stay in force, but new stops are not applied. Read why: kubectl -n ambit-system get configmap ambit-agent-stops-ack -o yaml (field degraded). A list over 1,000 entries or an unreadable list is the usual cause."
+              description: "The requests and decisions happened; the Audit page and otel_logs miss these records. The ServerRequest objects still hold them (kubectl -n ambit-system get serverrequests). Read why: kubectl -n ambit-system logs deploy/ambit-console | grep 'not delivered to the collector'; check the collector: kubectl -n ambit-system logs deploy/ambit-otel-collector"

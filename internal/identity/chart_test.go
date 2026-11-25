@@ -231,10 +231,19 @@ func TestChartAgentFragments(t *testing.T) {
 			"ambit.platform_declared":    AgentAttr("platformDeclared", "ambit_platform_declared", issuer),
 			"ambit.grant_id":             AgentAttr("", "ambit_grant", issuer),
 			"ambit.token_issuer":         TokenIssuer,
-			"ambit.ingress":              `"private"`,
 		} {
 			if got := attr(t, docs, name); got != want {
 				t.Errorf("issuer %q: %s = %s, want %s", issuer, name, got, want)
+			}
+		}
+		// ambit.ingress is written only with the public front door (frontDoor.enabled): the private Gateway then says "private"
+		for _, n := range []string{"ambit.ingress"} {
+			var spec doc
+			_ = yaml.Unmarshal([]byte(get(t, find(t, docs, "ConfigMap", "ambit-access-log-base"), "data", "spec.yaml").(string)), &spec)
+			for _, a := range get(t, spec, "frontend", "accessLog", "attributes", "add").([]any) {
+				if get(t, a, "name") == n {
+					t.Errorf("%s is written without the front door", n)
+				}
 			}
 		}
 		// the MCP policy must carry the same issuer in its scope clause only through the controller flag

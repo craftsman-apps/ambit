@@ -77,13 +77,13 @@ spec:
           labels: { severity: warning }
           annotations:
             summary: "The console could not send {{`{{ $value | printf \"%.0f\" }}`}} MCP app request or approval records to the collector in 30 minutes"
-            description: "The requests and decisions happened; the Audit page and otel_logs miss these records. The ServerRequest objects still hold them (kubectl -n {{ $ns }} get serverrequests). Read why: kubectl -n {{ $ns }} logs deploy/ambit-console | grep 'app audit record'; check the collector: kubectl -n {{ $ns }} logs deploy/ambit-otel-collector"
+            description: "The requests and decisions happened; the Audit page and otel_logs miss these records. The ServerRequest objects still hold them (kubectl -n {{ $ns }} get serverrequests). Read why: kubectl -n {{ $ns }} logs deploy/ambit-console | grep 'not delivered to the collector'; check the collector: kubectl -n {{ $ns }} logs deploy/ambit-otel-collector"
         - alert: AmbitControllerRecordsDropped
           expr: sum by (namespace, reason) (increase(ambit_controller_record_dropped_total{namespace="{{ $ns }}"}[30m])) > 0
           labels: { severity: warning }
           annotations:
-            summary: "The controller dropped access snapshot records ({{`{{ $value | printf \"%.0f\" }}`}} in 30 minutes, reason {{`{{ $labels.reason }}`}})"
-            description: "The rules were applied; only their record for evidence exports is missing, so an access review export for this time shows a gap. The next change or the daily record at 00:05 UTC writes the rules again. send_failed: the collector was not reachable (kubectl -n {{ $ns }} logs deploy/ambit-otel-collector). queue_full: more records than the controller can send. too_large: the AccessRules together are larger than 1 MiB (kubectl -n {{ $ns }} logs deploy/ambit-controller | grep 'access snapshot')."
+            summary: "The controller dropped records (access snapshots, MCP app removals) ({{`{{ $value | printf \"%.0f\" }}`}} in 30 minutes, reason {{`{{ $labels.reason }}`}})"
+            description: "The rules were applied; only the record is missing: an access review export for this time shows a gap (the next change or the daily record at 00:05 UTC writes the rules again), or an MCP app removal is not in the Audit page (the Git history or the Kubernetes audit log has it). send_failed: the collector was not reachable (kubectl -n {{ $ns }} logs deploy/ambit-otel-collector). queue_full: more records than the controller can send. too_large: the AccessRules together are larger than 1 MiB (kubectl -n {{ $ns }} logs deploy/ambit-controller | grep 'access snapshot')."
         {{- end }}
         # Agents (docs/agents.md): a stop is complete only when every Gateway accepted the stop policy.
         - alert: AmbitAgentStopNotConfirmed

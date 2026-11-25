@@ -90,7 +90,15 @@ spec:
             {{- end }}
       volumes:
         - name: config
+          {{- if (.Values.frontDoor | default dict).enabled }}
+          # The Budgets' limits (written by ambit-controller) and the public Gateway's (the chart's): one domain each.
+          projected:
+            sources:
+              - configMap: { name: ambit-ratelimit-config, optional: true }
+              - configMap: { name: ambit-ratelimit-front-door }
+          {{- else }}
           configMap: { name: ambit-ratelimit-config, optional: true }
+          {{- end }}
         {{- with include "ambit.valkey.ca" . }}
         - { name: valkey-ca, secret: { secretName: {{ . }}, items: [{ key: ca.crt, path: ca.crt }] } }
         {{- end }}
@@ -110,7 +118,11 @@ spec:
     matchLabels: { app.kubernetes.io/name: ambit-ratelimit }
   policyTypes: [Ingress]
   ingress:
-    - from: [{ podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit } } }]
+    - from:
+        - podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit } }
+        {{- if (.Values.frontDoor | default dict).enabled }}
+        - podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit-public } }
+        {{- end }}
       ports: [{ port: 8081 }]
     - ports: [{ port: 8080 }]  # health checks
 {{- if not .Values.limits.valkey.external.address }}

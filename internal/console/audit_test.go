@@ -254,6 +254,23 @@ func TestCompressionSQL(t *testing.T) {
 	}
 }
 
+// Injection records are read for the shown calls only, for the same person, once per call and rule; they are not calls.
+func TestInjectionSQL(t *testing.T) {
+	for _, want := range []string{"LogAttributes['ambit.kind'] = 'injection'", "LogAttributes['jwt.email'] = {email:String}",
+		"has({ids:Array(String)}, LogAttributes['ambit.call_id'])", "Timestamp >= {from:DateTime64(9)}", "GROUP BY id, rule"} {
+		if !strings.Contains(injectionSQL, want) {
+			t.Errorf("injectionSQL lacks %s", want)
+		}
+	}
+	if strings.Contains(injectionSQL, "matched") || strings.Contains(injectionSQL, "Body") {
+		t.Error("injectionSQL reads text of a result: records hold rule names only")
+	}
+	calls := []Call{{Tool: "get_page"}, {Method: "tools/list"}}
+	if err := (&Audit{}).addInjection(context.Background(), "user01@example.com", time.Time{}, calls); err != nil || calls[0].Injection != nil {
+		t.Fatal(calls, err) // no call IDs, no query (DB is nil)
+	}
+}
+
 // topLevelCommas counts the commas outside brackets and quotes.
 func topLevelCommas(s string) int {
 	n, depth, quoted := 0, 0, false

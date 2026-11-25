@@ -181,6 +181,11 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Docker Hub images come through mirror.gcr.io on this job's kind nodes too (#323; the e2e job sets it in its kind
+      # config). A background script writes the mirror file into each kind node, because the CLI and the test scripts
+      # create their own clusters. Docker Hub is still the fallback.
+      - name: Docker Hub mirror for the kind nodes (background)
+        run: nohup hack/ci-kind-mirror.sh > "$RUNNER_TEMP/kind-mirror.log" 2>&1 &
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
       - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
       - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
@@ -222,7 +227,7 @@ jobs:
           - { name: c, steps: "10 keys 9 compress sa", ui: false }
           - { name: f, steps: "agents", ui: false }
           - { name: d, steps: "12 ext savings evidence", ui: false }
-          - { name: e, steps: "4a 4b 4c 4d 5 6 7 guard", ui: false }
+          - { name: e, steps: "4a 4b 4c 4d 5 6 7 guard fd", ui: false }
     steps:
       # The runner's disk held the kind images, the build cache and Go's caches until "no space left on device"
       # (2026-10-08). Preinstalled tools this job never uses are removed in the background.
@@ -279,10 +284,14 @@ jobs:
         run: make test STEPS="${{ matrix.part.steps }}"
         env:
           AMBIT_SKIP_ARGO: "1"  # step 12's Argo CD check needs the GitHub App of step 4c, which CI does not have
-          # step 10's soak: 5 samples 10 s apart after 30 s (the growth check needs 4); 300 s locally
-          SOAK_SECONDS: "80"
-          SOAK_SAMPLE: "10"
-          SOAK_WARMUP: "30"
+          # step 10's soak: samples 15 s apart (metrics-server refreshes every 15 s) from 90 s to about 150 s: 5 samples,
+          # the growth check needs 4; 300 s locally.
+          # The otel collector's memory climbs from 34 to about 50 MiB in the first 45 to 60 s of traffic (buffers
+          # and the first batches) and then stays flat for 15 minutes (measured 2026-11-25, #362), so the samples
+          # start after that.
+          SOAK_SECONDS: "180"
+          SOAK_SAMPLE: "15"
+          SOAK_WARMUP: "90"
       - name: Playwright version
         if: matrix.part.ui
         id: pw
@@ -353,6 +362,11 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Docker Hub images come through mirror.gcr.io on this job's kind nodes too (#323; the e2e job sets it in its kind
+      # config). A background script writes the mirror file into each kind node, because the CLI and the test scripts
+      # create their own clusters. Docker Hub is still the fallback.
+      - name: Docker Hub mirror for the kind nodes (background)
+        run: nohup hack/ci-kind-mirror.sh > "$RUNNER_TEMP/kind-mirror.log" 2>&1 &
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version-file: go.mod }
       - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
@@ -386,6 +400,11 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Docker Hub images come through mirror.gcr.io on this job's kind nodes too (#323; the e2e job sets it in its kind
+      # config). A background script writes the mirror file into each kind node, because the CLI and the test scripts
+      # create their own clusters. Docker Hub is still the fallback.
+      - name: Docker Hub mirror for the kind nodes (background)
+        run: nohup hack/ci-kind-mirror.sh > "$RUNNER_TEMP/kind-mirror.log" 2>&1 &
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version-file: go.mod }
       - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
@@ -424,6 +443,11 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Docker Hub images come through mirror.gcr.io on this job's kind nodes too (#323; the e2e job sets it in its kind
+      # config). A background script writes the mirror file into each kind node, because the CLI and the test scripts
+      # create their own clusters. Docker Hub is still the fallback.
+      - name: Docker Hub mirror for the kind nodes (background)
+        run: nohup hack/ci-kind-mirror.sh > "$RUNNER_TEMP/kind-mirror.log" 2>&1 &
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version-file: go.mod }
       - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
@@ -491,6 +515,11 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Docker Hub images come through mirror.gcr.io on this job's kind nodes too (#323; the e2e job sets it in its kind
+      # config). A background script writes the mirror file into each kind node, because the CLI and the test scripts
+      # create their own clusters. Docker Hub is still the fallback.
+      - name: Docker Hub mirror for the kind nodes (background)
+        run: nohup hack/ci-kind-mirror.sh > "$RUNNER_TEMP/kind-mirror.log" 2>&1 &
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with: { go-version-file: go.mod }
       - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2

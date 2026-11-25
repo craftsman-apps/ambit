@@ -192,7 +192,7 @@ the verified key:
 | `ambit.platform_declared` | The platform the agent declared. Never a proof. |
 | `ambit.grant_id` | The OAuth grant (empty until OAuth is available) |
 | `ambit.token_issuer` | The validated issuer of a token (empty for keys) |
-| `ambit.ingress` | `private`: the Gateway that took the call |
+| `ambit.ingress` | `private` or `public`: the Gateway that took the call. Written only with the [public front door](front-door.md) (`frontDoor.enabled`); empty without it |
 
 Records written before this release do not have them, and keep exporting with empty cells.
 

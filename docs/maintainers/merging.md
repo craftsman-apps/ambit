@@ -19,7 +19,10 @@ need to update your branch from `main` any more, and you do not need to wait for
 
 1. Open the pull request as a draft: `gh pr create --draft`. Draft pull requests run the cheap checks. Push fixes freely.
 2. When the change is complete, write the changelog fragment if users can see the change (`changelog/unreleased/`),
-   then mark it ready: `gh pr ready <number>`. This runs quickstart and e2e on the pull request once.
+   then mark it ready: `gh pr ready <number>`. This runs quickstart on the pull request (when the change needs it).
+   The full e2e does not run on the pull request once the queue is on; it runs in the queue (see
+   [What runs where](#what-runs-where)). To try a risky change against the full e2e earlier, see
+   [Run the full e2e before the queue](#run-the-full-e2e-before-the-queue).
 3. Run the Codex review and fix what it finds.
 4. When every check of the pull request is green, join the queue. Name the commit you reviewed, so a late push cannot slip in:
 
@@ -47,6 +50,39 @@ Never use `--admin`, never push to `main`, and never create tags: those rules do
 | "CI green on a head that contains the current `main`" | The queue's own run is that proof. |
 
 The kind cluster lock (`/tmp/ambit-kind.lock`) is for local clusters and does not change.
+
+## What runs where
+
+| Where | What runs | Time (measured, see the end of this page) |
+|---|---|---|
+| Draft pull request | The quick checks: `changes`, `build`, `image`, `cli-unit` on three systems, the `cli-*` jobs the path filter asks for. No quickstart, no e2e. | the same as below |
+| Pull request that is ready | The same, plus `quickstart` when the path filter asks for it. **No e2e** once the queue is on. | a few minutes less than 15 |
+| Merge queue (event `merge_group`) | Everything: the quick checks, `quickstart`, and the full e2e (`e2e (a)` to `e2e (e)`, every part of the matrix in `ci.yml`). | about 30 to 35 |
+| A manual run (event `workflow_dispatch`) | Everything, for any branch, whatever files changed. | about 30 to 35 |
+
+The rule that keeps `main` safe: the one required check is `merge-gate`. On a queue branch it fails when e2e was skipped
+although the path filter says the change needs it. On a pull request it accepts "e2e not run here" only when the
+repository variable `MERGE_QUEUE` is `true`. So nothing reaches `main` without the full e2e passing on the queue's
+combined commit (the current `main` plus the pull request).
+
+The path filters keep their meaning: a change to documentation only needs no e2e, and then the queue skips it on purpose.
+
+**The switch.** The repository variable `MERGE_QUEUE` is the only difference between "e2e on every pull request" (today)
+and "e2e only in the queue". Only the owner sets it, together with turning the queue on (Settings, Secrets and
+variables, Actions, Variables: name `MERGE_QUEUE`, value `true`). Without it, nothing changes for pull requests, so
+this change can be merged before the queue is on. The repository rules must also make the merge queue mandatory for
+`main`: if a pull request could be merged without the queue, it would have no e2e at all.
+
+## Run the full e2e before the queue
+
+Use it for a risky change (the gateway, the charts, the controller), so you do not learn from the queue that it fails:
+
+```
+gh workflow run ci.yml --ref <your branch>
+```
+
+It runs every job, e2e included, on your branch. The results appear under the Actions tab and on the pull request,
+next to the pull request checks. It costs the same Actions minutes as one queue run, so use it when the risk is real.
 
 ## Which checks must pass
 
@@ -92,7 +128,5 @@ If the owner prefers to keep the six checks that are required today (`build`, `c
 `cli-unit (macos-latest)`, `cli-unit (windows-latest)`, `cli-local`, `cli-partial`) next to `merge-gate`, that works too:
 `merge-gate` already contains them.
 
-One cost to know: the required checks apply to the pull request too, so e2e runs once on the pull request (when it is
-marked ready) and once more in the queue. That is the price of testing together with the current `main`. To avoid the
-first run, the pull request could run only the cheap jobs; this needs a decision about what a pull request must prove
-before it joins the queue.
+The required checks apply to the pull request too. Since e2e runs only in the queue, a pull request needs `merge-gate`
+green with "e2e not run here"; the queue then runs e2e once, on the combined commit.

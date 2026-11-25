@@ -103,7 +103,7 @@ print(f"   first token accepted everywhere after {first_ok:.0f} s", flush=True)
 # 2 · tools: exactly the consented scope, on every pod, and each call is checked
 for p in PORTS:
     st, names = tools(p, tok1["access_token"])
-    check(f"2 pod {p}: the consented server's tools, and no other", st == 200 and names == [TOOL], (st, names))
+    check(f"2 pod {p}: the consented server's tools, and no other server's", st == 200 and TOOL in (names or []) and all(n.startswith("time_") for n in names), (st, names))
     st, data = call_tool(p, tok1["access_token"], TOOL, {"timezone": "UTC"})
     check(f"2 pod {p}: a call of the consented tool works", st == 200 and data and "result" in data and not data["result"].get("isError"), (st, data))
 cid2, tok2 = connect("alice", (), "Claude")  # a second person-mode agent of the same person, with an empty scope

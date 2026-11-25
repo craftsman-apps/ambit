@@ -27,6 +27,8 @@ const (
 	// person's record. Listings also require ownerRecordLabel, which admission protects.
 	ownerKindLabel = "ambitproject.dev/key-owner-kind"
 	annPrefix      = "ambitproject.dev/key-"
+	// agentLabel marks an agent's record (a ConfigMap) and, with the agent's name as its value, each key of the agent.
+	agentLabel = "ambitproject.dev/agent"
 )
 
 type Scope string
@@ -53,6 +55,20 @@ type Key struct {
 	IssuedBy string
 	// Exposed is when the exposure rule lowered the key's end date (its issuer was offboarded); zero when never.
 	Exposed time.Time
+	// Agent is set on an agent's key: what the gateway reads from the key's metadata (docs/agents.md).
+	Agent *KeyAgent
+}
+
+// KeyAgent is an agent key's metadata. The gateway reads these fields as apiKey.agent, apiKey.agentMode, and so on;
+// only the console writes them (key Secrets are fenced by admission). Experimental in 0.6.x.
+type KeyAgent struct {
+	Name         string   // the agent's name, as in the record
+	Mode         string   // person or itself
+	OwnerAtIssue string   // the owner when the key was issued; never changed, so Audit shows who was accountable then
+	Platform     string   // the platform the agent's record declares (never a proof)
+	Scope        []string // "server" and "server/tool" entries, at most 50; empty: the key may use no tool
+	Rev          int      // the record's revision this scope was copied from
+	SourceRanges []string // at most 10 CIDRs; the key is accepted only from these addresses
 }
 
 // KindServiceAccount is the owner record kind of a service account; a person's record has no kind.
@@ -64,7 +80,10 @@ type Owner struct {
 	SignedIn   time.Time `json:"signedIn"`
 	Offboarded bool      `json:"offboarded"`
 	// Service accounts only. Kind never changes once written; Deleted marks a tombstone, which keeps the name taken.
-	Kind                 string    `json:"kind,omitempty"`
+	Kind string `json:"kind,omitempty"`
+	// Agent names the itself-mode agent this account is, "" for an ordinary account: the account's keys are then made
+	// only through the agent (they carry its scope).
+	Agent                string    `json:"agent,omitempty"`
 	Description          string    `json:"description,omitempty"`
 	CreatedBy            string    `json:"createdBy,omitempty"`
 	Created              time.Time `json:"created,omitzero"`
@@ -121,6 +140,14 @@ type keyEntry struct {
 		Email  string   `json:"email"`
 		Groups []string `json:"groups"`
 		Until  string   `json:"until"`
+		// Agent keys only (all omitted otherwise).
+		Agent             string   `json:"agent,omitempty"`
+		AgentMode         string   `json:"agentMode,omitempty"`
+		AgentOwnerAtIssue string   `json:"agentOwnerAtIssue,omitempty"`
+		PlatformDeclared  string   `json:"platformDeclared,omitempty"`
+		AgentScope        []string `json:"agentScope,omitempty"` // an empty list is omitted: the gateway then lets the key use no tool
+		AgentRev          int      `json:"agentRev,omitempty"`
+		SourceRanges      []string `json:"sourceRanges,omitempty"`
 	} `json:"metadata"`
 }
 
@@ -129,8 +156,15 @@ func (k Key) Secret(ns string) *corev1.Secret {
 	e.KeyHash = k.Hash
 	e.Metadata.KeyID, e.Metadata.Email, e.Metadata.Groups = k.ID, k.Email, nonNil(k.Groups)
 	e.Metadata.Until = k.Until.UTC().Format(time.RFC3339)
+	if a := k.Agent; a != nil {
+		e.Metadata.Agent, e.Metadata.AgentMode, e.Metadata.AgentOwnerAtIssue = a.Name, a.Mode, a.OwnerAtIssue
+		e.Metadata.PlatformDeclared, e.Metadata.AgentScope, e.Metadata.AgentRev, e.Metadata.SourceRanges = a.Platform, a.Scope, a.Rev, a.SourceRanges
+	}
 	b, _ := json.Marshal(e)
 	labels := map[string]string{keyLabel: "true", keyOwnerLabel: ownerHash(k.Email)}
+	if k.Agent != nil {
+		labels[agentLabel] = k.Agent.Name
+	}
 	if k.Scope == ScopeLLM || k.Scope == ScopeBoth {
 		labels[keyLLMLabel] = "true"
 	}
@@ -169,6 +203,10 @@ func KeyFromSecret(s *corev1.Secret) (Key, error) {
 	k := Key{ID: e.Metadata.KeyID, Email: e.Metadata.Email, Groups: e.Metadata.Groups, Hash: e.KeyHash,
 		Name: a[annPrefix+"name"], Prefix: a[annPrefix+"prefix"], Scope: Scope(a[annPrefix+"scope"]),
 		UID: string(s.UID), ResourceVersion: s.ResourceVersion, IssuedBy: a[annPrefix+"issued-by"]}
+	if m := e.Metadata; m.Agent != "" {
+		k.Agent = &KeyAgent{Name: m.Agent, Mode: m.AgentMode, OwnerAtIssue: m.AgentOwnerAtIssue, Platform: m.PlatformDeclared,
+			Scope: m.AgentScope, Rev: m.AgentRev, SourceRanges: m.SourceRanges}
+	}
 	if v := a[annPrefix+"exposed"]; v != "" {
 		k.Exposed, _ = time.Parse(time.RFC3339, v) // unreadable: treated as never exposed; the ceiling holds the date
 	}

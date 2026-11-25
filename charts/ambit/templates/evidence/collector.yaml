@@ -84,6 +84,19 @@ data:
             - { name: ambit.call_id, expression: {{ include "ambit.callId" . | quote }} }
             {{- end }}
             - { name: ambit.identity, expression: {{ include "ambit.identity.kind" . | quote }} }
+            # Agents (docs/agents.md), experimental: read only from a verified key or token. The platform is the one the agent's
+            # record declares: never a proof, and no policy uses it.
+            - { name: ambit.agent, expression: {{ include "ambit.identity.agentAttr" (dict "key" "agent" "claim" "ambit_agent" "root" $) | quote }} }
+            - { name: ambit.agent_mode, expression: {{ include "ambit.identity.agentAttr" (dict "key" "agentMode" "claim" "ambit_agent_mode" "root" $) | quote }} }
+            - { name: ambit.agent_owner_at_issue, expression: {{ include "ambit.identity.agentAttr" (dict "key" "agentOwnerAtIssue" "claim" "ambit_agent_owner_at_issue" "root" $) | quote }} }
+            - { name: ambit.platform_declared, expression: {{ include "ambit.identity.agentAttr" (dict "key" "platformDeclared" "claim" "ambit_platform_declared" "root" $) | quote }} }
+            - { name: ambit.grant_id, expression: {{ include "ambit.identity.agentAttr" (dict "key" "" "claim" "ambit_grant" "root" $) | quote }} }
+            - { name: ambit.token_issuer, expression: {{ include "ambit.identity.tokenIssuer" . | quote }} }
+            {{- if (.Values.frontDoor | default dict).enabled }}
+            # Which Gateway the call came in on: a constant of this Gateway's policy (ambit-controller writes the public Gateway's
+            # copy with "public"), never a request header.
+            - { name: ambit.ingress, expression: '"private"' }
+            {{- end }}
             # The model name the client asked for (a ModelRouter such as "auto"); gen_ai.request.model is the one that answered.
             - { name: ambit.router, expression: "metadata.ambit_requested_model" }
             # A classifier's label and its reason (set by ambit-router, PR 2); empty for type Rules.

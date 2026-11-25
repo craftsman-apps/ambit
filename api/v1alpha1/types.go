@@ -353,6 +353,24 @@ type ServerSpec struct {
 	// to save model tokens. Off unless set. ambit-guard needs protection.enabled.
 	// +optional
 	ResultCompression *ResultCompression `json:"resultCompression,omitempty"`
+	// FrontDoor makes this server reachable through the public front door (frontDoor.enabled in the Helm values), by
+	// hosted agents on the internet that present an API key. Experimental in 0.6.x. Off unless set.
+	// +optional
+	FrontDoor *ServerFrontDoor `json:"frontDoor,omitempty"`
+}
+
+// ServerFrontDoor says whether a Server is reachable through the public front door. Experimental in 0.6.x.
+type ServerFrontDoor struct {
+	// Enabled puts the server on the public front door. It takes effect only with acceptUnmaskedServerMessages: true;
+	// without it the server is not served at all (Ready is False, reason FrontDoorNotAcknowledged) until an admin
+	// sets one or the other. A server with a Connection cannot be on the front door yet.
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
+	// AcceptUnmaskedServerMessages is the admin's written acknowledgment that this server's error messages and
+	// notifications reach the hosted agent without being masked: ambit-guard sees only the result of a tool call
+	// (issue 333). Set it only for a server that never puts personal data into an error or a notification.
+	// +optional
+	AcceptUnmaskedServerMessages bool `json:"acceptUnmaskedServerMessages,omitempty"`
 }
 
 // ServerEnv is one environment variable of an image Server: a value or a Secret key, not both.

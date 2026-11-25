@@ -149,6 +149,22 @@ Limits:
 - If the proxy address changes (the server is renamed or moved to another namespace), change `serverURL` too;
   users then connect again.
 
+## Put a server on the public front door
+
+Hosted agents on the internet reach only the servers marked with `spec.frontDoor` (experimental; needs `frontDoor.enabled`
+in the Helm values). Both fields are needed, and the second is a written acknowledgment that the server's error
+messages and notifications are not masked (see [The public front door](front-door.md#choose-the-servers)):
+
+```yaml
+spec:
+  frontDoor:
+    enabled: true
+    acceptUnmaskedServerMessages: true
+```
+
+A server with a `connection` cannot be on the front door yet. A server request never carries `frontDoor`: an admin sets it on
+the running server.
+
 ## The tool reader
 
 A per-user server has no shared account, so Ambit cannot list its tools by itself. An admin lends their own

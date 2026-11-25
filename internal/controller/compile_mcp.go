@@ -19,6 +19,21 @@ import (
 // every Server; clients see each tool as "<server>_<tool>".
 const MCPBackendName = "ambit-mcp"
 
+// PublicMCPBackendName is the backend of the public front door's route: only the Servers an admin put on the front door
+// and acknowledged (Server spec.frontDoor). A server that is not a target of it does not exist for a public session.
+// No request header decides this: the route names this backend, the private route names MCPBackendName.
+const PublicMCPBackendName = "ambit-mcp-public"
+
+// FrontDoorLabel is on the pods of a front-door server, so a network policy lets the public Gateway reach only these.
+const FrontDoorLabel = "ambitproject.dev/front-door"
+
+// onFrontDoor reports whether a Server is served through the public front door: marked, acknowledged, and without a
+// Connection (a person's own app token is not handed to a hosted agent until the broker checks each agent's consent).
+func onFrontDoor(s v1.Server) bool {
+	f := s.Spec.FrontDoor
+	return f != nil && f.Enabled && f.AcceptUnmaskedServerMessages && s.Spec.Connection == ""
+}
+
 // ToolHive's proxy listens here; its Service is mcp-<name>-proxy.
 const proxyPort = 8080
 
@@ -42,26 +57,45 @@ func compileServers(servers []v1.Server, rules []v1.AccessRule) []*unstructured.
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	access := accessByServer(sorted, rules)
 
-	var out, owners []*unstructured.Unstructured
-	var refs []metav1.OwnerReference
-	var targets []any
-	var clauses []string
+	var out []*unstructured.Unstructured
+	var public []v1.Server
 	for _, s := range sorted {
-		refs = append(refs, metav1.OwnerReference{APIVersion: v1.GroupVersion.String(), Kind: "Server", Name: s.Name, UID: s.UID})
-		t, ok := target(s)
-		if !ok {
+		if _, ok := target(s); !ok {
 			continue // a URL that does not parse (the console refuses these; kubectl can still write one): left out
 		}
 		if s.Spec.URL == "" {
 			out = append(out, mcpServer(s))
 		}
+		if s.Spec.Connection != "" {
+			out = append(out, connectionPolicy(s))
+		}
+		if onFrontDoor(s) {
+			public = append(public, s)
+		}
+	}
+	out = append(out, mcpBackend(MCPBackendName, sorted, access)...)
+	// Only the servers marked for the front door, with the same access rules restricted to them.
+	if len(public) > 0 {
+		out = append(out, mcpBackend(PublicMCPBackendName, public, access)...)
+	}
+	return out
+}
+
+// mcpBackend is one multiplexing backend over servers, and the policy that decides who may call which tool on it.
+func mcpBackend(name string, servers []v1.Server, access map[string]*serverAccess) []*unstructured.Unstructured {
+	var refs []metav1.OwnerReference
+	var targets []any
+	var clauses []string
+	for _, s := range servers {
+		refs = append(refs, metav1.OwnerReference{APIVersion: v1.GroupVersion.String(), Kind: "Server", Name: s.Name, UID: s.UID})
+		t, ok := target(s)
+		if !ok {
+			continue
+		}
 		// agentgateway opens each session by contacting every target: an image server joins once it has answered
 		// (Serving, set by the reconciler), so a booting one does not slow every user's new session.
 		if s.Spec.URL != "" || meta.IsStatusConditionTrue(s.Status.Conditions, "Serving") {
 			targets = append(targets, map[string]any{"name": s.Name, "static": t})
-		}
-		if s.Spec.Connection != "" {
-			out = append(out, connectionPolicy(s))
 		}
 		clauses = append(clauses, serverClauses(s.Name, access[s.Name])...)
 	}
@@ -71,7 +105,7 @@ func compileServers(servers []v1.Server, rules []v1.AccessRule) []*unstructured.
 	}
 	// ponytail: one expression for every server and tool; CRD limit is 16384 characters, so split
 	// into several Allow policies if a catalog ever grows past a few hundred rule entries.
-	backend := generated("agentgateway.dev/v1alpha1", "AgentgatewayBackend", MCPBackendName, sorted[0].Namespace, map[string]any{
+	backend := generated("agentgateway.dev/v1alpha1", "AgentgatewayBackend", name, servers[0].Namespace, map[string]any{
 		"mcp": map[string]any{
 			// One broken server must not take away every other server's tools.
 			"failureMode": "FailOpen",
@@ -79,8 +113,8 @@ func compileServers(servers []v1.Server, rules []v1.AccessRule) []*unstructured.
 			"targets":     targets,
 		},
 	})
-	policy := generated("agentgateway.dev/v1alpha1", "AgentgatewayPolicy", MCPBackendName+"-access", sorted[0].Namespace, map[string]any{
-		"targetRefs": []any{map[string]any{"group": "agentgateway.dev", "kind": "AgentgatewayBackend", "name": MCPBackendName}},
+	policy := generated("agentgateway.dev/v1alpha1", "AgentgatewayPolicy", name+"-access", servers[0].Namespace, map[string]any{
+		"targetRefs": []any{map[string]any{"group": "agentgateway.dev", "kind": "AgentgatewayBackend", "name": name}},
 		"backend": map[string]any{
 			"mcp": map[string]any{"authorization": map[string]any{
 				"action": "Allow",
@@ -94,14 +128,19 @@ func compileServers(servers []v1.Server, rules []v1.AccessRule) []*unstructured.
 	})
 	// agentgateway refuses an MCP backend without targets: none while no server runs (the reconciler deletes a
 	// previous one). The policy stays, so the backend never comes back before its authorization.
-	owners = append(owners, policy)
+	owners := []*unstructured.Unstructured{policy}
 	if len(targets) > 0 {
 		owners = append(owners, backend)
 	}
+	// Not controller refs: garbage-collected only when the last Server is gone. The public backend's policy has none: the
+	// garbage collector could delete it before the backend, and an MCP backend without an authorization rule allows every
+	// call (agentgateway). The reconciler deletes the backend first, then the policy.
 	for _, o := range owners {
-		o.SetOwnerReferences(refs) // not controller refs: garbage-collected only when the last Server is gone
+		if o.GetKind() == "AgentgatewayBackend" || name == MCPBackendName {
+			o.SetOwnerReferences(refs)
+		}
 	}
-	return append(out, owners...)
+	return owners
 }
 
 func accessByServer(servers []v1.Server, rules []v1.AccessRule) map[string]*serverAccess {
@@ -310,6 +349,12 @@ func mcpServer(s v1.Server) *unstructured.Unstructured {
 			args[i] = a
 		}
 		spec["args"] = args
+	}
+	if onFrontDoor(s) {
+		// The label on ToolHive's proxy pod (the pod the gateway calls): the network policy ambit-mcp-servers-front-door
+		// admits the public Gateway to pods that have it, and to no other server.
+		spec["resourceOverrides"] = map[string]any{"proxyDeployment": map[string]any{"podTemplateMetadataOverrides": map[string]any{
+			"labels": map[string]any{FrontDoorLabel: "true"}}}}
 	}
 	o := generated("toolhive.stacklok.dev/v1beta1", "MCPServer", s.Name, s.Namespace, spec)
 	o.SetOwnerReferences([]metav1.OwnerReference{{

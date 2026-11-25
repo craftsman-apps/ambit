@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -61,4 +62,37 @@ func SetBrokerPaths(objs []*unstructured.Unstructured, servers []v1.Server, conn
 		}
 		_ = unstructured.SetNestedField(o.Object, strconv.Quote(BrokerPath(s, bound[s.Spec.Connection])), "spec", "backend", "extAuth", "http", "path")
 	}
+}
+
+// Reasons of the Ready condition of a Server that is marked for the public front door but cannot be served there.
+const (
+	ReasonFrontDoorNotAcknowledged = "FrontDoorNotAcknowledged"
+	ReasonFrontDoorConnection      = "FrontDoorConnection"
+)
+
+// GateFrontDoor drops every Server that is marked for the public front door (spec.frontDoor.enabled) without being
+// ready to be there. Such a server is not served at all, on neither Gateway, and says why in Ready: a half-written
+// decision to expose a server must not leave it open somewhere. Two causes:
+//   - the admin has not acknowledged that the server's errors and notifications are not masked (issue 333);
+//   - the server has a Connection: its calls would carry a person's own app token, and the front door does not hand
+//     that out until the token broker checks each agent's consent (a later change of this release series).
+func GateFrontDoor(servers []v1.Server) ([]v1.Server, map[string]metav1.Condition) {
+	var kept []v1.Server
+	refused := map[string]metav1.Condition{}
+	for _, s := range servers {
+		f := s.Spec.FrontDoor
+		switch {
+		case f == nil || !f.Enabled:
+			kept = append(kept, s)
+		case !f.AcceptUnmaskedServerMessages:
+			refused[s.Name] = cond(metav1.ConditionFalse, ReasonFrontDoorNotAcknowledged,
+				"spec.frontDoor.enabled is set, but spec.frontDoor.acceptUnmaskedServerMessages is not: ambit-guard masks only the result of a tool call, so this server's error messages and notifications would reach hosted agents unmasked (issue 333). Set acceptUnmaskedServerMessages: true if this server never puts personal data into them, or remove spec.frontDoor")
+		case s.Spec.Connection != "":
+			refused[s.Name] = cond(metav1.ConditionFalse, ReasonFrontDoorConnection,
+				"spec.frontDoor.enabled is set on a server with connection "+s.Spec.Connection+": the front door does not carry a person's own app token yet. Remove spec.frontDoor or spec.connection")
+		default:
+			kept = append(kept, s)
+		}
+	}
+	return kept, refused
 }

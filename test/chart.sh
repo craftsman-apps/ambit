@@ -327,8 +327,19 @@ assert {"name":"ambit.ingress","expression":"\"private\""} in s, s
 # Nothing rendered by the chart is a load balancer except through the gateways Parameters; no Service names the public gateway.
 assert all(x["spec"].get("type","ClusterIP")=="ClusterIP" for x in docs if x["kind"]=="Service"), [x["metadata"]["name"] for x in docs if x["kind"]=="Service" and x["spec"].get("type","ClusterIP")!="ClusterIP"]
 # The only policies aimed at the public Gateway or its route are the chart'"'"'s three; the controller adds its access-log and offboarding policies.
-t=sorted(x["metadata"]["name"] for x in docs if x["kind"]=="AgentgatewayPolicy" and any(r["name"] in ("ambit-public","ambit-mcp-public") for r in x["spec"].get("targetRefs",[])))
+t=sorted(x["metadata"]["name"] for x in docs if x["kind"]=="AgentgatewayPolicy" and any(r["kind"] in ("Gateway","HTTPRoute") and r["name"] in ("ambit-public","ambit-mcp-public") for r in x["spec"].get("targetRefs",[])))
 assert t==["ambit-mcp-public-auth","ambit-public-limits"], t' "public gateway: ClusterIP in the test values, controller flag, ambit.ingress in the access-log base, only two chart policies target it"
+check_fd 'g=one("AgentgatewayPolicy","ambit-mcp-guard")["spec"]["targetRefs"]
+assert [t["name"] for t in g]==["ambit-mcp","ambit-mcp-public"], g
+n=one("NetworkPolicy","ambit-mcp-servers-front-door")["spec"]
+assert n["podSelector"]["matchLabels"]=={"toolhive":"true","ambitproject.dev/front-door":"true"}, n
+assert n["ingress"]==[{"from":[{"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"ambit-public"}}}],"ports":[{"port":8080}]}], n
+base=one("NetworkPolicy","ambit-mcp-servers")["spec"]["ingress"]
+assert not any("ambit-public" in json.dumps(i) for i in base), base
+b=one("NetworkPolicy","ambit-console-broker")["spec"]["ingress"]
+assert not any("ambit-public" in json.dumps(i) for i in b), b
+gd=one("NetworkPolicy","ambit-guard")["spec"]["ingress"][0]["from"]
+assert {"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"ambit-public"}}} in gd, gd' "public gateway: the guard covers the public backend; only front-door server pods and the guard admit the public gateway pods; the token broker does not"
 # The load balancer defaults of the real thing (type LoadBalancer): the client address is kept and the source ranges are passed on.
 lb=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml -f test/frontdoor/values.yaml --set frontDoor.service.type=LoadBalancer --set 'frontDoor.service.loadBalancerSourceRanges={203.0.113.0/24}' --set 'frontDoor.service.annotations.service\.beta\.kubernetes\.io/aws-load-balancer-type=nlb')
 fd=$lb check_fd 'a=one("AgentgatewayParameters","ambit-public")["spec"]["service"]
@@ -347,6 +358,7 @@ MSG='certificateSecret' refuse "no certificate" --set frontDoor.tls.certificateS
 MSG='also a private host name' refuse "the console's host name" --set frontDoor.host=console.localtest.me
 MSG='also a private host name' refuse "the MCP host name" --set frontDoor.host=mcp.localtest.me
 MSG='limits.enabled' refuse "no shared limits" --set limits.enabled=false
+MSG='protection.enabled' refuse "no guard" --set protection.enabled=false
 MSG='evidence.enabled' refuse "no audit" --set evidence.enabled=false
 MSG='apiKeys.enabled' refuse "no API keys" --set apiKeys.enabled=false
 MSG='mcp.enabled' refuse "no MCP" --set mcp.enabled=false

@@ -866,3 +866,152 @@ func TestImageServerWithConnectionJoinsOnProbe(t *testing.T) {
 		t.Fatalf("ToolsRead: %+v", c)
 	}
 }
+
+// The public backend follows spec.frontDoor: only an acknowledged server is a public target; a server that is marked
+// but not acknowledged, or marked with a Connection, is served nowhere and says why; taking the mark away (or deleting
+// the server) removes the public backend and its policy again, also when no server is left at all.
+func TestPublicBackendFollowsTheFrontDoorMark(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-frontdoor"
+	namespace(t, ns)
+	ctx := t.Context()
+	remote := func(name string, f *v1.ServerFrontDoor) *v1.Server {
+		return &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+			Spec: v1.ServerSpec{URL: "https://" + name + ".test/mcp", Transport: "streamable-http", FrontDoor: f}}
+	}
+	open := remote("open", &v1.ServerFrontDoor{Enabled: true, AcceptUnmaskedServerMessages: true})
+	closed := remote("closed", nil)
+	unack := remote("unack", &v1.ServerFrontDoor{Enabled: true})
+	withConn := remote("withconn", &v1.ServerFrontDoor{Enabled: true, AcceptUnmaskedServerMessages: true})
+	withConn.Spec.Connection = "gh"
+	rule := &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "all", Namespace: ns}, Spec: v1.AccessRuleSpec{AllSignedIn: true,
+		Servers: []v1.ServerAccess{{Name: "open"}, {Name: "closed"}, {Name: "unack"}, {Name: "withconn"}}}}
+	for _, o := range []client.Object{open, closed, unack, withConn, rule} {
+		if err := envClient.Create(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	targetsOf := func(name string) string {
+		b, err := genGet(ctx, ns, "AgentgatewayBackend", name)
+		if err != nil {
+			return "<" + err.Error() + ">"
+		}
+		var names []string
+		ts, _, _ := unstructured.NestedSlice(b.Object, "spec", "mcp", "targets")
+		for _, x := range ts {
+			names = append(names, x.(map[string]any)["name"].(string))
+		}
+		return strings.Join(names, ",")
+	}
+	if got := targetsOf(PublicMCPBackendName); got != "open" {
+		t.Fatalf("public targets: %s", got)
+	}
+	if got := targetsOf(MCPBackendName); got != "closed,open" {
+		t.Fatalf("private targets (a server marked for the door without being ready is served nowhere): %s", got)
+	}
+	pol, err := genGet(ctx, ns, "AgentgatewayPolicy", PublicMCPBackendName+"-access")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, _, _ := unstructured.NestedStringSlice(pol.Object, "spec", "backend", "mcp", "authorization", "policy", "matchExpressions"); len(e) != 1 || strings.Contains(e[0], "closed") || !strings.Contains(e[0], `"open"`) {
+		t.Fatalf("public access: %v", e)
+	}
+	why := func(name string) string {
+		var s v1.Server
+		if err := envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &s); err != nil {
+			t.Fatal(err)
+		}
+		c := meta.FindStatusCondition(s.Status.Conditions, "Ready")
+		if c == nil {
+			return "<none>"
+		}
+		return string(c.Status) + " " + c.Reason
+	}
+	for name, want := range map[string]string{"unack": "False FrontDoorNotAcknowledged", "withconn": "False FrontDoorConnection", "open": "True Remote", "closed": "True Remote"} {
+		if got := why(name); got != want {
+			t.Errorf("%s: Ready %s, want %s", name, got, want)
+		}
+	}
+	// Acknowledging makes the server servable; removing the mark of the only public server removes the public objects.
+	if err := envClient.Get(ctx, client.ObjectKeyFromObject(unack), unack); err != nil {
+		t.Fatal(err)
+	}
+	unack.Spec.FrontDoor.AcceptUnmaskedServerMessages = true
+	if err := envClient.Update(ctx, unack); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := targetsOf(PublicMCPBackendName); got != "open,unack" {
+		t.Fatalf("after the acknowledgment: %s", got)
+	}
+	for _, name := range []string{"open", "unack"} {
+		var s v1.Server
+		if err := envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &s); err != nil {
+			t.Fatal(err)
+		}
+		s.Spec.FrontDoor = nil
+		if err := envClient.Update(ctx, &s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range [][2]string{{"AgentgatewayBackend", PublicMCPBackendName}, {"AgentgatewayPolicy", PublicMCPBackendName + "-access"}} {
+		if _, err := genGet(ctx, ns, o[0], o[1]); !apierrors.IsNotFound(err) {
+			t.Errorf("%s %s stays after the last server left the front door: %v", o[0], o[1], err)
+		}
+	}
+	if got := targetsOf(MCPBackendName); got != "closed,open,unack" {
+		t.Fatalf("private targets after: %s", got)
+	}
+}
+
+// An image server that was acknowledged and then marked without the acknowledgment is served nowhere, and its proxy pod
+// loses the label that the public Gateway's network policy admits.
+func TestUnacknowledgedImageServerLosesTheFrontDoorLabel(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-frontdoor-label"
+	namespace(t, ns)
+	ctx := t.Context()
+	srv := &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "crm", Namespace: ns},
+		Spec: v1.ServerSpec{Image: digestImage, Transport: "stdio", FrontDoor: &v1.ServerFrontDoor{Enabled: true, AcceptUnmaskedServerMessages: true}}}
+	if err := envClient.Create(ctx, srv); err != nil {
+		t.Fatal(err)
+	}
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"}}
+	label := func() string {
+		var u unstructured.Unstructured
+		u.SetGroupVersionKind(MCPServerGVK)
+		if err := envClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: "crm"}, &u); err != nil {
+			return "<" + err.Error() + ">"
+		}
+		v, _, _ := unstructured.NestedString(u.Object, "spec", "resourceOverrides", "proxyDeployment", "podTemplateMetadataOverrides", "labels", FrontDoorLabel)
+		return v
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := label(); got != "true" {
+		t.Skipf("the MCPServer CRD is not installed in this environment: %s", got)
+	}
+	if err := envClient.Get(ctx, client.ObjectKeyFromObject(srv), srv); err != nil {
+		t.Fatal(err)
+	}
+	srv.Spec.FrontDoor.AcceptUnmaskedServerMessages = false
+	if err := envClient.Update(ctx, srv); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Reconcile(ctx, reconcile.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if got := label(); got != "" {
+		t.Fatalf("the proxy pod keeps the front-door label: %q", got)
+	}
+}

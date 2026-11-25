@@ -56,7 +56,7 @@ PW=$(kubectl -n "$NS" get secret ambit-initial-admin -o jsonpath='{.data.passwor
 sign_in local admin@ambit.local "$PW" || fail "0 admin sign-in"
 [[ $(api POST /api/test/keys/reset-limits '{}') == 204 ]] || fail "0 reset-limits hook: $(cat "$W/api")"
 reforward
-SUFFIX=$(date +%s | tail -c 7)
+SUFFIX=$(date +%s | tail -c 7); N=0
 
 # agent MODE PLATFORM NAME [RANGES-JSON]: makes an agent (scope: the time server's one tool) and a key; sets AGENT, KEY, KID
 agent() {
@@ -64,7 +64,7 @@ agent() {
   if [[ $mode == person ]]; then
     body="{\"displayName\":\"$name $SUFFIX\",\"platform\":\"$platform\",\"scope\":[\"time/get_current_time\"]}"
   else
-    body="{\"mode\":\"itself\",\"name\":\"$name-$SUFFIX\",\"displayName\":\"$name\",\"group\":\"ops\",\"owner\":\"admin@ambit.local\",\"platform\":\"$platform\",\"scope\":[\"time/get_current_time\"]}"
+    body="{\"mode\":\"itself\",\"name\":\"$platform-$SUFFIX-$((++N))\",\"displayName\":\"$name\",\"group\":\"ops\",\"owner\":\"admin@ambit.local\",\"platform\":\"$platform\",\"scope\":[\"time/get_current_time\"]}"
   fi
   c=$(ag POST /api/agents "$body"); [[ "$c" == 201 ]] || fail "agent $name ($mode, $platform): HTTP $c $(cat "$W/api")"
   AGENT=$(field 'd["name"]'); AGENTS+=("$AGENT")
@@ -76,9 +76,12 @@ agent() {
 # MCP: initialize, notifications/initialized, tools/list (one tool: the agent's scope), a call that the scope allows, a call that it
 # does not, then the session is closed (DELETE). A wrong key, and the key in the address, are refused.
 replay() {
-  local hname=$1 prefix=$2 proto=$3 label=$4 KH=(-H "$hname: $prefix$KEY") c
+  local hname=$1 prefix=$2 proto=$3 label=$4 c
+  local KH=(-H "$hname: $prefix$KEY")
   local init="{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"$proto\",\"capabilities\":{},\"clientInfo\":{\"name\":\"$label\",\"version\":\"1\"}}}"
-  wait_for 90 'c=$(pub "$PA" /mcp -X POST "${MCPH[@]}" -d "$init" "${KH[@]}"); [[ "$c" == 200 ]]' || fail "$label: initialize with a new key: HTTP $c $(head -c 200 "$W/pub")"
+  # the front-door label restarts the server's proxy pod once, and a new key takes seconds: wait until the agent sees its one tool
+  wait_for 240 '[[ "$(ptools "$PA" "${KH[@]}")" == time_get_current_time ]]' || fail "$label: the agent's key does not list its tool: '$(ptools "$PA" "${KH[@]}" 2>&1 | tail -c 200)'"
+  c=$(pub "$PA" /mcp -X POST "${MCPH[@]}" -d "$init" "${KH[@]}"); [[ "$c" == 200 ]] || fail "$label: initialize with the protocol $proto: HTTP $c $(head -c 200 "$W/pub")"
   PSID=$(awk 'tolower($1)=="mcp-session-id:"{print $2}' "$W/pubh" | tr -d '\r'); [[ -n "$PSID" ]] || fail "$label: no session id"
   c=$(psend "$PA" '{"jsonrpc":"2.0","method":"notifications/initialized"}' "${KH[@]}" -H "MCP-Protocol-Version: $proto"); [[ "$c" == 202 || "$c" == 200 ]] || fail "$label: initialized: $c"
   c=$(psend "$PA" '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' "${KH[@]}" -H "MCP-Protocol-Version: $proto"); [[ "$c" == 200 ]] || fail "$label: tools/list: $c"

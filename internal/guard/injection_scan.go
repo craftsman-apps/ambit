@@ -158,8 +158,12 @@ type hit struct{ word, start, end int }
 // "from  now\ton" is the word "from now on". nil when there is none: a result without these words costs one pass.
 // overflow is true when there are more than maxHits words; the rest are not kept.
 func (m *matcher) scan(s string) (hits []hit, overflow bool) {
-	for i := 0; i+2 < len(s); i++ {
-		p := startHash(lowerTab[s[i]], lowerTab[s[i+1]], lowerTab[s[i+2]])
+	for i := 0; i+1 < len(s); i++ {
+		var third byte // a word of two bytes at the very end of the text has none
+		if i+2 < len(s) {
+			third = lowerTab[s[i+2]]
+		}
+		p := startHash(lowerTab[s[i]], lowerTab[s[i+1]], third)
 		if m.start[p>>6]>>(p&63)&1 == 0 {
 			continue
 		}
@@ -183,6 +187,7 @@ func (m *matcher) scan(s string) (hits []hit, overflow bool) {
 				for _, w := range m.out[st] {
 					if len(m.words[w]) == consumed { // a word that begins here; the others begin at their own position
 						if len(hits) >= maxHits {
+							slices.SortFunc(hits, func(a, b hit) int { return a.end - b.end })
 							return hits, true
 						}
 						hits = append(hits, hit{int(w), i, j + 1})

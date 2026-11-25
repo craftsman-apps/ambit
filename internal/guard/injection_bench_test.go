@@ -70,8 +70,9 @@ func mustInjector(tb testing.TB, mode, extra string) *Injector {
 // BenchmarkInjectionScan is the one pass that finds the words of the built-in rules, for 100 KiB of JSON rows.
 func BenchmarkInjectionScan(b *testing.B) {
 	text := sized(queryRows, 100<<10)
+	in := mustInjector(b, "audit", "")
 	b.SetBytes(int64(len(text)))
 	for range b.N {
-		injectionScanner.scan(text)
+		in.scanner.scan(text)
 	}
 }

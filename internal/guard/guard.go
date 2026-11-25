@@ -340,7 +340,10 @@ func (g *Guard) maskResult(ctx context.Context, resp *extmcp.McpResponse) (*extm
 	var hidden []string
 	if g.Injection != nil {
 		// Hidden characters come out before masking: they can split an email address or a rule's words in two.
-		all, hidden = g.Injection.StripHidden(all)
+		var over bool
+		if all, hidden, over = g.Injection.StripHidden(all); over {
+			return withhold("has more hidden characters than the prompt-injection check can remove, so it was withheld")
+		}
 	}
 	masked, total, maskErr := g.maskTexts(ctx, all)
 	if maskErr != nil {

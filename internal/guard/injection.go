@@ -95,7 +95,7 @@ var injectionRules = []injRule{
 		`(?i)\[/?INST\]|<</?SYS>>|\[/?SYS\]`),
 	{name: "role-prefix", needles: []string{"system:", "system :", "assistant:", "assistant :"}, lineStart: true,
 		re: regexp.MustCompile(`(?im)^[ \t]{0,8}(?:system|assistant)[ \t]?:`)},
-	rl("hide-from-user", []string{"the user", "your user", "this user", "the human", "the person", "this from"},
+	rl("hide-from-user", []string{"user", "human", "person"},
 		`(?i)\b(?:(?:do\s+not|don['’]t|never)\s+(?:tell|inform|mention|reveal|notify|alert|show)|without\s+(?:telling|informing|notifying|alerting))\s+(?:this\s+to\s+)?(?:the\s+|your\s+|this\s+)?(?:user|human|person)\b`+
 			`|(?i)\b(?:hide|keep)\s+(?:this|it|that)\s+(?:a\s+secret\s+)?from\s+the\s+user\b`).near(100, "tell", "inform", "mention", "reveal", "notify", "alert", "show", "hide", "keep"),
 	rl("persona-override", []string{"you are now", "dan mode", "developer mode", "god mode", "jailbreak mode"},
@@ -103,7 +103,7 @@ var injectionRules = []injRule{
 	rl("addressed-to-ai", []string{"important to", "important for", "attention to", "attention for", "note to", "note for", "message to", "message for", "instruction to", "instructions to", "instruction for", "instructions for"},
 		`(?i)\b(?:important|attention|note|message|instructions?)\s+(?:to|for)\s+(?:the\s+|any\s+|all\s+)?(?:ai|assistants?|llms?|language\s+models?|agents?|models?)\b`).near(100, " ai", "assistant", "llm", "language model", "agent", "model"),
 	// A comment with an instruction in it. re stops at the first "-->", so a comment is read alone.
-	{name: "html-comment-instruction", needles: []string{"<!--"}, gap: 800, back: 8, fwd: 800,
+	{name: "html-comment-instruction", needles: []string{"<!--"}, gap: 3300, back: 8, fwd: 3300, // 800 characters are up to 3,200 bytes
 		partners: []string{"ignore", "instruction", "system prompt", "assistant", "you must", "you should", "do not", "don't"},
 		re:       regexp.MustCompile(`(?s)<!--.{0,800}?-->`),
 		must:     regexp.MustCompile(`(?i)ignore|instruction|system prompt|assistant|you must|you should|do not|don't`)},
@@ -112,19 +112,20 @@ var injectionRules = []injRule{
 		needles: []string{"\u200b", "\u200c", "\u200d", "\u2060", "\ufeff"}, invisible: true},
 }
 
-// matches returns the places in t where the rule matches, at most n of them, as FindAllStringIndex does.
-func (r *injRule) matches(t string, n int) [][]int {
-	ms := r.re.FindAllStringIndex(t, n)
+// matches returns the places in t where the rule matches, as FindAllStringIndex does with the limit n. over is true when
+// there may be more than n.
+func (r *injRule) matches(t string, n int) (ms [][]int, over bool) {
+	all := r.re.FindAllStringIndex(t, n)
+	over = n > 0 && len(all) >= n // before the filter: the list that was cut may have held what must would keep
 	if r.must == nil {
-		return ms
+		return all, over
 	}
-	out := ms[:0:0]
-	for _, m := range ms {
+	for _, m := range all {
 		if r.must.MatchString(t[m[0]:m[1]]) {
-			out = append(out, m)
+			ms = append(ms, m)
 		}
 	}
-	return out
+	return ms, over
 }
 
 // InjectionBuiltinNames lists the names of the built-in rules (the chart's values schema lists the same names).
@@ -154,10 +155,16 @@ type Injector struct {
 	mode    string
 	enabled []bool    // by index in injectionRules
 	custom  []injRule // your own patterns
-	hookURL string
-	timeout time.Duration
-	failure string
-	HTTP    *http.Client
+	// The words of the enabled rules, and a scanner for them: a rule that is switched off costs nothing and cannot fill the
+	// list of words (maxHits). scanner is nil when no built-in rule is enabled.
+	words       []string
+	wordRule    []int
+	wordPartner []bool
+	scanner     *matcher
+	hookURL     string
+	timeout     time.Duration
+	failure     string
+	HTTP        *http.Client
 }
 
 // LoadInjector reads the AMBIT_INJECTION_GUARD value. Empty: nil (no injection guard).
@@ -191,6 +198,20 @@ func LoadInjector(s string, hc *http.Client) (*Injector, error) {
 	in.enabled = make([]bool, len(injectionRules))
 	for i, r := range injectionRules {
 		in.enabled[i] = c.Builtins && !slices.Contains(c.DisabledBuiltins, r.name)
+	}
+	for i, r := range injectionRules {
+		if !in.enabled[i] {
+			continue
+		}
+		for _, n := range r.needles {
+			in.words, in.wordRule, in.wordPartner = append(in.words, n), append(in.wordRule, i), append(in.wordPartner, false)
+		}
+		for _, n := range r.partners {
+			in.words, in.wordRule, in.wordPartner = append(in.words, n), append(in.wordRule, i), append(in.wordPartner, true)
+		}
+	}
+	if in.words != nil {
+		in.scanner = newMatcher(in.words)
 	}
 	for i, p := range c.Patterns {
 		re, err := regexp.Compile(p)
@@ -231,31 +252,43 @@ type InjectionResult struct {
 }
 
 // StripHidden removes hidden characters (the rules with invisible text) from texts, in mask mode, and returns the texts and
-// the names of the rules that found some. It runs before masking: the hidden characters can split a word or an email
-// address in two, and removing them after the masker (or the other rules) had read the text would put the pieces together
-// again. In the other modes it changes nothing.
-func (in *Injector) StripHidden(texts []string) (out []string, rules []string) {
+// the names of the rules that found some. It runs before masking: the hidden characters can split an email address or a rule's
+// words in two, and removing them after the masker (or the other rules) had read the text would put the pieces together
+// again. A text is cleaned again until nothing is left, because removing characters can put two runs together. In the other
+// modes it changes nothing. over is true when the texts could not be cleaned (too many matches, or still hidden characters
+// after 4 rounds): the result must be withheld.
+func (in *Injector) StripHidden(texts []string) (out []string, rules []string, over bool) {
 	if in.mode != InjectionMask {
-		return texts, nil
+		return texts, nil, false
 	}
 	seen := map[string]bool{}
 	out = texts
+	total := 0
 	for i, t := range texts {
-		spans, _ := in.spans(t, seen, true)
-		if len(spans) == 0 {
-			continue
+		for round := 0; ; round++ {
+			spans, o := in.spans(t, seen, true)
+			over = over || o
+			if total += len(spans); len(spans) == 0 || total > maxSpansPerResult {
+				over = over || total > maxSpansPerResult
+				break
+			}
+			if round == 3 { // still hidden characters after removing them 4 times
+				over = true
+				break
+			}
+			t = replaceSpans(t, spans)
+			if &out[0] == &texts[0] {
+				out = slices.Clone(texts)
+			}
+			out[i] = t
 		}
-		if &out[0] == &texts[0] {
-			out = slices.Clone(texts)
-		}
-		out[i] = replaceSpans(t, spans)
 	}
 	for _, r := range injectionRules {
 		if seen[r.name] {
 			rules = append(rules, r.name)
 		}
 	}
-	return out, rules
+	return out, rules, over
 }
 
 // Check looks for injection text in texts, which are masked already. hidden are the rules that StripHidden found in the
@@ -268,9 +301,14 @@ func (in *Injector) Check(ctx context.Context, texts []string, hidden []string) 
 	}
 	var out []string // copy of texts, made when a text changes
 	tooMany := false
+	total := 0
 	for i, t := range texts {
 		spans, over := in.spans(t, seen, false)
 		tooMany = tooMany || over
+		if total += len(spans); total > maxSpansPerResult {
+			tooMany = true // each replacement is longer than the text it replaces (or not), so a result of matches is never made
+			break
+		}
 		if len(spans) == 0 || in.mode != InjectionMask {
 			continue
 		}
@@ -326,28 +364,15 @@ type injSpan struct {
 	remove     bool
 }
 
-// injectionWords are the needles and partners of all built-in rules; injectionWordRule is the rule of each word and
-// injectionWordPartner says if it is a partner.
-var injectionWords, injectionWordRule, injectionWordPartner = func() (words []string, rule []int, partner []bool) {
-	for i, r := range injectionRules {
-		for _, n := range r.needles {
-			words, rule, partner = append(words, n), append(rule, i), append(partner, false)
-		}
-		for _, n := range r.partners {
-			words, rule, partner = append(words, n), append(rule, i), append(partner, true)
-		}
-	}
-	return
-}()
-
-var injectionScanner = newMatcher(injectionWords)
-
 const (
 	windowBack = 64 // bytes read before and after the words of a rule: a match may start before its first word
 	windowFwd  = 32
 	// maxMatches is the most matches of one rule in one text that the guard keeps; with more, it does not try to mask (mask
 	// and reject mode withhold the result). A text that is all matches would otherwise need more memory than the text.
 	maxMatches = 10_000
+	// maxSpansPerResult is the same for the whole result: the replacements of a result of 24 MiB that is all matches would be
+	// 18 times as long as the matches.
+	maxSpansPerResult = 100_000
 	// maxWordWalk is how far a window moves to leave a word whole. A longer word is cut: no rule word is that long.
 	maxWordWalk = 64
 )
@@ -381,6 +406,9 @@ func window(text string, r *injRule, ws, we int) (lo, hi int, ok bool) {
 	for n := 0; hi < len(text) && n < maxWordWalk && (isWordByte(text[hi-1]) && isWordByte(text[hi]) || !utf8.RuneStart(text[hi])); n++ {
 		hi++
 	}
+	if !r.lineStart && lo == ws && lo > 0 && isWordByte(text[lo-1]) && isWordByte(text[lo]) {
+		lo-- // the word begins inside a longer word: the window must show that (a \b is not there)
+	}
 	for lo < ws && !utf8.RuneStart(text[lo]) {
 		lo++
 	}
@@ -403,8 +431,8 @@ func (in *Injector) spans(text string, seen map[string]bool, hiddenOnly bool) (o
 			}
 			return
 		}
-		ms := r.matches(t, maxMatches)
-		over = over || len(ms) >= maxMatches
+		ms, more := r.matches(t, maxMatches)
+		over = over || more
 		for _, m := range ms {
 			if m[1] > m[0] {
 				seen[r.name] = true
@@ -412,8 +440,12 @@ func (in *Injector) spans(text string, seen map[string]bool, hiddenOnly bool) (o
 			}
 		}
 	}
-	hits, overflow := injectionScanner.scan(text)
-	over = over || overflow
+	var hits []hit
+	if in.scanner != nil {
+		var overflow bool
+		hits, overflow = in.scanner.scan(text)
+		over = over || overflow
+	}
 	if hits != nil {
 		type pos struct{ start, end int }
 		wins := make([][][2]int, len(injectionRules))
@@ -431,8 +463,8 @@ func (in *Injector) spans(text string, seen map[string]bool, hiddenOnly bool) (o
 			}
 		}
 		for _, h := range hits {
-			ri := injectionWordRule[h.word]
-			if !in.enabled[ri] || hiddenOnly && !injectionRules[ri].invisible {
+			ri := in.wordRule[h.word]
+			if hiddenOnly && !injectionRules[ri].invisible {
 				continue
 			}
 			r := &injectionRules[ri]
@@ -443,7 +475,7 @@ func (in *Injector) spans(text string, seen map[string]bool, hiddenOnly bool) (o
 			}
 			// Needle and partner: a window from the one to the other, when they are near.
 			mine, other := 0, 1
-			if injectionWordPartner[h.word] {
+			if in.wordPartner[h.word] {
 				mine, other = 1, 0
 			}
 			last[ri][mine], seenWord[ri][mine] = me, true
@@ -496,6 +528,9 @@ func (in *Injector) callHook(ctx context.Context, res *InjectionResult) {
 		res.HookError = err
 		if in.mode != InjectionAudit && in.failure != "FailOpen" {
 			res.Withhold = "could not be checked by the prompt-injection webhook (FailClosed), so it was withheld"
+			if res.Action != "" {
+				res.Action = ActionRejected // the client gets no masked result
+			}
 		}
 		return
 	}

@@ -15,9 +15,9 @@ PY=(uv run --no-project python)
 PIDS=()
 CH_POD=ambit-clickhouse-0
 ch() { kubectl -n "$NS" exec "$CH_POD" -- sh -c 'clickhouse-client --user ambit --password "$CLICKHOUSE_PASSWORD" -q "$0"' "$1"; }
-# values used by every helm upgrade of this step; the limits are chosen so the other checks never reach them
+# values used by every helm upgrade of this step; the limits are high so the other checks never reach them (check 7 lowers them)
 fdset() { helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/frontdoor/values.yaml \
-  --set frontDoor.rateLimit.perCredentialPerMinute=20 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 \
+  --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 \
   "$@" --wait --timeout 5m >/dev/null; }
 cleanup() {
   for p in ${PIDS[@]+"${PIDS[@]}"}; do kill "$p" 2>/dev/null || true; done
@@ -214,6 +214,8 @@ burst() { # burst N PORT [curl args]: N requests in a row; prints "<200s> <429s>
 }
 mkkey fd-mcp-burst mcp; K4=$KEY
 wait_for 60 '[[ $(ptools "$PA" -H "x-api-key: $K4") == *time_get_current_time* ]]' || fail "7 the burst key does not work"
+fdset --set frontDoor.rateLimit.perCredentialPerMinute=20 >/dev/null
+wait_for 150 'rlconfig "$NS" | grep -q "fd_credential.*requests_per_unit=20"' || fail "7 the ratelimit service did not load the key limit 20: $(rlconfig "$NS" | grep ambit-public)"
 next_window
 read -r ok lim den other <<<"$(burst 30 "$PA" -H "x-api-key: $K4")"
 (( lim >= 1 && ok >= 1 && ok <= 20 && other == 0 )) || fail "7 per key (limit 20 a minute): $ok ok, $lim limited, $den refused, $other other"
@@ -221,11 +223,10 @@ KEY1_OK=$ok
 mkkey fd-mcp-3 mcp; K3=$KEY
 wait_for 60 '[[ $(ptools "$PA" -H "x-api-key: $K3") == *time_get_current_time* ]]' || fail "7 the third key does not work"
 pass "7 per key: of 30 requests with one key, $KEY1_OK passed and $lim were limited (429) in one minute (limit 20); a second key still passed"
+fdset >/dev/null
 # source limit: lower it to 30 a minute, then count requests without any key
 fdset --set frontDoor.rateLimit.perSourcePerMinute=30 >/dev/null
-wait_rl "$NS" "ambit-public.fd_source"
-for _ in $(seq 1 40); do rlconfig "$NS" | grep -q 'fd_source.*requests_per_unit=30' && break; sleep 3; done
-rlconfig "$NS" | grep -q 'fd_source.*requests_per_unit=30' || fail "7 the ratelimit service did not load the source limit 30: $(rlconfig "$NS" | grep ambit-public)"
+wait_for 150 'rlconfig "$NS" | grep -q "fd_source.*requests_per_unit=30"' || fail "7 the ratelimit service did not load the source limit 30: $(rlconfig "$NS" | grep ambit-public)"
 PODS=($(kubectl -n "$NS" get pods -l gateway.networking.k8s.io/gateway-name=ambit-public --field-selector=status.phase=Running -o jsonpath='{.items[*].metadata.name}'))
 next_window
 read -r ok lim den other <<<"$(burst 45 "$PA")"   # no key at all: every answer is 403 until the limit, then 429
@@ -235,7 +236,7 @@ c=$(pub "$PB" /mcp -X POST -H 'Content-Type: application/json' -d "$INIT" -H "x-
 [[ "$c" == 429 ]] || fail "7 a valid key from the limited source was not limited (HTTP $c): the source limit counts every request of the address"
 pass "7 per source: with no key, $SRC_DEN requests were refused (403) and $SRC_LIM limited (429) in one minute (limit 30); a valid key from the same address was limited too (the other pod: the counter is shared)"
 fdset >/dev/null
-for _ in $(seq 1 40); do rlconfig "$NS" | grep -q 'fd_source.*requests_per_unit=1000' && break; sleep 3; done
+wait_for 150 'rlconfig "$NS" | grep -q "fd_source.*requests_per_unit=1000"' || fail "7 the source limit was not restored"
 
 # per pod, and the ratelimit service down: FailOpen keeps serving and the per-pod limit still applies; FailClosed refuses
 fdset --set frontDoor.rateLimit.perPodPerSecond=3 >/dev/null

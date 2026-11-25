@@ -232,7 +232,7 @@ spec:
         object.spec.rules[0].backendRefs[0].name == "ambit-hydra-public" &&
         (!has(object.spec.rules[0].backendRefs[0].kind) || object.spec.rules[0].backendRefs[0].kind == "Service"))
 {{- end }}
-      message: "only the routes that the chart sets may be attached to the public Gateway ambit-public (ambit-mcp-public{{ if (.Values.oauth | default dict).enabled }}, ambit-auth-hydra{{ end }}), each with its host, exact paths and backend"
+      message: {{ if (.Values.oauth | default dict).enabled }}"only the routes that the chart sets may be attached to the public Gateway ambit-public (ambit-mcp-public, ambit-auth-hydra), each with its host, exact paths and backend"{{ else }}"only the route ambit-mcp-public may be attached to the public Gateway ambit-public, with the host, the exact path /mcp and the backend ambit-mcp-public that the chart sets"{{ end }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

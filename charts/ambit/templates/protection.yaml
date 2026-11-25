@@ -56,7 +56,10 @@ spec:
             - { name: AMBIT_PRESIDIO_TIMEOUT, value: {{ .timeout | default "10s" | quote }} }
             {{- end }}{{ end }}
             {{- with .Values.protection.injectionGuard }}{{ if .enabled }}
-            {{- if not (or .builtins .patterns .webhook.service) }}
+            {{- /* helm upgrade --reuse-values from an older release has none of the keys under injectionGuard: use the defaults */}}
+            {{- $w := .webhook | default dict }}
+            {{- $builtins := ternary .builtins true (hasKey . "builtins") }}
+            {{- if not (or $builtins .patterns $w.service) }}
             {{- fail "protection.injectionGuard.enabled=true needs builtins, patterns or webhook.service: a guard with nothing to check would only look like protection" }}
             {{- end }}
             {{- range .patterns }}
@@ -64,11 +67,11 @@ spec:
             {{- $_ := mustRegexMatch . "" }}
             {{- end }}
             {{- $hook := dict }}
-            {{- if .webhook.service }}
-            {{- $hook = dict "url" (printf "http://%s.%s.svc:%v/request" .webhook.service (.webhook.namespace | default $.Release.Namespace) .webhook.port) "timeout" (.webhook.timeout | default "2s") "failureMode" .webhook.failureMode }}
+            {{- if $w.service }}
+            {{- $hook = dict "url" (printf "http://%s.%s.svc:%v/request" $w.service ($w.namespace | default $.Release.Namespace) ($w.port | default 8000)) "timeout" ($w.timeout | default "2s") "failureMode" ($w.failureMode | default "FailClosed") }}
             {{- end }}
             - name: AMBIT_INJECTION_GUARD
-              value: {{ dict "mode" .mode "builtins" .builtins "disabledBuiltins" .disabledBuiltins "patterns" .patterns "webhook" $hook | toJson | quote }}
+              value: {{ dict "mode" (.mode | default "audit") "builtins" $builtins "disabledBuiltins" (.disabledBuiltins | default list) "patterns" (.patterns | default list) "webhook" $hook | toJson | quote }}
             {{- end }}{{ end }}
           ports: [{ name: grpc, containerPort: 9090 }, { name: health, containerPort: 8081 }]
           readinessProbe: { httpGet: { path: /, port: health } }

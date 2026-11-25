@@ -258,4 +258,6 @@ reuse=$(helm template ambit "$old/ambit" -n ambit-system -f deploy/quickstart.ya
 grep -q -- '--users-require-verified-email=true' <<<"$reuse" || { echo "FAIL chart: values of 0.1.0 only must keep users on verified emails"; exit 1; }
 grep -q -- '--access-mode=enforce' <<<"$reuse" && grep -q -- '--activation-timeout=120s' <<<"$reuse" && grep -q -- '--activation-settle=3s' <<<"$reuse" || { echo "FAIL chart: values of 0.1.0 only must give enforce and the default timings"; exit 1; }
 ! grep -q 'access.mode is audit' <<<"$(helm template ambit "$old/ambit" -n ambit-system -f deploy/quickstart.yaml --show-only templates/NOTES.txt 2>&1)" || { echo "FAIL chart: no audit warning with the values of 0.1.0 only"; exit 1; }
+igold=$(helm template ambit "$old/ambit" -n ambit-system -f deploy/quickstart.yaml --set protection.enabled=true --set protection.injectionGuard.enabled=true 2>&1) || { echo "FAIL chart: injectionGuard.enabled=true with the values of 0.1.0 only: $igold"; exit 1; }
+grep -q 'AMBIT_INJECTION_GUARD' <<<"$igold" && grep -q 'mode.*audit' <<<"$igold" || { echo "FAIL chart: the values of 0.1.0 only plus injectionGuard.enabled must give audit mode with the built-in rules"; exit 1; }
 echo "PASS chart"

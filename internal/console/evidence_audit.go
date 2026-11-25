@@ -38,7 +38,7 @@ const evidenceCallsColumns = `Timestamp, LogAttributes['jwt.email'], LogAttribut
        LogAttributes['ambit.key_id'], LogAttributes['ambit.identity'], LogAttributes['jwt.sub'],
        LogAttributes['ambit.accessMode'], c_mark, LogAttributes['ambit.rulesVersion'], c_outcome, LogAttributes['url.path'],
        ` + promptGuardSQL + `,
-       if(LogAttributes['ambit.identity'] = 'invalid key', LogAttributes['client.address'], ''), LogAttributes['ambit.call_id']`
+       if(LogAttributes['ambit.identity'] = 'invalid key', LogAttributes['client.address'], ''), LogAttributes['ambit.call_id'], ` + agentColumns
 
 var evidenceCallsSQL = withClassify(`{classify}
 SELECT ` + evidenceCallsColumns + `
@@ -72,7 +72,10 @@ var compressionHeader = []string{"time", "call_id", "email", "key_id", "server",
 
 var callsHeader = []string{"time", "email", "what", "target", "outcome", "status", "error", "input_tokens", "output_tokens", "mark",
 	"rules_version", "identity", "key_id", "subject", "route", "method", "server", "tool", "model", "router", "path", "access_mode",
-	"client_address", "prompt_guard", "call_id"}
+	"client_address", "prompt_guard", "call_id",
+	// Agents (experimental in 0.6.x), appended: the columns before them keep their place. agent_owner_at_issue is the
+	// owner when the key or token was issued; agent_owner_now is the agent's record today (empty: no record).
+	"agent", "agent_mode", "agent_owner_at_issue", "agent_owner_now", "platform_declared", "grant_id", "token_issuer", "ingress"}
 
 var appHeader = []string{"time", "action", "actor", "role", "server", "request", "requested_by", "image", "url", "tools", "comment",
 	"refused_reason", "pull_request"}
@@ -283,6 +286,10 @@ func eachDay(from, to time.Time, fn func(dayFrom, dayTo time.Time) error) error 
 // writeCalls writes the gateway records that query (evidenceCallsColumns) selects with params, in time order, and calls
 // seen with each; prefix cells come first in each row.
 func (c *Catalog) writeCalls(ctx context.Context, w *csvWriter, query string, params clickhouse.Parameters, seen func(Call), prefix ...any) error {
+	var ownerNow func(string) string
+	if c.Audit != nil {
+		ownerNow = c.Audit.agentOwnerNow(ctx)
+	}
 	rows, err := c.Audit.DB.QueryContext(exportContext(ctx, params), query)
 	if err != nil {
 		return err
@@ -293,14 +300,19 @@ func (c *Catalog) writeCalls(ctx context.Context, w *csvWriter, query string, pa
 		var requested string
 		if err := rows.Scan(&k.Time, &k.Email, &k.Route, &k.Method, &k.Server, &k.Tool, &k.Model, &k.Status, &k.Error, &k.InputTokens, &k.OutputTokens,
 			&requested, &k.Label, &k.LabelReason, &k.KeyID, &k.Identity, &k.Subject, &k.AccessMode, &k.Mark, &k.RulesVersion, &k.Outcome, &k.Path,
-			&k.PromptGuard, &k.ClientAddress, &k.CallID); err != nil {
+			&k.PromptGuard, &k.ClientAddress, &k.CallID,
+			&k.Agent, &k.AgentMode, &k.AgentOwnerAtIssue, &k.PlatformDeclared, &k.GrantID, &k.TokenIssuer, &k.Ingress); err != nil {
 			return err
 		}
 		k.Router = routerOf(requested, k.Model)
+		if ownerNow != nil && k.Agent != "" {
+			k.AgentOwnerNow = ownerNow(k.Agent)
+		}
 		seen(k)
 		if err := w.Row(append(prefix, csvTime(k.Time), k.Email, callWhat(k), callTarget(k), callOutcome(k), k.Status, k.Error, k.InputTokens, k.OutputTokens,
 			k.Mark, cmp.Or(k.RulesVersion, "unknown"), k.Identity, k.KeyID, k.Subject, k.Route, k.Method, k.Server, k.Tool, k.Model, k.Router,
-			k.Path, k.AccessMode, k.ClientAddress, k.PromptGuard, k.CallID)...); err != nil {
+			k.Path, k.AccessMode, k.ClientAddress, k.PromptGuard, k.CallID,
+			k.Agent, k.AgentMode, k.AgentOwnerAtIssue, k.AgentOwnerNow, k.PlatformDeclared, k.GrantID, k.TokenIssuer, k.Ingress)...); err != nil {
 			return err
 		}
 	}

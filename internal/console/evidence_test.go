@@ -85,7 +85,7 @@ func (c fakeConn) QueryContext(ctx context.Context, q string, _ []driver.NamedVa
 		n := f.calls
 		f.calls = 0
 		f.mu.Unlock()
-		return &fakeRows{ctx: ctx, f: f, cols: len(callsHeader), n: n, row: f.callRow, failAfter: f.failAfter, blockAt: f.blockAt}, nil
+		return &fakeRows{ctx: ctx, f: f, cols: len(callsHeader) - 1, n: n, row: f.callRow, failAfter: f.failAfter, blockAt: f.blockAt}, nil
 	case q == firstSnapshotSQL:
 		if len(f.snapshots) == 0 {
 			return one(2, int64(0), time.Unix(0, 0)), nil
@@ -111,7 +111,7 @@ func (c fakeConn) QueryContext(ctx context.Context, q string, _ []driver.NamedVa
 		rows := f.after[0]
 		f.after = f.after[1:]
 		f.mu.Unlock()
-		return &fakeRows{ctx: ctx, f: f, cols: len(callsHeader), n: len(rows), row: func(i int) []driver.Value { return rows[i] }}, nil
+		return &fakeRows{ctx: ctx, f: f, cols: len(callsHeader) - 1, n: len(rows), row: func(i int) []driver.Value { return rows[i] }}, nil
 	case q == evidenceCompressionSQL:
 		f.mu.Lock()
 		rows := f.compress
@@ -175,6 +175,10 @@ var evT0 = time.Date(2026, 10, 1, 8, 0, 0, 0, time.UTC)
 func seededCall(i int) []driver.Value {
 	email, identity, client, rules, mode, status, errText := "ana@example.com", "jwt", "", "3f9a1c0e2b7d", "enforce", "200", ""
 	tool, method := "", ""
+	agent, agentMode, agentOwner, platform := "", "", "", ""
+	if i%13 == 5 { // an agent's call (a key of the agent grok-y, owned by ana at issue)
+		agent, agentMode, agentOwner, platform = "grok-y", "person", "ana@example.com", "grok"
+	}
 	switch {
 	case i%7 == 3:
 		email, identity, client, status, errText = "", "invalid key", "10.0.0.7", "403", "=HYPERLINK(\"http://evil\")"
@@ -184,7 +188,8 @@ func seededCall(i int) []driver.Value {
 		method, tool, status, errText = "tools/call", "@SUM(A1),\"x\"\nnext", "400", "Unknown tool"
 	}
 	return []driver.Value{evT0.Add(time.Duration(i) * 3 * time.Hour), email, "ambit-system/ambit-llm", method, "", tool, "gpt-5", status, errText,
-		int64(12), int64(3), "", "", "", "k1", identity, "sub-ana", mode, "", rules, "n/a", "/v1/chat/completions", "", client, fmt.Sprintf("call-%d", i)}
+		int64(12), int64(3), "", "", "", "k1", identity, "sub-ana", mode, "", rules, "n/a", "/v1/chat/completions", "", client, fmt.Sprintf("call-%d", i),
+		agent, agentMode, agentOwner, platform, "", "", "private"}
 }
 
 type evidenceFixture struct {

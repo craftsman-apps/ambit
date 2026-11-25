@@ -80,6 +80,11 @@ func adminEmail(by Session) (string, error) {
 func (s *KeyService) CreateAccount(ctx context.Context, by Session, name, group, description string) (Owner, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.createAccountLocked(ctx, by, name, group, description)
+}
+
+// createAccountLocked is CreateAccount; call it holding s.mu (an itself-mode agent creates its account with it).
+func (s *KeyService) createAccountLocked(ctx context.Context, by Session, name, group, description string) (Owner, error) {
 	if err := s.servicesOn(); err != nil {
 		return Owner{}, err
 	}
@@ -146,6 +151,12 @@ func (s *KeyService) account(ctx context.Context, name string) (Owner, error) {
 func (s *KeyService) CreateAccountKey(ctx context.Context, by Session, name, keyName string, scope Scope, days int) (string, Key, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.createAccountKeyLocked(ctx, by, name, keyName, scope, days, nil)
+}
+
+// createAccountKeyLocked is CreateAccountKey; with ranges set (even empty) the key is that itself-mode agent's:
+// MCP only, with the agent's metadata read from its record now. Call it holding s.mu.
+func (s *KeyService) createAccountKeyLocked(ctx context.Context, by Session, name, keyName string, scope Scope, days int, agent *agentKeyRequest) (string, Key, error) {
 	if err := s.servicesOn(); err != nil {
 		return "", Key{}, err
 	}
@@ -171,6 +182,22 @@ func (s *KeyService) CreateAccountKey(ctx context.Context, by Session, name, key
 	o, err := s.account(ctx, name)
 	if err != nil {
 		return "", Key{}, err
+	}
+	var meta *KeyAgent
+	if agent == nil {
+		// An itself-mode agent's keys carry its scope: a key without it would be the account's, with no limit.
+		if a, err := s.GetAgent(ctx, name); err == nil && a.Mode == ModeItself {
+			return "", Key{}, fmt.Errorf("%w: this service account is an agent; create its keys on the agent", ErrBadInput)
+		}
+	}
+	if agent != nil {
+		if scope != ScopeMCP || days > s.Agents.KeyMaxDays {
+			return "", Key{}, ErrBadInput
+		}
+		if meta, err = s.agentKeyMeta(ctx, name, ModeItself, ""); err != nil {
+			return "", Key{}, err
+		}
+		meta.SourceRanges = agent.ranges
 	}
 	now := s.now()
 	recent := s.recent(actor, now) // counted with the admin's personal keys
@@ -200,7 +227,7 @@ func (s *KeyService) CreateAccountKey(ctx context.Context, by Session, name, key
 	}
 	ceiling := now.AddDate(0, 0, days)
 	k := Key{ID: id, Name: keyName, Prefix: prefix, Email: o.Email, Groups: o.Groups, Scope: scope, Created: now,
-		Expires: ceiling, Ceiling: ceiling, Until: ceiling, Hash: hash, IssuedBy: actor}
+		Expires: ceiling, Ceiling: ceiling, Until: ceiling, Hash: hash, IssuedBy: actor, Agent: meta}
 	sec := k.Secret(s.Namespace)
 	if err := s.Client.Create(ctx, sec); err != nil {
 		return "", Key{}, err
@@ -217,6 +244,21 @@ func (s *KeyService) CreateAccountKey(ctx context.Context, by Session, name, key
 func (s *KeyService) DeleteAccount(ctx context.Context, by Session, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.deleteAccountLocked(ctx, by, name); err != nil {
+		return err
+	}
+	// An itself-mode agent is this account: its record goes with it.
+	if a, err := s.GetAgent(ctx, name); err == nil && a.Mode == ModeItself {
+		if err := s.Client.Delete(ctx, a.record(s.Namespace)); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+		s.event(ctx, consoleActor, "agent-delete", "", a.Owner, "agent="+a.Name+" (its service account was deleted)")
+	}
+	return nil
+}
+
+// deleteAccountLocked is DeleteAccount; call it holding s.mu.
+func (s *KeyService) deleteAccountLocked(ctx context.Context, by Session, name string) error {
 	ctx, cancel, err := s.opCtx(ctx)
 	if err != nil {
 		return err

@@ -223,10 +223,11 @@ func TestCallsSelectPromptGuard(t *testing.T) {
 			t.Errorf("callsSQL lacks %s", want)
 		}
 	}
-	// The prompt guard and the call ID (#203) are the last two of the 24 fields Calls scans.
+	// The prompt guard and the call ID (#203) are fields 23 and 24 of the 31 Calls scans; the last seven are the agent
+	// attributes (docs/agents.md).
 	sel := callsSQL[strings.Index(callsSQL, "SELECT Timestamp"):strings.Index(callsSQL, "FROM otel_logs")]
-	if n := topLevelCommas(sel) + 1; n != 24 {
-		t.Errorf("callsSQL selects %d columns, Calls scans 24:\n%s", n, sel)
+	if n := topLevelCommas(sel) + 1; n != 31 {
+		t.Errorf("callsSQL selects %d columns, Calls scans 31:\n%s", n, sel)
 	}
 }
 

@@ -111,7 +111,7 @@ func TestSummariesOnClickHouse(t *testing.T) {
 
 	// Before any guard record: the Audit page's answer for user1 and the mark-missing count.
 	audit := func() (int, int) {
-		calls, err := a.Calls(ctx, "user1@example.com", d1.Add(-48*time.Hour), d2.Add(48*time.Hour), 100)
+		calls, err := a.Calls(ctx, "user1@example.com", d1.Add(-48*time.Hour), d2.Add(48*time.Hour), 100, CallFilter{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -336,7 +336,7 @@ func TestAuditCompressionOnClickHouse(t *testing.T) {
 	insertLog(t, a, t0.Add(4*time.Second), rec("c_none", "user1@example.com", "0", "logs", 1, 1, 0))     // gateway record lost
 	insertLog(t, a, t0.Add(61*time.Second), rec("c_late", "user1@example.com", "0", "json", 900, 300, 0))
 
-	calls, err := a.Calls(ctx, "user1@example.com", t0.Add(-time.Hour), t0.Add(time.Minute), 100)
+	calls, err := a.Calls(ctx, "user1@example.com", t0.Add(-time.Hour), t0.Add(time.Minute), 100, CallFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}

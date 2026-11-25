@@ -91,7 +91,7 @@ for s in ['system:serviceaccount:ambit-system:ambit-console','authentication.kub
   assert s in we, s
 assert [v['expression'] for v in w['validations']]==['variables.console || variables.cleanup'], w['validations']
 assert w['validations'][0]['message']=='only the Ambit console may write personal API key objects', w
-sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event']
+sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event','ambitproject.dev/agent','ambitproject.dev/agent-stops']
 bs={x['metadata']['name']:x['spec'] for x in docs if x['kind']=='ValidatingAdmissionPolicyBinding'}
 assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(5)}|{'ambit-key-lease'}, list(bs)
 assert all('paramRef' not in b for b in bs.values()), bs

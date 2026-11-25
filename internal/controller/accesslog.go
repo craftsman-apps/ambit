@@ -28,7 +28,11 @@ const (
 	AccessLogBase       = "ambit-access-log-base" // chart: spec.yaml holds the policy's spec without the generated fields
 	AccessLogPolicy     = "ambit-access-log"
 	AccessModeConfigMap = "ambit-access-mode" // the published mode and rules version, for the console and ambit check
-	accessLogManager    = "ambit-controller"  // app.kubernetes.io/managed-by of the policy: not Helm's any more
+	// AgentScopeKey is the data key of AccessModeConfigMap that says the MCP policy in force carries the agent-scope
+	// clause (published with the rules version, after agentgateway applied the change): the console issues no agent
+	// key before it (docs/agents.md). An older controller never writes it.
+	AgentScopeKey    = "agentScope"
+	accessLogManager = "ambit-controller" // app.kubernetes.io/managed-by of the policy: not Helm's any more
 )
 
 // accessLogPolicy is the base spec with ambit.accessMode, ambit.rulesVersion and the audit fields (audit mode only)
@@ -173,6 +177,7 @@ func (r *Reconciler) publishMode(ctx context.Context, mode, rulesVersion string)
 		if d["rulesVersion"] != rulesVersion {
 			d["rulesVersion"], d["rulesSince"] = rulesVersion, now
 		}
+		d[AgentScopeKey] = "1"
 		delete(d, "pending")
 	})
 }

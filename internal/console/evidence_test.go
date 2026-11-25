@@ -406,7 +406,9 @@ func TestAuditExportZipAndManifest(t *testing.T) {
 	ch.app = [][]driver.Value{{evT0.Add(time.Hour), "approved", "=cmd@example.com", "admin", "github", "req-1", "ana@example.com", "ghcr.io/x/y@sha256:1", "", "ok", "", `["a","b"]`, ""}}
 	e := newEvidenceFixture(t, ch)
 	// the agent's record today: moved since the keys were issued
-	e.cat.Audit.AgentOwners = func(context.Context) (map[string]string, error) { return map[string]string{"grok-y": "ana-new@example.com"}, nil }
+	e.cat.Audit.AgentOwners = func(context.Context) (map[string]string, error) {
+		return map[string]string{"grok-y": "ana-new@example.com"}, nil
+	}
 	resp, body, err := e.get(t, t.Context(), "/api/evidence/audit.zip?from=2026-10-01&to=2026-10-07", e.admin)
 	if err != nil || resp.StatusCode != 200 {
 		t.Fatalf("%v %v %s", resp.StatusCode, err, body)

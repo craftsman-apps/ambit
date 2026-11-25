@@ -5,7 +5,7 @@
 {{- $ag := .Values.agents | default dict }}
 {{- if not (has (int ($ag.keyMaxDays | default 90)) (list 30 90 365)) }}{{ fail "agents.keyMaxDays must be 30, 90 or 365" }}{{ end }}
 {{- if or (lt (int ($ag.maxTotal | default 2000)) 1) (gt (int ($ag.maxTotal | default 2000)) 2000) }}{{ fail "agents.maxTotal must be 1-2000" }}{{ end }}
-{{- if or (lt (int ($ag.maxPerPerson | default 10)) 1) (gt (int ($ag.maxPerPerson | default 10)) 100) }}{{ fail "agents.maxPerPerson must be 1-100" }}{{ end }}
+{{- if or (lt (int ($ag.maxPerPerson | default 10)) 1) (gt (int ($ag.maxPerPerson | default 10)) 10) }}{{ fail "agents.maxPerPerson must be 1-10" }}{{ end }}
 {{- if or (lt (int .Values.apiKeys.inactivityDays) 1) (gt (int .Values.apiKeys.inactivityDays) 365) }}{{ fail "apiKeys.inactivityDays must be 1-365" }}{{ end }}
 {{- /* serviceAccounts is missing after helm upgrade --reuse-values from a release before 0.5.0: the defaults apply */ -}}
 {{- $sa := .Values.serviceAccounts | default dict }}

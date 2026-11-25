@@ -1,6 +1,7 @@
 package console
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,7 +16,10 @@ type agentAnswer struct {
 
 func TestAgentsAPI(t *testing.T) {
 	f, _ := saFixture(t, nil)
-	f.keys.Agents = defaultAgents
+	f.keys.Agents, f.keys.RecordKey = defaultAgents, testRecordKey
+	if err := f.keys.Client.Create(context.Background(), scopeReady()); err != nil {
+		t.Fatal(err)
+	}
 	admin, ana, bob := f.cookie("admin@example.com", RoleAdmin), f.cookie("ana@acme.com", RoleViewer), f.cookie("bob@acme.com", RoleViewer)
 	if r := f.call(t, "GET", "/api/agents", nil, nil); r.Code != http.StatusUnauthorized {
 		t.Errorf("no session: %d", r.Code)

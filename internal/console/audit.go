@@ -161,7 +161,8 @@ const status = auditsql.Status
 
 var callsSQL = withClassify(`{classify}
 SELECT Timestamp,
-       {email:String}, LogAttributes['route'], LogAttributes['mcp.method.name'], LogAttributes['mcp.target'],
+       -- the person asked for; for an agent or platform search the principal the gateway logged
+       if({email:String} != '', {email:String}, LogAttributes['jwt.email']), LogAttributes['route'], LogAttributes['mcp.method.name'], LogAttributes['mcp.target'],
        LogAttributes['gen_ai.tool.name'],
        -- a model the gateway refused itself has no gen_ai.request.model; agentgateway v1.7.0 logs the name asked for
        if(LogAttributes['gen_ai.request.model'] != '', LogAttributes['gen_ai.request.model'], LogAttributes['agw.ai.original_model']),

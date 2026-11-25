@@ -70,7 +70,10 @@ MCP URL of your install (`mcp.host`).
   as soon as it has read the changed key (about a second on kind; see [Measured](#measured)). If some key could not be
   updated, the request fails with 503 and the saved change is finished by sending the same request again, or by the hourly
   repair.
-- **Deleting an agent** deletes its keys first, then its record. An itself-mode agent's service account name stays taken.
+- **Narrowing a scope** is enforced first: the keys are narrowed, and only then is the new scope saved. If a key cannot be
+  narrowed, nothing is saved (503) and the old scope stays; send the request again.
+- **Deleting an agent** first records state `deleting` (no new keys), then deletes its keys, its service account (itself
+  mode; the name stays taken) and its record. If a step fails, the same request, or the hourly repair, finishes it.
 - A person-mode agent's keys are the person's keys too: they count among the person's 20 keys, appear in **Keys**, are
   revoked by `DELETE /api/keys/{id}` and are deleted when the person is [offboarded](offboarding.md).
 
@@ -84,7 +87,17 @@ For an agent's key the gateway checks, in this order, and answers **403** when o
 4. For each MCP call: the owner's AccessRules allow the tool **and** the key's scope lists its server or the tool.
 
 The scope is in the key's metadata (`apiKey.agentScope`), not in the access policy, so the policy has the same length
-with 0 agents and with 2,000 agents. A key of an agent that has no scope list at all may use no tool.
+with 0 agents and with 2,000 agents. A key of an agent that has no scope list at all, or whose scope is not a list, may
+use no tool.
+
+**Audit-only mode** (`access.mode: audit`) relaxes the owner's AccessRules only. An agent's scope is part of its key, not
+an AccessRule, so it stays enforced in audit-only mode.
+
+**No key before the gateway enforces the scope.** The controller publishes in `ambit-access-mode` (`agentScope: "1"`) that
+the MCP policy in force has the scope clause, after agentgateway applied it. Until then the console refuses to create an
+agent key (503, "agents are not ready"). So a console that is upgraded before the controller, or a policy that
+agentgateway rejected (for example because it grew over the 16,384-character limit), never gives out a key that the
+gateway would not limit.
 
 ## Audit
 
@@ -128,7 +141,7 @@ agent uses the owner's connection.
 | Limit | Applies to | Counted by |
 |---|---|---|
 | Model budgets (requests per day, dollars per day, requests per minute) | The model calls of a person-mode agent count as its owner; an itself-mode agent counts as its service account, one person of its group | The ratelimit service, as today |
-| `agents.maxTotal` (2,000 agents), `agents.maxPerPerson` (10 person-mode agents) | Creating agents | The console |
+| `agents.maxTotal` (2,000 agents), `agents.maxPerPerson` (at most 10 person-mode agents) | Creating agents | The console |
 | Keys per agent: 2; source ranges per key: 10; scope entries per agent: 50 (each at most 200 characters); connections per agent: 20 | Creating keys, changing agents | The console |
 
 **No limit counts MCP calls in 0.6.0**, for agents or for people ([Budgets](budgets.md#per-minute-limits)). Agents have no
@@ -142,8 +155,15 @@ spending limit and no call limit of their own.
 | Agent key | A key Secret, as every key, with the label `ambitproject.dev/agent=<name>` | As keys |
 | Key metadata | `agent`, `agentMode`, `agentOwnerAtIssue`, `platformDeclared`, `agentScope`, `agentRev`, `sourceRanges` | Under 16 KiB with the largest scope |
 
+Each record carries a signature that only the console can make (HMAC with a key derived from the console's session key).
+A record without a valid signature, planted or changed by anything else, is not an agent: it is ignored, and the hourly
+repair deletes it.
+
 The console fails closed. When the agent records cannot be read, no key is created. The hourly repair deletes the keys of
-an agent whose record is missing, unreadable or not active.
+an agent whose record is missing, unreadable or not active, finishes a delete that stopped half way (state `deleting`),
+and deletes an itself-mode record that never got bound to its service account (state `pending` for more than 10
+minutes). An itself-mode record is bound to its service account's owner record (by UID): it never acts on another
+account of the same name.
 
 When the limit is reached the create request answers **409** `agent limit reached` and nothing else changes.
 

@@ -61,6 +61,8 @@ type KeyService struct {
 	Settings  KeySettings
 	Services  ServiceSettings
 	Agents    AgentSettings
+	// RecordKey signs agent records (AgentRecordKey); without it no record is trusted.
+	RecordKey []byte
 	Now       func() time.Time
 	PerHour   int // creations per person per hour; 0 means 10
 
@@ -201,7 +203,7 @@ func (s *KeyService) createLocked(ctx context.Context, sess Session, name string
 		if scope != ScopeMCP || days > s.Agents.KeyMaxDays {
 			return "", Key{}, ErrBadInput
 		}
-		if meta, err = s.agentKeyMeta(ctx, agent.name, ModePerson, email); err != nil {
+		if meta, err = s.agentKeyMeta(ctx, agent.name, ModePerson, email, ""); err != nil {
 			return "", Key{}, err
 		}
 		meta.SourceRanges = agent.ranges
@@ -902,6 +904,9 @@ func (s *KeyService) repairLocked(ctx context.Context) (rep RepairReport, objErr
 				errs = append(errs, err)
 			}
 		}
+	}
+	if err := s.repairAgentRecords(ctx); err != nil { // before the keys: a finished delete removes its keys too
+		errs = append(errs, err)
 	}
 	if err := s.repairAgentKeys(ctx, secs, &rep); err != nil {
 		errs = append(errs, err)

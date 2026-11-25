@@ -2,6 +2,8 @@ package console
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"time"
 
@@ -40,6 +42,20 @@ func (c *Catalog) agentView(a Agent, s Session) agentView {
 		v.Identity = AccountIdentity(a.Name)
 	}
 	return v
+}
+
+// decodeBody reads one JSON object of at most limit bytes into v, refusing unknown fields and anything after the
+// object (a second value, or an oversized suffix).
+func decodeBody(w http.ResponseWriter, r *http.Request, v any, limit int64) error {
+	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
+	d.DisallowUnknownFields()
+	if err := d.Decode(v); err != nil {
+		return err
+	}
+	if _, err := d.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("unexpected data after the JSON object")
+	}
+	return nil
 }
 
 func (c *Catalog) registerAgents(mux *http.ServeMux, read func(func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc,
@@ -99,6 +115,15 @@ func (c *Catalog) getAgent(w http.ResponseWriter, r *http.Request, s Session) {
 		return
 	}
 	keys, err := c.Keys.AgentKeys(r.Context(), a.Name)
+	if err == nil { // the agent may have moved while the keys were read: authorize again against the record as it is now
+		var again Agent
+		if again, err = c.Keys.GetAgent(r.Context(), a.Name); err == nil {
+			if actor, _ := identity.CanonicalEmail(s.Email); s.Role != RoleAdmin && again.Owner != actor {
+				err = ErrNoAgent
+			}
+			a = again
+		}
+	}
 	if err != nil {
 		keyErr(w, err)
 		return
@@ -120,9 +145,7 @@ func (c *Catalog) createAgent(w http.ResponseWriter, r *http.Request, s Session)
 		Group             string   `json:"group"`
 		Owner             string   `json:"owner"`
 	}
-	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
-	d.DisallowUnknownFields()
-	if err := d.Decode(&in); err != nil {
+	if err := decodeBody(w, r, &in, 64<<10); err != nil {
 		writeErr(w, http.StatusBadRequest, "send {displayName, platform, scope, connectionConsent} as JSON; admins add mode, name, group, owner for an itself-mode agent")
 		return
 	}
@@ -142,9 +165,7 @@ func (c *Catalog) patchAgent(w http.ResponseWriter, r *http.Request, s Session) 
 		Scope             *[]string `json:"scope"`
 		ConnectionConsent *[]string `json:"connectionConsent"`
 	}
-	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
-	d.DisallowUnknownFields()
-	if err := d.Decode(&in); err != nil {
+	if err := decodeBody(w, r, &in, 64<<10); err != nil {
 		writeErr(w, http.StatusBadRequest, "send any of {displayName, platform, scope, connectionConsent} as JSON")
 		return
 	}
@@ -170,9 +191,7 @@ func (c *Catalog) createAgentKey(w http.ResponseWriter, r *http.Request, s Sessi
 		Days         int      `json:"days"`
 		SourceRanges []string `json:"sourceRanges"`
 	}
-	d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192))
-	d.DisallowUnknownFields()
-	if err := d.Decode(&in); err != nil {
+	if err := decodeBody(w, r, &in, 8192); err != nil {
 		writeErr(w, http.StatusBadRequest, "send {name, days, sourceRanges} as JSON")
 		return
 	}
@@ -190,7 +209,7 @@ func (c *Catalog) moveAgent(w http.ResponseWriter, r *http.Request, s Session) {
 	var in struct {
 		Owner string `json:"owner"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&in); err != nil {
+	if err := decodeBody(w, r, &in, 4096); err != nil {
 		writeErr(w, http.StatusBadRequest, `send {"owner": "<email or group:name>"} as JSON`)
 		return
 	}

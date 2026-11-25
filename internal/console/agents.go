@@ -2,8 +2,11 @@ package console
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base32"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +19,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/craftsman-apps/ambit/internal/controller"
 	"github.com/craftsman-apps/ambit/internal/identity"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -41,9 +45,16 @@ const (
 	ModeItself = "itself"
 
 	StateActive = "active"
-	// The states a stop passes through (docs/agents.md, "Stopping an agent"). A stopped agent never gets a new key.
+	// StatePending: an itself-mode record whose service account is not bound yet; never used, deleted by the repair
+	// after pendingTTL. StateDeleting: a delete that is not finished; the repair finishes it. A stop passes through
+	// StateStopping to StateStopped (docs/agents.md). Only an active agent gets keys, and the keys of any other agent
+	// are deleted by the repair.
+	StatePending  = "pending"
+	StateDeleting = "deleting"
 	StateStopping = "stopping"
 	StateStopped  = "stopped"
+	pendingTTL    = 10 * time.Minute
+	agentSigAnn   = "ambitproject.dev/agent-sig"
 
 	agentRecordPrefix = "ambit-agent-"
 	agentOwnerLabel   = "ambitproject.dev/agent-owner" // the owner's hash, to list one person's agents
@@ -58,11 +69,14 @@ const (
 )
 
 var (
-	ErrAgentsOff        = errors.New("agents are switched off")
-	ErrAgentLimit       = errors.New("agent limit reached")
-	ErrNoAgent          = errors.New("no such agent")
-	ErrNotAllowed       = errors.New("you may not do this")
-	ErrAgentNotActive   = errors.New("this agent is not active")
+	ErrAgentsOff      = errors.New("agents are switched off")
+	ErrAgentLimit     = errors.New("agent limit reached")
+	ErrNoAgent        = errors.New("no such agent")
+	ErrNotAllowed     = errors.New("you may not do this")
+	ErrAgentNotActive = errors.New("this agent is not active")
+	// ErrAgentsNotReady: the controller has not published that the MCP policy in force carries the agent-scope clause
+	// (an older controller, or a change the gateway has not applied): no agent key is issued before it.
+	ErrAgentsNotReady   = errors.New("agents are not ready: the gateway has not applied the agent scope policy yet; try again in a minute")
 	ErrTooManyAgentKeys = fmt.Errorf("an agent may have at most %d keys; revoke one first", maxAgentKeys)
 
 	platformPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,39}$`)
@@ -79,8 +93,10 @@ type Agent struct {
 	// ("group:eng") of an itself-mode agent.
 	Owner string `json:"owner"`
 	Mode  string `json:"mode"`
-	// Group is the service account's group (itself mode).
-	Group string `json:"group,omitempty"`
+	// Group is the service account's group (itself mode). AccountUID is the UID of the service account's owner record
+	// the agent is bound to: a record never acts on an account it was not bound to.
+	Group      string `json:"group,omitempty"`
+	AccountUID string `json:"accountUID,omitempty"`
 	// Platform is what the agent says it is ("chatgpt", "grok", ...): declared, never a proof; no policy uses it.
 	Platform string `json:"platform"`
 	// Scope: "server" and "server/tool" entries, at most 50. Empty: the agent may use no tool.
@@ -95,24 +111,43 @@ type Agent struct {
 	UID, ResourceVersion string `json:"-"`
 }
 
-func (a Agent) record(ns string) *corev1.ConfigMap {
+// recordSig is the console's signature of a record (HMAC with a key only the console holds): a record that something
+// else wrote, or changed, before the admission policy existed or since, is not an agent.
+func (s *KeyService) recordSig(name, data string) string {
+	m := hmac.New(sha256.New, s.RecordKey)
+	m.Write([]byte(name + "\n" + data))
+	return hex.EncodeToString(m.Sum(nil))
+}
+
+// AgentRecordKey derives the record signing key from the console's session key.
+func AgentRecordKey(sessionKey []byte) []byte {
+	m := hmac.New(sha256.New, sessionKey)
+	m.Write([]byte("ambit agent records v1"))
+	return m.Sum(nil)
+}
+
+func (s *KeyService) record(a Agent) *corev1.ConfigMap {
 	b, _ := json.Marshal(a)
-	return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: agentRecordPrefix + a.Name, Namespace: ns,
-		Labels: map[string]string{agentLabel: "true", agentOwnerLabel: ownerHash(a.Owner)},
-		UID:    typesUID(a.UID), ResourceVersion: a.ResourceVersion},
+	return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: agentRecordPrefix + a.Name, Namespace: s.Namespace,
+		Labels:      map[string]string{agentLabel: "true", agentOwnerLabel: ownerHash(a.Owner)},
+		Annotations: map[string]string{agentSigAnn: s.recordSig(a.Name, string(b))},
+		UID:         typesUID(a.UID), ResourceVersion: a.ResourceVersion},
 		Data: map[string]string{"agent.json": string(b)}}
 }
 
-func agentFromRecord(cm *corev1.ConfigMap) (Agent, error) {
+func (s *KeyService) agentFromRecord(cm *corev1.ConfigMap) (Agent, error) {
 	var a Agent
 	if cm.Labels[agentLabel] != "true" {
 		return a, fmt.Errorf("record %s has no agent label", cm.Name)
+	}
+	if len(s.RecordKey) == 0 || !hmac.Equal([]byte(cm.Annotations[agentSigAnn]), []byte(s.recordSig(strings.TrimPrefix(cm.Name, agentRecordPrefix), cm.Data["agent.json"]))) {
+		return a, fmt.Errorf("agent record %s was not written by the console", cm.Name)
 	}
 	if err := json.Unmarshal([]byte(cm.Data["agent.json"]), &a); err != nil || a.Name == "" || cm.Name != agentRecordPrefix+a.Name {
 		return Agent{}, fmt.Errorf("agent record %s is unreadable", cm.Name)
 	}
 	if (a.Mode != ModePerson && a.Mode != ModeItself) || a.Owner == "" ||
-		(a.State != StateActive && a.State != StateStopping && a.State != StateStopped) {
+		!slices.Contains([]string{StateActive, StatePending, StateDeleting, StateStopping, StateStopped}, a.State) {
 		return Agent{}, fmt.Errorf("agent record %s has an unknown mode or state", cm.Name)
 	}
 	a.UID, a.ResourceVersion = string(cm.UID), cm.ResourceVersion
@@ -252,7 +287,9 @@ func newAgentName(display string) (string, error) {
 
 // ownerOf validates an itself-mode owner: a person's email, or "group:<name>".
 func cleanItselfOwner(o string) (string, error) {
-	o = strings.TrimSpace(o)
+	if o = strings.TrimSpace(o); len(o) > 254 {
+		return "", fmt.Errorf("%w: the owner is too long", ErrBadInput)
+	}
 	if g, ok := strings.CutPrefix(o, "group:"); ok {
 		if !groupPattern.MatchString(g) || len(g) > maxGroupLen {
 			return "", fmt.Errorf("%w: the owner group is not valid", ErrBadInput)
@@ -273,7 +310,7 @@ func (s *KeyService) agentRecords(ctx context.Context, sel client.MatchingLabels
 	}
 	out := make([]Agent, 0, len(l.Items))
 	for i := range l.Items {
-		a, err := agentFromRecord(&l.Items[i])
+		a, err := s.agentFromRecord(&l.Items[i])
 		if err != nil {
 			slog.Warn("agent record left out", "record", l.Items[i].Name, "err", err)
 			continue
@@ -327,7 +364,7 @@ func (s *KeyService) GetAgent(ctx context.Context, name string) (Agent, error) {
 		}
 		return Agent{}, err
 	}
-	a, err := agentFromRecord(&cm)
+	a, err := s.agentFromRecord(&cm)
 	if err != nil {
 		slog.Warn("agent record unreadable", "record", cm.Name, "err", err)
 		return Agent{}, ErrNoAgent
@@ -438,13 +475,23 @@ func (s *KeyService) CreateAgent(ctx context.Context, by Session, in AgentInput)
 			return Agent{}, ErrAgentLimit
 		}
 	}
+	if len(a.Owner) > 254 {
+		return Agent{}, fmt.Errorf("%w: the owner is too long", ErrBadInput)
+	}
+	if a.Mode == ModeItself {
+		a.State = StatePending // active only after the service account is created and bound
+	}
 	for try := 0; ; try++ {
 		if a.Mode == ModePerson {
 			if a.Name, err = newAgentName(a.DisplayName); err != nil {
 				return Agent{}, err
 			}
 		}
-		err = s.Client.Create(ctx, a.record(s.Namespace))
+		cm := s.record(a)
+		if len(cm.Data["agent.json"]) > maxAgentRecord {
+			return Agent{}, fmt.Errorf("%w: the agent record is too large", ErrBadInput)
+		}
+		err = s.Client.Create(ctx, cm)
 		if apierrors.IsAlreadyExists(err) && a.Mode == ModePerson && try < 3 {
 			continue
 		}
@@ -456,12 +503,21 @@ func (s *KeyService) CreateAgent(ctx context.Context, by Session, in AgentInput)
 	if err != nil {
 		return Agent{}, err
 	}
-	if a.Mode == ModeItself { // the record first: a name taken by a service account then leaves nothing behind
-		desc := "agent: " + a.DisplayName
-		if _, err := s.createAccountLocked(ctx, by, a.Name, a.Group, desc); err != nil {
-			if derr := s.Client.Delete(ctx, a.record(s.Namespace)); derr != nil && !apierrors.IsNotFound(derr) {
-				slog.Error("agent record left after its service account failed", "agent", a.Name, "err", derr)
+	if a.Mode == ModeItself {
+		// The record is written first, so a name taken by a service account is found before anything else happens; it
+		// is bound to the account's owner record (its UID) before it becomes active. A record that stays pending is
+		// deleted by the repair, and never acts on an account it is not bound to.
+		o, err := s.createAccountLocked(ctx, by, a.Name, a.Group, "agent: "+a.DisplayName, a.Name)
+		if err != nil {
+			if derr := s.Client.Delete(ctx, s.record(a)); derr != nil && !apierrors.IsNotFound(derr) {
+				slog.Error("pending agent record left; the repair deletes it", "agent", a.Name, "err", derr)
 			}
+			return Agent{}, err
+		}
+		if _, err := s.changeAgent(ctx, a.Name, func(cur *Agent) (bool, error) {
+			cur.State, cur.AccountUID = StateActive, o.UID
+			return true, nil
+		}); err != nil {
 			return Agent{}, err
 		}
 	}
@@ -483,7 +539,7 @@ func (s *KeyService) changeAgent(ctx context.Context, name string, rule func(a *
 		if err != nil || !write {
 			return err
 		}
-		cm := a.record(s.Namespace)
+		cm := s.record(a)
 		if len(cm.Data["agent.json"]) > maxAgentRecord {
 			return fmt.Errorf("%w: the agent record is too large", ErrBadInput)
 		}
@@ -536,6 +592,25 @@ func (s *KeyService) UpdateAgent(ctx context.Context, by Session, name string, p
 			return Agent{}, err
 		}
 	}
+	if p.Scope != nil {
+		// A scope that takes something away is enforced before it is saved: the keys are narrowed first. If that fails,
+		// nothing is saved, and the old scope stays in the record and in every key that was not narrowed.
+		cur, err := s.GetAgent(ctx, name)
+		if err != nil {
+			return Agent{}, err
+		}
+		if err := canManage(by, cur, actor); err != nil {
+			return Agent{}, err
+		}
+		if cur.State != StateActive {
+			return Agent{}, ErrAgentNotActive
+		}
+		if removesFrom(cur.Scope, scope) {
+			if err := s.setKeyScope(ctx, cur.Name, keptScope(cur.Scope, scope), cur.Rev+1); err != nil {
+				return Agent{}, fmt.Errorf("%w: the keys could not be narrowed, so nothing was changed; send the request again", ErrKeysBehind)
+			}
+		}
+	}
 	var changed []string
 	a, err := s.changeAgent(ctx, name, func(a *Agent) (bool, error) {
 		changed = nil
@@ -580,6 +655,52 @@ func (s *KeyService) UpdateAgent(ctx context.Context, by Session, name string, p
 		return a, fmt.Errorf("%w: the change is saved but some keys of the agent still have the old scope; send the request again", ErrKeysBehind)
 	}
 	return a, nil
+}
+
+// scopeCovers: the scope list allows entry e (the same entry, or e is a tool of a server the list names whole).
+func scopeCovers(list []string, e string) bool {
+	if slices.Contains(list, e) {
+		return true
+	}
+	server, _, isTool := strings.Cut(e, "/")
+	return isTool && slices.Contains(list, server)
+}
+
+// removesFrom: old allows something that next does not.
+func removesFrom(old, next []string) bool {
+	return slices.ContainsFunc(old, func(e string) bool { return !scopeCovers(next, e) })
+}
+
+// keptScope is the part of next that old already allowed: what a key may keep while a change is saved.
+func keptScope(old, next []string) []string {
+	out := []string{}
+	for _, e := range next {
+		if scopeCovers(old, e) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// setKeyScope sets the scope and revision of every key of the agent. Call it holding s.mu.
+func (s *KeyService) setKeyScope(ctx context.Context, name string, scope []string, rev int) error {
+	keys, err := s.AgentKeys(ctx, name)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, k := range keys {
+		if _, err := s.changeKey(ctx, k.ID, func(cur *Key) (keyOp, error) {
+			if cur.Agent == nil || (slices.Equal(cur.Agent.Scope, scope) && cur.Agent.Rev == rev) {
+				return keyKeep, nil
+			}
+			cur.Agent.Scope, cur.Agent.Rev = scope, rev
+			return keyUpdate, nil
+		}, "", consoleActor); err != nil && !apierrors.IsNotFound(err) {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // ErrKeysBehind: the record changed and some key Secrets did not follow yet.
@@ -659,16 +780,12 @@ func (s *KeyService) MoveAgent(ctx context.Context, by Session, name, owner stri
 	return a, err
 }
 
-// DeleteAgent deletes an agent's keys, then its record (and, in itself mode, its service account, whose name stays
-// taken). The owner (person mode) or an admin may. Idempotent: a half-deleted agent is finished by repeating it.
+// DeleteAgent deletes an agent: it first records state deleting (no new keys; a delete that stops half way is
+// finished by the repair), then deletes the agent's keys, its service account (itself mode, which keeps its name
+// taken) and its record. The owner (person mode) or an admin may. Idempotent.
 func (s *KeyService) DeleteAgent(ctx context.Context, by Session, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ctx, cancel, err := s.opCtx(ctx)
-	if err != nil {
-		return err
-	}
-	defer cancel()
 	actor, err := adminEmail(by)
 	if err != nil {
 		return err
@@ -682,7 +799,38 @@ func (s *KeyService) DeleteAgent(ctx context.Context, by Session, name string) e
 	} else if err := canManage(by, a, actor); err != nil {
 		return err
 	}
-	keys, err := s.AgentKeys(ctx, name)
+	return s.deleteAgentLocked(ctx, actor, name)
+}
+
+// deleteAgentLocked is the delete flow of DeleteAgent and of the Service accounts page. Call it holding s.mu.
+func (s *KeyService) deleteAgentLocked(ctx context.Context, actor, name string) error {
+	ctx, cancel, err := s.opCtx(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	a, err := s.GetAgent(ctx, name)
+	if err != nil {
+		return err
+	}
+	if a.State != StateDeleting {
+		if a, err = s.changeAgent(ctx, name, func(cur *Agent) (bool, error) {
+			if cur.State == StateDeleting {
+				return false, nil
+			}
+			cur.State = StateDeleting
+			return true, nil
+		}); err != nil {
+			return err
+		}
+	}
+	return s.finishDelete(ctx, a, actor)
+}
+
+// finishDelete deletes the keys of an agent in state deleting, its service account when the record is bound to it
+// (never another account of the same name), and the record. Call it holding s.mu, inside a term.
+func (s *KeyService) finishDelete(ctx context.Context, a Agent, actor string) error {
+	keys, err := s.AgentKeys(ctx, a.Name)
 	if err != nil {
 		return err
 	}
@@ -695,33 +843,84 @@ func (s *KeyService) DeleteAgent(ctx context.Context, by Session, name string) e
 	if err := errors.Join(errs...); err != nil {
 		return fmt.Errorf("%w: %w", ErrDeleteIncomplete, err)
 	}
-	if a.Mode == ModeItself {
-		if err := s.deleteAccountLocked(ctx, by, name); err != nil && !errors.Is(err, ErrNoAccount) {
-			return err
+	if a.Mode == ModeItself && a.AccountUID != "" {
+		switch o, err := s.owner(ctx, AccountIdentity(a.Name)); {
+		case apierrors.IsNotFound(err):
+		case err == nil && o.UID == a.AccountUID && o.Agent == a.Name:
+			if err := s.deleteAccountLocked(ctx, actor, a.Name); err != nil && !errors.Is(err, ErrNoAccount) {
+				return err
+			}
+		default:
+			slog.Warn("agent record is not bound to the service account of its name; the account is left alone", "agent", a.Name, "err", err)
 		}
 	}
 	uid, rv := typesUID(a.UID), a.ResourceVersion
-	if err := s.Client.Delete(ctx, a.record(s.Namespace), client.Preconditions{UID: &uid, ResourceVersion: &rv}); err != nil && !apierrors.IsNotFound(err) {
+	if err := s.Client.Delete(ctx, s.record(a), client.Preconditions{UID: &uid, ResourceVersion: &rv}); err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
 	s.event(ctx, actor, "agent-delete", "", a.Owner, "agent="+a.Name)
 	return nil
 }
 
+// agentScopeReady reports whether the controller published that the MCP policy in force has the agent-scope clause.
+func (s *KeyService) agentScopeReady(ctx context.Context) bool {
+	var cm corev1.ConfigMap
+	if err := s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: controller.AccessModeConfigMap}, &cm); err != nil {
+		return false
+	}
+	return cm.Data[controller.AgentScopeKey] == "1"
+}
+
 // agentKeyMeta reads an agent's record under the lock and returns the metadata a new key of it carries. The agent must
-// be active, of the given mode and, in person mode, owned by owner.
-func (s *KeyService) agentKeyMeta(ctx context.Context, name, mode, owner string) (*KeyAgent, error) {
+// be active, of the given mode and, in person mode, owned by owner; in itself mode it must be bound to the service
+// account with the owner record UID accountUID. Fail closed: no key before the gateway enforces the scope.
+func (s *KeyService) agentKeyMeta(ctx context.Context, name, mode, owner, accountUID string) (*KeyAgent, error) {
+	if !s.agentScopeReady(ctx) {
+		return nil, ErrAgentsNotReady
+	}
 	a, err := s.GetAgent(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	if a.Mode != mode || (mode == ModePerson && a.Owner != owner) {
+	if a.Mode != mode || (mode == ModePerson && a.Owner != owner) || (mode == ModeItself && (a.AccountUID == "" || a.AccountUID != accountUID)) {
 		return nil, ErrNoAgent
 	}
 	if a.State != StateActive {
 		return nil, ErrAgentNotActive
 	}
 	return &KeyAgent{Name: a.Name, Mode: a.Mode, OwnerAtIssue: a.Owner, Platform: a.Platform, Scope: a.Scope, Rev: a.Rev}, nil
+}
+
+// repairAgentRecords finishes interrupted deletes, deletes itself-mode records that never got bound (pending for more
+// than pendingTTL), and deletes agent-labelled ConfigMaps that are not records the console wrote (planted, or signed
+// with another key). Call it holding s.mu, inside a term.
+func (s *KeyService) repairAgentRecords(ctx context.Context) error {
+	var l corev1.ConfigMapList
+	if err := s.Client.List(ctx, &l, client.InNamespace(s.Namespace), client.MatchingLabels{agentLabel: "true"}); err != nil {
+		return err
+	}
+	var errs []error
+	now := s.now()
+	for i := range l.Items {
+		cm := &l.Items[i]
+		a, err := s.agentFromRecord(cm)
+		switch {
+		case err != nil:
+			slog.Warn("deleting an agent-labelled object that is not an agent record", "record", cm.Name, "err", err)
+			if derr := s.Client.Delete(ctx, cm); derr != nil && !apierrors.IsNotFound(derr) {
+				errs = append(errs, derr)
+			}
+		case a.State == StateDeleting:
+			if err := s.finishDelete(ctx, a, consoleActor); err != nil {
+				errs = append(errs, err)
+			}
+		case a.State == StatePending && now.Sub(a.Created) > pendingTTL:
+			if err := s.Client.Delete(ctx, cm); err != nil && !apierrors.IsNotFound(err) {
+				errs = append(errs, err)
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // checkAgentKeyRoom refuses a new key of a person-mode agent that already has its live keys.

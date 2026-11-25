@@ -51,6 +51,8 @@ func TestAgentScopeKeys(t *testing.T) {
 		{"a tool name is not a server", map[string]any{"keyId": "k", "agent": "g", "agentScope": []any{"read"}}, "crm", "read", false},
 		{"server name equal to a tool entry of another server", map[string]any{"keyId": "k", "agent": "g", "agentScope": []any{"wiki/crm"}}, "crm", "read", false},
 		{"empty scope: nothing", map[string]any{"keyId": "k", "agent": "g", "agentScope": []any{}}, "crm", "read", false},
+		{"a map as scope matches nothing, although `in` finds its keys", map[string]any{"keyId": "k", "agent": "g", "agentScope": map[string]any{"crm": true}}, "crm", "read", false},
+		{"a string as scope matches nothing", map[string]any{"keyId": "k", "agent": "g", "agentScope": "crm"}, "crm", "read", false},
 		{"agent key without a scope: nothing (fail closed)", map[string]any{"keyId": "k", "agent": "g"}, "crm", "read", false},
 		{"50 entries, the last one", map[string]any{"keyId": "k", "agent": "g", "agentScope": func() []any {
 			l := make([]any, 50)
@@ -84,6 +86,7 @@ func TestAgentScopeTokens(t *testing.T) {
 		{"agent token, other tool", hydra, map[string]any{"iss": hydra, "ambit_scope": []any{"crm/read"}}, "crm", "delete", false},
 		{"agent token, empty scope", hydra, map[string]any{"iss": hydra, "ambit_scope": []any{}}, "crm", "read", false},
 		{"agent token without a scope claim: nothing", hydra, map[string]any{"iss": hydra}, "crm", "read", false},
+		{"agent token with a map as scope: nothing", hydra, map[string]any{"iss": hydra, "ambit_scope": map[string]any{"crm": true}}, "crm", "read", false},
 		{"no agent issuer set: tokens are not limited", "", map[string]any{"iss": hydra, "ambit_scope": []any{"wiki"}}, "crm", "read", true},
 	} {
 		if got := evalAgent(t, AgentScope(c.issuer), map[string]any{}, c.jwt, c.target, c.tool); got != c.want {

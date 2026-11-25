@@ -80,7 +80,10 @@ type Owner struct {
 	SignedIn   time.Time `json:"signedIn"`
 	Offboarded bool      `json:"offboarded"`
 	// Service accounts only. Kind never changes once written; Deleted marks a tombstone, which keeps the name taken.
-	Kind                 string    `json:"kind,omitempty"`
+	Kind string `json:"kind,omitempty"`
+	// Agent names the itself-mode agent this account is, "" for an ordinary account: the account's keys are then made
+	// only through the agent (they carry its scope).
+	Agent                string    `json:"agent,omitempty"`
 	Description          string    `json:"description,omitempty"`
 	CreatedBy            string    `json:"createdBy,omitempty"`
 	Created              time.Time `json:"created,omitzero"`

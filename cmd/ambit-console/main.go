@@ -79,8 +79,8 @@ func agentSettingsFromEnv() (console.AgentSettings, error) {
 	if a.MaxTotal < 1 || a.MaxTotal > 2000 {
 		return a, fmt.Errorf("AMBIT_AGENTS_MAX_TOTAL is %d; it must be 1 to 2000", a.MaxTotal)
 	}
-	if a.MaxPerPerson < 1 || a.MaxPerPerson > 100 {
-		return a, fmt.Errorf("AMBIT_AGENTS_MAX_PER_PERSON is %d; it must be 1 to 100", a.MaxPerPerson)
+	if a.MaxPerPerson < 1 || a.MaxPerPerson > 10 {
+		return a, fmt.Errorf("AMBIT_AGENTS_MAX_PER_PERSON is %d; it must be 1 to 10", a.MaxPerPerson)
 	}
 	if a.KeyMaxDays != 30 && a.KeyMaxDays != 90 && a.KeyMaxDays != 365 {
 		return a, fmt.Errorf("AMBIT_AGENTS_KEY_MAX_DAYS is %d; it must be 30, 90 or 365", a.KeyMaxDays)
@@ -201,6 +201,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 	keySvc := &console.KeyService{Client: objects, Namespace: ns, Now: time.Now, Settings: keySettings, Services: services, Agents: agents}
+	keySvc.RecordKey = console.AgentRecordKey(keys.SessionKey)
 	go console.RunLeader(ctx, kube, ns, podName, keySvc.StartTerm, keySvc.EndTerm)
 	go func() { // the hourly full repair bounds any stale write or interrupted refresh to one hour
 		t := time.NewTicker(time.Hour)

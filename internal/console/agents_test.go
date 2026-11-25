@@ -7,10 +7,14 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/craftsman-apps/ambit/internal/controller"
 	"github.com/craftsman-apps/ambit/internal/identity"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
@@ -21,10 +25,28 @@ func newAgentSvc(t *testing.T, objs ...client.Object) (*KeyService, *syncClock) 
 	return newAgentSvcWith(t, interceptor.Funcs{}, objs...)
 }
 
+// scopeReady is what the controller publishes once the MCP policy in force has the agent-scope clause.
+func scopeReady() *corev1.ConfigMap {
+	return &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: controller.AccessModeConfigMap, Namespace: "ambit-system"}, Data: map[string]string{controller.AgentScopeKey: "1"}}
+}
+
+var testRecordKey = AgentRecordKey([]byte("0123456789abcdef0123456789abcdef"))
+
 func newAgentSvcWith(t *testing.T, f interceptor.Funcs, objs ...client.Object) (*KeyService, *syncClock) {
 	t.Helper()
-	s, clk := newKeySvcWith(t, f, objs...)
-	s.Agents = defaultAgents
+	// The fake client does not assign UIDs, which bind an itself-mode agent to its service account.
+	create := f.Create
+	f.Create = func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+		if obj.GetUID() == "" {
+			obj.SetUID(types.UID(randomString()))
+		}
+		if create != nil {
+			return create(ctx, c, obj, opts...)
+		}
+		return c.Create(ctx, obj, opts...)
+	}
+	s, clk := newKeySvcWith(t, f, append(objs, scopeReady())...)
+	s.Agents, s.RecordKey = defaultAgents, testRecordKey
 	return s, clk
 }
 
@@ -554,13 +576,13 @@ func TestAgentRecordsAreLabelled(t *testing.T) {
 	// a ConfigMap of the same name without the label (planted) is not an agent
 	cm2 := cm.DeepCopy()
 	cm2.Labels = nil
-	if _, err := agentFromRecord(cm2); err == nil {
+	if _, err := s.agentFromRecord(cm2); err == nil {
 		t.Error("an unlabelled record was accepted")
 	}
 	// a record whose content names another agent is refused
 	cm3 := cm.DeepCopy()
 	cm3.Name = "ambit-agent-other"
-	if _, err := agentFromRecord(cm3); err == nil {
+	if _, err := s.agentFromRecord(cm3); err == nil {
 		t.Error("a record under another name was accepted")
 	}
 	if _, err := s.GetAgent(ctx, "../etc"); !errors.Is(err, ErrNoAgent) {
@@ -568,5 +590,264 @@ func TestAgentRecordsAreLabelled(t *testing.T) {
 	}
 	if err := s.Client.Delete(ctx, &cm); err != nil && !apierrors.IsNotFound(err) {
 		t.Fatal(err)
+	}
+}
+
+// Review (Codex): a saved scope reduction must not leave the removed permissions live. The keys are narrowed first; when
+// that fails, nothing is saved.
+func TestNarrowingFailsClosedAndSavesNothing(t *testing.T) {
+	failKeyUpdate := false
+	s, _ := newAgentSvcWith(t, interceptor.Funcs{Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+		if sec, ok := obj.(*corev1.Secret); ok && failKeyUpdate && sec.Labels[agentLabel] != "" {
+			return errors.New("api server unavailable")
+		}
+		return c.Update(ctx, obj, opts...)
+	}})
+	ctx := context.Background()
+	a := mustAgent(t, s, user01("eng"), AgentInput{DisplayName: "bot", Scope: []string{"crm", "wiki/read"}})
+	_, k1, _ := s.CreateAgentKey(ctx, user01(), a.Name, "one", 30, nil)
+	_, k2, _ := s.CreateAgentKey(ctx, user01(), a.Name, "two", 30, nil)
+	failKeyUpdate = true
+	narrow := []string{"wiki/read"}
+	if _, err := s.UpdateAgent(ctx, user01(), a.Name, AgentPatch{Scope: &narrow}); !errors.Is(err, ErrKeysBehind) {
+		t.Fatalf("want ErrKeysBehind, got %v", err)
+	}
+	if got, _ := s.GetAgent(ctx, a.Name); fmt.Sprint(got.Scope) != "[crm wiki/read]" || got.Rev != 1 {
+		t.Errorf("the record changed although the keys could not be narrowed: %+v", got)
+	}
+	failKeyUpdate = false
+	if _, err := s.UpdateAgent(ctx, user01(), a.Name, AgentPatch{Scope: &narrow}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{k1.ID, k2.ID} {
+		if m := metadataOf(t, s, id); fmt.Sprint(m["agentScope"]) != "[wiki/read]" || m["agentRev"] != float64(2) {
+			t.Errorf("key %s: %v", id, m)
+		}
+	}
+	// A change that adds and removes: the removed entry goes first, the added one comes last
+	mixed := []string{"wiki/read", "mail"}
+	if _, err := s.UpdateAgent(ctx, user01(), a.Name, AgentPatch{Scope: &mixed}); err != nil {
+		t.Fatal(err)
+	}
+	if m := metadataOf(t, s, k1.ID); fmt.Sprint(m["agentScope"]) != "[mail wiki/read]" || m["agentRev"] != float64(3) {
+		t.Errorf("mixed change: %v", m)
+	}
+	// narrowing helpers
+	for _, c := range []struct {
+		old, next []string
+		removes   bool
+		kept      string
+	}{
+		{[]string{"crm"}, []string{"crm/read"}, true, "[crm/read]"}, // a whole server becomes one tool: something is removed
+		{[]string{"crm/read"}, []string{"crm"}, false, "[]"},
+		{[]string{"a", "b"}, []string{"a"}, true, "[a]"},
+		{[]string{"a"}, []string{"a", "b"}, false, "[a]"},
+		{[]string{}, []string{"a"}, false, "[]"},
+		{[]string{"a"}, []string{}, true, "[]"},
+	} {
+		if got := removesFrom(c.old, c.next); got != c.removes {
+			t.Errorf("removesFrom(%v, %v) = %v", c.old, c.next, got)
+		}
+		if got := fmt.Sprint(keptScope(c.old, c.next)); got != c.kept {
+			t.Errorf("keptScope(%v, %v) = %s, want %s", c.old, c.next, got, c.kept)
+		}
+	}
+}
+
+// Review (Codex): an agent record that the console did not write is not an agent, and the repair removes it.
+func TestPlantedAgentRecordsAreNotAgents(t *testing.T) {
+	s, _ := newAgentSvc(t)
+	ctx := context.Background()
+	real := mustAgent(t, s, user01("eng"), AgentInput{DisplayName: "real"})
+	good := Agent{Name: "planted", DisplayName: "planted", Owner: "user01@acme.com", Mode: ModePerson, State: StateActive, Rev: 1}
+	unsigned := s.record(good)
+	delete(unsigned.Annotations, agentSigAnn)
+	other := &KeyService{Namespace: s.Namespace, RecordKey: AgentRecordKey([]byte("another console's key"))}
+	foreign := other.record(Agent{Name: "foreign", DisplayName: "f", Owner: "user01@acme.com", Mode: ModePerson, State: StateActive, Rev: 1})
+	tampered := s.record(Agent{Name: "tampered", DisplayName: "t", Owner: "user01@acme.com", Mode: ModePerson, State: StateActive, Rev: 1})
+	tampered.Data["agent.json"] = strings.Replace(tampered.Data["agent.json"], "user01", "user02", 1)
+	for _, cm := range []*corev1.ConfigMap{unsigned, foreign, tampered} {
+		if err := s.Client.Create(ctx, cm); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.GetAgent(ctx, strings.TrimPrefix(cm.Name, agentRecordPrefix)); !errors.Is(err, ErrNoAgent) {
+			t.Errorf("%s: %v", cm.Name, err)
+		}
+	}
+	if all, _ := s.AllAgents(ctx); len(all) != 1 || all[0].Name != real.Name {
+		t.Errorf("listed %+v", all)
+	}
+	// without a key nothing is trusted
+	nokey := &KeyService{Client: s.Client, Namespace: s.Namespace}
+	if _, err := nokey.GetAgent(ctx, real.Name); !errors.Is(err, ErrNoAgent) {
+		t.Errorf("no record key: %v", err)
+	}
+	if _, err := s.Repair(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var l corev1.ConfigMapList
+	_ = s.Client.List(ctx, &l, client.MatchingLabels{agentLabel: "true"})
+	if len(l.Items) != 1 || l.Items[0].Name != agentRecordPrefix+real.Name {
+		t.Errorf("after the repair: %d agent-labelled objects", len(l.Items))
+	}
+}
+
+// Review (Codex): an itself-mode record is bound to the exact service account it made; a record that is not bound
+// never acts on an account of its name.
+func TestItselfAgentIsBoundToItsAccount(t *testing.T) {
+	s, clk := newAgentSvc(t)
+	ctx := context.Background()
+	if _, err := s.CreateAccount(ctx, adminA, "ci", "eng", "an ordinary account"); err != nil {
+		t.Fatal(err)
+	}
+	_, k, err := s.CreateAccountKey(ctx, adminA, "ci", "job", ScopeMCP, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// a record named like the account that was never bound (a creation that stopped half way, or a planted one)
+	pending := Agent{Name: "ci", DisplayName: "x", Owner: "admin@example.com", Mode: ModeItself, Group: "eng", State: StatePending, Rev: 1, Created: clk.Now()}
+	if err := s.Client.Create(ctx, s.record(pending)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.CreateAgentKey(ctx, adminA, "ci", "k", 30, nil); !errors.Is(err, ErrAgentNotActive) && !errors.Is(err, ErrBadInput) {
+		t.Errorf("a pending record issues keys: %v", err)
+	}
+	active := pending
+	active.State, active.AccountUID = StateActive, "not-the-uid-of-the-account"
+	if _, err := s.changeAgent(ctx, "ci", func(a *Agent) (bool, error) { *a = Agent{Name: "ci", DisplayName: "x", Owner: a.Owner, Mode: ModeItself, Group: "eng", State: StateActive, AccountUID: active.AccountUID, Rev: 1, Created: a.Created, UID: a.UID, ResourceVersion: a.ResourceVersion}; return true, nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.CreateAgentKey(ctx, adminA, "ci", "k", 30, nil); !errors.Is(err, ErrBadInput) { // the account is not an agent's
+		t.Errorf("a record bound to another UID issued a key: %v", err)
+	}
+	if err := s.DeleteAgent(ctx, adminA, "ci"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.getKey(ctx, k.ID); err != nil {
+		t.Errorf("deleting a record that is not bound to the account touched the account's key: %v", err)
+	}
+	if _, err := s.account(ctx, "ci"); err != nil {
+		t.Errorf("the account is gone: %v", err)
+	}
+	// a pending record that stays pending is deleted by the repair after the TTL
+	stale := Agent{Name: "stale", DisplayName: "x", Owner: "admin@example.com", Mode: ModeItself, Group: "eng", State: StatePending, Rev: 1, Created: clk.Now()}
+	if err := s.Client.Create(ctx, s.record(stale)); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = s.Repair(ctx)
+	if _, err := s.GetAgent(ctx, "stale"); err != nil {
+		t.Errorf("a fresh pending record was deleted: %v", err)
+	}
+	clk.Set(clk.Now().Add(pendingTTL + time.Minute))
+	_, _ = s.Repair(ctx)
+	if _, err := s.GetAgent(ctx, "stale"); !errors.Is(err, ErrNoAgent) {
+		t.Errorf("a stale pending record is still there: %v", err)
+	}
+}
+
+// Review (Codex): an agent's account never gets an unscoped key, even when the agent's record cannot be read.
+func TestAgentAccountNeverGetsAPlainKey(t *testing.T) {
+	s, _ := newAgentSvc(t)
+	ctx := context.Background()
+	mustAgent(t, s, adminA, AgentInput{DisplayName: "n", Mode: ModeItself, Name: "nightly", Group: "ops"})
+	var cm corev1.ConfigMap
+	_ = s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: agentRecordPrefix + "nightly"}, &cm)
+	cm.Data["agent.json"] = "{broken"
+	if err := s.Client.Update(ctx, &cm); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.CreateAccountKey(ctx, adminA, "nightly", "bypass", ScopeMCP, 30); !errors.Is(err, ErrBadInput) {
+		t.Errorf("a plain key for the agent's account with an unreadable record: %v", err)
+	}
+}
+
+// Review (Codex): a delete that stops half way is recorded, new keys are refused, and the repair finishes it.
+func TestInterruptedDeleteIsFinishedByTheRepair(t *testing.T) {
+	failDelete := true
+	s, _ := newAgentSvcWith(t, interceptor.Funcs{Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+		if sec, ok := obj.(*corev1.Secret); ok && failDelete && sec.Labels[agentLabel] != "" {
+			return errors.New("api server unavailable")
+		}
+		return c.Delete(ctx, obj, opts...)
+	}})
+	ctx := context.Background()
+	a := mustAgent(t, s, user01("eng"), AgentInput{DisplayName: "bot", Scope: []string{"crm"}})
+	_, k, _ := s.CreateAgentKey(ctx, user01(), a.Name, "k", 30, nil)
+	if err := s.DeleteAgent(ctx, user01(), a.Name); !errors.Is(err, ErrDeleteIncomplete) {
+		t.Fatalf("want ErrDeleteIncomplete, got %v", err)
+	}
+	if got, err := s.GetAgent(ctx, a.Name); err != nil || got.State != StateDeleting {
+		t.Fatalf("the interrupted delete is not recorded: %+v %v", got, err)
+	}
+	if _, _, err := s.CreateAgentKey(ctx, user01(), a.Name, "late", 30, nil); !errors.Is(err, ErrAgentNotActive) {
+		t.Errorf("a key for a deleting agent: %v", err)
+	}
+	if _, err := s.UpdateAgent(ctx, user01(), a.Name, AgentPatch{Platform: ptrTo("grok")}); !errors.Is(err, ErrAgentNotActive) {
+		t.Errorf("an update of a deleting agent: %v", err)
+	}
+	failDelete = false
+	if rep, err := s.Repair(ctx); err != nil || rep.Deleted != 0 {
+		t.Fatalf("repair %+v %v", rep, err)
+	}
+	if _, err := s.getKey(ctx, k.ID); !apierrors.IsNotFound(err) {
+		t.Errorf("the key survived the repair: %v", err)
+	}
+	if _, err := s.GetAgent(ctx, a.Name); !errors.Is(err, ErrNoAgent) {
+		t.Errorf("the record survived the repair: %v", err)
+	}
+	// the Service accounts page deletes an agent's account through the same flow
+	mustAgent(t, s, adminA, AgentInput{DisplayName: "n", Mode: ModeItself, Name: "nightly", Group: "ops"})
+	if err := s.DeleteAccount(ctx, adminA, "nightly"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetAgent(ctx, "nightly"); !errors.Is(err, ErrNoAgent) {
+		t.Errorf("record: %v", err)
+	}
+	if _, err := s.account(ctx, "nightly"); !errors.Is(err, ErrNoAccount) {
+		t.Errorf("account: %v", err)
+	}
+}
+
+func ptrTo[T any](v T) *T { return &v }
+
+// Review (Codex): no agent key before the controller says the MCP policy in force has the agent-scope clause.
+func TestNoAgentKeyBeforeTheGatewayEnforcesTheScope(t *testing.T) {
+	s, _ := newAgentSvc(t)
+	ctx := context.Background()
+	a := mustAgent(t, s, user01("eng"), AgentInput{DisplayName: "bot"})
+	var cm corev1.ConfigMap
+	_ = s.Client.Get(ctx, client.ObjectKey{Namespace: s.Namespace, Name: controller.AccessModeConfigMap}, &cm)
+	for name, data := range map[string]map[string]string{"an older controller: no flag": {"mode": "enforce"}, "flag not 1": {controller.AgentScopeKey: "0"}} {
+		cm.Data = data
+		if err := s.Client.Update(ctx, &cm); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := s.CreateAgentKey(ctx, user01(), a.Name, "k", 30, nil); !errors.Is(err, ErrAgentsNotReady) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if err := s.Client.Delete(ctx, &cm); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.CreateAgentKey(ctx, user01(), a.Name, "k", 30, nil); !errors.Is(err, ErrAgentsNotReady) {
+		t.Errorf("no ConfigMap at all: %v", err)
+	}
+}
+
+// The limits are the stricter of the three: itself-mode keys obey apiKeys.maxDays too, and an owner address is bounded.
+func TestAgentKeyDaysAndOwnerLength(t *testing.T) {
+	s, _ := newAgentSvc(t)
+	s.Settings.MaxDays = 30
+	ctx := context.Background()
+	mustAgent(t, s, adminA, AgentInput{DisplayName: "n", Mode: ModeItself, Name: "nightly", Group: "ops"})
+	if _, _, err := s.CreateAgentKey(ctx, adminA, "nightly", "k", 90, nil); !errors.Is(err, ErrBadInput) {
+		t.Errorf("a 90-day key with apiKeys.maxDays 30: %v", err)
+	}
+	if _, _, err := s.CreateAgentKey(ctx, adminA, "nightly", "k", 30, nil); err != nil {
+		t.Errorf("30 days: %v", err)
+	}
+	long := strings.Repeat("a", 17<<10) + "@acme.com"
+	if _, err := s.CreateAgent(ctx, adminA, AgentInput{DisplayName: "n", Mode: ModeItself, Name: "big", Group: "ops", Owner: long}); !errors.Is(err, ErrBadInput) {
+		t.Errorf("a 17 KiB owner: %v", err)
 	}
 }

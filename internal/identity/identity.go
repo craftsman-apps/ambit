@@ -114,15 +114,16 @@ func scopeMatch(list string) string {
 // AgentScope is the one clause the MCP access policy adds to every rule: what an agent may use, as carried by its
 // credential (a list of "server" and "server/tool" entries, at most 50), on top of its owner's AccessRules. It does
 // not depend on the number of agents. A key of an agent without a scope list, and with tokenIssuer set a token of
-// that issuer without one, may use nothing (fail closed); an empty list matches nothing. A key without an agent and
+// that issuer without one, may use nothing (fail closed); an empty list matches nothing; a scope that is not a list
+// (CEL's `in` also finds the keys of a map) matches nothing. A key without an agent and
 // a JWT of another issuer are not limited. tokenIssuer is the issuer whose tokens may carry agent claims ("" in
 // 0.6.0 until OAuth is on: no JWT is then limited).
 func AgentScope(tokenIssuer string) string {
-	key := `has(apiKey.keyId) ? (!has(apiKey.agent) || (has(apiKey.agentScope) && ` + scopeMatch("apiKey.agentScope") + `)) : `
+	key := `has(apiKey.keyId) ? (!has(apiKey.agent) || (has(apiKey.agentScope) && type(apiKey.agentScope) == list && ` + scopeMatch("apiKey.agentScope") + `)) : `
 	if tokenIssuer == "" {
 		return key + `true`
 	}
-	return key + `((has(jwt.iss) && jwt.iss == ` + strconv.Quote(tokenIssuer) + `) ? (has(jwt.ambit_scope) && ` + scopeMatch("jwt.ambit_scope") + `) : true)`
+	return key + `((has(jwt.iss) && jwt.iss == ` + strconv.Quote(tokenIssuer) + `) ? (has(jwt.ambit_scope) && type(jwt.ambit_scope) == list && ` + scopeMatch("jwt.ambit_scope") + `) : true)`
 }
 
 // AgentAttr is one audit attribute of an agent call, read only from a verified credential: the metadata field

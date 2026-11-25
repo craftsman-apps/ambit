@@ -80,11 +80,12 @@ func adminEmail(by Session) (string, error) {
 func (s *KeyService) CreateAccount(ctx context.Context, by Session, name, group, description string) (Owner, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.createAccountLocked(ctx, by, name, group, description)
+	return s.createAccountLocked(ctx, by, name, group, description, "")
 }
 
-// createAccountLocked is CreateAccount; call it holding s.mu (an itself-mode agent creates its account with it).
-func (s *KeyService) createAccountLocked(ctx context.Context, by Session, name, group, description string) (Owner, error) {
+// createAccountLocked is CreateAccount; call it holding s.mu. An itself-mode agent creates its account with it
+// (agent names the agent; the account's keys are then made only through it).
+func (s *KeyService) createAccountLocked(ctx context.Context, by Session, name, group, description, agent string) (Owner, error) {
 	if err := s.servicesOn(); err != nil {
 		return Owner{}, err
 	}
@@ -120,7 +121,7 @@ func (s *KeyService) createAccountLocked(ctx context.Context, by Session, name, 
 		if exists {
 			return false, ErrNameTaken
 		}
-		*o = Owner{Email: id, Kind: KindServiceAccount, Groups: []string{group}, Description: description, CreatedBy: actor, Created: s.now()}
+		*o = Owner{Email: id, Kind: KindServiceAccount, Groups: []string{group}, Description: description, CreatedBy: actor, Created: s.now(), Agent: agent}
 		return true, nil
 	})
 	if apierrors.IsAlreadyExists(err) { // created meanwhile by something else: the name is taken
@@ -184,17 +185,15 @@ func (s *KeyService) createAccountKeyLocked(ctx context.Context, by Session, nam
 		return "", Key{}, err
 	}
 	var meta *KeyAgent
-	if agent == nil {
+	if agent == nil && o.Agent != "" {
 		// An itself-mode agent's keys carry its scope: a key without it would be the account's, with no limit.
-		if a, err := s.GetAgent(ctx, name); err == nil && a.Mode == ModeItself {
-			return "", Key{}, fmt.Errorf("%w: this service account is an agent; create its keys on the agent", ErrBadInput)
-		}
+		return "", Key{}, fmt.Errorf("%w: this service account is an agent; create its keys on the agent", ErrBadInput)
 	}
 	if agent != nil {
-		if scope != ScopeMCP || days > s.Agents.KeyMaxDays {
+		if scope != ScopeMCP || days > s.Agents.KeyMaxDays || days > s.Settings.MaxDays || o.Agent != name {
 			return "", Key{}, ErrBadInput
 		}
-		if meta, err = s.agentKeyMeta(ctx, name, ModeItself, ""); err != nil {
+		if meta, err = s.agentKeyMeta(ctx, name, ModeItself, "", o.UID); err != nil {
 			return "", Key{}, err
 		}
 		meta.SourceRanges = agent.ranges
@@ -244,30 +243,26 @@ func (s *KeyService) createAccountKeyLocked(ctx context.Context, by Session, nam
 func (s *KeyService) DeleteAccount(ctx context.Context, by Session, name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if err := s.deleteAccountLocked(ctx, by, name); err != nil {
+	actor, err := adminEmail(by)
+	if err != nil {
 		return err
 	}
-	// An itself-mode agent is this account: its record goes with it.
-	if a, err := s.GetAgent(ctx, name); err == nil && a.Mode == ModeItself {
-		if err := s.Client.Delete(ctx, a.record(s.Namespace)); err != nil && !apierrors.IsNotFound(err) {
-			return err
-		}
-		s.event(ctx, consoleActor, "agent-delete", "", a.Owner, "agent="+a.Name+" (its service account was deleted)")
+	// An itself-mode agent is this account: it is deleted as an agent, in the order that can be finished.
+	if o, err := s.owner(ctx, AccountIdentity(name)); err == nil && o.Agent != "" {
+		return s.deleteAgentLocked(ctx, actor, o.Agent)
+	} else if errors.Is(err, errBadOwner) {
+		slog.Warn("service account record unreadable; deleting it as an account", "account", name)
 	}
-	return nil
+	return s.deleteAccountLocked(ctx, actor, name)
 }
 
 // deleteAccountLocked is DeleteAccount; call it holding s.mu.
-func (s *KeyService) deleteAccountLocked(ctx context.Context, by Session, name string) error {
+func (s *KeyService) deleteAccountLocked(ctx context.Context, actor, name string) error {
 	ctx, cancel, err := s.opCtx(ctx)
 	if err != nil {
 		return err
 	}
 	defer cancel()
-	actor, err := adminEmail(by)
-	if err != nil {
-		return err
-	}
 	if !accountNamePattern.MatchString(name) {
 		return ErrNoAccount
 	}

@@ -418,8 +418,8 @@ func TestAuditModeAuthorization(t *testing.T) {
 		t.Errorf("pro %q, want the unpriced refusal kept", got)
 	}
 	p := objs[MCPBackendName+"-access"]
-	if e, _, _ := unstructured.NestedStringSlice(p.Object, "spec", "backend", "mcp", "authorization", "policy", "matchExpressions"); !slices.Equal(e, []string{"true"}) {
-		t.Errorf("MCP access %q, want [true]", e)
+	if e, _, _ := unstructured.NestedStringSlice(p.Object, "spec", "backend", "mcp", "authorization", "policy", "matchExpressions"); !slices.Equal(e, []string{"(true) && (" + identity.AgentScope("") + ")"}) {
+		t.Errorf("MCP access %q, want true with the agent scope kept", e)
 	}
 	cond := func(i int) string { return routeCondition(routers[0].Spec.Routes[i], "") }
 	want := [][2]string{

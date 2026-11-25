@@ -37,7 +37,7 @@ func TestAgentsAtTheLimitsEnvtest(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &KeyService{Client: c, Namespace: "ambit-system", Settings: KeySettings{Enabled: true, InactivityDays: 30, MaxDays: 365},
-		Services: ServiceSettings{Enabled: true, MaxDays: 90, ExposureDays: 7}, Agents: defaultAgents, Now: time.Now}
+		Services: ServiceSettings{Enabled: true, MaxDays: 90, ExposureDays: 7}, Agents: defaultAgents, RecordKey: testRecordKey, Now: time.Now}
 	if err := s.StartTerm(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestAgentsAtTheLimitsEnvtest(t *testing.T) {
 	for i := 0; i < s.Agents.MaxTotal; i++ {
 		a := Agent{Name: fmt.Sprintf("agent-%04d", i), DisplayName: strings.Repeat("n", 100), Owner: fmt.Sprintf("user%03d@acme.com", i/10), Mode: ModePerson,
 			Platform: "grok", Scope: scope, ConnectionConsent: []string{"slack"}, State: StateActive, Rev: 1, Created: time.Now(), CreatedBy: "x"}
-		if err := c.Create(ctx, a.record(s.Namespace)); err != nil {
+		if err := c.Create(ctx, s.record(a)); err != nil {
 			t.Fatalf("record %d: %v", i, err)
 		}
 	}

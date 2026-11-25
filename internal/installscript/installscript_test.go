@@ -161,7 +161,7 @@ func TestInstallShPinnedVersion(t *testing.T) {
 // The PATH hint stays one safe word when the directory has a quote, a space or a $ (#108).
 func TestInstallShPathHintQuotesTheDirectory(t *testing.T) {
 	base := release(t, map[string][]byte{unixArchive(): targz(t, "ambit", fakeBinary)}, false)
-	dir := filepath.Join(t.TempDir(), `it's $HOME dir`)
+	dir := filepath.Join(t.TempDir(), "it's $HOME dir\n")
 	sh := need(t, "sh")
 	if runtime.GOOS == "windows" {
 		t.Skip("install.sh is for macOS and Linux")
@@ -179,8 +179,20 @@ func TestInstallShPathHintQuotesTheDirectory(t *testing.T) {
 func TestInstallShRosettaTakesTheNativeBuild(t *testing.T) {
 	bin := t.TempDir()
 	os.WriteFile(filepath.Join(bin, "uname"), []byte("#!/bin/sh\ncase \"$1\" in -s) echo Darwin;; -m) echo x86_64;; esac\n"), 0o755)
-	os.WriteFile(filepath.Join(bin, "sysctl"), []byte("#!/bin/sh\necho 1\n"), 0o755)
+	os.WriteFile(filepath.Join(bin, "sysctl"), []byte("#!/bin/sh\n[ \"$1 $2\" = \"-n sysctl.proc_translated\" ] && echo 1 || exit 1\n"), 0o755)
 	base := release(t, map[string][]byte{"ambit_darwin_arm64.tar.gz": targz(t, "ambit", fakeBinary)}, false)
+	out, _, err := runSh(t, base, "AMBIT_VERSION=v0.2.0", "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err != nil || !strings.Contains(out, "✓ installed ambit") {
+		t.Fatalf("err %v, output:\n%s", err, out)
+	}
+}
+
+// Intel Mac, no Rosetta: the sysctl key does not exist, and the amd64 build is kept.
+func TestInstallShIntelMacKeepsAmd64(t *testing.T) {
+	bin := t.TempDir()
+	os.WriteFile(filepath.Join(bin, "uname"), []byte("#!/bin/sh\ncase \"$1\" in -s) echo Darwin;; -m) echo x86_64;; esac\n"), 0o755)
+	os.WriteFile(filepath.Join(bin, "sysctl"), []byte("#!/bin/sh\nexit 1\n"), 0o755)
+	base := release(t, map[string][]byte{"ambit_darwin_amd64.tar.gz": targz(t, "ambit", fakeBinary)}, false)
 	out, _, err := runSh(t, base, "AMBIT_VERSION=v0.2.0", "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	if err != nil || !strings.Contains(out, "✓ installed ambit") {
 		t.Fatalf("err %v, output:\n%s", err, out)

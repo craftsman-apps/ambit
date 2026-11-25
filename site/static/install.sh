@@ -107,7 +107,15 @@ printf '✓ installed ambit to %s\n' "$dir/ambit"
 case ":$PATH:" in
   *":$dir:"*) ;;
   *) # single quotes: nothing in the directory name is read by the shell; a quote inside is closed, escaped, reopened
-    qdir=$(printf '%s' "$dir" | sed "s/'/'\\\\''/g")
+    # plain shell, no sed: it keeps every byte of the name (a trailing new line, bytes that are not UTF-8)
+    qdir= rest=$dir
+    while :; do
+      case $rest in
+        *\'*) qdir=$qdir${rest%%\'*}"'\\''"; rest=${rest#*\'} ;;
+        *) break ;;
+      esac
+    done
+    qdir=$qdir$rest
     printf 'Add the directory to your PATH: export PATH='"'"'%s'"'"':"$PATH"\n' "$qdir" ;;
 esac
 printf 'Next: ambit local up\n'

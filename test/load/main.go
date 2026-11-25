@@ -55,6 +55,49 @@ func answerLine(status int, body []byte) string {
 	return string(b)
 }
 
+// failure is why one request did not count (#274): a transport error, or the status and the start of the body. A run
+// that loses every request must say why.
+func failure(err error, status int, body []byte) string {
+	if err != nil {
+		return "transport: " + err.Error()
+	}
+	b := strings.Join(strings.Fields(string(body)), " ")
+	if len(b) > 200 {
+		b = b[:200]
+	}
+	return fmt.Sprintf("status %d: %s", status, b)
+}
+
+// causeSummary is the one line for stderr: the most common causes first, at most max of them.
+func causeSummary(causes map[string]int, max int) string {
+	if len(causes) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(causes))
+	for k := range causes {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if causes[keys[i]] != causes[keys[j]] {
+			return causes[keys[i]] > causes[keys[j]]
+		}
+		return keys[i] < keys[j]
+	})
+	var parts []string
+	for _, k := range keys[:min(max, len(keys))] {
+		parts = append(parts, fmt.Sprintf("%d x %s", causes[k], k))
+	}
+	line := "errors by cause: " + strings.Join(parts, "; ")
+	if len(keys) > max {
+		more := len(keys) - max
+		line += fmt.Sprintf("; and %d more cause", more)
+		if more > 1 {
+			line += "s"
+		}
+	}
+	return line
+}
+
 // headers is a repeated -header "Name: value" flag (an MCP session id, an Accept header).
 type headers [][2]string
 
@@ -122,6 +165,7 @@ func main() {
 	var mu sync.Mutex
 	lat := make([][]float64, len(bodies))
 	offered, completed, errs := make([]int, len(bodies)), make([]int, len(bodies)), make([]int, len(bodies))
+	causes := map[string]int{}
 	var wg sync.WaitGroup
 	start := time.Now()
 	tick := time.NewTicker(time.Duration(float64(time.Second) / *rate))
@@ -182,10 +226,15 @@ func main() {
 				lat[cohort] = append(lat[cohort], ms)
 			} else {
 				errs[cohort]++
+				causes[failure(err, status, rest)]++
 			}
 		}(now)
 	})
 	wg.Wait()
+	// stderr, so the one result line per cohort on stdout keeps its format for test/bench.sh
+	if l := causeSummary(causes, 5); l != "" {
+		fmt.Fprintln(os.Stderr, l)
+	}
 	for c := range bodies {
 		p := percentiles(lat[c])
 		prefix := ""

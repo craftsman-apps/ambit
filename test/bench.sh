@@ -63,7 +63,18 @@ arch=$(kubectl get nodes -o jsonpath='{.items[0].status.nodeInfo.architecture}')
 CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -o "$W/load" ./test/load || fail "0 build the load tool"
 kubectl -n "$NS" cp "$W/load" "$POD:/tmp/load" >/dev/null
 in_pod() { kubectl -n "$NS" exec -i "$POD" -- "$@"; }
-put() { in_pod sh -c "cat > /tmp/$1"; }   # put NAME < content: a file in the sender pod
+# put NAME < content: a file in the sender pod. `kubectl exec -i` delivers an empty file about once in 75 writes (4 of 300,
+# measured 2026-11-25, #274): an empty token file made one whole run fail with 403, because the request had no
+# Authorization header. So the size in the pod is checked, and the write is repeated until it matches.
+put() {
+  cat > "$W/put.$1"
+  local want; want=$(wc -c < "$W/put.$1" | tr -d ' ')
+  for _ in 1 2 3 4 5; do
+    in_pod sh -c "cat > /tmp/$1" < "$W/put.$1"
+    [[ $(in_pod sh -c "wc -c < /tmp/$1" </dev/null | tr -d ' ') == "$want" ]] && return 0
+  done
+  fail "0 could not copy $1 (${want} bytes) into the sender pod"
+}
 echo '{"model":"mock/echo","messages":[{"role":"user","content":"Summarize the build log in one line."}]}' | put llm.json
 # the gateway names a tool <server>_<tool>
 echo '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_rows","arguments":{"n":50}}}' | put mcp-direct.json
@@ -187,8 +198,10 @@ load() {
   local c=$1 rate=$2 run=$3 u=$4 t=$5 b=$6; shift 6
   local -a h=(); for x in "$@"; do h+=(-header "$x"); done
   local line
-  line=$(in_pod /tmp/load -url "$u" -rate "$rate" -duration "$DURATION" -warmup "$WARMUP" -token-file "/tmp/$t" -body-file "/tmp/$b" ${h[@]+"${h[@]}"})
+  # stderr of the load tool: why requests failed (status and body, or the transport error), kept in runs.log (#274)
+  line=$(in_pod /tmp/load -url "$u" -rate "$rate" -duration "$DURATION" -warmup "$WARMUP" -token-file "/tmp/$t" -body-file "/tmp/$b" ${h[@]+"${h[@]}"} 2>"$W/load.err")
   echo "$c $rate $run $line" | tee -a "$OUT/runs.log"
+  [[ ! -s "$W/load.err" ]] || { sed "s/^/  $c $rate $run /" "$W/load.err" | tee -a "$OUT/runs.log"; }
   [[ "$line" =~ ^p50=([0-9.]+)ms\ p95=([0-9.]+)ms\ p99=([0-9.]+)ms\ offered=[0-9]+\ completed=([0-9]+)\ errors=([0-9]+)$ ]] ||
     fail "$c at $rate req/s, run $run: unexpected output of test/load: $line"
   # a run where more than 1 % of the requests failed measures the failure, not the gateway

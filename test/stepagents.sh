@@ -122,9 +122,16 @@ wait_for 60 '[[ $(api GET "/api/audit?platform_declared=agentcore&from=$day&to=$
 [[ $(api GET "/api/audit?email=user09@example.com&from=$day&to=$next") == 200 ]] && [[ $(field 'sum(1 for c in d["calls"] if c.get("agent","")=="" and c["identity"]=="jwt")') -ge 1 ]] || fail "7 the owner's own token calls carry no agent: $(head -c 600 "$W/api")"
 [[ $(api GET "/api/audit?ingress=public&from=$day&to=$next") == 400 ]] || fail "7 ingress alone must be refused"
 command curl -s -b "$W/jar" -o "$W/audit.zip" "$BASE/api/evidence/audit.zip?from=$day&to=$next"
-unzip -p "$W/audit.zip" calls.csv | head -1 | grep -q '^time,email,what,target,outcome,status,error,input_tokens,output_tokens,mark,rules_version,identity,key_id,subject,route,method,server,tool,model,router,path,access_mode,client_address,prompt_guard,call_id,agent,agent_mode,agent_owner_at_issue,agent_owner_now,platform_declared,grant_id,token_issuer,ingress$' ||
-  fail "7 calls.csv header: $(unzip -p "$W/audit.zip" calls.csv | head -1)"
-unzip -p "$W/audit.zip" calls.csv | grep -q ",$A1,person,user09@example.com,user09@example.com,grok,,,private" || fail "7 calls.csv has no row of the agent"
+unzip -p "$W/audit.zip" calls.csv | A1="$A1" python3 -c '
+import csv, sys, os
+rows = list(csv.reader(sys.stdin)); h = rows[0]
+want = "time,email,what,target,outcome,status,error,input_tokens,output_tokens,mark,rules_version,identity,key_id,subject,route,method,server,tool,model,router,path,access_mode,client_address,prompt_guard,call_id,agent,agent_mode,agent_owner_at_issue,agent_owner_now,platform_declared,grant_id,token_issuer,ingress"
+assert ",".join(h) == want, ",".join(h)
+i = {n: k for k, n in enumerate(h)}
+hit = [r for r in rows[1:] if r[i["agent"]] == os.environ["A1"] and r[i["agent_mode"]] == "person" and r[i["agent_owner_at_issue"]] == "user09@example.com"
+       and r[i["agent_owner_now"]] == "user09@example.com" and r[i["platform_declared"]] == "grok" and r[i["ingress"]] == "private"]
+assert hit, "no row of the agent"
+' || fail "7 calls.csv: header or the agent's rows are wrong"
 pass "7 Audit: calls of $A1 (person, grok, owner at issue and now user09, private, key $K1ID); filters agent= and platform_declared= work; calls.csv has the 8 new columns after call_id"
 
 # 8 · only the console writes agent records and the key metadata

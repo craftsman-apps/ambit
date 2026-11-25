@@ -3,6 +3,12 @@
 dex: { enabled: false }
 notifications: { enabled: false }
 applicationSet: { replicas: 0 }
+redis:
+  image:
+    # The chart's default is ecr-public.aws.com/docker/library/redis. ECR Public answers anonymous pulls from CI runners
+    # with "429 Too Many Requests: Data limit exceeded" (#363), and the install then waits 5 minutes for a redis that
+    # cannot start. Same image and tag, from Docker Hub.
+    repository: docker.io/library/redis
 configs:
   params:
     server.insecure: true

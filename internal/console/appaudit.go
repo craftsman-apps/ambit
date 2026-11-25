@@ -47,7 +47,7 @@ func refusedAction(action string) bool { return apprecord.Refused(action) }
 // AppEvent is one step of an MCP app's request and approval, as the Audit page and otel_logs hold it.
 type AppEvent = apprecord.Event
 
-// appSendFailures counts records not delivered to the collector, by reason (queue_full, send_failed).
+// appSendFailures counts records not delivered to the collector, by reason (queue_full, send_failed, closed).
 var appSendFailures = promauto.NewCounterVec(prometheus.CounterOpts{Name: "ambit_console_audit_send_failures_total",
 	Help: "MCP app request and approval records the console could not deliver to the collector, by reason."}, []string{"reason"})
 

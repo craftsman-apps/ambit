@@ -29,6 +29,7 @@ const (
 const (
 	DropQueueFull  = "queue_full"
 	DropSendFailed = "send_failed"
+	DropClosed     = "closed" // Send after Close
 )
 
 // Exporter queues records and sends them in batches. Send never blocks and never fails: a record that cannot be
@@ -43,6 +44,8 @@ type Exporter struct {
 	stop    chan struct{}      // closed by Close; the queue itself is never closed, so a late Send cannot panic
 	flush   chan chan struct{} // Flush requests
 	once    sync.Once
+	mu      sync.RWMutex // Send holds it shared while it queues; Close holds it to refuse later records
+	closed  bool
 	warn    time.Time // last logged send failure
 }
 
@@ -60,11 +63,22 @@ func New(endpoint, service string, dropped *prometheus.CounterVec) (*Exporter, e
 }
 
 func newExporter(service string, dropped *prometheus.CounterVec, queue int) *Exporter {
+	// Create every series at 0 now: a series that first appears at its first loss has no earlier sample, so
+	// increase() would not see that loss and an alert on it would stay silent.
+	for _, r := range []string{DropQueueFull, DropSendFailed, DropClosed} {
+		dropped.WithLabelValues(r)
+	}
 	return &Exporter{service: service, dropped: dropped, queue: make(chan *logspb.LogRecord, queue), done: make(chan struct{}), stop: make(chan struct{}), flush: make(chan chan struct{})}
 }
 
 // Send queues rec. It returns at once.
 func (e *Exporter) Send(rec *logspb.LogRecord) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.closed { // the worker has stopped or is about to; nothing would send this record
+		e.dropped.WithLabelValues(DropClosed).Inc()
+		return
+	}
 	select {
 	case e.queue <- rec:
 	default:
@@ -86,7 +100,12 @@ func (e *Exporter) Flush() {
 // Close sends what is queued and stops. It waits at most Timeout: with the collector down every batch would take
 // that long, and the process must still exit. Records not sent by then are lost, as when the collector is down.
 func (e *Exporter) Close() {
-	e.once.Do(func() { close(e.stop) })
+	e.once.Do(func() {
+		e.mu.Lock() // waits for Sends that are queuing now; the worker drains them after stop
+		e.closed = true
+		e.mu.Unlock()
+		close(e.stop)
+	})
 	select {
 	case <-e.done:
 	case <-time.After(Timeout):

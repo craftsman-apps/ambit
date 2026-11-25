@@ -110,7 +110,7 @@ Not supported in this release: a layer-7 load balancer or a CDN that ends TLS an
 Ambit does not test cloud load balancers in CI. What is tested on kind: a connection with no PROXY header (`direct`), and
 a connection that sends a made-up client address in a PROXY header (`proxyProtocol`). On your cloud, check the address
 once after install: call the front door from a machine whose address you know, then read the record in Audit or in
-ClickHouse (`LogAttributes['src.addr']`).
+ClickHouse (`LogAttributes['client.address']`).
 
 ## Rate limits
 

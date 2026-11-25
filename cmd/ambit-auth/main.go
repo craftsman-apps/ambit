@@ -1,7 +1,8 @@
-// ambit-auth is Ambit's OAuth sign-in component (experimental in 0.6.x, docs/oauth.md). This build has the two commands
+// ambit-auth is Ambit's OAuth sign-in component (experimental in 0.6.x, docs/oauth.md). It runs the sign-in host, and two commands
 // that run beside Ory Hydra:
 //
 //	ambit-auth check-database   an init container of Hydra's pods: the DSN, the server and the role (exit 1: not usable)
+//	ambit-auth serve            the sign-in host (docs/oauth.md)
 //	ambit-auth hydra-keys       a container of Hydra's pods: keeps the signing key sets at one key, and is the pod's readiness
 package main
 
@@ -22,7 +23,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: ambit-auth check-database | hydra-keys")
+		fmt.Fprintln(os.Stderr, "usage: ambit-auth serve | check-database | hydra-keys")
 		os.Exit(2)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -31,6 +32,8 @@ func main() {
 	switch os.Args[1] {
 	case "check-database":
 		err = checkDatabase(ctx, os.Args[2:])
+	case "serve":
+		err = serve(ctx)
 	case "hydra-keys":
 		err = hydraKeys(ctx, os.Args[2:])
 	default:

@@ -231,8 +231,18 @@ spec:
         has(object.spec.rules[0].backendRefs) && size(object.spec.rules[0].backendRefs) == 1 &&
         object.spec.rules[0].backendRefs[0].name == "ambit-hydra-public" &&
         (!has(object.spec.rules[0].backendRefs[0].kind) || object.spec.rules[0].backendRefs[0].kind == "Service"))
+        || (object.kind == "HTTPRoute" && object.metadata.name == "ambit-auth-app" &&
+        size(object.spec.parentRefs) == 1 &&
+        has(object.spec.hostnames) && object.spec.hostnames == [{{ $fd.authHost | quote }}] &&
+        has(object.spec.rules) && size(object.spec.rules) == 1 &&
+        has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) <= 8 &&
+        object.spec.rules[0].matches.all(m, has(m.path) && m.path.type == "Exact" && has(m.method) &&
+        (m.method + " " + m.path.value) in ["GET /.well-known/oauth-authorization-server", "GET /oauth2/auth", "GET /login", "GET /callback", "GET /consent", "POST /consent", "GET /error", "POST /register"]) &&
+        has(object.spec.rules[0].backendRefs) && size(object.spec.rules[0].backendRefs) == 1 &&
+        object.spec.rules[0].backendRefs[0].name == "ambit-auth" &&
+        (!has(object.spec.rules[0].backendRefs[0].kind) || object.spec.rules[0].backendRefs[0].kind == "Service"))
 {{- end }}
-      message: "only the routes that the chart sets may be attached to the public Gateway ambit-public (ambit-mcp-public{{ if (.Values.oauth | default dict).enabled }}, ambit-auth-hydra{{ end }}), each with its host, exact paths and backend"
+      message: "only the routes that the chart sets may be attached to the public Gateway ambit-public (ambit-mcp-public{{ if (.Values.oauth | default dict).enabled }}, ambit-auth-hydra, ambit-auth-app{{ end }}), each with its host, exact paths and backend"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

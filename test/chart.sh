@@ -329,6 +329,7 @@ MSG='perSourcePerMinute' refuse "a zero limit" --set frontDoor.rateLimit.perSour
 # and every refusal names its value.
 oav=("${fdv[@]}" -f test/oauth/values.yaml)
 oat() { helm template ambit charts/ambit -n ambit-system "${oav[@]}" "$@"; }
+RT=oat  # refuse() below renders with the OAuth values
 ! grep -q 'ambit-hydra\|https-auth\|ambit-auth-hydra' <<<"$fd" || { echo "FAIL chart: nothing of OAuth is rendered by default"; exit 1; }
 oa=$(oat) || { echo "FAIL chart: the OAuth values must render"; exit 1; }
 check_oa() { uv run --no-project --with pyyaml python -c "import sys,yaml,json
@@ -339,7 +340,7 @@ check_oa 'l=one("Gateway","ambit-public")["spec"]["listeners"]
 assert [(x["name"],x["hostname"],x["protocol"]) for x in l]==[("https","mcp-public.localtest.me","HTTPS"),("https-auth","auth.localtest.me","HTTPS")], l
 assert all(x["tls"]["mode"]=="Terminate" and x["tls"]["certificateRefs"]==[{"name":"ambit-public-tls"}] for x in l), l' "public Gateway: a second HTTPS listener for the sign-in host, same certificate, no HTTP listener"
 check_oa 'on=sorted(x["metadata"]["name"] for x in docs if x["kind"] in ("HTTPRoute","GRPCRoute","TLSRoute","TCPRoute","UDPRoute") and any(p["name"]=="ambit-public" for p in x["spec"].get("parentRefs",[])))
-assert on==["ambit-auth-hydra","ambit-mcp-public"], on
+assert on==["ambit-auth-app","ambit-auth-hydra","ambit-mcp-public"], on
 r=one("HTTPRoute","ambit-auth-hydra")["spec"]
 assert r["parentRefs"]==[{"name":"ambit-public","sectionName":"https-auth"}] and r["hostnames"]==["auth.localtest.me"], r
 assert len(r["rules"])==1, r
@@ -388,9 +389,52 @@ assert sorted(list(f["podSelector"]["matchLabels"].values())[0] for f in pub["fr
 assert sorted(list(f["podSelector"]["matchLabels"].values())[0] for f in adm["from"])==["ambit-auth","ambit-console"], adm
 assert len(n["ingress"])==2, n
 pdb=one("PodDisruptionBudget","ambit-hydra")["spec"]; assert pdb["minAvailable"]==1' "Hydra: ClusterIP Services, the admin port only for ambit-auth and the console, the public port only for the public Gateway and the controller"
+check_oa 'r=one("HTTPRoute","ambit-auth-app")["spec"]
+assert r["parentRefs"]==[{"name":"ambit-public","sectionName":"https-auth"}] and r["hostnames"]==["auth.localtest.me"] and len(r["rules"])==1, r
+m=sorted((x["method"],x["path"]["type"],x["path"]["value"]) for x in r["rules"][0]["matches"])
+assert m==[("GET","Exact","/.well-known/oauth-authorization-server"),("GET","Exact","/callback"),("GET","Exact","/consent"),("GET","Exact","/error"),("GET","Exact","/login"),("GET","Exact","/oauth2/auth"),("POST","Exact","/consent"),("POST","Exact","/register")], m
+assert r["rules"][0]["backendRefs"]==[{"name":"ambit-auth","port":8080}], r
+# the two routes do not overlap: /oauth2/token, /oauth2/revoke and the key list are Hydra'"'"'s only
+assert not any(x["path"]["value"] in ("/oauth2/token","/oauth2/revoke","/.well-known/jwks.json") for x in r["rules"][0]["matches"])
+p=one("AgentgatewayPolicy","ambit-auth-public-headers")["spec"]
+assert p["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute","name":"ambit-auth-app"}], p
+t=p["traffic"]["transformation"]["request"]
+assert t["set"]==[{"name":"x-ambit-client-address","value":"string(source.address)"}] and set(t["remove"])=={"x-forwarded-for","x-real-ip","forwarded"}, t
+v=one("ValidatingAdmissionPolicy","ambit-public-routes")["spec"]["validations"][0]["expression"]
+assert "ambit-auth-app" in v and "GET /login" in v, v' "ambit-auth: exact pages on the sign-in host, the Gateway writes the client address and removes forwarded headers, the route policy admits only this route"
+check_oa 'd=one("Deployment","ambit-auth")["spec"]; p=d["template"]["spec"]
+assert d["replicas"]==2 and p["securityContext"]["runAsNonRoot"] is True, d
+c=p["containers"][0]; assert c["command"]==["/ambit-auth","serve"] and c["securityContext"]["readOnlyRootFilesystem"] is True, c
+env={e["name"]:e for e in c["env"]}
+for n in ("AMBIT_AUTH_IDP_CLIENT_SECRET","AMBIT_AUTH_COOKIE_SECRET"): assert "secretKeyRef" in env[n]["valueFrom"] and "value" not in env[n], n
+assert env["AMBIT_AUTH_PUBLIC_URL"]["value"]=="https://auth.localtest.me" and env["AMBIT_AUTH_RESOURCE"]["value"]=="https://mcp-public.localtest.me/mcp", env
+assert env["AMBIT_AUTH_REGISTRATION_HOSTS"]["value"]=="chatgpt.com,claude.ai" and env["AMBIT_AUTH_MAX_CLIENTS"]["value"]=="500", env
+assert env["AMBIT_AUTH_VALKEY_ADDRESS"]["value"]=="ambit-valkey:6379" and "AMBIT_AUTH_VALKEY_TLS" not in env, env
+pr=p["volumes"][0]["projected"]["sources"][0]["serviceAccountToken"]; assert pr["audience"]=="ambit-console", pr
+role=one("Role","ambit-auth")["rules"]
+assert role==[{"apiGroups":[""],"resources":["configmaps"],"resourceNames":["ambit-offboarded","ambit-agent-stops"],"verbs":["get"]}], role
+n=one("NetworkPolicy","ambit-auth")["spec"]["ingress"]
+assert n[0]["ports"]==[{"port":8080}] and n[0]["from"][0]["podSelector"]["matchLabels"]=={"gateway.networking.k8s.io/gateway-name":"ambit-public"}, n
+assert n[1]["ports"]==[{"port":8081}] and n[1]["from"][0]["podSelector"]["matchLabels"]=={"app.kubernetes.io/name":"ambit-hydra"}, n
+vk=[x for x in docs if x["kind"]=="NetworkPolicy" and x["metadata"]["name"]=="ambit-valkey"][0]["spec"]["ingress"][0]["from"]
+assert {"podSelector":{"matchLabels":{"app.kubernetes.io/name":"ambit-auth"}}} in vk, vk' "ambit-auth: two replicas, secrets from Secrets only, a token for the console only, reads two ConfigMaps by name, pages reachable from the public Gateway only, the hook from Hydra only, allowed to reach Valkey"
+off_dcr=$(oat --set oauth.registration.dynamic.enabled=false)
+! grep -q 'value: /register' <<<"$off_dcr" && ! grep -q 'path: { type: Exact, value: /register }' <<<"$off_dcr" || { echo "FAIL chart: no /register route when dynamic registration is off"; exit 1; }
+grep -q 'AMBIT_AUTH_REGISTRATION' <<<"$off_dcr" || { echo "FAIL chart: ambit-auth must be told that registration is off"; exit 1; }
+MSG='oauth.signIn.issuer' refuse "no identity provider" --set oauth.signIn.issuer=
+MSG='oauth.signIn.issuer' refuse "an http identity provider" --set oauth.signIn.issuer=http://idp.example.com
+MSG='end with a slash' refuse "an issuer with a final slash" --set oauth.signIn.issuer=https://idp.example.com/
+MSG='oauth.signIn.clientID' refuse "no client ID" --set oauth.signIn.clientID=
+MSG='oauth.signIn.clientSecret' refuse "no client secret" --set oauth.signIn.clientSecret.name=
+MSG='oauth.cookieSecret' refuse "no cookie secret" --set oauth.cookieSecret.name=
+MSG='limits.enabled' refuse "OAuth without shared limits" --set limits.enabled=false
+MSG='redirectHosts' refuse "dynamic registration without hosts" --set 'oauth.registration.dynamic.redirectHosts={}'
+MSG='lower-case host name' refuse "a wildcard registration host" --set 'oauth.registration.dynamic.redirectHosts={*.example.com}'
+MSG='lower-case host name' refuse "a registration host with a scheme" --set 'oauth.registration.dynamic.redirectHosts={https://chatgpt.com}'
+MSG='maxClients' refuse "a client cap of 0" --set oauth.registration.dynamic.maxClients=0
 one_r=$(oat --set oauth.hydra.replicas=1)
 ! grep -q 'name: ambit-hydra$' <(sed -n '/kind: PodDisruptionBudget/,/^---/p' <<<"$one_r") || { echo "FAIL chart: one Hydra pod needs no PodDisruptionBudget"; exit 1; }
-RT=oat; MSG='frontDoor.enabled' refuse "OAuth without the front door" --set frontDoor.enabled=false
+MSG='frontDoor.enabled' refuse "OAuth without the front door" --set frontDoor.enabled=false
 MSG='frontDoor.authHost' refuse "OAuth without a sign-in host" --set frontDoor.authHost=
 MSG='own' refuse "the sign-in host named like the MCP host" --set frontDoor.authHost=mcp-public.localtest.me
 MSG='own' refuse "the sign-in host named like the console" --set frontDoor.authHost=console.localtest.me

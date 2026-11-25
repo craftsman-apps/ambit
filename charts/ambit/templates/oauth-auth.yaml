@@ -1,0 +1,208 @@
+{{- $o := .Values.oauth | default dict }}
+{{- if $o.enabled }}
+{{- /* ambit-auth (experimental in 0.6.x, docs/oauth.md): the pages of the sign-in host, the registration of clients and
+Hydra's token hook. Stateless: a pending sign-in is in the person's browser, counters are in Valkey. No Secret is rendered. */ -}}
+{{- $fd := .Values.frontDoor }}
+{{- $si := $o.signIn | default dict }}
+{{- $au := $o.auth | default dict }}
+{{- $dcr := ($o.registration | default dict).dynamic | default dict }}
+{{- if not (hasPrefix "https://" ($si.issuer | default "")) }}{{ fail "oauth.signIn.issuer must be the https address of your identity provider (for example https://idp.example.com or https://idp.example.com/realms/acme)" }}{{ end }}
+{{- if hasSuffix "/" $si.issuer }}{{ fail "oauth.signIn.issuer must not end with a slash: it is compared as the provider writes it" }}{{ end }}
+{{- if not $si.clientID }}{{ fail "oauth.signIn.clientID is needed (the client you registered at your identity provider, docs/oauth.md)" }}{{ end }}
+{{- range $v := list (dict "k" "oauth.signIn.clientSecret" "v" $si.clientSecret) (dict "k" "oauth.cookieSecret" "v" $o.cookieSecret) }}
+{{- if not (and $v.v $v.v.name $v.v.key) }}{{ fail (printf "oauth.enabled=true needs %s.name and %s.key: a Secret you create (docs/oauth.md, \"Before you turn it on\")" $v.k $v.k) }}{{ end }}
+{{- end }}
+{{- if lt (int $au.replicas) 1 }}{{ fail "oauth.auth.replicas must be 1 or more" }}{{ end }}
+{{- if not .Values.limits.enabled }}{{ fail "oauth.enabled=true needs limits.enabled=true: sign-in and registration limits are counted in Valkey, shared by all replicas" }}{{ end }}
+{{- if $dcr.enabled }}
+{{- if not $dcr.redirectHosts }}{{ fail "oauth.registration.dynamic.redirectHosts must name at least one host, or set oauth.registration.dynamic.enabled=false" }}{{ end }}
+{{- range $h := $dcr.redirectHosts }}{{ if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$" $h) }}{{ fail (printf "oauth.registration.dynamic.redirectHosts: %q must be a lower-case host name (no scheme, port, path or wildcard)" $h) }}{{ end }}{{ end }}
+{{- if or (lt (int $dcr.maxClients) 1) (gt (int $dcr.maxClients) 5000) }}{{ fail "oauth.registration.dynamic.maxClients must be 1 to 5000" }}{{ end }}
+{{- if lt (int $dcr.unusedClientDays) 1 }}{{ fail "oauth.registration.dynamic.unusedClientDays must be 1 or more" }}{{ end }}
+{{- end }}
+{{- $img := printf "%s:%s" .Values.console.image.repository (.Values.console.image.tag | default .Chart.AppVersion) }}
+{{- $sc := dict "allowPrivilegeEscalation" false "readOnlyRootFilesystem" true "capabilities" (dict "drop" (list "ALL")) | toJson }}
+{{- $valkey := .Values.limits.valkey.external | default dict }}
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: ambit-auth }
+---
+# It reads two lists and nothing else: the offboarded people and the stopped agents and grants. It writes nothing.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: ambit-auth }
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [ambit-offboarded, ambit-agent-stops]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: ambit-auth }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: ambit-auth }
+subjects: [{ kind: ServiceAccount, name: ambit-auth }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ambit-auth
+  labels: { app.kubernetes.io/name: ambit-auth }
+spec:
+  replicas: {{ int $au.replicas }}
+  strategy: { type: RollingUpdate, rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } }
+  selector:
+    matchLabels: { app.kubernetes.io/name: ambit-auth }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: ambit-auth }
+    spec:
+      serviceAccountName: ambit-auth
+      terminationGracePeriodSeconds: 30
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      topologySpreadConstraints:
+        - { maxSkew: 1, topologyKey: kubernetes.io/hostname, whenUnsatisfiable: ScheduleAnyway, labelSelector: { matchLabels: { app.kubernetes.io/name: ambit-auth } } }
+      containers:
+        - name: ambit-auth
+          image: {{ $img | quote }}
+          imagePullPolicy: {{ .Values.console.image.pullPolicy }}
+          command: [/ambit-auth, serve]
+          env:
+            - { name: AMBIT_NAMESPACE, valueFrom: { fieldRef: { fieldPath: metadata.namespace } } }
+            - { name: AMBIT_AUTH_PUBLIC_URL, value: {{ printf "https://%s" $fd.authHost | quote }} }
+            - { name: AMBIT_AUTH_RESOURCE, value: {{ printf "https://%s/mcp" $fd.host | quote }} }
+            - { name: AMBIT_AUTH_IDP_ISSUER, value: {{ $si.issuer | quote }} }
+            - { name: AMBIT_AUTH_IDP_CLIENT_ID, value: {{ $si.clientID | quote }} }
+            - { name: AMBIT_AUTH_GROUPS_CLAIM, value: {{ $si.groupsClaim | default "groups" | quote }} }
+            - name: AMBIT_AUTH_IDP_CLIENT_SECRET
+              valueFrom: { secretKeyRef: { name: {{ $si.clientSecret.name | quote }}, key: {{ $si.clientSecret.key | quote }} } }
+            - name: AMBIT_AUTH_COOKIE_SECRET
+              valueFrom: { secretKeyRef: { name: {{ $o.cookieSecret.name | quote }}, key: {{ $o.cookieSecret.key | quote }} } }
+            - { name: AMBIT_AUTH_HYDRA_ADMIN, value: "http://ambit-hydra-admin:4445" }
+            - { name: AMBIT_AUTH_HYDRA_PUBLIC, value: "http://ambit-hydra-public:4444" }
+            - { name: AMBIT_AUTH_CONSOLE_URL, value: {{ $au.consoleURL | default "http://ambit-console:8085" | quote }} }
+            - { name: AMBIT_AUTH_CONSOLE_TOKEN_FILE, value: /var/run/ambit/console/token }
+            - { name: AMBIT_AUTH_VALKEY_ADDRESS, value: {{ include "ambit.valkey.address" . | quote }} }
+            {{- if and $valkey.address $valkey.tls }}
+            - { name: AMBIT_AUTH_VALKEY_TLS, value: "true" }
+            {{- if include "ambit.valkey.ca" . }}
+            - { name: AMBIT_AUTH_VALKEY_CA, value: /etc/ambit/valkey-ca/ca.crt }
+            {{- end }}
+            {{- end }}
+            {{- if and $valkey.address $valkey.passwordSecret }}
+            - name: AMBIT_AUTH_VALKEY_PASSWORD
+              valueFrom: { secretKeyRef: { name: {{ $valkey.passwordSecret | quote }}, key: password } }
+            {{- end }}
+            {{- if $dcr.enabled }}
+            - { name: AMBIT_AUTH_REGISTRATION_HOSTS, value: {{ join "," $dcr.redirectHosts | quote }} }
+            - { name: AMBIT_AUTH_MAX_CLIENTS, value: {{ $dcr.maxClients | quote }} }
+            - { name: AMBIT_AUTH_UNUSED_CLIENT_DAYS, value: {{ $dcr.unusedClientDays | quote }} }
+            {{- else }}
+            - { name: AMBIT_AUTH_REGISTRATION, value: "off" }
+            {{- end }}
+            {{- if $si.caSecret }}
+            # Go reads every directory in SSL_CERT_DIR: system CAs plus the identity provider's.
+            - { name: SSL_CERT_DIR, value: "/etc/ssl/certs:/etc/ambit/idp-ca" }
+            {{- end }}
+          ports:
+            - { name: public, containerPort: 8080 }
+            - { name: hook, containerPort: 8081 }
+            - { name: ops, containerPort: 8082 }
+          # Ready only while Hydra, Valkey and the offboarding and stop lists answer.
+          readinessProbe: { httpGet: { path: /readyz, port: ops }, periodSeconds: 3 }
+          livenessProbe: { httpGet: { path: /healthz, port: ops }, periodSeconds: 10, failureThreshold: 6 }
+          lifecycle: { preStop: { sleep: { seconds: 5 } } }
+          securityContext: {{ $sc }}
+          resources: {{- toYaml $au.resources | nindent 12 }}
+          volumeMounts:
+            # The pod's identity toward the console, for the console only (audience ambit-console).
+            - { name: console-token, mountPath: /var/run/ambit/console, readOnly: true }
+            {{- if and $valkey.address $valkey.tls (include "ambit.valkey.ca" .) }}
+            - { name: valkey-ca, mountPath: /etc/ambit/valkey-ca, readOnly: true }
+            {{- end }}
+            {{- if $si.caSecret }}
+            - { name: idp-ca, mountPath: /etc/ambit/idp-ca, readOnly: true }
+            {{- end }}
+      volumes:
+        - name: console-token
+          projected:
+            sources:
+              - serviceAccountToken: { audience: ambit-console, expirationSeconds: 3600, path: token }
+        {{- if and $valkey.address $valkey.tls (include "ambit.valkey.ca" .) }}
+        - { name: valkey-ca, secret: { secretName: {{ include "ambit.valkey.ca" . | quote }}, items: [{ key: ca.crt, path: ca.crt }] } }
+        {{- end }}
+        {{- if $si.caSecret }}
+        - { name: idp-ca, secret: { secretName: {{ $si.caSecret | quote }}, items: [{ key: ca.crt, path: ca.crt }] } }
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata: { name: ambit-auth }
+spec:
+  selector: { app.kubernetes.io/name: ambit-auth }
+  ports:
+    - { name: public, port: 8080, targetPort: public }
+    - { name: hook, port: 8081, targetPort: hook }
+    - { name: ops, port: 8082, targetPort: ops }
+{{- if gt (int $au.replicas) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: ambit-auth }
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: ambit-auth }
+{{- end }}
+---
+# Port 8080 (the pages): the public Gateway's pods only, so the client address header that the Gateway writes cannot come
+# from anyone else. Port 8081 (the token hook): Hydra's pods only. Port 8082 (health, metrics): any pod of the cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: ambit-auth }
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: ambit-auth }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit-public } } }]
+      ports: [{ port: 8080 }]
+    - from: [{ podSelector: { matchLabels: { app.kubernetes.io/name: ambit-hydra } } }]
+      ports: [{ port: 8081 }]
+    - ports: [{ port: 8082 }]
+---
+# The sign-in host's pages. Exact paths and methods; Hydra's token, revoke and key routes are ambit-auth-hydra (oauth.yaml).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: { name: ambit-auth-app }
+spec:
+  parentRefs: [{ name: ambit-public, sectionName: https-auth }]
+  hostnames: [{{ $fd.authHost | quote }}]
+  rules:
+    - name: pages
+      matches:
+        - { method: GET, path: { type: Exact, value: /.well-known/oauth-authorization-server } }
+        - { method: GET, path: { type: Exact, value: /oauth2/auth } }
+        - { method: GET, path: { type: Exact, value: /login } }
+        - { method: GET, path: { type: Exact, value: /callback } }
+        - { method: GET, path: { type: Exact, value: /consent } }
+        - { method: POST, path: { type: Exact, value: /consent } }
+        - { method: GET, path: { type: Exact, value: /error } }
+        {{- if $dcr.enabled }}
+        - { method: POST, path: { type: Exact, value: /register } }
+        {{- end }}
+      backendRefs: [{ name: ambit-auth, port: 8080 }]
+---
+# The address of the caller, from the connection (or the PROXY protocol header, frontDoor.clientAddress): written by the
+# Gateway, replacing anything the caller sent. ambit-auth counts its limits by it and reads no X-Forwarded-For.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata: { name: ambit-auth-public-headers }
+spec:
+  targetRefs: [{ group: gateway.networking.k8s.io, kind: HTTPRoute, name: ambit-auth-app }]
+  traffic:
+    transformation:
+      request:
+        set: [{ name: x-ambit-client-address, value: "string(source.address)" }]
+        remove: [x-forwarded-for, x-real-ip, forwarded]
+{{- end }}

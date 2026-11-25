@@ -10,3 +10,10 @@ oauth:
     caSecret: { name: ambit-oauth-db-ca, key: ca.crt }
   hydra:
     systemSecret: { name: ambit-oauth-hydra, key: system }
+  signIn:
+    issuer: https://idp.oauth-test.svc
+    clientID: ambit-auth
+    clientSecret: { name: ambit-oauth-idp, key: client-secret }
+  cookieSecret: { name: ambit-oauth-cookie, key: cookie }
+  registration:
+    dynamic: { enabled: true, redirectHosts: [chatgpt.com, claude.ai] }

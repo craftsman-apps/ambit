@@ -62,7 +62,7 @@ type AppEvent struct {
 	Reason      string    `json:"reason"` // refused actions: why the console refused
 }
 
-// appSendFailures counts records not delivered to the collector, by reason (queue_full, send_failed).
+// appSendFailures counts records not delivered to the collector, by reason (queue_full, send_failed, closed).
 var appSendFailures = promauto.NewCounterVec(prometheus.CounterOpts{Name: "ambit_console_audit_send_failures_total",
 	Help: "MCP app request and approval records the console could not deliver to the collector, by reason."}, []string{"reason"})
 

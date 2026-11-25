@@ -40,6 +40,7 @@ type Exporter struct {
 	dropped *prometheus.CounterVec
 	queue   chan *logspb.LogRecord
 	done    chan struct{}
+	stop    chan struct{}      // closed by Close; the queue itself is never closed, so a late Send cannot panic
 	flush   chan chan struct{} // Flush requests
 	once    sync.Once
 	warn    time.Time // last logged send failure
@@ -59,7 +60,7 @@ func New(endpoint, service string, dropped *prometheus.CounterVec) (*Exporter, e
 }
 
 func newExporter(service string, dropped *prometheus.CounterVec, queue int) *Exporter {
-	return &Exporter{service: service, dropped: dropped, queue: make(chan *logspb.LogRecord, queue), done: make(chan struct{}), flush: make(chan chan struct{})}
+	return &Exporter{service: service, dropped: dropped, queue: make(chan *logspb.LogRecord, queue), done: make(chan struct{}), stop: make(chan struct{}), flush: make(chan chan struct{})}
 }
 
 // Send queues rec. It returns at once.
@@ -85,7 +86,7 @@ func (e *Exporter) Flush() {
 // Close sends what is queued and stops. It waits at most Timeout: with the collector down every batch would take
 // that long, and the process must still exit. Records not sent by then are lost, as when the collector is down.
 func (e *Exporter) Close() {
-	e.once.Do(func() { close(e.queue) })
+	e.once.Do(func() { close(e.stop) })
 	select {
 	case <-e.done:
 	case <-time.After(Timeout):
@@ -104,36 +105,34 @@ func (e *Exporter) run() {
 			batch = batch[:0]
 		}
 	}
-	for {
-		select {
-		case rec, ok := <-e.queue:
-			if !ok {
-				flush()
+	drain := func() { // everything queued now
+		for {
+			select {
+			case rec := <-e.queue:
+				if batch = append(batch, rec); len(batch) >= Batch {
+					flush()
+				}
+			default:
 				return
 			}
+		}
+	}
+	for {
+		select {
+		case rec := <-e.queue:
 			if batch = append(batch, rec); len(batch) >= Batch {
 				flush()
 			}
 		case <-tick.C:
 			flush()
 		case ack := <-e.flush:
-			for drained := false; !drained; {
-				select {
-				case rec, ok := <-e.queue:
-					if !ok {
-						drained = true
-						break
-					}
-					batch = append(batch, rec)
-					if len(batch) >= Batch {
-						flush()
-					}
-				default:
-					drained = true
-				}
-			}
+			drain()
 			flush()
 			close(ack)
+		case <-e.stop:
+			drain()
+			flush()
+			return
 		}
 	}
 }

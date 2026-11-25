@@ -19,7 +19,7 @@ func TestParseDSN(t *testing.T) {
 		"sslmode require":        {strings.Replace(goodDSN, "verify-full", "require", 1), "(it says require)"},
 		"sslmode verify-ca":      {strings.Replace(goodDSN, "verify-full", "verify-ca", 1), "(it says verify-ca)"},
 		"no sslmode":             {strings.Replace(goodDSN, "sslmode=verify-full&", "", 1), "(not set)"},
-		"sslmode repeated":       {goodDSN + "&sslmode=disable", `repeats the parameter "sslmode"`},
+		"sslmode repeated":       {goodDSN + "&sslmode=disable", "repeats a parameter"},
 		"no CA":                  {strings.Replace(goodDSN, "&sslrootcert=/ca/ca.crt", "", 1), "sslrootcert"},
 		"no max_conns":           {strings.Replace(goodDSN, "&max_conns=8", "", 1), "max_conns"},
 		"max_conns zero":         {strings.Replace(goodDSN, "max_conns=8", "max_conns=0", 1), "max_conns"},

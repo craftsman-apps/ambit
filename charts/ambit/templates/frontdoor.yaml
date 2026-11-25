@@ -228,9 +228,18 @@ spec:
         has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) == 3 &&
         object.spec.rules[0].matches.all(m, has(m.path) && m.path.type == "Exact" && has(m.method) &&
         ((m.method == "POST" && m.path.value in ["/oauth2/token", "/oauth2/revoke"]) || (m.method == "GET" && m.path.value == "/.well-known/jwks.json"))) &&
+        object.spec.rules[0].matches.exists(m, m.method == "POST" && m.path.value == "/oauth2/token") &&
+        object.spec.rules[0].matches.exists(m, m.method == "POST" && m.path.value == "/oauth2/revoke") &&
+        object.spec.rules[0].matches.exists(m, m.method == "GET" && m.path.value == "/.well-known/jwks.json") &&
+        has(object.spec.parentRefs[0].sectionName) && object.spec.parentRefs[0].sectionName == "https-auth" &&
+        (!has(object.spec.rules[0].filters) || object.spec.rules[0].filters.all(f, f.type == "RequestHeaderModifier")) &&
+        !has(object.spec.rules[0].timeouts) && !has(object.spec.rules[0].sessionPersistence) &&
         has(object.spec.rules[0].backendRefs) && size(object.spec.rules[0].backendRefs) == 1 &&
         object.spec.rules[0].backendRefs[0].name == "ambit-hydra-public" &&
-        (!has(object.spec.rules[0].backendRefs[0].kind) || object.spec.rules[0].backendRefs[0].kind == "Service"))
+        (!has(object.spec.rules[0].backendRefs[0].kind) || object.spec.rules[0].backendRefs[0].kind == "Service") &&
+        (!has(object.spec.rules[0].backendRefs[0].group) || object.spec.rules[0].backendRefs[0].group == "") &&
+        !has(object.spec.rules[0].backendRefs[0].namespace) && object.spec.rules[0].backendRefs[0].port == 4444 &&
+        (!has(object.spec.rules[0].backendRefs[0].filters) || size(object.spec.rules[0].backendRefs[0].filters) == 0))
 {{- end }}
       message: {{ if (.Values.oauth | default dict).enabled }}"only the routes that the chart sets may be attached to the public Gateway ambit-public (ambit-mcp-public, ambit-auth-hydra), each with its host, exact paths and backend"{{ else }}"only the route ambit-mcp-public may be attached to the public Gateway ambit-public, with the host, the exact path /mcp and the backend ambit-mcp-public that the chart sets"{{ end }}
 ---

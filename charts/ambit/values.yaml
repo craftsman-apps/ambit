@@ -218,8 +218,8 @@ oauth:
   # OAuth for MCP clients. Ory Hydra issues the tokens; it needs a PostgreSQL database that you run (15 to 17, TLS, backups).
   # Off by default. Needs frontDoor.enabled, frontDoor.authHost, oauth.database and oauth.hydra.systemSecret.
   enabled: false
-  # How long an access token lives, in minutes. A stop or an offboarding refuses a token at once at the gateways; this
-  # only bounds the rare cases where that cannot happen (docs/oauth.md, "Stopping a connection").
+  # How long an access token lives, in minutes. The gateways will refuse a stopped or offboarded person's token at once (a later change of
+  # this release series); this only bounds the rare cases where that cannot happen (docs/oauth.md, "Stopping a connection").
   accessTokenMinutes: 15
   # A refresh token not used for this many days stops working.
   refreshTokenIdleDays: 30

@@ -28,6 +28,14 @@ The chart refuses `oauth.enabled: true` unless each of these is set, and the mes
 | `oauth.database.dsnSecret`, `oauth.database.caSecret` | The address of the database and the CA that signed its certificate. |
 | `oauth.hydra.systemSecret` | A random string that encrypts Hydra's keys and tokens in the database. |
 
+Look at the routes first, as for the [front door](front-door.md#before-you-turn-it-on): the admission policy checks routes when
+they are created or changed, so a route that names `ambit-public` **before** OAuth is turned on is not checked. No route
+except the ones this chart writes may name it:
+
+```
+kubectl -n ambit-system get httproutes -o custom-columns=NAME:.metadata.name,GATEWAYS:.spec.parentRefs[*].name
+```
+
 Create the three Secrets first. Nothing secret is ever written into the chart's values or objects.
 
 ```
@@ -58,8 +66,8 @@ oauth:
 ## PostgreSQL
 
 **Plain statement.** Turning on OAuth means you run a PostgreSQL database for Ambit, with backups. If the database is
-down, people cannot connect a platform or refresh a connection. A call that already carries a valid access token keeps
-working for up to 15 minutes. Ambit does not install, back up, upgrade or fail over this database. A front door with API
+down, people cannot connect a platform or refresh a connection. Once the gateway checks tokens (the next change of this release series), a call that already carries a valid access
+token keeps working for up to 15 minutes. Ambit does not install, back up, upgrade or fail over this database. A front door with API
 keys only needs no database.
 
 | Requirement | How Ambit checks it |
@@ -117,8 +125,11 @@ Run this once on your own database before you rely on OAuth. It does not depend 
 | `HTTPRoute ambit-auth-hydra` | On the sign-in host, three exact paths: `POST /oauth2/token`, `POST /oauth2/revoke`, `GET /.well-known/jwks.json`. Everything else of Hydra (registration, discovery, user info, device flow, sessions, health, the admin API) has no route and answers 404. |
 | `PodDisruptionBudget ambit-hydra` | One pod stays up during a drain. |
 
-The **admin API can read Hydra's private keys.** It is never routed, and the network policy admits only the two callers
-above. The Kubernetes API refuses any route on the public Gateway that the chart did not write
+The **admin API can read Hydra's private keys, and it has no password of its own.** It is never routed, and the network policy
+admits only the two callers above, **by pod label**. So the rule holds only while nobody who can create pods in the Ambit
+namespace is untrusted (a pod with the label `app.kubernetes.io/name: ambit-auth` would be let in), and only on a cluster
+network that enforces NetworkPolicy (kindnet, Calico, Cilium and the major clouds' policy engines do; check yours, the
+test `test/stepoauth.sh` shows how). Treat the right to create pods in this namespace as the right to read the signing key. The Kubernetes API refuses any route on the public Gateway that the chart did not write
 (`ValidatingAdmissionPolicy ambit-public-routes`).
 
 Hydra's own dynamic client registration is turned off. Access tokens are signed JWTs that live `oauth.accessTokenMinutes`
@@ -138,7 +149,9 @@ Hydra signs access tokens with one RSA key. Two things matter:
 So Hydra's pods start **one at a time** (`StatefulSet`, `OrderedReady`). The first pod finds an empty database and its
 container `hydra-keys` creates the one key of each set; only then is the pod Ready, and the second pod starts. Nothing
 needs a Helm hook or a Job, so Argo CD and `helm template` give the same result. `hydra-keys` keeps checking: **a pod
-whose signing set is missing or holds two keys is not Ready**, so it gets no request. It never deletes a key; which key
+whose signing set is missing or holds two keys is not Ready**, so it gets no request (the check runs every few seconds: a
+second key that appears is noticed within that time). If two pods run when a database is replaced by an empty one, both may
+create a key; both then report two keys, stay out of service, and the log says so: remove one key by hand. It never deletes a key; which key
 to keep is your decision (the pod's log says `key set ... holds 2 keys`).
 
 There is no scheduled key rotation in 0.6.0. After a rotation, refreshed tokens of existing connections carry the old key
@@ -148,7 +161,10 @@ series.
 
 ## Operating
 
-- **A bad change stops one pod, not the service.** If a change makes the start check fail (for example a Secret with
+- **One Hydra pod.** With `oauth.hydra.replicas: 1` an update replaces the only pod: sign-in and refresh are unavailable
+  until the new pod is Ready, and a bad change (a wrong Secret) leaves them unavailable until you fix it. Keep two pods for
+  a roll-out that never takes the service down.
+- **A bad change stops one pod, not the service (two pods).** If a change makes the start check fail (for example a Secret with
   `sslmode=require`), the StatefulSet stops at the first pod it updates; the other pod keeps serving. A StatefulSet does
   not replace a pod that failed its start when you fix the template: after you fix the Secret or the values, **delete the
   stuck pod** (`kubectl -n ambit-system delete pod ambit-hydra-1`) and the roll-out goes on.

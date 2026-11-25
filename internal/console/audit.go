@@ -105,7 +105,10 @@ type Call struct {
 	// Compression is what the guard did to the tool result (#203); nil when it did not compress it, or when no record
 	// of it arrived. CallID (ambit.call_id) links the guard's records to this call; it is not in the answer.
 	Compression *Compression `json:"compression,omitempty"`
-	CallID      string       `json:"-"`
+	// Injection is what the injection guard (protection.injectionGuard) found in the result; nil when it found nothing, or
+	// when no record of it arrived. From the guard's records, joined by the call ID; never the matched text.
+	Injection *Injection `json:"injection,omitempty"`
+	CallID    string     `json:"-"`
 	// The agent of the call (docs/agents.md, experimental), read from a verified key or token; empty for a person's own
 	// key or token. PlatformDeclared is what the agent's record says it is, never a proof. AgentOwnerAtIssue is the
 	// owner when the credential was issued; AgentOwnerNow is added when the console reads (the agent's record today;
@@ -133,6 +136,14 @@ type Compression struct {
 	BytesIn  int64             `json:"bytesIn"`
 	BytesOut int64             `json:"bytesOut"`
 	Match    string            `json:"match"` // call-id: joined by the call ID
+}
+
+// Injection is the injection guard's findings in one call's result: the strongest action (rejected, masked or found) and
+// the names of the rules, in alphabetical order.
+type Injection struct {
+	Action string   `json:"action"`
+	Mode   string   `json:"mode"`
+	Rules  []string `json:"rules"`
 }
 
 // CompressionPart is one compressed text of the result (its index in content[]).
@@ -244,7 +255,63 @@ func (a *Audit) Calls(ctx context.Context, email string, from, to time.Time, lim
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return out, a.addCompression(ctx, email, from, out)
+	if err := a.addCompression(ctx, email, from, out); err != nil {
+		return out, err
+	}
+	return out, a.addInjection(ctx, email, from, out)
+}
+
+// injectionSQL reads the injection guard's records of the given calls by the same person: one row per call and rule, so a
+// record delivered twice counts once. Like the compression records it is written up to a few seconds after its call, and
+// with protection.compressionAudit.caller false it has no email and is not shown.
+const injectionSQL = `SELECT LogAttributes['ambit.call_id'] AS id, LogAttributes['ambit.injection.rule'] AS rule,
+       argMin(LogAttributes['ambit.injection.mode'], Timestamp), argMin(LogAttributes['ambit.injection.action'], Timestamp)
+FROM otel_logs
+WHERE LogAttributes['ambit.kind'] = 'injection' AND LogAttributes['jwt.email'] = {email:String}
+  AND Timestamp >= {from:DateTime64(9)} AND has({ids:Array(String)}, LogAttributes['ambit.call_id'])
+GROUP BY id, rule
+ORDER BY id, rule`
+
+// injectionRank orders the actions: the strongest one is shown for the call.
+var injectionRank = map[string]int{"found": 1, "masked": 2, "rejected": 3}
+
+// addInjection sets Injection on the calls that have records.
+func (a *Audit) addInjection(ctx context.Context, email string, from time.Time, calls []Call) error {
+	byID := map[string]*Call{}
+	var ids []string
+	for i := range calls {
+		if id := calls[i].CallID; id != "" && byID[id] == nil {
+			byID[id] = &calls[i]
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := a.DB.QueryContext(clickhouse.Context(ctx, clickhouse.WithParameters(clickhouse.Parameters{"email": email, "ids": arrayLiteral(ids),
+		"from": from.UTC().Format("2006-01-02 15:04:05.000000000")})), injectionSQL)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, rule, mode, action string
+		if err := rows.Scan(&id, &rule, &mode, &action); err != nil {
+			return err
+		}
+		c := byID[id]
+		if c == nil {
+			continue
+		}
+		if c.Injection == nil {
+			c.Injection = &Injection{Mode: mode, Rules: []string{}}
+		}
+		c.Injection.Rules = append(c.Injection.Rules, rule)
+		if injectionRank[action] > injectionRank[c.Injection.Action] {
+			c.Injection.Action = action
+		}
+	}
+	return rows.Err()
 }
 
 // compressionSQL reads the guard's records of the given calls by the same person: one row per call and part, so a

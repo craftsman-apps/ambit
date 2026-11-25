@@ -171,7 +171,7 @@ func TestHermesWindows(t *testing.T) {
 	if kc := got["providers"].(map[string]any)["ambit"].(map[string]any)["key_cmd"]; kc != `"C:\Users\O’Brien\ambit.exe" key print --url "https://llm.example.com"` {
 		t.Fatalf("key_cmd %q", kc)
 	}
-	for _, bad := range []string{`C:\Users\a$b\ambit.exe`, `C:\Users\100%\ambit.exe`} {
+	for _, bad := range []string{`C:\Users\a$b\ambit.exe`, "C:\\Users\\a`b\\ambit.exe"} {
 		in.AmbitPath = bad
 		if _, err := PlanHermes(in, "h"); err == nil {
 			t.Fatalf("%q must be refused", bad)

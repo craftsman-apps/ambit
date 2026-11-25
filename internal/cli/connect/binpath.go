@@ -87,18 +87,19 @@ func QuoteCmd(goos, s string) string {
 }
 
 // CheckCmdSafe refuses, on Windows, a path or address that no quoting makes right for both cmd.exe and Git Bash:
-// cmd.exe reads %, Git Bash reads $ and a backtick inside double quotes, and a double quote cannot be escaped.
+// Git Bash reads $ and a backtick inside double quotes, and a double quote cannot be escaped. A % is left out on
+// purpose: cmd.exe changes only %NAME% for a variable that exists, which no real folder or address is named.
 func CheckCmdSafe(goos, tool string, vals ...string) error {
 	if goos != "windows" {
 		return nil
 	}
 	for i, v := range vals {
-		if strings.ContainsAny(v, "\"$`%") {
+		if strings.ContainsAny(v, "\"$`") {
 			what, next := "the path of ambit", "install ambit in a folder whose path has none of them (npm install -g @craftsman-apps/ambit), then run the command again"
 			if i > 0 {
 				what, next = "the address", "use an address without them, then run the command again"
 			}
-			return &out.Error{What: tool + " cannot run a command with " + what, Why: fmt.Sprintf("%q has a %% $ ` or \" character, which cmd.exe and Git Bash read differently", v),
+			return &out.Error{What: tool + " cannot run a command with " + what, Why: fmt.Sprintf("%q has a $ ` or \" character, which cmd.exe and Git Bash read differently", v),
 				Next: next, Code: out.ExitFailed}
 		}
 	}

@@ -266,7 +266,7 @@ spec:
         has(object.spec.parentRefs[0].sectionName) && object.spec.parentRefs[0].sectionName == "https-auth" &&
         has(object.spec.hostnames) && size(object.spec.hostnames) == 1 &&
         has(object.spec.rules) && size(object.spec.rules) == 1 &&
-        has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) <= 8 &&
+        has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) >= 7 && size(object.spec.rules[0].matches) <= 8 &&
         object.spec.rules[0].matches.all(m, has(m.path) && m.path.type == "Exact" && has(m.method) &&
         (m.method + " " + m.path.value) in ["GET /.well-known/oauth-authorization-server", "GET /oauth2/auth", "GET /login", "GET /callback", "GET /consent", "POST /consent", "GET /error", "POST /register"]) &&
         has(object.spec.rules[0].backendRefs) && size(object.spec.rules[0].backendRefs) == 1 &&

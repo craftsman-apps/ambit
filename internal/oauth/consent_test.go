@@ -1031,3 +1031,30 @@ func TestLocalLimiterKeepsActiveWindowsWhenFull(t *testing.T) {
 		t.Fatal("old windows are dropped")
 	}
 }
+
+// A client that is registered while the janitor lists Hydra's clients is not dropped from the registry (the cap would be
+// exceeded by one for every such race).
+func TestRegistryResetKeepsAClientAddedAfterTheListing(t *testing.T) {
+	r := &MemRegistry{}
+	ctx := context.Background()
+	_, _ = r.Add(ctx, "old")
+	since := time.Now()
+	time.Sleep(2 * time.Millisecond)
+	_, _ = r.Add(ctx, "during") // registered after the listing began: the listing does not hold it
+	if err := r.Reset(ctx, []string{"listed"}, since); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := r.Count(ctx); n != 2 { // "listed" (new to the registry) and "during"; "old" was not listed and is gone
+		t.Fatalf("the registry counts %d, want 2", n)
+	}
+}
+
+// Only A-Z are lower-cased: the Kelvin sign (U+212A) is not the letter k, so two different addresses are two identities.
+func TestAsciiEmailDoesNotFoldUnicode(t *testing.T) {
+	if asciiEmail("Kate@acme.test") == asciiEmail("kate@acme.test") {
+		t.Fatal("a Kelvin sign was folded into k")
+	}
+	if got := asciiEmail("  Alice@Acme.TEST "); got != "alice@acme.test" {
+		t.Fatalf("got %q", got)
+	}
+}

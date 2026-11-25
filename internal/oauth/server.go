@@ -3,6 +3,7 @@ package oauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -42,7 +43,7 @@ type Registry interface {
 	Add(ctx context.Context, id string) (int, error)
 	Remove(ctx context.Context, id string) error
 	Count(ctx context.Context) (int, error)
-	Reset(ctx context.Context, ids []string) error
+	Reset(ctx context.Context, ids []string, since time.Time) error
 	// Once reports true the first time it is called for key within ttl (used to write "last used" once a day).
 	Once(ctx context.Context, key string, ttl time.Duration) (bool, error)
 }
@@ -203,7 +204,7 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("X-Forwarded-Proto", "https")
 	resp, err := s.front.Do(req)
 	if err != nil {
-		s.log().Error("authorize: Hydra did not answer", "err", err)
+		s.log().Error("authorize: Hydra did not answer") // not the error: it quotes the address, and the address holds a verifier
 		oauthError(w, 503, "temporarily_unavailable", "the authorization server is not available")
 		return
 	}
@@ -313,7 +314,7 @@ func invalidMeta(w http.ResponseWriter, desc string) {
 func (s *Server) checkRedirect(raw, appType string) (host string, err error) {
 	u, perr := url.Parse(raw)
 	if perr != nil || len(raw) > 512 || u.Fragment != "" || u.User != nil || u.Host == "" || strings.Contains(raw, "#") {
-		return "", fmt.Errorf("redirect_uri %q is not acceptable", raw)
+		return "", errors.New("a redirect_uri is not acceptable (https on a named host, or http on a loopback name; no user, no fragment, at most 512 characters)")
 	}
 	// The answer to the platform adds code, state, error and iss to the address: it must not have them already.
 	for _, k := range []string{"code", "state", "error", "error_description", "iss"} {
@@ -332,14 +333,14 @@ func (s *Server) checkRedirect(raw, appType string) (host string, err error) {
 		return u.Hostname(), nil
 	case "http":
 		if appType == "web" {
-			return "", fmt.Errorf("redirect_uri %q: a web client needs https", raw)
+			return "", errors.New("a redirect_uri: a web client needs https")
 		}
 		if h := u.Hostname(); h != "127.0.0.1" && h != "::1" && h != "localhost" {
-			return "", fmt.Errorf("redirect_uri %q: http is accepted for loopback addresses only", raw)
+			return "", errors.New("a redirect_uri: http is accepted for loopback addresses only")
 		}
 		return u.Hostname(), nil
 	}
-	return "", fmt.Errorf("redirect_uri %q: unsupported scheme", raw)
+	return "", errors.New("a redirect_uri has an unsupported scheme")
 }
 
 func (s *Server) register(w http.ResponseWriter, r *http.Request) {

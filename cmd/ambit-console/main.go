@@ -334,6 +334,7 @@ func run(ctx context.Context) error {
 		if appAudit, err = console.NewAppRecorder(ep); err != nil {
 			return fmt.Errorf("AMBIT_OTLP_ENDPOINT: %w", err)
 		}
+		defer appAudit.Close() // sends what is queued, within 5 seconds
 		// ambit_console_audit_send_failures_total, for the AmbitConsoleAuditSendFailed alert.
 		msrv := &http.Server{Addr: ":8084", Handler: promhttp.Handler(), ReadHeaderTimeout: 10 * time.Second}
 		go func() {
@@ -392,7 +393,9 @@ func run(ctx context.Context) error {
 	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), loginOpts,
 		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, AppAudit: appAudit, Evidence: evidence, Budgets: budgets, Dependencies: deps, AccessMode: os.Getenv("AMBIT_ACCESS_MODE"), Prices: prices, Tools: reader, Presets: catalogPresets,
 			Groups: groupStore, Keys: keySvc, LLMURL: os.Getenv("AMBIT_LLM_URL"), MCPURL: os.Getenv("AMBIT_MCP_URL")}), ReadHeaderTimeout: 10 * time.Second}
+	shutDone := make(chan struct{})
 	go func() {
+		defer close(shutDone)
 		<-ctx.Done()
 		shut, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -402,5 +405,6 @@ func run(ctx context.Context) error {
 	if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
+	<-shutDone // ListenAndServe returns when Shutdown starts; wait for running requests, so their audit records are queued before the recorder closes
 	return nil
 }

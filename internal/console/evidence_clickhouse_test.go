@@ -25,7 +25,7 @@ func TestEvidenceOnClickHouse(t *testing.T) {
 		}
 		return m
 	}
-	insertLog(t, a, day, gw("ana@example.com", "sub-ana", map[string]string{"ambit.call_id": "c-1"}))
+	insertLog(t, a, day, gw("ana@example.com", "sub-ana", map[string]string{"ambit.call_id": "c-1", "ambit.agent": "grok-y", "ambit.agent_mode": "person", "ambit.agent_owner_at_issue": "ana@example.com", "ambit.platform_declared": "grok", "ambit.ingress": "private"}))
 	insertLog(t, a, day.Add(time.Hour), gw("ana@example.com", "sub-ana", map[string]string{"ambit.accessMode": "audit", "ambit.rulesVersion": ""}))
 	insertLog(t, a, day.Add(25*time.Hour), gw("ana@example.com", "sub-ana", map[string]string{"error": "=HYPERLINK(\"x\")", "http.status": "502"}))
 	insertLog(t, a, day.Add(26*time.Hour), gw("", "sub-ana", map[string]string{"http.status": "403"})) // a refusal with the subject only
@@ -89,8 +89,10 @@ func TestEvidenceOnClickHouse(t *testing.T) {
 	if c := files["compression.csv"]; len(c) != 3 || c[1][1] != "c-1" || c[1][2] != "ana@example.com" || c[1][9] != "48000" || c[1][10] != "9000" || c[2][2] != "" {
 		t.Errorf("compression %v", c)
 	}
-	if r := files["calls.csv"][1]; r[len(r)-1] != "c-1" {
+	if r := files["calls.csv"][1]; r[24] != "c-1" {
 		t.Errorf("the first call's call_id: %v", r)
+	} else if r[25] != "grok-y" || r[26] != "person" || r[27] != "ana@example.com" || r[29] != "grok" || r[32] != "private" {
+		t.Errorf("the agent columns of the first call (on ClickHouse): %v", r[24:])
 	}
 	if len(files["app-requests.csv"]) != 2 || files["app-requests.csv"][1][1] != "approved" {
 		t.Errorf("app requests %v", files["app-requests.csv"])
@@ -199,6 +201,20 @@ func TestAccessEvidenceOnClickHouse(t *testing.T) {
 	}
 	if strings.Join(seen, ", ") != "eng ana@example.com 2, ml ana@example.com 1" {
 		t.Errorf("people-seen.csv %v", seen)
+	}
+	// at=T: the newest snapshot at or before T (also one from an earlier day); a snapshot at exactly T counts.
+	for at, want := range map[string]string{"2026-12-31T09:00:00Z": "old000000000", "2026-12-31T10:00:00Z": "ten000000000", "2026-12-31T14:59:59.999999999Z": "ten000000000", "2026-12-31T15:00:00Z": "fif000000000"} {
+		resp, body, err := e.get(t, t.Context(), "/api/evidence/access.zip?date=2026-12-31&at="+at, e.admin)
+		if err != nil || resp.StatusCode != 200 {
+			t.Fatalf("at=%s: %v %v %s", at, resp.StatusCode, err, body)
+		}
+		if files, _ := csvFiles(t, body); len(files["grants.csv"]) != 2 || files["grants.csv"][1][1] != want {
+			t.Errorf("at=%s: grants.csv %v, want %s", at, files["grants.csv"], want)
+		}
+	}
+	_, body, _ = e.get(t, t.Context(), "/api/evidence/access/snapshots?date=2026-12-31", e.admin)
+	if !strings.Contains(string(body), `"rulesVersion":"ten000000000"`) || !strings.Contains(string(body), `"rulesVersion":"fif000000000"`) || strings.Contains(string(body), "old0") || strings.Contains(string(body), "next0") {
+		t.Errorf("snapshots of the day %s", body)
 	}
 	resp, body, _ = e.get(t, t.Context(), "/api/evidence/access.zip?date=2026-12-01", e.admin)
 	if resp.StatusCode != 404 || !strings.Contains(string(body), "Snapshots exist from 2026-12-28") {

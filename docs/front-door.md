@@ -11,7 +11,7 @@ side door that leads only to the rooms marked "visitors allowed". It has its own
 list of visitors. It does not open into the rest of the building.
 
 It is **off by default**. In this release it accepts **API keys only** (personal keys and service account keys with the
-MCP scope). Sign-in with OAuth is a later step; until then, a request without a valid key gets 403.
+MCP scope). Sign-in with OAuth is a separate, experimental feature ([OAuth sign-in](oauth.md)); without it, a request without a valid key gets 403.
 
 ## What it is, and what it is not
 

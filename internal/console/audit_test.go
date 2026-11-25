@@ -205,6 +205,15 @@ func TestAuditSearchModes(t *testing.T) {
 		"/api/audit?email=user01%40example.com&invalidKey=true": http.StatusBadRequest,
 		"/api/audit?invalidKey=yes":                             http.StatusBadRequest,
 		"/api/audit?invalidKey=true":                            http.StatusBadGateway, // reaches the store
+		// Agents (experimental): an agent or a declared platform selects calls like an email does; ingress only narrows.
+		"/api/audit?agent=grok-y":                            http.StatusBadGateway,
+		"/api/audit?platform_declared=grok&ingress=public":   http.StatusBadGateway,
+		"/api/audit?email=user01%40example.com&agent=grok-y": http.StatusBadGateway,
+		"/api/audit?ingress=public":                          http.StatusBadRequest,
+		"/api/audit?agent=Grok%20Y":                          http.StatusBadRequest,
+		"/api/audit?agent=grok-y&ingress=both":               http.StatusBadRequest,
+		"/api/audit?invalidKey=true&agent=grok-y":            http.StatusBadRequest,
+		"/api/audit?approvals=true&agent=grok-y":             http.StatusBadRequest,
 	} {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest("GET", u, nil))

@@ -405,6 +405,8 @@ func TestAuditExportZipAndManifest(t *testing.T) {
 		int64(48000), int64(9000), int64(14), `["eng"]`}}
 	ch.app = [][]driver.Value{{evT0.Add(time.Hour), "approved", "=cmd@example.com", "admin", "github", "req-1", "ana@example.com", "ghcr.io/x/y@sha256:1", "", "ok", "", `["a","b"]`, ""}}
 	e := newEvidenceFixture(t, ch)
+	// the agent's record today: moved since the keys were issued
+	e.cat.Audit.AgentOwners = func(context.Context) (map[string]string, error) { return map[string]string{"grok-y": "ana-new@example.com"}, nil }
 	resp, body, err := e.get(t, t.Context(), "/api/evidence/audit.zip?from=2026-10-01&to=2026-10-07", e.admin)
 	if err != nil || resp.StatusCode != 200 {
 		t.Fatalf("%v %v %s", resp.StatusCode, err, body)
@@ -447,6 +449,30 @@ func TestAuditExportZipAndManifest(t *testing.T) {
 	col := map[string]int{}
 	for i, h := range calls[0] {
 		col[h] = i
+	}
+	// Agents (experimental): the columns are appended after call_id; the ones before keep their place.
+	if got := callsHeader[:25]; strings.Join(got, ",") != "time,email,what,target,outcome,status,error,input_tokens,output_tokens,mark,rules_version,identity,key_id,subject,route,method,server,tool,model,router,path,access_mode,client_address,prompt_guard,call_id" {
+		t.Errorf("the first 25 columns changed: %v", got)
+	}
+	if got := strings.Join(callsHeader[25:], ","); got != "agent,agent_mode,agent_owner_at_issue,agent_owner_now,platform_declared,grant_id,token_issuer,ingress" {
+		t.Errorf("appended columns: %s", got)
+	}
+	var agents int
+	for _, r := range calls[1:] {
+		if r[col["agent"]] == "" {
+			if r[col["agent_mode"]] != "" || r[col["agent_owner_now"]] != "" || r[col["platform_declared"]] != "" || r[col["ingress"]] != "private" {
+				t.Errorf("a call without an agent has agent cells: %v", r)
+			}
+			continue
+		}
+		agents++
+		if r[col["agent"]] != "grok-y" || r[col["agent_mode"]] != "person" || r[col["agent_owner_at_issue"]] != "ana@example.com" ||
+			r[col["agent_owner_now"]] != "ana-new@example.com" || r[col["platform_declared"]] != "grok" {
+			t.Errorf("agent row %v", r)
+		}
+	}
+	if agents == 0 {
+		t.Error("the fixture has no agent call")
 	}
 	var invalid, unknown, formula, multiline int
 	for _, r := range calls[1:] {

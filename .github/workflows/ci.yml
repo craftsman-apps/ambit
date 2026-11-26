@@ -74,7 +74,7 @@ jobs:
         with: { go-version-file: go.mod }
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: 26, cache: npm, cache-dependency-path: web/package-lock.json }
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
       - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
       # cr.agentgateway.dev failed twice on 2026-10-10. Its chart and images come from this cache (filled on main by
       # ci-cache.yml, which every PR can read) and reach the e2e clusters through the artifact below.
@@ -202,7 +202,7 @@ jobs:
       # create their own clusters. Docker Hub is still the fallback.
       - name: Docker Hub mirror for the kind nodes (background)
         run: nohup hack/ci-kind-mirror.sh > "$RUNNER_TEMP/kind-mirror.log" 2>&1 &
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
       - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
       - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376 # v1.15.2
         with: { install_only: true }
@@ -260,7 +260,7 @@ jobs:
         with: { go-version-file: go.mod }
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: 26, cache: npm, cache-dependency-path: web/package-lock.json }
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
       - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
       # Docker Hub images come through Google's mirror (mirror.gcr.io), then Docker Hub itself if the mirror fails.
       # On 2026-11-16 the runner could not pull ClickHouse and python from Docker Hub for 10 minutes, and the install

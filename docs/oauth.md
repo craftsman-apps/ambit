@@ -271,8 +271,8 @@ umask 077   # the file holds tokens signed with the real keys
 curl -s -b "$COOKIES" -X POST "$CONSOLE/api/admin/oauth/signing-key/emergency-rotation" -H 'Content-Type: application/json' \
   -d '{"confirm":"every connection must connect again"}' > rotation.json
 
-# 3. Hydra publishes the new key only, and its pods stay Ready (one key per set).
-curl -s https://auth.example.com/.well-known/jwks.json      # one key, the new key ID
+# 3. Hydra publishes the new keys only (one per signing set: the access token key and the ID token key), and its pods stay Ready.
+curl -s https://auth.example.com/.well-known/jwks.json      # two keys, the new key IDs of the answer of step 2
 kubectl -n ambit-system get pods -l app.kubernetes.io/name=ambit-hydra
 
 # 4. The check on EVERY public gateway pod (a gateway fetches the keys again every 5 minutes, so this can take that long).

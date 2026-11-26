@@ -90,7 +90,8 @@ cidA, tokA = connect_wait("alice", ("time",), "BeforeRotation")
 kidA = header(tokA["access_token"]).get("kid")
 code, st0 = ctl_json("keys")
 access = [s for s in st0.get("sets", []) if s["set"] == "hydra.jwt.access-token"]
-check("R0 the signing key is one key, the token carries its key ID, and the published keys are that key", code == "200" and access and access[0]["kids"] == [kidA] and jwks_kids() == [kidA], (code, st0, kidA, jwks_kids()))
+all_kids = sorted(k for s_ in st0.get("sets", []) for k in s_["kids"])
+check("R0 each signing set is one key, the token carries the access token key's ID, and the published keys are the keys of both sets", code == "200" and len(st0.get("sets", [])) == 2 and all(len(s_["kids"]) == 1 for s_ in st0["sets"]) and access and access[0]["kids"] == [kidA] and jwks_kids() == all_kids, (code, st0, kidA, jwks_kids()))
 check("R0 the token works on every pod", accepted_everywhere(tokA["access_token"], 120))
 # a second connection, only for R4 (the refresh of a grant made before a rotation), so that R4 does not depend on E2
 cidC, tokC = connect_wait("alice", ("time",), "BeforeRotationToo")
@@ -140,7 +141,8 @@ newKid = acc[0]["newKid"] if acc else None
 check("R1 the old key is the one that signed the token", acc and acc[0]["oldKid"] == kidA, (acc, kidA))
 
 # R2 · the published keys are the new key only; Hydra's pods stay ready (one key per set)
-check("R2 the published keys are the new key only", wait(lambda: jwks_kids() == [newKid], 60, 2), jwks_kids())
+new_kids = sorted(x["newKid"] for x in rot.get("sets", []))
+check("R2 the published keys are the new keys only (one per set), and the old keys are not published", wait(lambda: jwks_kids() == new_kids, 60, 2), (jwks_kids(), new_kids))
 def hydra_ready():
     r = kube("get", "pods", "-l", "app.kubernetes.io/name=ambit-hydra", "-o", "jsonpath={.items[*].status.containerStatuses[*].ready}").split()
     return len(r) >= 4 and all(x == "true" for x in r)

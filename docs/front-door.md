@@ -136,7 +136,7 @@ Limits protect the gateway and the keys. They are on by default. Values are in `
 | Limit | Default | Counted | Counts |
 |---|---|---|---|
 | `perSourcePerMinute` (bucket **mcp**) | 120 | by the ratelimit service and Valkey, **shared by all gateway pods**, **before** the route is matched and before the key is checked | **every** request from one source address that is not in a bucket below: a valid key, a wrong key, an unknown path, a call with a token |
-| `perCredentialPerMinute` | 600 | by the same service, shared, after authentication | requests with one valid key (by key ID) |
+| `perCredentialPerMinute` | 600 | by the same service, shared, after authentication | requests with one valid key (by key ID), or with one token (by its agent: one connection of one person to one platform), so that tokens do not share one counter |
 | `perPodPerSecond` | 200 | in each gateway pod, after authentication | every request that reaches the limit check. A second line: it still works when the ratelimit service is down. |
 
 With `oauth.enabled` there are four more **buckets of the source limit**, on the same address, counted the same way (before the route and

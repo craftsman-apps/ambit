@@ -21,7 +21,7 @@
 {{- $orl := ((.Values.oauth | default dict).rateLimit) | default dict }}
 {{- if (.Values.oauth | default dict).enabled }}
 {{- range $k := list "discoveryPerMinute" "signInPerMinute" "tokenPerMinute" }}
-{{- if lt (int (index $orl $k)) 1 }}{{ fail (printf "oauth.rateLimit.%s must be 1 or more" $k) }}{{ end }}
+{{- if or (lt (int (index $orl $k)) 1) (ne (toString (index $orl $k)) (toString (int (index $orl $k)))) }}{{ fail (printf "oauth.rateLimit.%s must be a whole number, 1 or more" $k) }}{{ end }}
 {{- end }}
 {{- end }}
 {{- if lt (int $fd.replicas) 1 }}{{ fail "frontDoor.replicas must be 1 or more" }}{{ end }}
@@ -365,7 +365,13 @@ spec:
         descriptors:
           # "" for a request without a valid key: all of those share one counter, capped like a key.
           - unit: Requests
+            {{- if $oauth }}
+            # A request with a token counts for its agent (one connection of one person to one platform), not in one counter that every token
+            # of the install would share. "" is only what has neither a key nor a token.
+            entries: [{ name: fd_credential, expression: 'has(apiKey.keyId) ? apiKey.keyId : (has(jwt.ambit_agent) ? "agent:" + string(jwt.ambit_agent) : "")' }]
+            {{- else }}
             entries: [{ name: fd_credential, expression: 'has(apiKey.keyId) ? apiKey.keyId : ""' }]
+            {{- end }}
       local:
         - requests: {{ $rl.perPodPerSecond }}
           unit: Seconds

@@ -103,6 +103,9 @@ st, h, body = raw("POST", ISS + "/oauth2/token", urllib.parse.urlencode({"grant_
                   {"Content-Type": "application/x-www-form-urlencoded"})
 e = js(body)
 shape("token-error", st == 400 and e.get("error") == "invalid_grant" and e.get("error_description"), (st, e))  # the code was used once already
+V9, CH9 = pkce(); kind9, det9 = sign_in(Browser(), CID, "bob", challenge=CH9)
+st9, e9 = token(CID, grant_type="authorization_code", code=det9["code"], redirect_uri=REDIRECT, code_verifier=pkce()[0], resource=MCP_URL)  # a fresh code, another verifier
+check("19 shape token-error: a fresh code with a verifier that is not the one of the request is refused (invalid_grant)", kind9 == "code" and st9 == 400 and e9.get("error") == "invalid_grant", (kind9, st9, e9))
 
 # 8 · a call with the token
 AT = tok.get("access_token")
@@ -125,13 +128,13 @@ st2, _ = token(CID, grant_type="refresh_token", refresh_token=RT2)
 print(f"   after the spent refresh token was shown again, the newer one: HTTP {st2} (the guide says what a client must do)", flush=True)
 SECOND_REFRESH_AFTER_REUSE = st2
 
-# 10 · revocation (RFC 7009)
-if SECOND_REFRESH_AFTER_REUSE != 200:  # reuse ended the grant: a new one for the revocation shape
-    V, CH = pkce(); kind, det = sign_in(Browser(), CID, "bob", challenge=CH)
-    st, tk = token(CID, grant_type="authorization_code", code=det["code"], redirect_uri=REDIRECT, code_verifier=V, resource=MCP_URL)
-    RT2 = tk["refresh_token"]
-st, h, body = raw("POST", ISS + "/oauth2/revoke", urllib.parse.urlencode({"token": RT2, "token_type_hint": "refresh_token", "client_id": CID}).encode(), {"Content-Type": "application/x-www-form-urlencoded"})
-st2, e2 = token(CID, grant_type="refresh_token", refresh_token=RT2)
+# 10 · revocation (RFC 7009): a live refresh token of a grant of its own (the one above is spent or ended already)
+V, CH = pkce(); kind, det = sign_in(Browser(), CID, "bob", challenge=CH)
+st, tk = token(CID, grant_type="authorization_code", code=det["code"], redirect_uri=REDIRECT, code_verifier=V, resource=MCP_URL)
+RT3 = tk["refresh_token"]
+st0, _, _ = raw("POST", ISS + "/oauth2/revoke", urllib.parse.urlencode({"token": "ory_rt_made-up", "token_type_hint": "refresh_token", "client_id": CID}).encode(), {"Content-Type": "application/x-www-form-urlencoded"})
+st, h, body = raw("POST", ISS + "/oauth2/revoke", urllib.parse.urlencode({"token": RT3, "token_type_hint": "refresh_token", "client_id": CID}).encode(), {"Content-Type": "application/x-www-form-urlencoded"})
+st2, e2 = token(CID, grant_type="refresh_token", refresh_token=RT3)
 shape("revoke", st == 200 and st2 == 400 and e2.get("error") == "invalid_grant", (st, st2, e2))
 
 # 11 · the keys, for a client that checks the token itself

@@ -399,8 +399,8 @@ pass "14 tokens at the public Gateway"
 # The Gateway runs in PROXY protocol mode here, so the test can be any client address (a load balancer tells the Gateway the address in production).
 lim() { env GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
   HTTP_TIMEOUT=60 KEY="$OKEY" ONE_TOOL=time_get_current_time "$@" "${PY[@]}" test/oauthtest/limits.py "$MODE"; }
-rl_phase() { # rl_phase DISCOVERY SIGNIN TOKEN REGISTRATION: the buckets, the Gateway in PROXY protocol mode, the loaded limits
-  oaset_real --set frontDoor.clientAddress=proxyProtocol --set oauth.registration.dynamic.perSourcePerHour="$4" --wait --timeout 8m
+rl_phase() { # rl_phase DISCOVERY SIGNIN TOKEN REGISTRATION MCP CREDENTIAL: the buckets, the Gateway in PROXY protocol mode, the loaded limits
+  oaset_real --set frontDoor.clientAddress=proxyProtocol --set frontDoor.rateLimit.perSourcePerMinute="$5" --set frontDoor.rateLimit.perCredentialPerMinute="$6" --set oauth.registration.dynamic.perSourcePerHour="$4" --wait --timeout 8m
   kubectl -n "$NS" rollout status deploy/ambit-public --timeout=300s >/dev/null
   kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
   reforward
@@ -408,8 +408,8 @@ rl_phase() { # rl_phase DISCOVERY SIGNIN TOKEN REGISTRATION: the buckets, the Ga
   wait_for 60 '[[ $("${PY[@]}" test/frontdoor/request.py "$PA" "$W/ca.pem" "$AUTH" /.well-known/jwks.json --proxy 203.0.113.1) == 200 ]]' || fail "18 the Gateway does not answer with a PROXY header"
 }
 OARL=(--set oauth.rateLimit.discoveryPerMinute=30 --set oauth.rateLimit.signInPerMinute=40 --set oauth.rateLimit.tokenPerMinute=50)
-rl_phase 30 40 50 5
-MODE=buckets lim LIM_DISCOVERY=30 LIM_SIGNIN=40 LIM_TOKEN=50 LIM_REGISTRATION=5 || fail "18 the bucket checks failed (see FAIL lines above)"
+rl_phase 30 40 50 5 30 60
+MODE=buckets lim LIM_DISCOVERY=30 LIM_SIGNIN=40 LIM_TOKEN=50 LIM_REGISTRATION=5 LIM_MCP=30 LIM_CRED=60 || fail "18 the bucket checks failed (see FAIL lines above)"
 pass "18 five buckets (mcp, discovery, sign-in, token, registration): each stops at its own limit and leaves the others open; headers that name an address change nothing; two Gateway pods count together; the 401 for a call without a credential is in the discovery bucket"
 # the second line: with the ratelimit service stopped (FailOpen) ambit-auth's own counter is what limits the sign-in pages
 kubectl -n "$NS" scale deploy/ambit-ratelimit --replicas=0 >/dev/null
@@ -420,7 +420,7 @@ kubectl -n "$NS" rollout status deploy/ambit-ratelimit --timeout=180s >/dev/null
 pass "18 with the ratelimit service stopped, ambit-auth's own counter stops the sign-in pages at the same limit (the second line)"
 # the chart's own values: the NAT measurement
 OARL=()
-rl_phase 600 300 600 10
+rl_phase 600 300 600 10 1000 600
 MODE=nat lim LIM_DISCOVERY=600 LIM_SIGNIN=300 LIM_TOKEN=600 LIM_REGISTRATION=10 || fail "18 the NAT measurement failed (see FAIL lines above)"
 pass "18 many people behind one address: measured with the chart's default limits (the numbers are printed above)"
 # back to the other mode and the high limits of the other checks

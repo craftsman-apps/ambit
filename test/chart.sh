@@ -543,10 +543,13 @@ c=yaml.safe_load(one("ConfigMap","ambit-ratelimit-front-door")["data"]["front-do
 got={d["value"]:(d["descriptors"][0]["key"],d["descriptors"][0]["rate_limit"]["unit"],d["descriptors"][0]["rate_limit"]["requests_per_unit"]) for d in c["descriptors"] if d["key"]=="fd_bucket"}
 assert got=={"mcp":("fd_source","minute",120),"discovery":("fd_source","minute",600),"signin":("fd_source","minute",300),"token":("fd_source","minute",600),"registration":("fd_source","hour",10)}, got
 env={e["name"]:e["value"] for e in one("Deployment","ambit-auth")["spec"]["template"]["spec"]["containers"][0]["env"] if "value" in e}
+g=one("AgentgatewayPolicy","ambit-public-limits")["spec"]["traffic"]["rateLimit"]["global"]["descriptors"][0]["entries"][0]["expression"]
+assert "jwt.ambit_agent" in g and "apiKey.keyId" in g, g  # a token counts for its agent, not in one counter for every token
 assert env["AMBIT_AUTH_DISCOVERY_PER_MINUTE"]=="600" and env["AMBIT_AUTH_SIGNIN_PER_MINUTE"]=="300" and env["AMBIT_AUTH_REGISTER_PER_HOUR"]=="10", env' "the source limit has five buckets (mcp, discovery, sign-in, token, registration): the Gateway reads the path and two header names, never a client address header; ambit-auth gets the same numbers"
 set_rl=$(oat --set oauth.rateLimit.signInPerMinute=77 --set oauth.registration.dynamic.perSourcePerHour=3)
 grep -q 'requests_per_unit: 77' <<<"$set_rl" && grep -q 'requests_per_unit: 3 }' <<<"$set_rl" && grep -q 'AMBIT_AUTH_SIGNIN_PER_MINUTE, value: "77"' <<<"$set_rl" || { echo "FAIL chart: the bucket values must reach the ratelimit config and ambit-auth"; exit 1; }
 MSG='oauth.rateLimit.signInPerMinute' refuse "a sign-in limit of 0" --set oauth.rateLimit.signInPerMinute=0
+MSG='whole number' refuse "a sign-in limit with a fraction" --set oauth.rateLimit.signInPerMinute=77.5
 MSG='oauth.rateLimit.tokenPerMinute' refuse "a token limit of 0" --set oauth.rateLimit.tokenPerMinute=0
 MSG='oauth.rateLimit.discoveryPerMinute' refuse "a discovery limit of 0" --set oauth.rateLimit.discoveryPerMinute=0
 MSG='maxGrantDays' refuse "a grant life of 400 days" --set oauth.maxGrantDays=400

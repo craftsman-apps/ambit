@@ -19,6 +19,9 @@ src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "gateway.py"
 exec(src)
 
 MODE = ARGV[1]
+LIM_MCP = int(os.environ.get("LIM_MCP", "0"))
+LIM_CRED = int(os.environ.get("LIM_CRED", "0"))
+OPEN = {200, 201, 400, 401, 403}  # what a request that is not limited gets here: never 404 (a route is missing) or 5xx
 LIM = {"discovery": int(os.environ["LIM_DISCOVERY"]), "signin": int(os.environ["LIM_SIGNIN"]), "token": int(os.environ["LIM_TOKEN"]), "registration": int(os.environ["LIM_REGISTRATION"])}
 
 # what one request of each bucket looks like, and the status it gets when it is NOT limited
@@ -53,6 +56,19 @@ def mcp_no_credential(addr, port=None, token=None):
     return Browser().req("POST", f"https://{MCP}/mcp", json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}).encode(), hd)[0]
 
 
+def mcp_status(addr, key=None, token=None):
+    """One MCP initialize with a key or a token from addr: 200, or 429 when limited (an MCP request over a limit may also answer 200 with a
+    JSON-RPC error that says 'rate limit': that is reported as 429)."""
+    global CLIENT_ADDR
+    CLIENT_ADDR = addr
+    ROUTES[(MCP, 443)] = PORTS[0]
+    hd = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    if key: hd["x-api-key"] = key
+    if token: hd["Authorization"] = "Bearer " + token
+    st, h, body = Browser().req("POST", f"https://{MCP}/mcp", json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "limits", "version": "1"}}}).encode(), hd)
+    return 429 if st == 200 and "rate limit" in body.lower() else st
+
+
 def start_of_window(unit="minute"):
     """The limits count in fixed windows of the clock: start a burst early in one."""
     t = time.gmtime()
@@ -84,7 +100,7 @@ if MODE == "buckets":
         n = LIM[b] + 8
         codes = burst(lambda _: send(addr, b), n, "hour" if b == "registration" else "minute")
         a = allowed(codes)
-        check(f"18 {b} bucket: {n} requests from one address, {a} passed and the rest got 429 (limit {LIM[b]})", a == LIM[b] and codes[LIM[b]:] == [429] * 8, codes)
+        check(f"18 {b} bucket: {n} requests from one address, {a} passed and the rest got 429 (limit {LIM[b]})", a == LIM[b] and codes[LIM[b]:] == [429] * 8 and set(codes[:LIM[b]]) <= OPEN, codes)
         others = {o: send(addr, o) for o in names if o != b}
         check(f"18 {b} bucket used up: the other three buckets of the same address are open", all(c != 429 for c in others.values()), others)
     print("   the first 429 of each bucket came from: " + ", ".join(f"{k}: {v}" for k, v in GW_ANSWER.items()), flush=True)
@@ -110,10 +126,32 @@ if MODE == "buckets":
 
     # two Gateway pods count together
     D = "203.0.113.52"
-    two = burst(lambda i: send(D, "signin", port=PORTS[i % 2]), LIM["signin"] + 12)
-    check(f"18 two Gateway pods count together: {len(two)} requests alternating between them, {allowed(two)} passed (limit {LIM['signin']}, not {2 * LIM['signin']})", allowed(two) == LIM["signin"], two)
-    both = [send(D, "signin", port=p) for p in PORTS]
+    # the token bucket: only the Gateway counts it (ambit-auth does not see /oauth2/token), so shared counters are the Gateway's
+    two = burst(lambda i: send(D, "token", port=PORTS[i % 2]), LIM["token"] + 12)
+    check(f"18 two Gateway pods count together: {len(two)} token requests alternating between them, {allowed(two)} passed (limit {LIM['token']}, not {2 * LIM['token']})", allowed(two) == LIM["token"] and set(two[:LIM["token"]]) <= OPEN, two)
+    both = [send(D, "token", port=p) for p in PORTS]
     check("18 ... and the address is limited on both pods", both == [429, 429], both)
+    # path spellings that a router may read as /oauth2/token are never a way around the token bucket: if one reaches Hydra it is counted as a token request
+    E = "203.0.113.53"
+    def alias(i):
+        global CLIENT_ADDR
+        CLIENT_ADDR = E; ROUTES[(AUTH, 443)] = PORTS[0]
+        return Browser().req("POST", f"https://{AUTH}/oauth2/%74oken", urllib.parse.urlencode({"grant_type": "refresh_token", "client_id": "limits-test", "refresh_token": "x"}).encode(), {"Content-Type": "application/x-www-form-urlencoded"})[0]
+    al = burst(alias, LIM["token"] + 10)
+    check("18 a percent-encoded spelling of /oauth2/token is either not served, or counted in the token bucket (no way around the limit)", not any(c in (400, 401) for c in al) or 429 in al[: LIM["token"] + 2], al)
+    # the fifth bucket: calls with a key or token (mcp), and the count per credential (an agent), not one counter for every token
+    if LIM_MCP:
+        F = "203.0.113.54"
+        calls = burst(lambda i: mcp_status(F, key=os.environ["KEY"]), LIM_MCP + 8)
+        check(f"18 mcp bucket: {len(calls)} calls with a valid key from one address, {allowed(calls)} passed (limit {LIM_MCP})", allowed(calls) == LIM_MCP and set(calls[:LIM_MCP]) <= {200}, calls)
+    if LIM_CRED:
+        _, tA = connect("person150", ("time",)); _, tB = connect("person151", ("time",))
+        res = []
+        for tok in (tA, tB):
+            codes = burst(lambda i: mcp_status(f"203.0.114.{(i + 1) % 250 + 1}", token=tok["access_token"]), LIM_CRED + 8)  # a new source address for every call: only the credential count can stop it
+            res.append(codes)
+        check(f"18 per credential: a token's calls stop at the limit of {LIM_CRED} a minute for its agent, and another agent's token has its own count ({allowed(res[0])} and {allowed(res[1])} passed)",
+              all(allowed(c) == LIM_CRED for c in res), [sorted(set(c)) for c in res])
     # ambit-auth's second line: its own counter in Valkey, shared by its replicas, with the same numbers (seen in its metrics by the shell script)
 
 elif MODE == "second":

@@ -178,11 +178,12 @@ The browser comes back to your `redirect_uri`.
 https://chatgpt.com/connector_platform_oauth_redirect?code=CODE&state=STATE&iss=https%3A%2F%2Fauth.example.com
 ```
 
-Check, before you use the code: `state` is the one you sent, and **`iss` equals the issuer** of step 3
+Keep each sign-in as one transaction: its own random `state`, used once, stored together with its PKCE verifier. When the browser returns, look up the transaction by `state`, and drop
+it whatever the outcome (an old Deny that arrives late must not end a newer sign-in). Check, before you use the code: `state` is the one you sent, and **`iss` equals the issuer** of step 3
 (`https://auth.example.com`, exactly). A different `iss` means the answer came from another authorization server: drop it.
 The code lives one minute and works once.
 
-If the person chose Deny, or the company refused the sign-in:
+If the person chose Deny, or the company refused the sign-in (the same checks of `state` and `iss` apply to this answer, exactly one of each):
 
 <!-- shape: authorize-denied -->
 ```
@@ -250,14 +251,17 @@ curl -X POST https://auth.example.com/oauth2/token \
 ```
 
 The answer has the shape of step 7, with a **new access token and a new refresh token**. The refresh token **rotates**: store the new
-one before you do anything else, and never send the old one again.
+one before you do anything else, and never send the old one again. **Refresh one connection from one place at a time** (a lock per connection): two refreshes at once, or a retry after an answer
+that you did not get (a proxy that answered 502 after the service had already rotated the token), spend the same token twice, and the second one is refused. If a refresh ends in an answer that you
+did not see, do not send the same token again at once: read whether the connection still works with the newest access token you have, and start the sign-in again if it does not.
 
 <!-- shape: refresh-reused -->
 ```json
 {"error": "invalid_grant", "error_description": "…"}
 ```
 
-HTTP 400: this is what an old (already used) refresh token gets. When a refresh answers `invalid_grant`, the connection is over
+HTTP 400: this is what an old (already used) refresh token gets. A connection that Ambit ended on purpose (the person or an admin stopped it, the person left the company, the grant is older than the
+limit) answers **`access_denied`** instead. When a refresh answers `invalid_grant` or `access_denied`, the connection is over
 (the person disconnected it, an admin stopped it, the person left the company, the token was spent, or the grant is older than the
 limit that the admin set, 30 days by default): **send the person through step 5 again.** A refresh that answers 5xx or
 `temporarily_unavailable` is a failure of the service: try again later with the same token.

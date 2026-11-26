@@ -806,14 +806,17 @@ func TestFirstImageServerDoesNotStallTheAuthorizationStep(t *testing.T) {
 	skew = admissionRetry + time.Second
 	second := reconcileAsync(r)
 	eventually(t, "the backend is written", func() error { _, err := genGet(ctx, ns, "AgentgatewayBackend", MCPBackendName); return err })
+	eventually(t, "the change is pending at the authorization step", func() error {
+		if p := pendingOf(t, ns); p["step"] != "authorization" {
+			return fmt.Errorf("pending %v", p)
+		}
+		return nil
+	})
 	stays(t, "the change waits for the attachment of the policy", func() error {
 		select {
 		case err := <-second:
 			return fmt.Errorf("the pass ended without the attachment: %v", err)
 		default:
-		}
-		if p := pendingOf(t, ns); p["step"] != "authorization" {
-			return fmt.Errorf("pending %v", p)
 		}
 		return nil
 	})

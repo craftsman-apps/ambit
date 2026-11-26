@@ -61,6 +61,9 @@ type gated struct {
 	// acceptedOnly: the policy's target is not generated yet, so it cannot be attached; waiting for Attached would last
 	// until the timeout (#431). Accepted (and so an Invalid verdict) still counts.
 	acceptedOnly bool
+	// attachWait: agentgateway has the policy as not attached while its backend is now generated (awaitsAttachment): the
+	// step waits for it like for a written object, but it is not a fresh write (a retry still checks once).
+	attachWait bool
 }
 
 // stalledError is a step that agentgateway did not apply: the change stops there. objects are the objects that
@@ -454,7 +457,7 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 			switch {
 			case g.changed:
 				anyChanged = true
-			case remembered[g.kind+"/"+g.name]:
+			case remembered[g.kind+"/"+g.name], g.attachWait:
 			default:
 				o := &unstructured.Unstructured{}
 				o.SetGroupVersionKind(AgentgatewayPolicyGVK.GroupVersion().WithKind(g.kind))

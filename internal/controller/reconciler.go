@@ -328,7 +328,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: AccessModeConfigMap}, &published); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, err
 	}
-	changing := r.Activation != nil && (published.Data["mode"] != mode || published.Data["rulesVersion"] != version || r.attachPending(ctx, res.Objects))
+	changing := r.Activation != nil && (published.Data["mode"] != mode || published.Data["rulesVersion"] != version || r.stalled != nil || r.attachPending(ctx, res.Objects))
 	steps := []step{
 		{"authorization", func() (w []gated, err error) {
 			applyFailed, w, err = r.applyAll(ctx, res.Objects, conds)
@@ -748,7 +748,8 @@ func (r *Reconciler) applyAll(ctx context.Context, objs []*unstructured.Unstruct
 		}
 		if kind == "AgentgatewayModel" || kind == "AgentgatewayPolicy" {
 			written = append(written, gated{kind: kind, name: name, generation: desired.GetGeneration(),
-				changed:      desired.GetGeneration() != current.GetGeneration() || awaitsAttachment(current, desired, objs),
+				changed:      desired.GetGeneration() != current.GetGeneration(),
+				attachWait:   awaitsAttachment(current, desired, objs),
 				acceptedOnly: kind == "AgentgatewayPolicy" && attachesToAbsentTarget(desired, objs)})
 		}
 		switch kind {

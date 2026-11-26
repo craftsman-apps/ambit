@@ -30,12 +30,12 @@ jobs:
       - name: Placeholder for web/dist
         if: matrix.language == 'go'
         run: mkdir -p web/dist && touch web/dist/.keep
-      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+      - uses: github/codeql-action/init@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.language == 'go' && 'manual' || 'none' }}
       - name: Build Go packages
         if: matrix.language == 'go'
         run: go build ./...
-      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+      - uses: github/codeql-action/analyze@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
         with: { category: "/language:${{ matrix.language }}" }

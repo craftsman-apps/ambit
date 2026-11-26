@@ -35,4 +35,11 @@ Memory per container: `kubectl -n <ns> top pods --containers`. Known causes:
 - **ClickHouse:** `kubectl -n <ns> exec ambit-clickhouse-0 -- clickhouse-client -q "SELECT metric, value
   FROM system.metrics WHERE metric = 'GlobalThread'"`. The chart's settings keep it near 90 threads; many
   more means its thread pools were changed.
-- **Gateway:** about 7 KiB per open MCP session, dropped after 30 idle minutes.
+- **Gateway:** about 7 KiB per open MCP session, dropped after 30 minutes without use. With more than one gateway pod, a
+  session that a client closes (HTTP DELETE) is dropped only in the pod that receives the DELETE; a pod that served the
+  session earlier keeps its copy until it has not used it for 30 minutes. So under steady MCP traffic the memory of a gateway
+  pod rises for the first 30 minutes and then levels off; it is not a leak. Measured on kind with three pods and about 36 new
+  sessions a minute, each closed: 12 MiB at the start, 19 MiB after 35 minutes, then between 17 and 20 MiB for the next 75
+  minutes (issue #383). Size `gateway.resources.limits.memory` for the level, not for the first minutes. The level is the
+  pod's own memory plus 30 minutes of the sessions that the pod served; it grows with the number of new sessions a minute.
+  Memory that keeps rising after more than 40 minutes of constant traffic needs another explanation.

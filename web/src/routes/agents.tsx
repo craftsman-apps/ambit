@@ -1,12 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { getJSON, sendJSON, useGroups, useMe, useServers, type ServerView } from "@/api";
+import { getJSON, sendJSON, useConnections, useGroups, useMe, useServers, type ServerView } from "@/api";
 import { Button } from "@/components/ui/button";
 import { Shell } from "@/components/shell";
 import { CopyBlock, FirstUse, day, field, statusText, type KeySettings, type KeyView } from "@/routes/keys";
 import {
-  headerLines, knownPlatforms, lastUseByAgent, modeText, NAME_RE, parseRanges, PLATFORM_RE, platformText, scopeSummary, stateText, toggleScope, toolsUsed,
+  headerLines, knownPlatforms, lastUseByAgent, modeText, NAME_RE, parseRanges, PLATFORM_RE, platformText, scopeSummary, stateText, stopNotes, toggleName, toggleScope, toolsUsed, utcTime,
   type AgentSettings, type AgentView,
 } from "@/lib/agents";
 
@@ -21,12 +21,14 @@ type CreatedKey = { key: string; view: KeyView; urls: { mcp: string } };
 type AuditCall = { time: string; method: string; server: string; tool: string; status: string };
 
 const agentsKey = ["agents"] as const;
-const useAgents = (admin: boolean) => useQuery({ queryKey: [...agentsKey, "list", admin], refetchInterval: 60_000,
+const useAgents = (admin: boolean) => useQuery({ queryKey: [...agentsKey, "list", admin], refetchInterval: (q) => (q.state.data?.agents.some((a) => a.state === "stopping") ? 5_000 : 60_000),
   queryFn: () => getJSON<AgentList>(admin ? "/api/agents?all=true" : "/api/agents") });
 // The keys of the agents in the list: their last use, in one request (a person's own keys; an admin's all keys).
 const useKeyUse = (admin: boolean) => useQuery({ queryKey: [...agentsKey, "keys", admin],
   queryFn: () => getJSON<KeyList>(admin ? "/api/admin/keys" : "/api/keys") });
+// While a stop is not confirmed, ask again every 2 seconds: the console reports Stopped only after every gateway confirmed.
 const useAgent = (name?: string) => useQuery({ queryKey: [...agentsKey, "one", name], enabled: !!name, retry: false,
+  refetchInterval: (q) => (q.state.data?.state === "stopping" && q.state.errorUpdateCount < 3 ? 2_000 : false),
   queryFn: () => getJSON<AgentDetailData>(`/api/agents/${encodeURIComponent(name!)}`) });
 
 const th = "py-1.5 pr-3 font-normal";
@@ -251,6 +253,105 @@ function ToolsUsed({ name }: { name: string }) {
   );
 }
 
+// Stop and start. A stop is complete only when every gateway has confirmed it; the page shows what the console measured and
+// never promises that no call is accepted after the request.
+function StopPanel({ a, admin, enabled }: { a: AgentView; admin: boolean; enabled: boolean }) {
+  const qc = useQueryClient();
+  const [confirm, setConfirm] = useState(false);
+  // The answer of stop and start is the agent as it is now: put it in the page at once (no moment with the old controls),
+  // then ask again.
+  const seed = (now: unknown) => {
+    qc.setQueryData([...agentsKey, "one", a.name], (old: AgentDetailData | undefined) => ({ ...old, ...(now as AgentView) }));
+    qc.invalidateQueries({ queryKey: agentsKey });
+  };
+  const stop = useMutation({ mutationFn: () => sendJSON("POST", `/api/agents/${encodeURIComponent(a.name)}/stop`, {}), onSuccess: (now) => { setConfirm(false); seed(now); } });
+  const start = useMutation({ mutationFn: () => sendJSON("POST", `/api/agents/${encodeURIComponent(a.name)}/start`, {}), onSuccess: seed });
+  const mayAct = a.manageable || admin; // the owner (person mode) or an admin
+  const notes = stopNotes(a);
+  return (
+    <div className="space-y-2" data-testid="stop-panel">
+      {notes.map((n) => <p key={n.text} role="status" data-testid={`stop-note-${n.tone}`}
+        className={n.tone === "warn" ? "rounded-md bg-warn-soft px-2 py-1 text-warn" : n.tone === "ok" ? "text-ok" : "text-muted"}>{n.text}</p>)}
+      {mayAct && admin && (a.state === "stopping" || a.state === "stopped") && (
+        <p><a className="text-accent underline" href={`/api/evidence/agent-stop/${encodeURIComponent(a.name)}.zip`} download>Download the stop evidence (agent-stop.zip)</a>
+          <span className="block text-small text-muted">Times of each step, the confirmation of each gateway, and the calls that were accepted after the request, counted. It needs evidence to be switched on.</span></p>)}
+      {start.isError && <p className="text-bad" role="alert">{start.error.message}</p>}
+      {mayAct && a.state === "stopped" && <Button variant="outline" className="w-auto py-1" disabled={start.isPending || !enabled} title={enabled ? "" : "Agents are switched off by your administrator"} onClick={() => start.mutate()}>Start agent</Button>}
+      {mayAct && a.state === "active" && (confirm ? (
+        <div role="alertdialog" aria-label="Stop agent" aria-describedby="stop-agent-text" className="space-y-2 rounded-md border border-bad p-3">
+          <p id="stop-agent-text">Stop <strong>{a.displayName}</strong>? Its keys are deleted and cannot be brought back; Start gives the agent new keys. The page shows Stopped only after every gateway has confirmed the stop. A call that is already on its way can still be accepted until then.</p>
+          {stop.isError && <p className="text-bad" role="alert">{stop.error.message}</p>}
+          <div className="flex gap-2">
+            <Button className="w-auto py-1" disabled={stop.isPending} onClick={() => stop.mutate()}>Stop agent</Button>
+            <Button variant="outline" className="w-auto py-1" autoFocus onClick={() => { setConfirm(false); setTimeout(() => document.getElementById("stop-agent-button")?.focus()); }}>Keep it running</Button>
+          </div>
+        </div>
+      ) : <Button id="stop-agent-button" variant="outline" className="w-auto py-1" onClick={() => setConfirm(true)}>Stop agent</Button>)}
+    </div>
+  );
+}
+
+// The owner left (offboarding or a change at the identity provider): the agent keeps working for a limited time (Helm value
+// agents.orphanDays, 7 by default), then it is stopped. An admin moves it to a new owner.
+function OrphanBanner({ a, admin, enabled }: { a: AgentView; admin: boolean; enabled: boolean }) {
+  const qc = useQueryClient();
+  const [owner, setOwner] = useState("");
+  const move = useMutation({ mutationFn: () => sendJSON("PUT", `/api/agents/${encodeURIComponent(a.name)}/owner`, { owner: owner.trim() }),
+    onSuccess: () => { setOwner(""); qc.invalidateQueries({ queryKey: agentsKey }); } });
+  if (!a.orphanedAt) return null;
+  return (
+    <div role="status" data-testid="orphan-banner" className="space-y-2 rounded-md bg-warn-soft p-3 text-warn">
+      <p>The owner of this agent left on {utcTime(a.orphanedAt)}.{" "}
+        {a.state === "active" || a.state === "pending" ? "The agent keeps working for a limited time (the Helm value agents.orphanDays, 7 by default). Then it is stopped. An admin can move it to a new owner."
+          : `The agent is now ${stateText[a.state].toLowerCase()}.`}</p>
+      {admin && enabled && a.mode === "itself" && (a.state === "active" || a.state === "pending") && (
+        <form className="flex flex-wrap items-end gap-2 text-ink" aria-label="Owner change" onSubmit={(e) => { e.preventDefault(); move.mutate(); }}>
+          <label><span className="mb-1 block text-muted">New owner</span><input className={field} value={owner} required onChange={(e) => setOwner(e.target.value)} placeholder="a person's email, or group:platform" /></label>
+          <Button type="submit" className="w-auto" disabled={move.isPending}>Move agent</Button>
+        </form>)}
+      {move.isError && <p className="text-bad" role="alert">{move.error.message}</p>}
+    </div>
+  );
+}
+
+// Which of the owner's app connections the agent may use. Unticked by default. Only the owner changes it: the connection is the owner's own
+// sign-in to the app. Ticking gives nothing alone: the owner must have connected the app, and the agent still needs the server in its
+// scope and in the owner's AccessRules.
+function ConsentSection({ a, canChange }: { a: AgentView; canChange: boolean }) {
+  const qc = useQueryClient();
+  const conns = useConnections();
+  const [picked, setPicked] = useState(a.connectionConsent);
+  // What the console has is the truth: when it changes (another session, a save), the boxes show it, so an old draft cannot grant again.
+  const served = a.connectionConsent.join(",");
+  useEffect(() => { setPicked(a.connectionConsent); }, [served]); // eslint-disable-line react-hooks/exhaustive-deps
+  const save = useMutation({ mutationFn: () => sendJSON("PATCH", `/api/agents/${encodeURIComponent(a.name)}`, { connectionConsent: picked }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: agentsKey }) });
+  if (a.mode === "itself") return <p className="text-small text-muted" data-testid="consent-itself">An itself-mode agent gets no app connections in 0.6.0.</p>;
+  const known = new Set((conns.data ?? []).map((c) => c.name));
+  const gone = conns.data ? picked.filter((n) => !known.has(n)) : []; // unknown only once the connection list has arrived
+  const changed = JSON.stringify([...picked].sort()) !== JSON.stringify([...a.connectionConsent].sort());
+  return (
+    <div className="space-y-1" data-testid="consent">
+      <h3 className="text-muted">Apps with the owner's own sign-in</h3>
+      <p className="text-small text-muted">Some MCP apps use a person's own login to that app (a connection). This agent may use {canChange ? "your" : "its owner's"} connection to an app only if it is ticked here. Nothing is ticked by default. Ticking gives nothing by itself: the app must be connected under My connections, the agent needs the app's server in its tools, and AccessRules must allow it.</p>
+      {!canChange && <p data-testid="consent-list">{a.connectionConsent.length ? <>Allowed: <span className="font-mono">{a.connectionConsent.join(", ")}</span></> : "No connection is allowed."}</p>}
+      {canChange && conns.isError && <p className="text-bad" role="alert">{conns.error.message}</p>}
+      {canChange && conns.data && conns.data.length === 0 && <p className="text-muted">There are no apps with their own sign-in.</p>}
+      {canChange && conns.data?.map((c) => (
+        <label key={c.name} className="flex items-center gap-2">
+          <input type="checkbox" checked={picked.includes(c.name)} onChange={() => setPicked(toggleName(picked, c.name))} />
+          <span>May use my {c.displayName || c.name} connection</span>
+          <span className="text-small text-muted">{c.state === "connected" ? "(connected)" : c.state === "broken" ? "(connection broken)" : "(not connected yet)"}</span>
+        </label>))}
+      {canChange && gone.length > 0 && <p className="text-small text-muted">Also allowed, but not a connection of yours: <span className="font-mono">{gone.join(", ")}</span>.{" "}
+        <button type="button" className="underline" onClick={() => setPicked(picked.filter((n) => known.has(n)))}>Remove them</button></p>}
+      {save.isError && <p className="text-bad" role="alert">{save.error.message}</p>}
+      {canChange && <div className="flex items-center gap-2"><Button variant="outline" className="w-auto py-1" disabled={!changed || save.isPending} onClick={() => save.mutate()}>Save connections</Button>
+        {save.isSuccess && !changed && <span role="status" className="text-small text-ok">Saved.</span>}</div>}
+    </div>
+  );
+}
+
 function AgentDetail({ name, list, onClose }: { name: string; list: AgentList | undefined; onClose: () => void }) {
   const me = useMe().data;
   const admin = me?.role === "admin";
@@ -275,6 +376,11 @@ function AgentDetail({ name, list, onClose }: { name: string; list: AgentList | 
     mutationFn: () => sendJSON("DELETE", `/api/agents/${encodeURIComponent(name)}`),
     onSuccess: () => { qc.invalidateQueries({ queryKey: agentsKey }); onClose(); },
   });
+  // The list shows the state too: when the detail learns of a new state (Stopped, after the poll), the list asks again.
+  const listState = list?.agents.find((x) => x.name === name)?.state;
+  useEffect(() => { if (listState && q.data && listState !== q.data.state) void q.refetch(); }, [listState]); // eslint-disable-line react-hooks/exhaustive-deps
+  const seenState = q.data?.state;
+  useEffect(() => { if (seenState) qc.invalidateQueries({ queryKey: [...agentsKey, "list"] }); }, [seenState, qc]);
   if (q.isError) return <p className="text-muted" role="status">This agent does not exist, or it is not yours.</p>;
   const a = q.data;
   if (!a) return <p className="text-muted">Loading…</p>;
@@ -298,6 +404,8 @@ function AgentDetail({ name, list, onClose }: { name: string; list: AgentList | 
         {facts.map(([t, v]) => <div key={t} className="contents"><dt className="text-muted">{t}</dt>
           <dd data-testid={`agent-${t.toLowerCase().replace(/ /g, "-")}`}>{v}</dd></div>)}
       </dl>
+      <OrphanBanner a={a} admin={admin} enabled={list?.settings.enabled ?? true} />
+      <StopPanel a={a} admin={admin} enabled={list?.settings.enabled ?? true} />
       {a.state === "pending" && <p role="status" className="rounded-md bg-warn-soft px-2 py-1 text-warn">The service account of this agent is not ready yet. Keys can be made when the state is Active.</p>}
       <div className="space-y-1">
         <div className="flex items-center justify-between"><h3 className="text-muted">Tools it may use</h3>
@@ -306,13 +414,14 @@ function AgentDetail({ name, list, onClose }: { name: string; list: AgentList | 
           ? <p data-testid="agent-scope">None. With an empty scope the agent can use no tool. Change it to add servers or tools.</p>
           : <ul data-testid="agent-scope" className="space-y-0.5">{a.scope.map((e) => <li key={e} className="font-mono text-small">{e.includes("/") ? e : `${e} (all tools)`}</li>)}</ul>}
       </div>
-      {editing && <EditAgent a={a} onClose={() => setEditing(false)} />}
+      {editing && usable && <EditAgent a={a} onClose={() => setEditing(false)} />}
+      <ConsentSection a={a} canChange={a.manageable && a.mode === "person" && usable} />
       <div className="space-y-2">
         <div className="flex items-center justify-between"><h3 className="text-muted">Keys</h3>
           {a.manageable && usable && !addingKey && live.length < 2 && <Button variant="outline" className="w-auto py-1" onClick={() => setAddingKey(true)}>New key</Button>}</div>
-        {addingKey && <NewKey a={a} maxDays={maxDays} admin={admin} onClose={() => setAddingKey(false)} onBusy={setKeyBusy} />}
+        {addingKey && usable && <NewKey a={a} maxDays={maxDays} admin={admin} onClose={() => setAddingKey(false)} onBusy={setKeyBusy} />}
         {revoke.isError && <p className="text-bad" role="alert">{revoke.error.message}</p>}
-        {keys.length === 0 ? <p className="text-muted">No keys. The agent cannot call anything until it has a key.</p> : (
+        {keys.length === 0 ? <p className="text-muted">{a.state === "stopping" ? "No keys are listed." : "No keys. The agent cannot call anything until it has a key."}</p> : (
           <table className="w-full border-collapse text-left">
             <thead><tr className="border-b border-line text-muted"><th className={th}>Name</th><th className={th}>Starts with</th><th className={th}>Status</th><th className={th}>Stops on</th>
               <th className={th}>Last used</th><th className={th}>Source ranges</th><th /></tr></thead>

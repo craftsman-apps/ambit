@@ -19,7 +19,7 @@ bad=0
 legs_of() {
   case "$1" in
     cli-unit) printf '%s\n' "cli-unit (ubuntu-latest)" "cli-unit (macos-latest)" "cli-unit (windows-latest)" ;;
-    e2e) printf '%s\n' "e2e (a)" "e2e (b)" "e2e (c)" "e2e (d)" "e2e (e)" ;;
+    e2e) for p in ${E2E_PARTS:-a b c d e}; do echo "e2e ($p)"; done ;; # E2E_PARTS: the parts a manual run was limited to
   esac
 }
 

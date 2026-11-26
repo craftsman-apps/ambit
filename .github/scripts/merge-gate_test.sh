@@ -66,10 +66,13 @@ all_legs | grep -v "e2e (c)" > "$JOBS";                                  run 1 "
 all_legs | sed 's/e2e (e)|success/e2e (e)|cancelled/' > "$JOBS";         run 1 "a leg of e2e was cancelled" JOBS_FILE="$JOBS"
 all_legs | grep -v "windows" > "$JOBS";                                  run 1 "a leg of cli-unit is missing" JOBS_FILE="$JOBS"
 all_legs | grep -v "e2e" > "$JOBS";                                      run 0 "e2e skipped on purpose: its legs are not looked for" JOBS_FILE="$JOBS" R_E2E=skipped W_E2E=false
+# a manual run limited to some parts: only those legs are expected
+{ all_legs | grep -v "e2e"; echo "e2e (f)|success"; } > "$JOBS";                             run 0 "a manual run of part f: only leg f is expected" JOBS_FILE="$JOBS" E2E_PARTS=f
+{ all_legs | grep -v "e2e"; echo "e2e (f)|cancelled"; } > "$JOBS";                              run 1 "a manual run of part f: leg f cancelled" JOBS_FILE="$JOBS" E2E_PARTS=f
 run 1 "the list of jobs cannot be read" JOBS_FILE=/nonexistent
 # the e2e parts the gate expects are the parts of the matrix in ci.yml
-parts=$(sed -n 's/^ *- { name: \([a-e]\), steps:.*/\1/p' ../workflows/ci.yml | tr '\n' ' ')
-gate=$(grep -o 'e2e ([a-e])' merge-gate.sh | sed 's/e2e (\(.\))/\1/' | tr '\n' ' ')
+parts=$(./e2e-parts.sh | jq -r '[.[].name | select(test("^[a-e]$"))] | join(" ")')
+gate=$(sed -n 's/.*E2E_PARTS:-\([a-e ]*\)}.*/\1/p' merge-gate.sh)
 if [ -n "$parts" ] && [ "$parts" = "$gate" ]; then echo "ok   the e2e parts of the gate are the parts of ci.yml ($parts)"; else echo "FAIL gate parts '$gate', ci.yml parts '$parts'"; fails=$((fails + 1)); fi
 
 [ "$fails" -eq 0 ] || { echo "$fails failed"; exit 1; }

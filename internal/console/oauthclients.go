@@ -24,6 +24,7 @@ type oauthClientView struct {
 func (c *Catalog) registerOAuth(mux *http.ServeMux, allow func(string, func(http.ResponseWriter, *http.Request, Session), ...string) http.HandlerFunc) {
 	mux.HandleFunc("GET /api/admin/oauth/clients", allow("only admins can see OAuth clients", c.listOAuthClients, RoleAdmin))
 	mux.HandleFunc("DELETE /api/admin/oauth/clients/{id}", allow("only admins can delete OAuth clients", c.deleteOAuthClient, RoleAdmin))
+	c.registerOAuthKeys(mux, allow)
 }
 
 func (c *Catalog) listOAuthClients(w http.ResponseWriter, r *http.Request, _ Session) {

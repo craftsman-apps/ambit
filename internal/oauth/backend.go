@@ -136,6 +136,8 @@ func (c *ConsoleBackend) Active(ctx context.Context, agent, grant string, scope 
 type Deny interface {
 	Offboarded(email string) (bool, error)
 	Stopped(agent, grant string) (bool, error)
+	// RotatedAt is the time of the last emergency rotation of the signing keys (zero: none). A refresh of a grant made before it is refused.
+	RotatedAt() (time.Time, error)
 }
 
 // ConfigDeny reads the offboarding list (ConfigMap ambit-offboarded, key emails: a JSON list) and the stop list
@@ -148,12 +150,14 @@ type ConfigDeny struct {
 	mu      sync.RWMutex
 	off     map[string]bool
 	stopped map[string]bool
+	rotated time.Time
 	at      time.Time
 }
 
 const (
 	OffboardedConfigMap = "ambit-offboarded"
 	StopsConfigMap      = "ambit-agent-stops"
+	// RotationConfigMap is in rotate.go.
 )
 
 func (d *ConfigDeny) now() time.Time {
@@ -199,8 +203,18 @@ func (d *ConfigDeny) Refresh(ctx context.Context) error {
 			st[strings.ToLower(e.Kind)+":"+e.Name] = true
 		}
 	}
+	var rotated time.Time
+	rd, err := d.Get(ctx, RotationConfigMap)
+	if err != nil {
+		return err
+	}
+	if v := rd["since"]; v != "" {
+		if rotated, err = time.Parse(time.RFC3339, v); err != nil {
+			return errors.New("the time of the last key rotation is unreadable")
+		}
+	}
 	d.mu.Lock()
-	d.off, d.stopped, d.at = off, st, d.now()
+	d.off, d.stopped, d.rotated, d.at = off, st, rotated, d.now()
 	d.mu.Unlock()
 	return nil
 }
@@ -231,6 +245,15 @@ func (d *ConfigDeny) Stopped(agent, grant string) (bool, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return (agent != "" && d.stopped["agent:"+agent]) || (grant != "" && d.stopped["grant:"+grant]), nil
+}
+
+func (d *ConfigDeny) RotatedAt() (time.Time, error) {
+	if err := d.Fresh(); err != nil {
+		return time.Time{}, err
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.rotated, nil
 }
 
 // Run refreshes every interval until ctx ends.

@@ -140,4 +140,4 @@ spec:
         apiVersions: [v1]
         operations: [CREATE, UPDATE, DELETE]
         resources: [configmaps]
-        resourceNames: [ambit-agent-stops]
+        resourceNames: [ambit-agent-stops, ambit-oauth-rotation] # the time of the last signing-key rotation: only the console writes it

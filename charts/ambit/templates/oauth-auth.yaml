@@ -36,7 +36,7 @@ metadata: { name: ambit-auth }
 rules:
   - apiGroups: [""]
     resources: [configmaps]
-    resourceNames: [ambit-offboarded, ambit-agent-stops]
+    resourceNames: [ambit-offboarded, ambit-agent-stops, ambit-oauth-rotation]
     verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

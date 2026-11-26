@@ -392,6 +392,12 @@ GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$
   STOPCTL="$PWD/test/oauthtest/stopctl.sh" ADMIN_PW="$PW" HTTP_TIMEOUT=90 KEY="$OKEY" ONE_TOOL=time_get_current_time "${PY[@]}" test/oauthtest/gateway.py || fail "14 the gateway checks failed (see FAIL lines above)"
 pass "14 tokens at the public Gateway"
 
+# --- 15 · the emergency rotation of the signing keys (test/oauthtest/rotate.py): the JWKS failures J1 to J3, a rotation that fails while Hydra is down (E2),
+# the rotation itself with the check on every proxy (R0 to R7), and the time that it takes (a gateway fetches the keys every 5 minutes)
+GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
+  STOPCTL="$PWD/test/oauthtest/stopctl.sh" ADMIN_PW="$PW" HTTP_TIMEOUT=90 KEY="$OKEY" ONE_TOOL=time_get_current_time "${PY[@]}" test/oauthtest/rotate.py || fail "15 the signing key checks failed (see FAIL lines above)"
+pass "15 emergency rotation of the signing keys"
+
 # --- 13 · off again: everything of OAuth goes, the front door stays
 helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/frontdoor/values.yaml \
   --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 --wait --timeout 5m >/dev/null

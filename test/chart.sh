@@ -469,12 +469,12 @@ assert env["AMBIT_AUTH_REGISTRATION_HOSTS"]["value"]=="chatgpt.com,claude.ai" an
 assert env["AMBIT_AUTH_VALKEY_ADDRESS"]["value"]=="ambit-valkey:6379" and "AMBIT_AUTH_VALKEY_TLS" not in env, env
 pr=p["volumes"][0]["projected"]["sources"][0]["serviceAccountToken"]; assert pr["audience"]=="ambit-console", pr
 role=one("Role","ambit-auth")["rules"]
-assert role==[{"apiGroups":[""],"resources":["configmaps"],"resourceNames":["ambit-offboarded","ambit-agent-stops"],"verbs":["get"]}], role
+assert role==[{"apiGroups":[""],"resources":["configmaps"],"resourceNames":["ambit-offboarded","ambit-agent-stops","ambit-oauth-rotation"],"verbs":["get"]}], role
 n=one("NetworkPolicy","ambit-auth")["spec"]["ingress"]
 assert n[0]["ports"]==[{"port":8080}] and n[0]["from"][0]["podSelector"]["matchLabels"]=={"gateway.networking.k8s.io/gateway-name":"ambit-public"}, n
 assert n[1]["ports"]==[{"port":8081}] and n[1]["from"][0]["podSelector"]["matchLabels"]=={"app.kubernetes.io/name":"ambit-hydra"}, n
 vk=[x for x in docs if x["kind"]=="NetworkPolicy" and x["metadata"]["name"]=="ambit-valkey"][0]["spec"]["ingress"][0]["from"]
-assert {"podSelector":{"matchLabels":{"app.kubernetes.io/name":"ambit-auth"}}} in vk, vk' "ambit-auth: two replicas, secrets from Secrets only, a token for the console only, reads two ConfigMaps by name, pages reachable from the public Gateway only, the hook from Hydra only, allowed to reach Valkey"
+assert {"podSelector":{"matchLabels":{"app.kubernetes.io/name":"ambit-auth"}}} in vk, vk' "ambit-auth: two replicas, secrets from Secrets only, a token for the console only, reads three ConfigMaps by name, pages reachable from the public Gateway only, the hook from Hydra only, allowed to reach Valkey"
 off_dcr=$(oat --set oauth.registration.dynamic.enabled=false)
 ! grep -q 'value: /register' <<<"$off_dcr" && ! grep -q 'path: { type: Exact, value: /register }' <<<"$off_dcr" || { echo "FAIL chart: no /register route when dynamic registration is off"; exit 1; }
 grep -q 'AMBIT_AUTH_REGISTRATION' <<<"$off_dcr" || { echo "FAIL chart: ambit-auth must be told that registration is off"; exit 1; }
@@ -517,6 +517,7 @@ c=[x for x in one("Deployment","ambit-controller")["spec"]["template"]["spec"]["
 assert "--agent-token-issuer=https://auth.localtest.me" in c, c' "the public MCP route: a keys rule and a token rule (more specific match first), each with its own policy; tokens of the sign-in host only, for this MCP URL, a person and an agent and a grant; the controller reads agent claims from that issuer"
 check_oa 'e=[x for x in one("Deployment","ambit-console")["spec"]["template"]["spec"]["containers"][0]["env"]]
 assert {"name":"AMBIT_OAUTH_ADDR","value":":8085"} in e and {"name":"AMBIT_HYDRA_ADMIN","value":"http://ambit-hydra-admin:4445"} in e, e
+assert {"name":"AMBIT_OAUTH_ISSUER","value":"https://auth.localtest.me"} in e and {"name":"AMBIT_OAUTH_RESOURCE","value":"https://mcp-public.localtest.me/mcp"} in e, e
 assert {"name":"oauth","port":8085,"targetPort":"oauth"} in one("Service","ambit-console")["spec"]["ports"]
 n=one("NetworkPolicy","ambit-console-oauth")["spec"]["ingress"]
 assert n[1]=={"from":[{"podSelector":{"matchLabels":{"app.kubernetes.io/name":"ambit-auth"}}}],"ports":[{"port":8085}]}, n

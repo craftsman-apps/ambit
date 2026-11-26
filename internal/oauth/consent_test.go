@@ -3,6 +3,7 @@ package oauth
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1105,5 +1106,57 @@ func TestTokenHookSendsTheTokensScope(t *testing.T) {
 func TestConsentTokenCarriesVerifiedEmail(t *testing.T) {
 	if g := groupNames([]any{"eng", 3, "ml"}); !slices.Equal(g, []string{"eng", "ml"}) {
 		t.Fatalf("groups %v", g)
+	}
+}
+
+// A grant made before the last emergency rotation of the signing keys is not refreshed (it would get the key ID of a key that is gone);
+// a grant made after it is; and the time of the rotation must be readable.
+func TestTokenHookRefusesGrantsBeforeTheRotation(t *testing.T) {
+	e := newEnv(t)
+	sess := func(grant string) map[string]any {
+		return map[string]any{"subject": "alice@acme.test", "extra": map[string]any{"ambit_agent": "a1", "ambit_grant": grant, "email": "alice@acme.test", "ambit_scope": []string{}}}
+	}
+	before, after := NewGrantID(e.now.Add(-2*time.Hour)), NewGrantID(e.now.Add(-time.Minute))
+	e.deny.rotated = e.now.Add(-time.Hour)
+	if w := hook(e, sess(before)); w.Code != 403 {
+		t.Errorf("a grant before the rotation: %d, want 403", w.Code)
+	}
+	if w := hook(e, sess(after)); w.Code != 204 {
+		t.Errorf("a grant after the rotation: %d, want 204", w.Code)
+	}
+	// the first token of a code exchange is not a refresh: it is made with the new key
+	if w := hook(e, sess(before), "authorization_code"); w.Code != 204 {
+		t.Errorf("a code exchange: %d", w.Code)
+	}
+	e.deny.rotated = time.Time{}
+	if w := hook(e, sess(before)); w.Code != 204 {
+		t.Errorf("no rotation: %d", w.Code)
+	}
+	e.deny.err = errors.New("unreadable")
+	if w := hook(e, sess(after)); w.Code != 503 {
+		t.Errorf("an unreadable list: %d, want 503", w.Code)
+	}
+}
+
+func TestConfigDenyReadsTheRotationTime(t *testing.T) {
+	data := map[string]map[string]string{}
+	now := time.Date(2026, 11, 26, 10, 0, 0, 0, time.UTC)
+	d := &ConfigDeny{Get: func(_ context.Context, n string) (map[string]string, error) { return data[n], nil }, MaxAge: time.Minute, Now: func() time.Time { return now }}
+	if err := d.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if at, err := d.RotatedAt(); err != nil || !at.IsZero() {
+		t.Fatalf("no ConfigMap: %v %v", at, err)
+	}
+	data[RotationConfigMap] = map[string]string{"since": "2026-11-26T09:30:00Z"}
+	if err := d.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if at, err := d.RotatedAt(); err != nil || !at.Equal(time.Date(2026, 11, 26, 9, 30, 0, 0, time.UTC)) {
+		t.Fatalf("%v %v", at, err)
+	}
+	data[RotationConfigMap] = map[string]string{"since": "yesterday"}
+	if err := d.Refresh(context.Background()); err == nil {
+		t.Fatal("an unreadable time was accepted")
 	}
 }

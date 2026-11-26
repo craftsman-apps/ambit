@@ -406,13 +406,12 @@ helm get values ambit -n "$NS" -a -o yaml > "$W/release-values.yaml" || fail "18
 GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" NS="$NS" \
   BLOCKCTL="$W/ambit" HELM_UPGRADE="helm upgrade ambit charts/ambit -n $NS --reuse-values --force-conflicts --wait --timeout 8m" HELM_TEMPLATE="helm template ambit charts/ambit -n $NS -f $W/release-values.yaml" \
   HTTP_TIMEOUT=90 KEY="$OKEY" ONE_TOOL=time_get_current_time "${PY[@]}" test/oauthtest/block.py || fail "18 the emergency block checks failed (see FAIL lines above)"
-# The Argo CD-style re-apply took fields of the chart's policies: Helm takes them back, so that the next upgrade (check 13) does not meet a conflict
-helm upgrade ambit charts/ambit -n "$NS" --reuse-values --force-conflicts --wait --timeout 8m >/dev/null || fail "18 the Helm upgrade that takes the fields back"
 pass "18 the emergency block (ambit oauth block on) survives a Helm upgrade and a re-apply of the chart; the old kind of block does not"
 
 # --- 13 · off again: everything of OAuth goes, the front door stays
+# (--force-conflicts: check 18's Argo CD-style re-apply shares ownership of fields of the chart's policies; a change of one of them is then a conflict for Helm 4's server-side apply)
 helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/frontdoor/values.yaml \
-  --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 --wait --timeout 5m >/dev/null
+  --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 --force-conflicts --wait --timeout 5m >/dev/null
 wait_for 120 '[[ -z "$(kubectl -n "$NS" get sts ambit-hydra -o name 2>/dev/null)" ]]' || fail "13 Hydra is still there with oauth.enabled=false"
 for o in service/ambit-hydra-public service/ambit-hydra-admin networkpolicy/ambit-hydra configmap/ambit-hydra httproute/ambit-auth-hydra httproute/ambit-auth-app deploy/ambit-auth; do
   [[ -z "$(kubectl -n "$NS" get "$o" -o name 2>/dev/null)" ]] || fail "13 $o is still there"

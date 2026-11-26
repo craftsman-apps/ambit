@@ -84,9 +84,15 @@ type Rotation struct {
 	At    time.Time    `json:"rotatedAt"`
 	Sets  []RotatedSet `json:"sets"`
 	Probe struct {
-		Old string `json:"old"` // signed by the key that left
-		New string `json:"new"` // signed by the key that signs now
+		Old string `json:"old"` // signed by the key of the access token set that left
+		New string `json:"new"` // signed by the key of the access token set that signs now
 	} `json:"probe"`
+	// IDTokenProbe is the same for the ID token set: the gateways trust every key that Hydra publishes, the ID token key too, so a pod must have dropped the
+	// old key of both sets before the block is lifted.
+	IDTokenProbe struct {
+		Old string `json:"old"`
+		New string `json:"new"`
+	} `json:"idTokenProbe"`
 }
 
 // ProbeClaims says what the probe tokens name: the issuer and the audience of the public route.
@@ -97,7 +103,7 @@ type ProbeClaims struct{ Issuer, Audience string }
 // not touched (fix that first). On an error some sets may be rotated and some not; run it again.
 func RotateSigningKeys(ctx context.Context, h *HydraAdmin, pc ProbeClaims, now time.Time) (Rotation, error) {
 	rot := Rotation{At: now.UTC()}
-	var oldAccess, newAccess json.RawMessage
+	oldKeys, newKeys := map[string]json.RawMessage{}, map[string]json.RawMessage{}
 	var rnd [6]byte
 	_, _ = rand.Read(rnd[:])
 	temp := tempKeySet + "-" + hex.EncodeToString(rnd[:])
@@ -128,16 +134,19 @@ func RotateSigningKeys(ctx context.Context, h *HydraAdmin, pc ProbeClaims, now t
 			return rot, fmt.Errorf("key set %s does not hold the new key after the replacement", set)
 		}
 		rot.Sets = append(rot.Sets, RotatedSet{Set: set, OldKID: KeyID(old[0]), NewKID: KeyID(fresh)})
-		if set == SigningSets[0] {
-			oldAccess, newAccess = old[0], fresh
-		}
+		oldKeys[set], newKeys[set] = old[0], fresh
 	}
 	var err error
-	if rot.Probe.Old, err = probeToken(oldAccess, pc, rot.At); err != nil {
-		return rot, err
-	}
-	if rot.Probe.New, err = probeToken(newAccess, pc, rot.At); err != nil {
-		return rot, err
+	for _, p := range []struct {
+		set      string
+		old, new *string
+	}{{SigningSets[0], &rot.Probe.Old, &rot.Probe.New}, {SigningSets[1], &rot.IDTokenProbe.Old, &rot.IDTokenProbe.New}} {
+		if *p.old, err = probeToken(oldKeys[p.set], pc, rot.At); err != nil {
+			return rot, err
+		}
+		if *p.new, err = probeToken(newKeys[p.set], pc, rot.At); err != nil {
+			return rot, err
+		}
 	}
 	return rot, nil
 }

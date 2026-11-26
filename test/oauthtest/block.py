@@ -33,9 +33,10 @@ def ambit(*a):
 def renew():
     """A new access token of the connection (the old one lives 15 minutes; the helm upgrade takes a while)."""
     st, j = token(tok["cid"], grant_type="refresh_token", refresh_token=tok["refresh_token"])
-    if st == 200 and j.get("access_token"):
-        tok.update(access_token=j["access_token"], refresh_token=j.get("refresh_token", tok["refresh_token"]))
-    return st == 200
+    if st == 200 and j.get("access_token") and j.get("refresh_token"):
+        tok.update(access_token=j["access_token"], refresh_token=j["refresh_token"])
+        return True
+    return False
 
 
 def code_all(fn):
@@ -98,9 +99,14 @@ while time.time() - t < 60 and len(seen) < len(PORTS):
     time.sleep(0.2)
 check("N1b every token is refused with 403 on every pod", len(seen) == len(PORTS), seen)
 print(f"   ambit oauth block on: refused on every pod {max(seen.values()) if seen else float('nan'):.1f} s after the command was started", flush=True)
-check("N1b API keys keep working on the same route", all(tools(p, key=KEY)[0] == 200 for p in PORTS))
+check("N1b API keys keep working on the same route (the tool list holds the front-door tool)", all(TOOL in (tools(p, key=KEY)[1] or []) for p in PORTS))
 rc, text = sh("helm get manifest ambit -n %s" % NSN)[0:2]
-check("N1b the policy is in no Helm release", "ambit-oauth-emergency-block" not in text)
+check("N1b the policy is in no Helm release (the manifest of the release was read)", rc == 0 and "kind: AgentgatewayPolicy" in text and "ambit-oauth-emergency-block" not in text)
+# N1g · no Ambit component may lift it: the controller has the right to delete policies (it makes many), and the admission policy refuses it for this one
+# (the console and the sign-in server have no such right at all; the unit test of the chart checks that the policy names all three)
+for sa in ("ambit-controller",):
+    r = subprocess.run(KUBECTL + ["--as=system:serviceaccount:%s:%s" % (NSN, sa), "delete", BLOCK, "--dry-run=server"], capture_output=True, text=True, timeout=60)
+    check("N1g %s cannot delete the block (the admission policy ambit-oauth-block-fence)" % sa, r.returncode != 0 and "ambit-oauth-block-fence" in r.stderr, r.stderr[-200:])
 
 # N1c · a Helm upgrade leaves it
 rc, out, err = sh(os.environ["HELM_UPGRADE"])

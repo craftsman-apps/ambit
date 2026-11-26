@@ -261,7 +261,11 @@ YAML
 Every request with a token now gets 403 on every public Gateway pod, also with a token that the stolen key signed (the gateway checks this rule
 after it has checked the signature; a request with a key has no token, and the key rule is not touched). **Helm and Argo CD do not own this
 policy**: a `helm upgrade`, Argo CD self-heal (`ambit init --gitops argocd` writes an Application with `selfHeal`) and Flux drift correction
-do not remove it, because it is in no chart and in no Git repository. It stays until you run `ambit oauth block off` (or delete the policy).
+do not remove it, because it is in no chart and in no Git repository. It stays until you run `ambit oauth block off` (or delete the policy). An admission
+policy (`ambit-oauth-block-fence`) refuses every write of this policy by Ambit's own controller, console and sign-in server: only an operator makes and removes it.
+The command waits up to 20 seconds for a gateway to report the policy accepted and says if it did not; a gateway pod applies it within a second of that (measured in the
+end-to-end test: refused on every pod 0.1 s after the command). The protected-resource metadata document (`/.well-known/oauth-protected-resource/mcp`) stays public:
+it holds no secret and starts the sign-in of a platform.
 Platforms get 403 on `/mcp`: they stay connected, and work again when you lift the block.
 
 What GitOps users do: the same. The block is an object that is not in Git, so no tool puts it back or removes it; do not add it to Git
@@ -309,7 +313,9 @@ Step 4, for each pod `P` of `kubectl -n ambit-system get pods -l gateway.network
 to the pod and send the request to it, with the real host name `mcp.example.com` in the `Host` header and certificate check):
 `POST /mcp` with `Authorization: Bearer <probe.old from rotation.json>` must answer **401** (the pod no longer knows the old key), and with
 `<probe.new>` must answer **403** (the pod knows the new key; the token is valid but names no agent, so the rules refuse it, and the block refuses
-everything anyway). Repeat until every pod answers like that. **Only then** lift the block (`ambit oauth block off`). If one pod
+everything anyway). **Do the same with `idTokenProbe.old` and `idTokenProbe.new`**: a gateway trusts every key that Hydra publishes, the key of the ID
+token set too, so a pod that still knows the old ID token key would accept a token signed with it. A probe expires one hour after the rotation (a 401 for
+`probe.new` then means that it expired, not that the pod lacks the new key: rotate again, or check within the hour). Repeat until every pod answers like that. **Only then** lift the block (`ambit oauth block off`). If one pod
 still answers 403 for the old probe, keep the block on and check that pod again; do not lift the block for the others. The probe tokens
 carry no agent, grant or scope: no route accepts them, and they expire after an hour. They are signed with the real keys, so treat the answer of
 step 2 as secret and delete `rotation.json` after the check.

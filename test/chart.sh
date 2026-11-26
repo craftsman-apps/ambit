@@ -532,6 +532,13 @@ n=one("NetworkPolicy","ambit-console-oauth")["spec"]["ingress"]
 assert n[1]=={"from":[{"podSelector":{"matchLabels":{"app.kubernetes.io/name":"ambit-auth"}}}],"ports":[{"port":8085}]}, n
 r=one("ClusterRole","ambit-system-ambit-console-tokenreview")["rules"]
 assert r==[{"apiGroups":["authentication.k8s.io"],"resources":["tokenreviews"],"verbs":["create"]}], r' "the console: an internal API on its own port for ambit-auth only (network policy and a token check), and the right to check tokens and nothing else of the authentication API"
+check_oa 'v=one("ValidatingAdmissionPolicy","ambit-oauth-block-fence")["spec"]
+e=v["validations"][0]["expression"]
+assert all(sa in e for sa in ("ambit-controller","ambit-console","ambit-auth")), e
+assert "ambit-oauth-emergency-block" in v["matchConditions"][0]["expression"] and "oldObject" in v["matchConditions"][0]["expression"], v
+b=one("ValidatingAdmissionPolicyBinding","ambit-oauth-block-fence")["spec"]
+assert b["validationActions"]==["Deny"] and b["policyName"]=="ambit-oauth-block-fence", b' "the emergency block policy is written by an operator only: Ambit's controller, console and sign-in server are refused (admission), checked by the old object's name on a delete"
+[[ "$fd" != *ambit-oauth-block-fence* ]] || { echo "FAIL chart: the block fence is rendered without OAuth"; exit 1; }
 blk=$(oat --set oauth.emergencyBlock=true)
 # (not "oa=$blk check_oa": a variable set for one call is exported, and the rendered chart is more than the 128 KB that Linux allows in one)
 ( oa=$blk; check_oa 'ex=one("AgentgatewayPolicy","ambit-mcp-public-oauth")["spec"]["traffic"]["authorization"]["policy"]["matchExpressions"]

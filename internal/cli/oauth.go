@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -88,6 +89,35 @@ func blockPolicy(ns string) *unstructured.Unstructured {
 	return o
 }
 
+// oauthBlockWait is how long `on` waits for the gateway to report the policy accepted.
+var oauthBlockWait = 20 * time.Second
+
+// isBlock reports whether the object is the block that `on` makes: a Require rule on the public route that is false for every request with a token.
+func isBlock(o *unstructured.Unstructured) bool {
+	refs, _, _ := unstructured.NestedSlice(o.Object, "spec", "targetRefs")
+	action, _, _ := unstructured.NestedString(o.Object, "spec", "traffic", "authorization", "action")
+	exprs, _, _ := unstructured.NestedStringSlice(o.Object, "spec", "traffic", "authorization", "policy", "matchExpressions")
+	if len(refs) != 1 || action != "Require" || len(exprs) != 1 || exprs[0] != "!has(jwt.iss)" {
+		return false
+	}
+	r, ok := refs[0].(map[string]any)
+	return ok && r["kind"] == "HTTPRoute" && r["name"] == oauthPublicRoute && r["sectionName"] == nil
+}
+
+// accepted reports whether a gateway has accepted the policy (status.ancestors[].conditions: Accepted True).
+func accepted(o *unstructured.Unstructured) bool {
+	anc, _, _ := unstructured.NestedSlice(o.Object, "status", "ancestors")
+	for _, a := range anc {
+		conds, _, _ := unstructured.NestedSlice(a.(map[string]any), "conditions")
+		for _, c := range conds {
+			if m, ok := c.(map[string]any); ok && m["type"] == "Accepted" && m["status"] == "True" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (a *app) oauthBlock(ctx context.Context, on bool) error {
 	p := a.printer()
 	c, err := a.oauthClients()
@@ -95,13 +125,15 @@ func (a *app) oauthBlock(ctx context.Context, on bool) error {
 		return err
 	}
 	ns := a.g.namespace
-	// OAuth sign-in must be on: the token policy of the chart is there.
-	if err := c.Ctrl.Get(ctx, client.ObjectKey{Namespace: ns, Name: oauthTokenPolicy}, policyObject(ns, oauthTokenPolicy)); err != nil {
-		if apierrors.IsNotFound(err) {
-			return &out.Error{What: "OAuth sign-in is not turned on in namespace " + ns, Why: "the policy " + oauthTokenPolicy + " does not exist",
-				Next: "pass -n <namespace> if Ambit is installed in another namespace"}
+	if on {
+		// OAuth sign-in must be on: the token policy of the chart is there. (Lifting the block needs no such policy.)
+		if err := c.Ctrl.Get(ctx, client.ObjectKey{Namespace: ns, Name: oauthTokenPolicy}, policyObject(ns, oauthTokenPolicy)); err != nil {
+			if apierrors.IsNotFound(err) {
+				return &out.Error{What: "OAuth sign-in is not turned on in namespace " + ns, Why: "the policy " + oauthTokenPolicy + " does not exist",
+					Next: "pass -n <namespace> if Ambit is installed in another namespace"}
+			}
+			return &out.Error{What: "the policy " + oauthTokenPolicy + " cannot be read", Why: err.Error(), Next: "check the context and your rights (kubectl auth can-i get agentgatewaypolicies -n " + ns + ")"}
 		}
-		return &out.Error{What: "the policy " + oauthTokenPolicy + " cannot be read", Why: err.Error(), Next: "check the context and your rights (kubectl auth can-i get agentgatewaypolicies -n " + ns + ")"}
 	}
 	existing := policyObject(ns, oauthBlockPolicy)
 	getErr := c.Ctrl.Get(ctx, client.ObjectKeyFromObject(existing), existing)
@@ -109,6 +141,10 @@ func (a *app) oauthBlock(ctx context.Context, on bool) error {
 		return &out.Error{What: "the policy " + oauthBlockPolicy + " cannot be read", Why: getErr.Error()}
 	}
 	exists := getErr == nil
+	if exists && !isBlock(existing) {
+		return &out.Error{What: "a policy named " + oauthBlockPolicy + " exists, but it is not the block", Why: "its rule is not the one that ambit oauth block on makes, so it may not refuse tokens",
+			Next: "kubectl -n " + ns + " get agentgatewaypolicy " + oauthBlockPolicy + " -o yaml; delete it, then run ambit oauth block on"}
+	}
 	if on {
 		if exists {
 			p.Line("%s OAuth tokens are already blocked (policy %s in namespace %s).", p.Mark("ok"), oauthBlockPolicy, ns)
@@ -121,9 +157,34 @@ func (a *app) oauthBlock(ctx context.Context, on bool) error {
 			return err
 		}
 		if err := c.Ctrl.Create(ctx, blockPolicy(ns)); err != nil {
-			return &out.Error{What: "the policy " + oauthBlockPolicy + " was not created", Why: err.Error(), Next: "kubectl auth can-i create agentgatewaypolicies -n " + ns}
+			if !apierrors.IsAlreadyExists(err) { // another operator made it meanwhile: it must be the block
+				return &out.Error{What: "the policy " + oauthBlockPolicy + " was not created", Why: err.Error(), Next: "kubectl auth can-i create agentgatewaypolicies -n " + ns}
+			}
+			if gerr := c.Ctrl.Get(ctx, client.ObjectKeyFromObject(existing), existing); gerr != nil || !isBlock(existing) {
+				return &out.Error{What: "a policy named " + oauthBlockPolicy + " exists, but it is not the block", Why: "it was made while this command ran",
+					Next: "kubectl -n " + ns + " get agentgatewaypolicy " + oauthBlockPolicy + " -o yaml"}
+			}
 		}
-		p.Line("%s OAuth tokens are blocked: policy %s created in namespace %s. Every public gateway pod refuses a token within a second.", p.Mark("ok"), oauthBlockPolicy, ns)
+		// The block is in force when a gateway has accepted the policy; say what is known.
+		got := policyObject(ns, oauthBlockPolicy)
+		deadline := time.Now().Add(oauthBlockWait)
+		ok := false
+		for {
+			if err := c.Ctrl.Get(ctx, client.ObjectKeyFromObject(got), got); err == nil && accepted(got) {
+				ok = true
+				break
+			}
+			if !time.Now().Before(deadline) {
+				break
+			}
+			time.Sleep(time.Second)
+		}
+		if ok {
+			p.Line("%s OAuth tokens are blocked: policy %s created in namespace %s, and the gateway has accepted it.", p.Mark("ok"), oauthBlockPolicy, ns)
+		} else {
+			p.Line("%s Policy %s is created in namespace %s, but the gateway has not reported it accepted yet. Check it, and try a token:", p.Mark("warn"), oauthBlockPolicy, ns)
+			p.Line("  kubectl -n %s get agentgatewaypolicy %s -o jsonpath='{.status.ancestors[*].conditions}'", ns, oauthBlockPolicy)
+		}
 		p.Line("Helm and Argo CD do not own this policy: an upgrade or self-heal leaves it. Lift it with: ambit oauth block off")
 		return nil
 	}
@@ -134,12 +195,14 @@ func (a *app) oauthBlock(ctx context.Context, on bool) error {
 	}
 	if err := kube.Confirm(p, a.stdin(), a.stdinTTY(), a.g.yes, []string{
 		fmt.Sprintf("Lifting the block of OAuth tokens in context %s (%s), namespace %s.", c.Context, c.Server, ns),
-		"Tokens that are valid work again at once. Lift it only when the check on every gateway pod says that the old key is gone (docs/oauth.md).",
+		"Tokens that are valid work again at once. Lift it only when the check on every gateway pod is done (docs/oauth.md).",
 	}, "Lift the block?"); err != nil {
 		return err
 	}
-	if err := c.Ctrl.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
-		return &out.Error{What: "the policy " + oauthBlockPolicy + " was not deleted", Why: err.Error()}
+	// Delete exactly the object that was shown: not one that replaced it while the question was open.
+	uid, rv := existing.GetUID(), existing.GetResourceVersion()
+	if err := c.Ctrl.Delete(ctx, existing, client.Preconditions{UID: &uid, ResourceVersion: &rv}); err != nil && !apierrors.IsNotFound(err) {
+		return &out.Error{What: "the policy " + oauthBlockPolicy + " was not deleted", Why: err.Error(), Next: "ambit oauth block status, then run the command again"}
 	}
 	p.Line("%s The block is lifted: policy %s deleted.", p.Mark("ok"), oauthBlockPolicy)
 	return nil
@@ -153,17 +216,25 @@ func (a *app) oauthBlockStatus(ctx context.Context) error {
 	}
 	ns := a.g.namespace
 	tok := policyObject(ns, oauthTokenPolicy)
+	haveTok := true
 	if err := c.Ctrl.Get(ctx, client.ObjectKey{Namespace: ns, Name: oauthTokenPolicy}, tok); err != nil {
-		if apierrors.IsNotFound(err) {
-			p.Line("OAuth sign-in is not turned on in namespace %s.", ns)
-			return nil
+		if !apierrors.IsNotFound(err) {
+			return &out.Error{What: "the policy " + oauthTokenPolicy + " cannot be read", Why: err.Error()}
 		}
-		return &out.Error{What: "the policy " + oauthTokenPolicy + " cannot be read", Why: err.Error()}
+		haveTok = false
 	}
 	blocked := false
-	if err := c.Ctrl.Get(ctx, client.ObjectKey{Namespace: ns, Name: oauthBlockPolicy}, policyObject(ns, oauthBlockPolicy)); err == nil {
-		p.Line("OAuth tokens are BLOCKED by the policy %s (made by ambit oauth block on; lift it with ambit oauth block off).", oauthBlockPolicy)
-		blocked = true
+	blk := policyObject(ns, oauthBlockPolicy)
+	if err := c.Ctrl.Get(ctx, client.ObjectKeyFromObject(blk), blk); err == nil {
+		switch {
+		case !isBlock(blk):
+			p.Line("A policy named %s exists, but it is not the block that ambit oauth block on makes: it may not refuse tokens (kubectl -n %s get agentgatewaypolicy %s -o yaml).", oauthBlockPolicy, ns, oauthBlockPolicy)
+		case accepted(blk):
+			p.Line("OAuth tokens are BLOCKED by the policy %s (made by ambit oauth block on; the gateway has accepted it; lift it with ambit oauth block off).", oauthBlockPolicy)
+			blocked = true
+		default:
+			p.Line("The block policy %s exists, but the gateway has not reported it accepted: tokens may not be blocked yet.", oauthBlockPolicy)
+		}
 	} else if !apierrors.IsNotFound(err) {
 		return &out.Error{What: "the policy " + oauthBlockPolicy + " cannot be read", Why: err.Error()}
 	}
@@ -174,7 +245,11 @@ func (a *app) oauthBlockStatus(ctx context.Context) error {
 			blocked = true
 		}
 	}
-	if !blocked {
+	switch {
+	case blocked:
+	case !haveTok:
+		p.Line("OAuth sign-in is not turned on in namespace %s.", ns)
+	default:
 		p.Line("OAuth tokens are not blocked.")
 	}
 	return nil

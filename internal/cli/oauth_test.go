@@ -16,6 +16,9 @@ import (
 // oauthRig is a cluster whose chart has the token policy (OAuth on), or not.
 func oauthRig(t *testing.T, oauthOn bool, tokenClauses ...any) *installRig {
 	t.Helper()
+	was := oauthBlockWait
+	oauthBlockWait = 0 // the fake cluster has no gateway that reports the policy accepted
+	t.Cleanup(func() { oauthBlockWait = was })
 	r := newInstallRig(t)
 	var objs []client.Object
 	if oauthOn {
@@ -42,7 +45,8 @@ func getBlock(t *testing.T, r *installRig) (*unstructured.Unstructured, bool) {
 func TestOAuthBlockOnMakesAPolicyOfItsOwn(t *testing.T) {
 	r := oauthRig(t, true)
 	code, s := r.run("oauth", "block", "on", "--yes")
-	if code != 0 || !strings.Contains(s, "OAuth tokens are blocked") {
+	// no gateway in the fake cluster: the command says that the policy is made and that the gateway has not yet said that it is accepted
+	if code != 0 || !strings.Contains(s, "is created") || !strings.Contains(s, "has not reported it accepted") || strings.Contains(s, "and the gateway has accepted it") {
 		t.Fatalf("exit %d\n%s", code, s)
 	}
 	o, ok := getBlock(t, r)
@@ -130,13 +134,63 @@ func TestOAuthBlockOffLiftsIt(t *testing.T) {
 	}
 }
 
+// Lifting needs no token policy of the chart (the block must be removable also when OAuth was turned off meanwhile).
+func TestOAuthBlockOffWorksWithoutTheChartPolicy(t *testing.T) {
+	r := oauthRig(t, true)
+	r.run("oauth", "block", "on", "--yes")
+	b, _ := getBlock(t, r)
+	r2 := oauthRig(t, false)
+	c := blockPolicy("ambit-system")
+	c.SetResourceVersion("")
+	if err := r2.ctrl.Create(context.Background(), c); err != nil {
+		t.Fatal(err)
+	}
+	_ = b
+	if code, s := r2.run("oauth", "block", "off", "--yes"); code != 0 || !strings.Contains(s, "The block is lifted") {
+		t.Fatalf("exit %d\n%s", code, s)
+	}
+	if _, ok := getBlock(t, r2); ok {
+		t.Fatal("the policy stays")
+	}
+}
+
+// A policy of the same name that is not the block is never reported as a block, and never deleted.
+func TestOAuthBlockRefusesAPolicyThatIsNotTheBlock(t *testing.T) {
+	r := oauthRig(t, true)
+	other := policyObject("ambit-system", oauthBlockPolicy)
+	_ = unstructured.SetNestedSlice(other.Object, []any{"true"}, "spec", "traffic", "authorization", "policy", "matchExpressions")
+	if err := r.ctrl.Create(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"oauth", "block", "on", "--yes"}, {"oauth", "block", "off", "--yes"}} {
+		if code, s := r.run(args...); code == 0 || !strings.Contains(s, "is not the block") {
+			t.Fatalf("%v: exit %d\n%s", args, code, s)
+		}
+	}
+	if _, ok := getBlock(t, r); !ok {
+		t.Fatal("an unrelated policy was deleted")
+	}
+	if _, s := r.run("oauth", "block", "status"); !strings.Contains(s, "not the block") || strings.Contains(s, "BLOCKED by the policy") {
+		t.Fatalf("status of a policy that is not the block:\n%s", s)
+	}
+}
+
 func TestOAuthBlockStatus(t *testing.T) {
 	r := oauthRig(t, true)
 	if _, s := r.run("oauth", "block", "status"); !strings.Contains(s, "not blocked") {
 		t.Fatalf("not blocked:\n%s", s)
 	}
 	r.run("oauth", "block", "on", "--yes")
-	if _, s := r.run("oauth", "block", "status"); !strings.Contains(s, "BLOCKED by the policy "+oauthBlockPolicy) {
+	if _, s := r.run("oauth", "block", "status"); !strings.Contains(s, "has not reported it accepted") || strings.Contains(s, "BLOCKED by the policy") {
+		t.Fatalf("made but not accepted:\n%s", s)
+	}
+	// the gateway reports it accepted
+	o, _ := getBlock(t, r)
+	_ = unstructured.SetNestedSlice(o.Object, []any{map[string]any{"conditions": []any{map[string]any{"type": "Accepted", "status": "True"}}}}, "status", "ancestors")
+	if err := r.ctrl.Update(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	if _, s := r.run("oauth", "block", "status"); !strings.Contains(s, "BLOCKED by the policy "+oauthBlockPolicy) || !strings.Contains(s, "accepted") {
 		t.Fatalf("blocked by the policy:\n%s", s)
 	}
 	// the old way (a clause in the chart's policy) is named, with its weakness

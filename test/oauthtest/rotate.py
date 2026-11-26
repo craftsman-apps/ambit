@@ -160,13 +160,14 @@ check("R4 the refresh of a grant made before the rotation is refused (a grant th
 
 # R5 · the check on every gateway pod (the block is on, so only the signature decides 401 or 403)
 probe_old, probe_new = rot["probe"]["old"], rot["probe"]["new"]
+id_old, id_new = rot["idTokenProbe"]["old"], rot["idTokenProbe"]["new"]  # the gateways trust the ID token key too
 done, t = {}, time.time()
 while time.time() - t < 600 and len(done) < len(PORTS):
     for p in PORTS:
-        if p not in done and code_of(p, probe_old) == 401 and code_of(p, probe_new) == 403:
+        if p not in done and code_of(p, probe_old) == 401 and code_of(p, probe_new) == 403 and code_of(p, id_old) == 401 and code_of(p, id_new) == 403:
             done[p] = time.time() - t_rot
     time.sleep(2)
-check("R5 on every pod: a token of the old key is 401 and a token of the new key is 403 (valid, refused by the rules)", len(done) == len(PORTS), done)
+check("R5 on every pod: a token of an old key (of either signing set) is 401 and a token of a new key is 403 (valid, refused by the rules)", len(done) == len(PORTS), done)
 check("E1 the block held all the time: a real token is refused on every pod", all_pods(lambda p: tools(p, tokB["access_token"])[0] in (401, 403)))
 t_all = max(done.values()) if done else float("nan")
 print(f"   emergency rotation measured: the old key is refused and the new key accepted on every pod {t_all:.0f} s after the rotation request", flush=True)

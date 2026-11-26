@@ -59,7 +59,8 @@ class Conn(http.client.HTTPSConnection):
             raise OSError(f"no route to {self.host}:{self.port}")
         sock = socket.create_connection(("127.0.0.1", port), timeout=20)
         if CLIENT_ADDR and port != IDP_PORT:
-            sock.sendall(f"PROXY TCP4 {CLIENT_ADDR} 10.0.0.1 51000 443\r\n".encode())
+            fam, dst = ("TCP6", "fd00::1") if ":" in CLIENT_ADDR else ("TCP4", "10.0.0.1")
+            sock.sendall(f"PROXY {fam} {CLIENT_ADDR} {dst} 51000 443\r\n".encode())
         self.sock = ctx.wrap_socket(sock, server_hostname=self.host)
 
 

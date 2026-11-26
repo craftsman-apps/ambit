@@ -354,7 +354,7 @@ flow() { GW_PORT=$PA IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_H
 # the registration limit first, at its default of 10 per hour and address (the counter is per hour: nothing registered before)
 flow limits
 # then the limit is raised, so that the many registrations of the other checks pass
-oaset --set oauth.registration.dynamic.perSourcePerHour=1000 --wait --timeout 8m
+oaset --set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000 --wait --timeout 8m
 wait_rl "$NS" "unit=HOUR requests_per_unit=1000"  # the Gateway counts registrations too: its limit must be the new one before the checks register
 kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
 flow
@@ -364,7 +364,7 @@ pass "12 the sign-in flow and its refusals"
 # The 401 challenge, the metadata, the consented scope and nothing else, changed and forged tokens, offboarding, the emergency block (also with
 # Hydra down), API keys on the same route, a restart of the console. A server on the front door, an AccessRule for everyone, and a key.
 G=ambitproject.dev
-oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --wait --timeout 8m
+oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000 --wait --timeout 8m
 wait_rl "$NS" "unit=HOUR requests_per_unit=1000"  # the Gateway counts registrations too: its limit must be the new one before the checks register
 kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
 kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
@@ -407,8 +407,8 @@ pass "15 emergency rotation of the signing keys"
 # The Gateway runs in PROXY protocol mode here, so the test can be any client address (a load balancer tells the Gateway the address in production).
 lim() { env GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
   HTTP_TIMEOUT=60 KEY="$OKEY" ONE_TOOL=time_get_current_time "$@" "${PY[@]}" test/oauthtest/limits.py "$MODE"; }
-rl_phase() { # rl_phase DISCOVERY SIGNIN TOKEN REGISTRATION MCP CREDENTIAL: the buckets, the Gateway in PROXY protocol mode, the loaded limits
-  oaset_real --set frontDoor.clientAddress=proxyProtocol --set frontDoor.rateLimit.perSourcePerMinute="$5" --set frontDoor.rateLimit.perCredentialPerMinute="$6" --set oauth.registration.dynamic.perSourcePerHour="$4" --wait --timeout 8m
+rl_phase() { # rl_phase DISCOVERY SIGNIN TOKEN REGISTRATION MCP CREDENTIAL GLOBAL-REGISTRATIONS: the buckets, the Gateway in PROXY protocol mode, the loaded limits
+  oaset_real --set frontDoor.clientAddress=proxyProtocol --set frontDoor.rateLimit.perSourcePerMinute="$5" --set frontDoor.rateLimit.perCredentialPerMinute="$6" --set oauth.registration.dynamic.perSourcePerHour="$4" --set oauth.registration.dynamic.globalPerHour="$7" --wait --timeout 8m
   kubectl -n "$NS" rollout status deploy/ambit-public --timeout=300s >/dev/null
   kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
   reforward
@@ -416,8 +416,8 @@ rl_phase() { # rl_phase DISCOVERY SIGNIN TOKEN REGISTRATION MCP CREDENTIAL: the 
   wait_for 60 '[[ $("${PY[@]}" test/frontdoor/request.py "$PA" "$W/ca.pem" "$AUTH" /.well-known/jwks.json --proxy 203.0.113.1) == 200 ]]' || fail "18 the Gateway does not answer with a PROXY header"
 }
 OARL=(--set oauth.rateLimit.discoveryPerMinute=30 --set oauth.rateLimit.signInPerMinute=40 --set oauth.rateLimit.tokenPerMinute=50)
-rl_phase 30 40 50 5 30 60
-MODE=buckets lim LIM_DISCOVERY=30 LIM_SIGNIN=40 LIM_TOKEN=50 LIM_REGISTRATION=5 LIM_MCP=30 LIM_CRED=60 || fail "18 the bucket checks failed (see FAIL lines above)"
+rl_phase 30 40 50 5 30 60 8
+MODE=buckets lim LIM_DISCOVERY=30 LIM_SIGNIN=40 LIM_TOKEN=50 LIM_REGISTRATION=5 LIM_MCP=30 LIM_CRED=60 LIM_GLOBAL=8 || fail "18 the bucket checks failed (see FAIL lines above)"
 pass "18 five buckets (mcp, discovery, sign-in, token, registration): each stops at its own limit and leaves the others open; headers that name an address change nothing; two Gateway pods count together; the 401 for a call without a credential is in the discovery bucket"
 # the second line: with the ratelimit service stopped (FailOpen) ambit-auth's own counter is what limits the sign-in pages
 kubectl -n "$NS" scale deploy/ambit-ratelimit --replicas=0 >/dev/null
@@ -428,12 +428,12 @@ kubectl -n "$NS" rollout status deploy/ambit-ratelimit --timeout=180s >/dev/null
 pass "18 with the ratelimit service stopped, ambit-auth's own counter stops the sign-in pages at the same limit (the second line)"
 # the chart's own values: the NAT measurement
 OARL=()
-rl_phase 600 300 600 10 1000 600
+rl_phase 600 300 600 10 1000 600 1000
 MODE=nat lim LIM_DISCOVERY=600 LIM_SIGNIN=300 LIM_TOKEN=600 LIM_REGISTRATION=10 || fail "18 the NAT measurement failed (see FAIL lines above)"
 pass "18 many people behind one address: measured with the chart's default limits (the numbers are printed above)"
 # back to the other mode and the high limits of the other checks
 OARL=(--set oauth.rateLimit.discoveryPerMinute=100000 --set oauth.rateLimit.signInPerMinute=100000 --set oauth.rateLimit.tokenPerMinute=100000)
-oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --wait --timeout 8m
+oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000 --wait --timeout 8m
 wait_rl "$NS" "unit=HOUR requests_per_unit=1000"  # the Gateway counts registrations too: its limit must be the new one before the checks register
 kubectl -n "$NS" rollout status deploy/ambit-public --timeout=300s >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null

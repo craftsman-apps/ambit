@@ -20,6 +20,7 @@ exec(src)
 
 MODE = ARGV[1]
 LIM_MCP = int(os.environ.get("LIM_MCP", "0"))
+LIM_GLOBAL = int(os.environ.get("LIM_GLOBAL", "0"))
 LIM_CRED = int(os.environ.get("LIM_CRED", "0"))
 OPEN = {200, 201, 400, 401, 403}  # what a request that is not limited gets here: never 404 (a route is missing) or 5xx
 LIM = {"discovery": int(os.environ["LIM_DISCOVERY"]), "signin": int(os.environ["LIM_SIGNIN"]), "token": int(os.environ["LIM_TOKEN"]), "registration": int(os.environ["LIM_REGISTRATION"])}
@@ -156,6 +157,48 @@ if MODE == "buckets":
             res.append(codes)
         check(f"18 per credential: a token's calls stop at the limit of {LIM_CRED} a minute for its agent, and another agent's token has its own count ({allowed(res[0])} and {allowed(res[1])} passed)",
               all(allowed(c) == LIM_CRED for c in res), [sorted(set(c)) for c in res])
+    # N8: the bucket is chosen by the host too. Sign-in paths on the MCP host (a 404 there) stay in the mcp bucket: a flood there neither spreads over the
+    # sign-in and token buckets of the same address, nor is counted as sign-in traffic.
+    if LIM_MCP:
+        H = "203.0.113.56"
+        def on_mcp_host(i):
+            global CLIENT_ADDR
+            CLIENT_ADDR = H; ROUTES[(MCP, 443)] = PORTS[0]
+            path = ["/oauth2/token", "/login", "/register"][i % 3]
+            return Browser().req("POST" if path in ("/oauth2/token", "/register") else "GET", f"https://{MCP}{path}", b"x=y" if path in ("/oauth2/token", "/register") else None, {"Content-Type": "application/x-www-form-urlencoded"})[0]
+        flood = burst(on_mcp_host, LIM_MCP + 10)
+        check(f"18 sign-in paths on the MCP host: {allowed(flood)} of {len(flood)} passed (the mcp limit {LIM_MCP}), then 429: they count in the mcp bucket", allowed(flood) == LIM_MCP and set(flood[:LIM_MCP]) == {404}, sorted(set(flood)))
+        after = {b: send(H, b) for b in ("discovery", "signin", "token")}
+        check("18 ... and the sign-in host's discovery, sign-in and token buckets of the same address are still open (no spreading)", all(c != 429 for c in after.values()), after)
+        # a host name in other letters is the same host: it must not be a way to another bucket
+        U = "203.0.113.57"
+        def upper(i):
+            global CLIENT_ADDR
+            CLIENT_ADDR = U; ROUTES[(AUTH, 443)] = PORTS[0]
+            return Browser().req("GET", base_url("/error"), None, {"Host": AUTH.upper()})[0]
+        up = burst(upper, LIM["signin"] + 6)
+        check(f"18 the sign-in host written in capital letters is counted as the sign-in host: {allowed(up)} passed (limit {LIM['signin']})", allowed(up) == LIM["signin"], sorted(set(up)))
+    # N2: IPv6 registrations count by the /48 in ambit-auth: many /64 networks of one /48 share the 10 (here 5) an hour; another /48 has its own
+    def reg6(net, i):
+        global CLIENT_ADDR
+        CLIENT_ADDR = f"2001:db8:{net}:{i:x}::1"; ROUTES[(AUTH, 443)] = PORTS[0]
+        st, h, body = Browser().req("POST", base_url("/register"), SHAPES["registration"][2], SHAPES["registration"][3])
+        if st == 429: GW_ANSWER["reg6"] = "ambit-auth" if h.get("Retry-After") else "the Gateway"
+        return st
+    six = burst(lambda i: reg6(0x48, i + 1), LIM["registration"] + 7, "hour")
+    check(f"18 IPv6: {len(six)} registrations from {len(six)} different /64 networks of one /48: {allowed(six)} passed (limit {LIM['registration']}), then 429", allowed(six) == LIM["registration"] and six[LIM["registration"]:] == [429] * 7, six)
+    check("18 ... and the 429 is ambit-auth's (the Gateway counts the single addresses, and each had one request)", GW_ANSWER.get("reg6") == "ambit-auth", GW_ANSWER)
+    check("18 ... another /48 registers", reg6(0x49, 1) != 429)
+    # N2: the global limit of accepted registrations, last (it uses the quota that the sign-ins above need)
+    if LIM_GLOBAL:
+        got = []
+        for i in range(LIM_GLOBAL + 6):
+            CLIENT_ADDR = f"203.0.116.{i + 1}"; ROUTES[(AUTH, 443)] = PORTS[0]
+            st, h, body = Browser().req("POST", base_url("/register"), json.dumps({"client_name": "g", "redirect_uris": [REDIRECT]}).encode(), {"Content-Type": "application/json"})
+            got.append((st, h.get("Retry-After")))
+        codes = [c for c, _ in got]
+        first429 = codes.index(429) if 429 in codes else -1
+        check(f"18 global registration limit: registrations from {len(got)} different addresses: {codes.count(201)} created (limit {LIM_GLOBAL} an hour for everybody), then 429 with Retry-After 3600", 1 <= codes.count(201) <= LIM_GLOBAL and first429 > 0 and all(c == 429 for c in codes[first429:]) and got[first429][1] == "3600", got)
     # ambit-auth's second line: its own counter in Valkey, shared by its replicas, with the same numbers (seen in its metrics by the shell script)
 
 elif MODE == "second":

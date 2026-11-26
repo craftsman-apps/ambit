@@ -145,6 +145,8 @@ if MODE == "buckets":
         calls = burst(lambda i: mcp_status(F, key=os.environ["KEY"]), LIM_MCP + 8)
         check(f"18 mcp bucket: {len(calls)} calls with a valid key from one address, {allowed(calls)} passed (limit {LIM_MCP})", allowed(calls) == LIM_MCP and set(calls[:LIM_MCP]) <= {200}, calls)
     if LIM_CRED:
+        CLIENT_ADDR = "203.0.115.1"  # a fresh address for the registrations and sign-ins
+        ROUTES[(AUTH, 443)] = PORTS[0]
         _, tA = connect("person150", ("time",)); _, tB = connect("person151", ("time",))
         res = []
         for tok in (tA, tB):

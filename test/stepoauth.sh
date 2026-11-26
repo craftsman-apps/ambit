@@ -656,7 +656,7 @@ oaset_real --set oauth.janitor.limit=3 --wait --timeout 8m
 jrun() { # jrun: one janitor job by hand
   kubectl -n "$NS" delete job ambit-hydra-janitor-e2e --ignore-not-found >/dev/null
   kubectl -n "$NS" create job ambit-hydra-janitor-e2e --from=cronjob/ambit-hydra-janitor >/dev/null
-  kubectl -n "$NS" wait --for=condition=complete job/ambit-hydra-janitor-e2e --timeout=300s >/dev/null 2>&1 || fail "17 the janitor job did not complete"
+  kubectl -n "$NS" wait --for=condition=complete job/ambit-hydra-janitor-e2e --timeout=300s >/dev/null 2>&1 || fail "17 the janitor job did not complete: $(kubectl -n "$NS" logs job/ambit-hydra-janitor-e2e --all-containers --tail=6 2>&1 | head -c 600)"
 }
 jrun; REM1=$(cnt refresh "$JM")
 (( REM1 > 0 && REM1 < RR1 )) || fail "17 a janitor run with the limit 3 must delete some of the $RR1 old refresh tokens and not all (left: $REM1)"

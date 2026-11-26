@@ -281,8 +281,8 @@ oauth:
     schedule: "17 * * * *"
     # The run is stopped after this many minutes (it starts again at the next schedule).
     timeoutMinutes: 30
-    # The most rows of each kind that one run deletes (in batches of 1000). A connection in steady use writes about 4 rows a refresh
-    # (measured, docs/oauth.md, "Daily clean-up"): 100,000 a run and 24 runs a day cover about 6,000 such connections.
+    # The most rows of each kind that one run deletes (in batches of 1000). A connection in steady use writes one refresh token row a refresh,
+    # about 96 a day (measured, docs/oauth.md, "Clean-up of the tokens"): 100,000 a run and 24 runs a day cover about 25,000 such connections.
     limit: 100000
   # Sign in at your company's OIDC identity provider (Okta, Entra ID, Google, Keycloak). One issuer per install.
   # Register ONE confidential web client there: authorization code flow only, PKCE S256 required, the redirect URI exactly

@@ -546,6 +546,8 @@ assert {v["name"] for v in p["volumes"]}=={"config","ca","tmp"} and [v for v in 
 off_j=$(oat --set oauth.janitor.enabled=false)
 ! grep -q 'ambit-hydra-janitor' <<<"$off_j" || { echo "FAIL chart: oauth.janitor.enabled=false must render no janitor"; exit 1; }
 ! grep -q 'ambit-hydra-janitor' <<<"$fd" || { echo "FAIL chart: no janitor without OAuth"; exit 1; }
+small=$(oat --set oauth.janitor.limit=3 | sed -n '/^kind: CronJob/,/^---/p')
+grep -q '"--batch-size", "3"\|--batch-size, "3", --limit, "3"' <<<"$small" || { echo "FAIL chart: a batch is never larger than the limit (Hydra refuses it)"; exit 1; }
 sch=$(oat --set oauth.janitor.schedule='5 4 * * 0' --set oauth.janitor.timeoutMinutes=10 | sed -n '/^kind: CronJob/,/^---/p')
 grep -q 'schedule: "5 4 \* \* 0"' <<<"$sch" && grep -q 'activeDeadlineSeconds: 600' <<<"$sch" || { echo "FAIL chart: the janitor schedule and time limit are values"; exit 1; }
 MSG='maxGrantDays' refuse "a grant life of 400 days" --set oauth.maxGrantDays=400

@@ -233,7 +233,7 @@ spec:
             - name: janitor
               image: {{ $h.image | quote }}
               # An hour of margin (--keep-if-younger): a request or token that was made a moment ago is never touched.
-              args: [janitor, -e, -c, /etc/hydra/hydra.yml, --tokens, --requests, --grants, --keep-if-younger, 1h, --batch-size, "1000", --limit, {{ $j.limit | default 100000 | quote }}]
+              args: [janitor, -e, -c, /etc/hydra/hydra.yml, --tokens, --requests, --grants, --keep-if-younger, 1h, --batch-size, {{ min 1000 (int ($j.limit | default 100000)) | quote }}, --limit, {{ $j.limit | default 100000 | quote }}]
               env:
                 - name: DSN
                   valueFrom: { secretKeyRef: { name: {{ $db.dsnSecret.name | quote }}, key: {{ $db.dsnSecret.key | quote }} } }

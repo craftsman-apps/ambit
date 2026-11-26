@@ -695,10 +695,20 @@ for i in 1 3 4; do [[ $(adm ambit-hydra-0 GET "/admin/clients/${IDS[$i]}") == 20
 [[ $(adm ambit-hydra-0 GET /admin/clients/admin-made-e2e) == 200 ]] || fail "17 a client that an admin made was deleted"
 adm ambit-hydra-0 DELETE /admin/clients/admin-made-e2e >/dev/null; for i in 1 3 4; do adm ambit-hydra-0 DELETE "/admin/clients/${IDS[$i]}" >/dev/null; done
 pass "17 ambit-auth deletes a registered client that was not used for 31 days, and one that was never used 25 hours after it registered; it keeps one used 29 days ago, one that registered 2 hours ago, one that a consent used and a client that an admin made (clean-up on start and every 10 minutes)"
+# --- 18 · the emergency block as an object of its own (test/oauthtest/block.py): `ambit oauth block on` survives a Helm upgrade and an Argo CD-style re-apply of the chart
+# (the old kind of block, an edit of the chart's policy, does not: the test shows that first)
+# (--force-conflicts: Helm 4 applies server-side, and the test's Argo CD-style re-apply has taken some fields of the chart's policies; Argo CD users do not run helm upgrade)
+go build -o "$W/ambit" ./cmd/ambit || fail "18 build the CLI"
+helm get values ambit -n "$NS" -a -o yaml > "$W/release-values.yaml" || fail "18 the values of the release"
+GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" NS="$NS" \
+  BLOCKCTL="$W/ambit" HELM_UPGRADE="helm upgrade ambit charts/ambit -n $NS --reuse-values --force-conflicts --wait --timeout 8m" HELM_TEMPLATE="helm template ambit charts/ambit -n $NS -f $W/release-values.yaml" \
+  HTTP_TIMEOUT=90 KEY="$OKEY" ONE_TOOL=time_get_current_time "${PY[@]}" test/oauthtest/block.py || fail "18 the emergency block checks failed (see FAIL lines above)"
+pass "18 the emergency block (ambit oauth block on) survives a Helm upgrade and a re-apply of the chart; the old kind of block does not"
 
 # --- 13 · off again: everything of OAuth goes, the front door stays
+# (--force-conflicts: check 18's Argo CD-style re-apply shares ownership of fields of the chart's policies; a change of one of them is then a conflict for Helm 4's server-side apply)
 helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/frontdoor/values.yaml \
-  --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 --wait --timeout 5m >/dev/null
+  --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 --force-conflicts --wait --timeout 5m >/dev/null
 wait_for 120 '[[ -z "$(kubectl -n "$NS" get sts ambit-hydra -o name 2>/dev/null)" ]]' || fail "13 Hydra is still there with oauth.enabled=false"
 for o in service/ambit-hydra-public service/ambit-hydra-admin networkpolicy/ambit-hydra configmap/ambit-hydra httproute/ambit-auth-hydra httproute/ambit-auth-app deploy/ambit-auth; do
   [[ -z "$(kubectl -n "$NS" get "$o" -o name 2>/dev/null)" ]] || fail "13 $o is still there"

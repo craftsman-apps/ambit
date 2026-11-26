@@ -251,18 +251,54 @@ is too long.
 
 ## If a signing key may be stolen
 
-**First, block every token of the sign-in host at once.** This edit of one policy needs no Helm run, no Hydra, no keys and none of Ambit's
-own components; the gateway applies it within a second. API keys and service account keys are not touched (they take the other rule).
+**First, block every token of the sign-in host at once.** One command makes a policy of its own on the public MCP route; it needs no Helm run, no
+Hydra, no keys and none of Ambit's own components, and every public gateway pod applies it within a second. API keys and service account
+keys are not touched (they take the other rule).
 
 ```
-kubectl -n ambit-system patch agentgatewaypolicy ambit-mcp-public-oauth --type json \
-  -p '[{"op":"add","path":"/spec/traffic/authorization/policy/matchExpressions/-","value":"false"}]'
+ambit oauth block on          # asks for y on a terminal; --yes without one
+ambit oauth block status      # says whether tokens are blocked, and by what
+ambit oauth block off         # lifts it (only when the check on every pod is done: see below)
 ```
 
-Every request with a token now gets 403 on every public Gateway pod, also with a token that the stolen key signed (the gateway checks this
-clause after it has checked the signature, and `false` is never true). The next `helm upgrade` removes the edit; to keep the block, set
-`oauth.emergencyBlock: true`. To lift it, remove the clause (`"op":"remove"` with its index, the last one) or set the value to `false` and
-upgrade. Platforms then get 403 on `/mcp`: they stay connected, and work again when you lift the block.
+The command creates `AgentgatewayPolicy ambit-oauth-emergency-block`. You can create the same object yourself, with the operator's own rights, if
+you have no `ambit` binary at hand (`create`, not `apply`: an object of that name that already exists must not be changed):
+
+```
+kubectl -n ambit-system create -f - <<'YAML'
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata: { name: ambit-oauth-emergency-block }
+spec:
+  targetRefs: [{ group: gateway.networking.k8s.io, kind: HTTPRoute, name: ambit-mcp-public }]
+  traffic:
+    authorization:
+      action: Require
+      policy:
+        matchExpressions: ['!has(jwt.iss)']
+YAML
+```
+
+Every request with a token now gets 403 on every public Gateway pod, also with a token that the stolen key signed (the gateway checks this rule
+after it has checked the signature; a request with a key has no token, and the key rule is not touched). **Helm and Argo CD do not own this
+policy**: a `helm upgrade`, Argo CD self-heal (`ambit init --gitops argocd` writes an Application with `selfHeal`) and Flux drift correction
+do not remove it, because it is in no chart and in no Git repository. It stays until you run `ambit oauth block off` (or delete the policy). An admission
+policy (`ambit-oauth-block-fence`) refuses every write of this policy by Ambit's own controller, console and sign-in server: only an operator makes and removes it. (The fence protects this one object. A person or component that may write any authorization policy on the public route or its Gateway may still weaken the
+protection by another policy: keep the right to write `agentgatewaypolicies` for operators.)
+The command waits up to 20 seconds for a gateway to report the policy accepted; **if none does it exits with an error** (the policy is made, but do not rely on it until
+you have tried a token on each public gateway pod); a gateway pod applies it within a second of that (measured in the
+end-to-end test: refused on every pod 0.1 s after the command). The protected-resource metadata document (`/.well-known/oauth-protected-resource/mcp`) stays public:
+it holds no secret and starts the sign-in of a platform.
+Platforms get 403 on `/mcp`: they stay connected, and work again when you lift the block.
+A request that a pod admitted before the block, and an open event stream, run on until they end. To cut them in an incident, restart the public gateway pods
+(`kubectl -n ambit-system rollout restart deploy -l gateway.networking.k8s.io/gateway-name=ambit-public`); a new request is refused either way.
+
+What GitOps users do: the same. The block is an object that is not in Git, so no tool puts it back or removes it; do not add it to Git
+during the incident (a tool that prunes by Git would then own it, and a revert of the commit would lift the block). `oauth.emergencyBlock: true`
+(a `false` clause in the chart's own token policy) still works on a plain Helm install; in GitOps mode it is a change in Git that Argo CD
+applies after the commit, and the next commit that removes it lifts the block. The older runbook edit (a `kubectl patch` of the policy
+`ambit-mcp-public-oauth`) is **undone within seconds by Argo CD self-heal**: do not use it in GitOps mode. `ambit oauth block status` names every
+way in which tokens are blocked.
 
 The block does **not** replace the key: a token signed with the stolen key is valid again as soon as the block is lifted, until the
 gateway's copy of the old key is gone. Replace the key as below, keep the block until the check on every gateway pod says that the old key is
@@ -280,10 +316,9 @@ encrypted with `oauth.hydra.systemSecret`; a hardware or cloud key service is no
 **Steps**, with `$CONSOLE` the console's address and `$COOKIES` the cookie jar of an admin who is signed in (as in [Agents](agents.md)):
 
 ```
-# 1. Block every token (seconds; no Hydra needed). Keep it until step 4 says the old key is gone.
-#    Do not run helm upgrade until the end: it removes the edit. To make the block survive an upgrade, set oauth.emergencyBlock: true.
-kubectl -n ambit-system patch agentgatewaypolicy ambit-mcp-public-oauth --type json \
-  -p '[{"op":"add","path":"/spec/traffic/authorization/policy/matchExpressions/-","value":"false"}]'
+# 1. Block every token (seconds; no Hydra needed). Keep it until step 4 says the old key is gone. The block is a policy that Helm and
+#    Argo CD do not own: an upgrade or self-heal leaves it.
+ambit oauth block on
 #    Check that the block is in force on EVERY public gateway pod before you rotate: a token that worked (a real one, or a connection of a
 #    test platform) must now get 403 from each pod (the check of step 4 works the same way).
 
@@ -303,7 +338,9 @@ Step 4, for each pod `P` of `kubectl -n ambit-system get pods -l gateway.network
 to the pod and send the request to it, with the real host name `mcp.example.com` in the `Host` header and certificate check):
 `POST /mcp` with `Authorization: Bearer <probe.old from rotation.json>` must answer **401** (the pod no longer knows the old key), and with
 `<probe.new>` must answer **403** (the pod knows the new key; the token is valid but names no agent, so the rules refuse it, and the block refuses
-everything anyway). Repeat until every pod answers like that. **Only then** lift the block (remove the last clause of the policy, as above). If one pod
+everything anyway). **Do the same with `idTokenProbe.old` and `idTokenProbe.new`**: a gateway trusts every key that Hydra publishes, the key of the ID
+token set too, so a pod that still knows the old ID token key would accept a token signed with it. A probe expires one hour after the rotation (a 401 for
+`probe.new` then means that it expired, not that the pod lacks the new key: rotate again, or check within the hour). Repeat until every pod answers like that. **Only then** lift the block (`ambit oauth block off`). If one pod
 still answers 403 for the old probe, keep the block on and check that pod again; do not lift the block for the others. The probe tokens
 carry no agent, grant or scope: no route accepts them, and they expire after an hour. They are signed with the real keys, so treat the answer of
 step 2 as secret and delete `rotation.json` after the check.

@@ -151,6 +151,12 @@ func TestRotateSigningKeys(t *testing.T) {
 	if verify(rot.Probe.Old, newAccess) == nil || verify(rot.Probe.New, oldAccess) == nil {
 		t.Error("a probe token verifies with the other key")
 	}
+	// the ID token set has its own pair: a gateway trusts every published key, so the old key of that set must be checked too
+	oldID, newID := rot.IDTokenProbe.Old, rot.IDTokenProbe.New
+	newIDKey := f.sets["hydra.openid.id-token"][0]
+	if oldID == "" || newID == "" || verify(newID, newIDKey) != nil || verify(oldID, newIDKey) == nil || verify(oldID, newAccess) == nil {
+		t.Error("the ID token probes are missing, or do not belong to the ID token keys")
+	}
 }
 
 func TestRotateRefusesASetThatIsNotOneKey(t *testing.T) {

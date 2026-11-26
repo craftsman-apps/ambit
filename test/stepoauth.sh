@@ -355,6 +355,7 @@ flow() { GW_PORT=$PA IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_H
 flow limits
 # then the limit is raised, so that the many registrations of the other checks pass
 oaset --set oauth.registration.dynamic.perSourcePerHour=1000 --wait --timeout 8m
+wait_rl "$NS" "unit=HOUR requests_per_unit=1000"  # the Gateway counts registrations too: its limit must be the new one before the checks register
 kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
 flow
 pass "12 the sign-in flow and its refusals"
@@ -364,6 +365,7 @@ pass "12 the sign-in flow and its refusals"
 # Hydra down), API keys on the same route, a restart of the console. A server on the front door, an AccessRule for everyone, and a key.
 G=ambitproject.dev
 oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --wait --timeout 8m
+wait_rl "$NS" "unit=HOUR requests_per_unit=1000"  # the Gateway counts registrations too: its limit must be the new one before the checks register
 kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
 kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
 kubectl -n "$NS" apply -f - >/dev/null <<EOF
@@ -426,6 +428,7 @@ pass "18 many people behind one address: measured with the chart's default limit
 # back to the other mode and the high limits of the other checks
 OARL=(--set oauth.rateLimit.discoveryPerMinute=100000 --set oauth.rateLimit.signInPerMinute=100000 --set oauth.rateLimit.tokenPerMinute=100000)
 oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --wait --timeout 8m
+wait_rl "$NS" "unit=HOUR requests_per_unit=1000"  # the Gateway counts registrations too: its limit must be the new one before the checks register
 kubectl -n "$NS" rollout status deploy/ambit-public --timeout=300s >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
 reforward

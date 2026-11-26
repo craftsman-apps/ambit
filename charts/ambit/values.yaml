@@ -293,9 +293,11 @@ oauth:
   registration:
     dynamic:
       # Hosted platforms that have no pre-registered client register themselves (RFC 7591). Only redirect addresses on
-      # these hosts (and loopback addresses for native clients) are accepted. false: no /register.
+      # these entries (and loopback addresses for native clients) are accepted. false: no /register.
+      # An entry is a host with the path of the platform's callback ("chatgpt.com/connector/oauth": that path and the paths below it), or
+      # a bare host (every path of it: add a bare host only when nobody can publish a page or a redirect there).
       enabled: true
-      redirectHosts: [chatgpt.com, claude.ai]
+      redirectHosts: [chatgpt.com/connector_platform_oauth_redirect, chatgpt.com/connector/oauth, claude.ai/api/mcp/auth_callback]
       # Registrations allowed per caller address and hour (counted in Valkey, shared by all replicas).
       perSourcePerHour: 10
       # Registrations that ambit-auth accepts in an hour, all callers together (security review N2): a flood from many networks cannot fill the cap faster than this.

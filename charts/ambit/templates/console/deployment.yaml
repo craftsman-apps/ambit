@@ -30,6 +30,8 @@ spec:
             # The internal API for ambit-auth (docs/oauth.md); only ambit-auth's service account token is accepted.
             - { name: AMBIT_OAUTH_ADDR, value: ":8085" }
             - { name: AMBIT_HYDRA_ADMIN, value: "http://ambit-hydra-admin:4445" }
+            # Hydra's public key list, for the status call of the signing keys (public keys only).
+            - { name: AMBIT_HYDRA_PUBLIC, value: "http://ambit-hydra-public:4444" }
             # What the probe tokens of an emergency key rotation name (docs/oauth.md): the sign-in host and the MCP URL of the public route.
             - { name: AMBIT_OAUTH_ISSUER, value: {{ include "ambit.agents.tokenIssuer" . | quote }} }
             - { name: AMBIT_OAUTH_RESOURCE, value: {{ printf "https://%s/mcp" .Values.frontDoor.host | quote }} }

@@ -1244,3 +1244,79 @@ func TestConfigDenyReadsTheRotationTime(t *testing.T) {
 		t.Fatal("an unreadable time was accepted")
 	}
 }
+
+// An entry of the registration list may name a path: only that path, and the ones below it, are accepted for the host (docs/oauth.md, "Registering clients").
+func TestRegistrationRedirectPathAllowList(t *testing.T) {
+	c := Config{RegistrationHosts: []string{"chatgpt.com/connector_platform_oauth_redirect", "chatgpt.com/connector/oauth", "claude.ai/api/mcp/auth_callback", "open.example.com"}}
+	for raw, want := range map[string]bool{
+		"https://chatgpt.com/connector_platform_oauth_redirect":      true,
+		"https://chatgpt.com/connector/oauth":                        true,
+		"https://chatgpt.com/connector/oauth/abc123":                 true,
+		"https://claude.ai/api/mcp/auth_callback":                    true,
+		"https://open.example.com/any/path/at/all":                   true, // an entry without a path: every path
+		"https://chatgpt.com/other":                                  false,
+		"https://chatgpt.com/connector_platform_oauth_redirectX":     false, // a prefix of the text, not of the path
+		"https://chatgpt.com/connector_platform_oauth_redirect/x":    true,
+		"https://chatgpt.com/connector/oauth/../../evil":             false, // a dot segment
+		"https://chatgpt.com/connector/oauth/%2e%2e/evil":            false, // an encoded dot segment
+		"https://chatgpt.com/connector/oauth%2fx":                    false, // an encoded slash
+		"https://chatgpt.com/connector/oauth//x":                     false, // an empty segment
+		"https://chatgpt.com/connector/oauth/a%5cb":                  false,
+		"https://chatgpt.com/":                                       false,
+		"https://claude.ai/api/mcp/auth_callback_x":                  false,
+		"https://claude.ai/login":                                    false,
+		"https://evil.example.com/connector_platform_oauth_redirect": false,
+		"https://chatgpt.com.evil.example.com/connector/oauth":       false,
+	} {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		if got := c.RedirectAllowed(u); got != want {
+			t.Errorf("%s: allowed=%v, want %v", raw, got, want)
+		}
+	}
+	// the list itself is validated: a bad path is refused at start
+	for name, entry := range map[string]string{"dot segment": "chatgpt.com/a/../b", "query": "chatgpt.com/a?b=c", "empty segment": "chatgpt.com//a", "trailing slash": "chatgpt.com/a/", "no host": "/a/b", "wildcard": "*.example.com/a", "percent escape": "chatgpt.com/a%2fb", "variable reference": "chatgpt.com/$(MCP_URL)", "path parameter": "chatgpt.com/a;b=c"} {
+		cfg := Config{PublicURL: "https://auth.example.com", Resource: "https://mcp.example.com/mcp", IdPIssuer: "https://idp.example.com", IdPClientID: "a", IdPClientSecret: "b",
+			RegistrationHosts: []string{entry}, MaxClients: 500, UnusedClientDays: 30}
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("%s: %q was accepted", name, entry)
+		}
+	}
+}
+
+// With a path entry a client cannot register another path of the host.
+func TestRegistrationRefusesAPathThatIsNotListed(t *testing.T) {
+	e := newEnv(t)
+	e.srv.Cfg.RegistrationHosts = []string{"chatgpt.com/connector_platform_oauth_redirect"}
+	b := e.browser()
+	if w, out := post(b, map[string]any{"client_name": "x", "redirect_uris": []string{"https://chatgpt.com/some/other/page"}}, nil); w.Code != 400 || len(e.hydra.clients) != 0 {
+		t.Fatalf("another path: %d %v", w.Code, out)
+	}
+	if w, out := post(b, map[string]any{"client_name": "ChatGPT", "redirect_uris": []string{"https://chatgpt.com/connector_platform_oauth_redirect"}}, nil); w.Code != 201 && w.Code != 200 {
+		t.Fatalf("the listed path: %d %v", w.Code, out)
+	}
+}
+
+// The status call reads Hydra's public key list and follows no redirect: an answer that points at another address is an error.
+func TestPublicKeyIDsFollowsNoRedirect(t *testing.T) {
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"keys":[{"kid":"private-one","d":"SECRET"}]}`))
+	}))
+	defer admin.Close()
+	pub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, admin.URL, http.StatusFound)
+	}))
+	defer pub.Close()
+	if ids, err := PublicKeyIDs(context.Background(), pub.URL); err == nil {
+		t.Fatalf("a redirect was followed: %v", ids)
+	}
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"keys":[{"kid":"b"},{"kid":"a"}]}`))
+	}))
+	defer ok.Close()
+	if ids, err := PublicKeyIDs(context.Background(), ok.URL); err != nil || strings.Join(ids, ",") != "a,b" {
+		t.Fatalf("%v %v", ids, err)
+	}
+}

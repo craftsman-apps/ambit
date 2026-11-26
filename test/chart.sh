@@ -452,10 +452,10 @@ check_oa 'for n in ("ambit-hydra-public","ambit-hydra-admin"):
 n=one("NetworkPolicy","ambit-hydra")["spec"]
 assert n["policyTypes"]==["Ingress"] and n["podSelector"]=={"matchLabels":{"app.kubernetes.io/name":"ambit-hydra"}}, n
 pub=[i for i in n["ingress"] if i["ports"]==[{"port":4444}]][0]; adm=[i for i in n["ingress"] if i["ports"]==[{"port":4445}]][0]
-assert sorted(list(f["podSelector"]["matchLabels"].values())[0] for f in pub["from"])==["agentgateway","ambit-auth","ambit-public"], pub
+assert sorted(list(f["podSelector"]["matchLabels"].values())[0] for f in pub["from"])==["agentgateway","ambit-auth","ambit-console","ambit-public"], pub
 assert sorted(list(f["podSelector"]["matchLabels"].values())[0] for f in adm["from"])==["ambit-auth","ambit-console"], adm
 assert len(n["ingress"])==2, n
-pdb=one("PodDisruptionBudget","ambit-hydra")["spec"]; assert pdb["minAvailable"]==1' "Hydra: ClusterIP Services, the admin port only for ambit-auth and the console, the public port only for the public Gateway and the controller"
+pdb=one("PodDisruptionBudget","ambit-hydra")["spec"]; assert pdb["minAvailable"]==1' "Hydra: ClusterIP Services, the admin port only for ambit-auth and the console, the public port only for the public Gateway, the controller, ambit-auth and the console (the public key list)"
 check_oa 'r=one("HTTPRoute","ambit-auth-app")["spec"]
 assert r["parentRefs"]==[{"name":"ambit-public","sectionName":"https-auth"}] and r["hostnames"]==["auth.localtest.me"] and len(r["rules"])==1, r
 m=sorted((x["method"],x["path"]["type"],x["path"]["value"]) for x in r["rules"][0]["matches"])
@@ -498,6 +498,9 @@ MSG='limits.enabled' refuse "OAuth without shared limits" --set limits.enabled=f
 MSG='redirectHosts' refuse "dynamic registration without hosts" --set 'oauth.registration.dynamic.redirectHosts={}'
 MSG='lower-case host name' refuse "a wildcard registration host" --set 'oauth.registration.dynamic.redirectHosts={*.example.com}'
 MSG='lower-case host name' refuse "a registration host with a scheme" --set 'oauth.registration.dynamic.redirectHosts={https://chatgpt.com}'
+MSG='optional path' refuse "a registration path with a dot segment" --set 'oauth.registration.dynamic.redirectHosts={chatgpt.com/a/../b}'
+MSG='optional path' refuse "a registration path with a trailing slash" --set 'oauth.registration.dynamic.redirectHosts={chatgpt.com/a/}'
+MSG='optional path' refuse "a registration path with a query" --set 'oauth.registration.dynamic.redirectHosts={chatgpt.com/a?b=c}'
 MSG='perSourcePerHour' refuse "a registration limit of 0" --set oauth.registration.dynamic.perSourcePerHour=0
 MSG='maxClients' refuse "a client cap of 0" --set oauth.registration.dynamic.maxClients=0
 check_oa 'r=one("HTTPRoute","ambit-mcp-public")["spec"]
@@ -533,6 +536,9 @@ n=one("NetworkPolicy","ambit-console-oauth")["spec"]["ingress"]
 assert n[1]=={"from":[{"podSelector":{"matchLabels":{"app.kubernetes.io/name":"ambit-auth"}}}],"ports":[{"port":8085}]}, n
 r=one("ClusterRole","ambit-system-ambit-console-tokenreview")["rules"]
 assert r==[{"apiGroups":["authentication.k8s.io"],"resources":["tokenreviews"],"verbs":["create"]}], r' "the console: an internal API on its own port for ambit-auth only (network policy and a token check), and the right to check tokens and nothing else of the authentication API"
+check_oa 'ex=one("AgentgatewayPolicy","ambit-mcp-public-oauth")["spec"]["traffic"]["authorization"]["policy"]["matchExpressions"]
+aud=[e for e in ex if "jwt.aud" in e]
+assert len(aud)==1 and aud[0].count("https://mcp-public.localtest.me/mcp")==2 and "jwt.aud == [" in aud[0], ex' "the token rule requires the audience to be exactly the MCP URL (not only to contain it)"
 blk=$(oat --set oauth.emergencyBlock=true)
 # (not "oa=$blk check_oa": a variable set for one call is exported, and the rendered chart is more than the 128 KB that Linux allows in one)
 ( oa=$blk; check_oa 'ex=one("AgentgatewayPolicy","ambit-mcp-public-oauth")["spec"]["traffic"]["authorization"]["policy"]["matchExpressions"]

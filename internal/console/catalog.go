@@ -54,9 +54,11 @@ type Catalog struct {
 	Hydra *oauth.HydraAdmin
 	// OAuthIssuer and OAuthResource are the issuer (https://<authHost>) and the MCP URL of the public route: what the probe tokens of a key rotation name.
 	OAuthIssuer, OAuthResource string
-	LLMURL                     string
-	MCPURL                     string
-	LastUsed                   func(ctx context.Context, ids []string, from time.Time) (map[string]time.Time, error)
+	// HydraPublic is Hydra's public address (for the public key list of the status call).
+	HydraPublic string
+	LLMURL      string
+	MCPURL      string
+	LastUsed    func(ctx context.Context, ids []string, from time.Time) (map[string]time.Time, error)
 	// Groups remembers group names seen at sign-in for the access rule form; nil suggests only names in rules.
 	Groups *GroupStore
 	// Conns serves "My connections" and the connect flow; nil when no grants namespace is configured.

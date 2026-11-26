@@ -4,6 +4,7 @@
 //	                   signed ID tokens, and users that misbehave on purpose (another issuer, a wrong nonce, ...)
 //	oauthtest console  the console's internal OAuth API that ambit-auth calls (servers, agents, active), with a /_state
 //	                   page that tells the test what ambit-auth asked for
+//	oauthtest mint     signs the claims on standard input with the key in SIGNING_JWK (run on the test host, not in the cluster)
 package main
 
 import (
@@ -29,13 +30,15 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		log.Fatal("usage: oauthtest idp|console")
+		log.Fatal("usage: oauthtest idp|console|mint")
 	}
 	switch os.Args[1] {
 	case "idp":
 		idp()
 	case "console":
 		console()
+	case "mint":
+		mint()
 	default:
 		log.Fatal("unknown command")
 	}

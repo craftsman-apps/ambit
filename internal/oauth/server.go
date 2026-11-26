@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -328,11 +327,8 @@ func (s *Server) checkRedirect(raw, appType string) (host string, err error) {
 	}
 	switch u.Scheme {
 	case "https":
-		if appType == "native" && !slices.Contains(s.Cfg.RegistrationHosts, u.Hostname()) {
-			return "", fmt.Errorf("redirect_uri host %q is not on the list of allowed hosts", u.Hostname())
-		}
-		if !slices.Contains(s.Cfg.RegistrationHosts, u.Hostname()) || (u.Port() != "" && u.Port() != "443") {
-			return "", fmt.Errorf("redirect_uri host %q is not on the list of allowed hosts (or its port is not 443)", u.Hostname())
+		if !s.Cfg.RedirectAllowed(u) || (u.Port() != "" && u.Port() != "443") {
+			return "", fmt.Errorf("redirect_uri host %q (with this path) is not on the list of allowed redirect addresses (or its port is not 443)", u.Hostname())
 		}
 		return u.Hostname(), nil
 	case "http":

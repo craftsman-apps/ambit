@@ -12,11 +12,12 @@ balancer would tell the Gateway. What is checked (MINOR 3 of the design review, 
 
 Environment: as gateway.py, plus LIM_DISCOVERY, LIM_SIGNIN, LIM_TOKEN, LIM_REGISTRATION (the limits the chart was installed with) and the mode as
 the first argument."""
-import os
+import os, sys
+ARGV = sys.argv[:]  # the code below clears sys.argv
 src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "gateway.py")).read().split("# 1 · no token")[0]
 exec(src)
 
-MODE = sys.argv[1]
+MODE = ARGV[1]
 LIM = {"discovery": int(os.environ["LIM_DISCOVERY"]), "signin": int(os.environ["LIM_SIGNIN"]), "token": int(os.environ["LIM_TOKEN"]), "registration": int(os.environ["LIM_REGISTRATION"])}
 
 # what one request of each bucket looks like, and the status it gets when it is NOT limited

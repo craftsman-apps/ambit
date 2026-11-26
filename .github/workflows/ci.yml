@@ -15,7 +15,12 @@ on:
   push: { branches: ["step-*"] }
   pull_request: { types: [opened, synchronize, reopened, ready_for_review] }
   merge_group: { types: [checks_requested] }
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      parts:
+        description: 'Which e2e parts to run: "all" (the default) or a space-separated list such as "f" or "a e" (parts are listed in .github/scripts/e2e-parts.sh)'
+        default: all
+        type: string
 permissions: { contents: read }
 concurrency:
   group: ci-${{ github.ref }}
@@ -32,6 +37,7 @@ jobs:
       cli_kind: ${{ steps.changes.outputs.cli_kind }}
       quickstart: ${{ steps.changes.outputs.quickstart }}
       e2e: ${{ steps.changes.outputs.e2e }}
+      e2e_parts: ${{ steps.parts.outputs.matrix }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0 }
@@ -44,6 +50,14 @@ jobs:
           HEAD: "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}"
           MERGE_GROUP_BASE_REF: "${{ github.event.merge_group.base_ref }}"
         run: .github/scripts/changed-files.sh | .github/scripts/changes.sh | tee -a "$GITHUB_OUTPUT"
+      # Only a manual run can name parts; a pull request and a merge group always get every part.
+      - name: Which e2e parts?
+        id: parts
+        env:
+          PARTS: "${{ github.event_name == 'workflow_dispatch' && inputs.parts || 'all' }}"
+        run: |
+          matrix=$(.github/scripts/e2e-parts.sh "$PARTS")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   # Its own job: a failure here must not skip the jobs that need `changes` (a skipped required job reports success).
   changes-test:
@@ -58,6 +72,8 @@ jobs:
         run: |
           .github/scripts/merge-gate_test.sh
           .github/scripts/changed-files_test.sh
+      - name: The e2e matrix of a manual run can be limited to some parts
+        run: .github/scripts/e2e-parts_test.sh
       - name: The Scoop and winget steps of the release skip, with exit 0, without their secrets
         run: .github/scripts/release-skip_test.sh
 
@@ -238,14 +254,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part:
-          - { name: a, steps: "0 1 2 3 3b 3c args", ui: true }
-          - { name: b, steps: "8 fallback", ui: false }
-          - { name: c, steps: "10 keys 9 compress sa", ui: false }
-          - { name: f, steps: "agents agentconn", ui: false }
-          - { name: d, steps: "12 ext savings evidence", ui: false }
-          - { name: e, steps: "4a 4b 4c 4d 5 6 7 guard fd platforms", ui: false }
-          - { name: g, steps: "oauth", ui: false }
+        part: ${{ fromJSON(needs.changes.outputs.e2e_parts) }}
     steps:
       # The runner's disk held the kind images, the build cache and Go's caches until "no space left on device"
       # (2026-10-08). Preinstalled tools this job never uses are removed in the background.
@@ -613,6 +622,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       R_CHANGES: ${{ needs.changes.result }}
+      E2E_PARTS: ${{ github.event_name == 'workflow_dispatch' && inputs.parts != 'all' && inputs.parts || '' }}
       R_CHANGES_TEST: ${{ needs.changes-test.result }}
       R_BUILD: ${{ needs.build.result }}
       R_IMAGE: ${{ needs.image.result }}

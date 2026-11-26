@@ -317,7 +317,9 @@ oauth:
       # At most this many registered clients; one that nobody used for unusedClientDays is deleted.
       maxClients: 500
       unusedClientDays: 30
-<<<<<<< HEAD
+      # A client that registered and that no consent and no refresh has ever used is deleted this many hours after it registered, so that
+      # a flood of registrations cannot fill the cap for a month (docs/oauth.md, "Unused clients").
+      neverUsedClientHours: 24
   # Limits per caller address on the sign-in host, in separate buckets (docs/front-door.md, "Rate limits"; docs/oauth.md, "Limits"). The
   # address is the one the Gateway sees (never a header of the caller). Every request counts, refused ones too. The same numbers
   # apply in the Gateway (shared by all Gateway pods) and, as a second line, in ambit-auth (shared by its replicas). Registration
@@ -330,11 +332,6 @@ oauth:
     signInPerMinute: 300
     # /oauth2/token and /oauth2/revoke: a code exchange, and a refresh about every 15 minutes for each connection.
     tokenPerMinute: 600
-=======
-      # A client that registered and that no consent and no refresh has ever used is deleted this many hours after it registered, so that
-      # a flood of registrations cannot fill the cap for a month (docs/oauth.md, "Unused clients").
-      neverUsedClientHours: 24
->>>>>>> origin/main
   auth:
     # ambit-auth pods (stateless: a pending sign-in is in the browser, counters are in Valkey).
     replicas: 2

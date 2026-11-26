@@ -547,7 +547,6 @@ k=one("AgentgatewayPolicy","ambit-mcp-public-auth")["spec"]["traffic"]["authoriz
 assert "false" not in k, "the keys rule must not be touched"' "oauth.emergencyBlock adds a false clause to the token rule only, never to the key rule" )
 none=$(helm template ambit charts/ambit -n ambit-system "${fdv[@]}")
 ! grep -q 'ambit-mcp-public-oauth\|sectionName: keys\|ambit-console-oauth\|ambit-console-tokenreview' <<<"$none" || { echo "FAIL chart: nothing of OAuth in the front door's objects without OAuth"; exit 1; }
-<<<<<<< HEAD
 # Rate limits of the sign-in host: separate buckets, counted at the Gateway before the route and the credential, by the address of the connection.
 check_oa 'e=one("AgentgatewayPolicy","ambit-public-source-limit")["spec"]["traffic"]["extAuth"]["http"]["body"]
 b=e.split("\"fd_bucket\", \"value\": ",1)[1].split("}, {\"key\": \"fd_source\"",1)[0]
@@ -572,7 +571,6 @@ MSG='oauth.rateLimit.signInPerMinute' refuse "a sign-in limit of 0" --set oauth.
 MSG='whole number' refuse "a sign-in limit with a fraction" --set oauth.rateLimit.signInPerMinute=77.5
 MSG='oauth.rateLimit.tokenPerMinute' refuse "a token limit of 0" --set oauth.rateLimit.tokenPerMinute=0
 MSG='oauth.rateLimit.discoveryPerMinute' refuse "a discovery limit of 0" --set oauth.rateLimit.discoveryPerMinute=0
-=======
 # The Hydra janitor: a daily CronJob on the same database Secret, with Hydra's own lifetimes, one run at a time, no secret in it; off with
 # oauth.janitor.enabled=false, and not there at all without OAuth.
 check_oa 'j=one("CronJob","ambit-hydra-janitor")["spec"]
@@ -592,7 +590,6 @@ small=$(oat --set oauth.janitor.limit=3 | sed -n '/^kind: CronJob/,/^---/p')
 grep -q '"--batch-size", "3"\|--batch-size, "3", --limit, "3"' <<<"$small" || { echo "FAIL chart: a batch is never larger than the limit (Hydra refuses it)"; exit 1; }
 sch=$(oat --set oauth.janitor.schedule='5 4 * * 0' --set oauth.janitor.timeoutMinutes=10 | sed -n '/^kind: CronJob/,/^---/p')
 grep -q 'schedule: "5 4 \* \* 0"' <<<"$sch" && grep -q 'activeDeadlineSeconds: 600' <<<"$sch" || { echo "FAIL chart: the janitor schedule and time limit are values"; exit 1; }
->>>>>>> origin/main
 MSG='maxGrantDays' refuse "a grant life of 400 days" --set oauth.maxGrantDays=400
 one_r=$(oat --set oauth.hydra.replicas=1)
 ! grep -q 'name: ambit-hydra$' <(sed -n '/kind: PodDisruptionBudget/,/^---/p' <<<"$one_r") || { echo "FAIL chart: one Hydra pod needs no PodDisruptionBudget"; exit 1; }

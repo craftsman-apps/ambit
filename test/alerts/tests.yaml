@@ -233,7 +233,14 @@ tests:
     input_series:
       - series: 'kube_job_status_failed{namespace="ambit-system",job_name="ambit-hydra-janitor-29000"}'
         values: '0x120 1x120'
+      - series: 'kube_job_status_failed{namespace="ambit-system",job_name="ambit-hydra-janitor-29001"}'
+        values: '1x240'
+      - series: 'kube_job_status_succeeded{namespace="ambit-system",job_name="ambit-hydra-janitor-29001"}'
+        values: '1x240'
       - series: 'kube_cronjob_status_last_successful_time{namespace="ambit-system",cronjob="ambit-hydra-janitor"}'
+        values: '0x3700'
+      # a second CronJob that never succeeded (no last-success series), created at time 0
+      - series: 'kube_cronjob_created{namespace="ambit-system",cronjob="ambit-hydra-janitor"}'
         values: '0x3700'
     alert_rule_test:
       - eval_time: 1h
@@ -254,7 +261,7 @@ tests:
         exp_alerts:
           - exp_labels: { severity: warning, namespace: ambit-system, cronjob: ambit-hydra-janitor }
             exp_annotations:
-              summary: "The clean-up of Hydra's database has not succeeded for two days"
+              summary: "The clean-up of Hydra's database has not succeeded for 48 hours"
               description: "kubectl -n ambit-system get cronjob ambit-hydra-janitor; kubectl -n ambit-system get jobs. The database grows until it runs again."
   # OAuth: the database's own metrics, named by alerts.oauth: a backup older than 26 hours, and more than 80% of the connections.
   - interval: 1m
@@ -284,3 +291,19 @@ tests:
             exp_annotations:
               summary: "Hydra and other clients use more than 80% of the database's connections"
               description: "Hydra takes at most (pods x max_conns) connections, and the janitor or a migration one more run (docs/oauth.md, Operations: Pool sizing). The expression comes from alerts.oauth.connectionsUsedRatioExpr."
+  # OAuth: a clean-up CronJob that never succeeded has no last-success series: it still fires once it is older than the limit.
+  - interval: 1m
+    input_series:
+      - series: 'kube_cronjob_created{namespace="ambit-system",cronjob="ambit-hydra-janitor"}'
+        values: '0x3700'
+    alert_rule_test:
+      - eval_time: 40h
+        alertname: AmbitHydraJanitorStale
+        exp_alerts: []
+      - eval_time: 60h
+        alertname: AmbitHydraJanitorStale
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: ambit-system, cronjob: ambit-hydra-janitor }
+            exp_annotations:
+              summary: "The clean-up of Hydra's database has not succeeded for 48 hours"
+              description: "kubectl -n ambit-system get cronjob ambit-hydra-janitor; kubectl -n ambit-system get jobs. The database grows until it runs again."

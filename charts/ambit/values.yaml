@@ -384,6 +384,8 @@ alerts:
   # OAuth (oauth.enabled): the database is yours, so its metrics are yours. Put a PromQL expression here to get the alert; leave it empty for none.
   # The names depend on your database and its exporter, so Ambit does not guess them (docs/alerts.md has examples).
   oauth:
+    # The janitor alert fires when its last success is older than this many hours (48 for the daily schedule; raise it if you change oauth.janitor.schedule).
+    janitorMaxAgeHours: 48
     # Seconds since the newest backup, e.g. for CloudNativePG: time() - max(cnpg_collector_last_available_backup_timestamp)
     backupAgeSecondsExpr: ""
     backupMaxAgeHours: 26

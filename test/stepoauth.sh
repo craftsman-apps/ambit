@@ -401,6 +401,7 @@ oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --set agents.m
 kubectl -n "$NS" rollout status deploy/ambit-console --timeout=300s >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
 reforward
+[[ ${#PODS[@]} -eq 2 && "${PODS[0]}" != "${PODS[1]}" ]] || fail "16 want two different public gateway pods, have: ${PODS[*]}"
 dbo() { GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
   HTTP_TIMEOUT=60 KEY="$OKEY" ONE_TOOL=time_get_current_time "${PY[@]}" test/oauthtest/dbops.py "$@"; }
 now() { "${PY[@]}" -c 'import time;print("%.2f" % time.time())'; }
@@ -470,6 +471,8 @@ kubectl -n "$NS" patch svc ambit-pg17 --type merge -p '{"spec":{"selector":{"app
 kubectl -n "$NS" scale sts/ambit-pg17 --replicas=0 >/dev/null
 wait "$PRB" || true
 REP=$(dbo report "$W/probe-failover.json"); echo "   fail-over probes: $REP"
+probes_ok() { [[ "$(sed -E 's/^probes=([0-9]+) .*/\1/' <<<"$1")" -ge "$2" ]]; }  # a probe that died early must not pass as "no errors"
+probes_ok "$REP" 40 || fail "16 P5 the probe ran too few times: $REP"
 [[ "$REP" == *"end_ok=True"* ]] || fail "16 P5 Hydra did not recover after the name moved to the restored instance: $REP"
 wait_for 60 'hydra_both_ready && jwks_ok' || fail "16 P5 Hydra pods are not Ready on the restored instance"
 FIRST=$(sed -E 's/.* first=([0-9.]+) .*/\1/' <<<"$REP"); LAST=$(sed -E 's/.* last=([0-9.]+) .*/\1/' <<<"$REP"); NERR=$(sed -E 's/.* errors=([0-9]+) .*/\1/' <<<"$REP")
@@ -487,6 +490,7 @@ T_DEL=$(now)
 kubectl -n "$NS" delete pod ambit-pg17r-0 --wait=false >/dev/null
 wait "$PRB" || true
 REP=$(dbo report "$W/probe-crash.json"); echo "   after deleting the database pod: $REP"
+probes_ok "$REP" 25 || fail "16 P6 the probe ran too few times: $REP"
 [[ "$REP" == *"end_ok=True"* ]] || fail "16 P6 Hydra did not recover after the database pod was deleted: $REP"
 wait_for 60 'hydra_both_ready && jwks_ok' || fail "16 P6 Hydra pods are not Ready after the database pod came back"
 [[ "$(dbo refresh "$W/g.json" 0)" == "200 " ]] || fail "16 P6 the data must be there after the pod came back (a grant refreshes)"
@@ -498,6 +502,14 @@ pass "16 P6 database pod deleted with its volume kept: $P6; the data is there (a
 # refresh answer 5xx while no Hydra pod is Ready; recovery is measured from the moment the database accepts connections.
 [[ "$(dbo refresh "$W/g.json" 0)" == "200 " ]] || fail "16 outage: grant 0 does not refresh before the outage"
 [[ "$(dbo mcp "$W/g.json" 0)" == "200 200" ]] || fail "16 outage: the access token is not accepted at both pods before the outage: $(dbo mcp "$W/g.json" 0)"
+gw5xx() { # the sum of the Gateway's 5xx counters of the route to Hydra, on the first public pod (port 15020, read through a port-forward)
+  local gm; gm=$(freeport); kubectl -n "$NS" port-forward "pod/${PODS[0]}" "$gm:15020" >/dev/null 2>&1 & local pf=$!
+  wait_for 30 "(exec 3<>/dev/tcp/127.0.0.1/$gm) 2>/dev/null" || { kill "$pf" 2>/dev/null; echo -1; return; }
+  command curl -s --max-time 10 "http://127.0.0.1:$gm/metrics" | grep '^agentgateway_requests_total{' | grep "route=\"$NS/ambit-auth-hydra\"" | grep -E 'status="5[0-9][0-9]"' \
+    | "${PY[@]}" -c 'import re,sys;print(sum(float(l.rsplit(" ",1)[1]) for l in sys.stdin))'
+  kill "$pf" 2>/dev/null || true
+}
+G5_BEFORE=$(gw5xx)
 dbo probe 100 "$W/probe-outage.json" >/dev/null & PRB=$!; echo $PRB >> "$W/pids"
 sleep 5
 T_DOWN=$(now)
@@ -516,6 +528,7 @@ kubectl -n "$NS" rollout status sts/ambit-pg17r --timeout=300s >/dev/null
 T_DBREADY=$(now)
 wait "$PRB" || true
 REP=$(dbo report "$W/probe-outage.json"); echo "   30 second outage: $REP"
+probes_ok "$REP" 50 || fail "16 outage: the probe ran too few times: $REP"
 [[ "$REP" == *"end_ok=True"* && "$REP" != *"errors=0 "* ]] || fail "16 outage: the probes must show errors during the outage and none at the end: $REP"
 [[ -n "$T_NOTREADY" ]] || fail "16 outage: both Hydra pods must be NotReady while the database is down"
 [[ "$MCP_DURING" == "200 200" ]] || fail "16 outage: an access token that was issued before must keep working at the gateway during the outage, got: $MCP_DURING"
@@ -524,12 +537,9 @@ OUT=$("${PY[@]}" -c "print(f'first error {$FIRST-$T_DOWN:.1f} s after the stop, 
 RECOV=$("${PY[@]}" -c "print($LAST-$T_DBREADY)")
 "${PY[@]}" -c "import sys;sys.exit(0 if $RECOV < 60 else 1)" || fail "16 outage: sign-in and refresh took more than 60 s to recover after the database was Ready: $OUT"
 wait_for 60 'hydra_both_ready && jwks_ok' || fail "16 outage: Hydra pods are not Ready after the database came back"
-# The alert AmbitOAuthTokenErrors reads the Gateway's request counter of the route to Hydra: the 5xx of the outage must be in it.
-GM=$(freeport); kubectl -n "$NS" port-forward "pod/${PODS[0]}" "$GM:15020" >/dev/null 2>&1 & echo $! >> "$W/pids"
-wait_for 30 '(exec 3<>"/dev/tcp/127.0.0.1/$GM") 2>/dev/null' || fail "16 outage: no port-forward to the Gateway's metrics"
-command curl -s --max-time 10 "http://127.0.0.1:$GM/metrics" > "$W/gwmetrics"
-grep '^agentgateway_requests_total{' "$W/gwmetrics" | grep "route=\"$NS/ambit-auth-hydra\"" | grep -qE 'status="5[0-9][0-9]"' \
-  || fail "16 outage: the Gateway's request counter has no 5xx for the route ambit-auth-hydra (the alert AmbitOAuthTokenErrors reads it): $(grep '^agentgateway_requests_total{' "$W/gwmetrics" | grep -o 'route="[^"]*"[^}]*status="[0-9]*"' | sort -u | head -8)"
+# The alert AmbitOAuthTokenErrors reads the Gateway's request counter of the route to Hydra: the 5xx of the outage must have raised it.
+G5_AFTER=$(gw5xx)
+"${PY[@]}" -c "import sys;sys.exit(0 if $G5_AFTER > $G5_BEFORE >= 0 else 1)" || fail "16 outage: the Gateway's 5xx counter for the route ambit-auth-hydra did not rise ($G5_BEFORE before, $G5_AFTER after; the alert AmbitOAuthTokenErrors reads it)"
 [[ "$(dbo refresh "$W/g.json" 0)" == "200 " ]] || fail "16 outage: a refresh must work after the outage"
 pass "16 30 second outage of the database: $OUT; the access token kept working at both gateway pods during it ($MCP_DURING); refresh works again"
 
@@ -547,9 +557,11 @@ kubectl -n "$NS" rollout status sts/ambit-hydra --timeout=300s >/dev/null
 wait_for 60 'hydra_both_ready && jwks_ok' || fail "16 password rotation: Hydra pods are not Ready with the new password"
 wait "$PRB" || true
 REP=$(dbo report "$W/probe-rot.json"); echo "   password rotation: $REP"
+probes_ok "$REP" 50 || fail "16 password rotation: the probe ran too few times: $REP"
 [[ "$REP" == *"end_ok=True"* ]] || fail "16 password rotation: Hydra did not recover: $REP"
 [[ "$(dbo refresh "$W/g.json" 0)" == "200 " ]] || fail "16 password rotation: a grant must refresh with the new password"
-! kubectl -n "$NS" logs ambit-hydra-0 -c hydra 2>&1 | grep -qE "$OLDPW|$NEWPW" || fail "16 password rotation: a Hydra log holds a password"
+kubectl -n "$NS" logs ambit-hydra-0 -c hydra > "$W/hydra0.log" 2>&1 || fail "16 password rotation: the Hydra log cannot be read"
+[[ -s "$W/hydra0.log" ]] && ! grep -qE "$OLDPW|$NEWPW" "$W/hydra0.log" || fail "16 password rotation: a Hydra log is empty or holds a password"
 NERR=$(sed -E 's/.* errors=([0-9]+) .*/\1/' <<<"$REP")
 pass "16 rotation of the database password (ALTER ROLE, a new Secret, the pods rolled one at a time): $NERR error probes of a 100 s run, Hydra on the new password, a grant refreshes, no log holds a password"
 # A file with two CAs (the middle of a CA rotation): the start check and verify-full accept it.
@@ -583,10 +595,10 @@ EOY
 }
 [[ "$(hyrun mig-down migrate sql down -e --yes --steps 1)" == Succeeded ]] || fail "16 migrate down failed: $(kubectl -n "$NS" logs mig-down | tail -c 300)"
 [[ "$(psq 'select count(*) from schema_migration')" == "$((SM1 - 1))" ]] || fail "16 one step down must remove one migration"
-RF2=$(psq "select count(*) from hydra_oauth2_refresh"); FL2=$(psq "select count(*) from hydra_oauth2_flow")
+RF2=$(psq "select count(*) from hydra_oauth2_refresh"); FL2=$(psq "select count(*) from hydra_oauth2_flow"); AC2=$(psq "select count(*) from hydra_oauth2_access")
 [[ "$(hyrun mig-up migrate sql up -e --yes)" == Succeeded ]] || fail "16 migrate up failed: $(kubectl -n "$NS" logs mig-up | tail -c 300)"
 [[ "$(psq 'select count(*) from schema_migration')" == "$SM1" && "$(psq 'select count(*) from hydra_client')" == "$CL1" ]] || fail "16 after up again the migrations and the clients must be as before"
-[[ "$RF2" == 0 && "$FL2" == 0 && "$RF1" -gt 0 ]] || fail "16 one step down: expected the flows and refresh tokens to go (flows $FL2, refresh tokens $RF2, before: refresh tokens $RF1)"
+[[ "$RF2" == 0 && "$FL2" == 0 && "$AC2" == 0 && "$RF1" -gt 0 ]] || fail "16 one step down: expected the flows, refresh tokens and access tokens to go (flows $FL2, refresh tokens $RF2, access tokens $AC2, before: refresh tokens $RF1)"
 [[ "$(dbo refresh "$W/g.json" 0)" == "400 invalid_grant" ]] || fail "16 after migrate down every grant must be refused with invalid_grant, got: $(dbo refresh "$W/g.json" 0)"
 dbo grants 1 "$W/g-new2.json" >/dev/null || fail "16 a new sign-in must work after migrate down and up"
 pass "16 P2 \`hydra migrate sql down --steps 1\` then \`up\`: the clients stay ($CL1), the login and consent records and all $RF1 refresh tokens are gone, every grant must connect again, a new sign-in works. A rollback is a restore of the backup, not migrate down"

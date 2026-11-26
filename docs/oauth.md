@@ -343,8 +343,11 @@ Back up: (1) **the whole database**, with your database's backup (managed backup
 you keep the backups, not in the same place as the database. The other Secrets (address, CA, cookie secret, identity provider's client secret) are yours already.
 
 ```
-kubectl -n <database namespace> exec <database pod> -- pg_dump -Fc -U <owner role> -d hydra -f /tmp/hydra.dump
+kubectl -n <database namespace> exec <database pod> -- pg_dump -Fc -U <owner role> -d hydra > hydra.dump
 ```
+
+The dump goes to a file **outside** the database pod, and then to your backup storage: a dump that lives only in the pod that holds the database is lost with it.
+Keep the matching `system` Secret with it (the restore needs both).
 
 *Measured:* @@P4@@ Check a backup by restoring it somewhere once (below): a backup that was never restored is a guess.
 
@@ -352,22 +355,28 @@ kubectl -n <database namespace> exec <database pod> -- pg_dump -Fc -U <owner rol
 
 Restore into a **new** instance; never over the live one.
 
+0. **Keep the matching Secret** `oauth.hydra.systemSecret` in the cluster (it is a Secret of the install; a restored database is read with it). A row count can be right and the keys
+   unreadable if the `system` value is another one.
 1. Create the new instance with the same TLS rules (a certificate for the name Hydra uses, the same CA), the role and the empty database `hydra`, then restore:
    `pg_restore -U <superuser> -d hydra --exit-on-error /tmp/hydra.dump` (a managed service: its "restore to a new instance").
 2. Check it: the counts of `hydra_client` and `hydra_oauth2_refresh` are what you expect.
-3. Point Hydra at it: change the Secret `oauth.database.dsnSecret` (or move the DNS name or Service), then roll Hydra's pods one at a time:
+3. **Stop the old database first**, or take the login away from its role (`ALTER ROLE ... NOLOGIN`), so that no Hydra pod can still write to it while another pod already uses the new one. A rolling
+   change of the address leaves for a short time pods on both: a refresh that succeeds on the old side (and rotates the token there) can fail on the next call on the new side.
+   Then point Hydra at the new instance: change the Secret `oauth.database.dsnSecret` (or move the DNS name or Service), then roll Hydra's pods one at a time:
    `kubectl -n ambit-system rollout restart statefulset/ambit-hydra`. Hydra does not notice a changed Secret by itself. If the name moved and the old instance
    is stopped, the pods reconnect by themselves.
 4. **What people see** (measured, P5): connections that were **not used since the backup** keep working. Connections that **refreshed after the backup** are refused with
    `invalid_grant`: the new refresh token that the platform holds is not in the backup. Those people connect the platform again (a new sign-in and consent). Clients that
    registered after the backup are missing: that platform gets `invalid_client` and registers again. A person who ended a connection after the backup does not get it back:
    the stop and the offboarding live in Kubernetes. Tell the people: "connections you made or used in the last <time since the backup> may ask you to connect again".
-5. Take a new backup.
+5. **Re-apply what the backup does not know.** Changes in Hydra after the backup are undone: an OAuth client that an admin deleted is back, and a refresh token that a platform revoked
+   (`/oauth2/revoke`) works again until its agent ends. Read the History of the console for deletions of OAuth clients since the backup, and delete them again; ended connections (agents) stay ended.
+6. Take a new backup.
 
 ### Fail-over
 
 A managed service's fail-over usually keeps the DNS name and moves it to a replica. Hydra reconnects by itself: no action. *Measured on kind (a Service moved to another
-instance, the old one stopped):* @@P5FAIL@@ What kind cannot show: how long your provider's fail-over takes, and how much of the last seconds the replica has (your
+instance, the old one stopped, so no pod wrote to two databases):* @@P5FAIL@@ What kind cannot show: how long your provider's fail-over takes, and how much of the last seconds the replica has (your
 RPO). Measure both with checklist items 1 and 2. If the name does not move (a new address), change the Secret and roll the pods as in Restore.
 
 ### Pool sizing
@@ -382,6 +391,9 @@ counts `pods × max_conns + 1`, so set the role's `CONNECTION LIMIT` to `(pods +
 Hydra never deletes finished rows. The CronJob **`ambit-hydra-janitor`** (`oauth.janitor.*`, 03:17 every day) runs `hydra janitor` with Hydra's own lifetimes
 (the same ConfigMap), so **a token that is still valid is never deleted**. It deletes **expired access and refresh tokens**, and keeps everything younger than an
 hour. One run at a time (`concurrencyPolicy: Forbid`), stopped after 30 minutes, at most 10,000 rows of each kind per run (the next day goes on). It does not touch clients.
+
+**If you shorten `oauth.refreshTokenIdleDays`**, the janitor uses the new, shorter lifetime: a refresh token that is older than it is deleted at the next run, although the token itself still said
+that it was valid for longer. Lower the value only when you mean to end those connections.
 
 **What it does not delete** (measured on Hydra v26.2.0 with a database in which the rows were made old by hand): authorization codes, and the records of sign-ins that
 were completed, **also when they are old**. A refresh token is tied to the record of its sign-in by a cascading rule of the database, so a record that is deleted ends the
@@ -411,7 +423,7 @@ again ([the guide](guides/oauth-mcp-client.md#4-register-a-client-rfc-7591)). Te
 
 **The database password:** (1) change the role's password in the database; (2) change the Secret `oauth.database.dsnSecret` (a URL-safe password); (3) roll the pods one at a time:
 `kubectl -n ambit-system rollout restart statefulset/ambit-hydra`. A connection that exists keeps working (a password is checked when a connection starts), so only new
-connections fail between step 1 and the end of step 3. The janitor Job reads the Secret each time it runs. *Measured:* @@ROT@@
+connections fail between step 1 and the end of step 3. The janitor Job reads the Secret each time it runs, and starts with the same database check as Hydra's pods (a wrong address is refused with a fixed message). *Measured:* @@ROT@@
 **The CA:** put the old and the new CA, one after the other, in the file of `oauth.database.caSecret` (a file with several certificates is accepted: tested), change the
 server's certificate, roll the pods, then remove the old CA from the file and roll again. A rotation of the server's own certificate by a real service is not tested.
 

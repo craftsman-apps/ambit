@@ -119,17 +119,23 @@ spec:
             summary: "More than 5% of the requests to Hydra's public endpoints (/oauth2/token, /oauth2/revoke, the key list) answer 5xx"
             description: "People cannot connect a platform, and connections cannot refresh. Look at Hydra and its database: kubectl -n {{ $ns }} get pods -l app.kubernetes.io/name=ambit-hydra; kubectl -n {{ $ns }} logs ambit-hydra-0 -c hydra."
         - alert: AmbitHydraJanitorFailed
-          expr: kube_job_status_failed{namespace="{{ $ns }}", job_name=~"ambit-hydra-janitor.*"} > 0
+          # A job that failed once and then succeeded on its retry is not an alert.
+          expr: kube_job_status_failed{namespace="{{ $ns }}", job_name=~"ambit-hydra-janitor.*"} > 0 unless on (namespace, job_name) kube_job_status_succeeded{namespace="{{ $ns }}", job_name=~"ambit-hydra-janitor.*"} > 0
           labels: { severity: warning }
           annotations:
             summary: "The clean-up of Hydra's database failed ({{`{{ $labels.job_name }}`}})"
             description: "Expired tokens stay in the database until it runs again. Read why: kubectl -n {{ $ns }} logs job/{{`{{ $labels.job_name }}`}}. The usual cause is the database address or password."
         - alert: AmbitHydraJanitorStale
-          expr: time() - kube_cronjob_status_last_successful_time{namespace="{{ $ns }}", cronjob="ambit-hydra-janitor"} > 2 * 86400
+          # Too old a last success, or a CronJob that is older than the limit and never succeeded (then there is no last-success series).
+          expr: |
+            (time() - kube_cronjob_status_last_successful_time{namespace="{{ $ns }}", cronjob="ambit-hydra-janitor"} > {{ mul (int (((.Values.alerts | default dict).oauth | default dict).janitorMaxAgeHours | default 48)) 3600 }})
+              or
+            (time() - kube_cronjob_created{namespace="{{ $ns }}", cronjob="ambit-hydra-janitor"} > {{ mul (int (((.Values.alerts | default dict).oauth | default dict).janitorMaxAgeHours | default 48)) 3600 }}
+              unless on (namespace, cronjob) kube_cronjob_status_last_successful_time{namespace="{{ $ns }}", cronjob="ambit-hydra-janitor"})
           for: 1h
           labels: { severity: warning }
           annotations:
-            summary: "The clean-up of Hydra's database has not succeeded for two days"
+            summary: "The clean-up of Hydra's database has not succeeded for {{ ((.Values.alerts | default dict).oauth | default dict).janitorMaxAgeHours | default 48 }} hours"
             description: "kubectl -n {{ $ns }} get cronjob ambit-hydra-janitor; kubectl -n {{ $ns }} get jobs. The database grows until it runs again."
         {{- $dba := ((.Values.alerts | default dict).oauth) | default dict }}
         {{- if $dba.backupAgeSecondsExpr }}

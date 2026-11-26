@@ -217,6 +217,18 @@ spec:
           serviceAccountName: ambit-hydra
           automountServiceAccountToken: false
           securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: { type: RuntimeDefault } }
+          # The same database check as Hydra's pods: a bad address is refused with a fixed message, and never reaches Hydra's own error output (which can quote it).
+          initContainers:
+            - name: check-database
+              image: {{ $img | quote }}
+              imagePullPolicy: {{ .Values.console.image.pullPolicy }}
+              command: [/ambit-auth, check-database, --replicas={{ int $h.replicas }}]
+              env:
+                - name: DSN
+                  valueFrom: { secretKeyRef: { name: {{ $db.dsnSecret.name | quote }}, key: {{ $db.dsnSecret.key | quote }} } }
+              volumeMounts: [{ name: ca, mountPath: /ca, readOnly: true }]
+              securityContext: {{ $sc }}
+              resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 64Mi } }
           containers:
             - name: janitor
               image: {{ $h.image | quote }}

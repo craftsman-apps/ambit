@@ -527,6 +527,31 @@ wait_for 60 'hydra_both_ready && jwks_ok' || fail "16 outage: Hydra pods are not
 [[ "$(dbo refresh "$W/g.json" 0)" == "200 " ]] || fail "16 outage: a refresh must work after the outage"
 pass "16 30 second outage of the database: $OUT; the access token kept working at both gateway pods during it ($MCP_DURING); refresh works again"
 
+# Rotation of the database password: change the role's password, change the Secret, roll Hydra's pods one at a time. Connections that exist keep
+# working (a password is checked when a connection starts), so the probes (made-up refresh requests) show how long the new connections are refused.
+NEWPW=$(rnd)
+dbo probe 100 "$W/probe-rot.json" >/dev/null & PRB=$!; echo $PRB >> "$W/pids"
+sleep 3
+T_ROT=$(now)
+psq "alter role hydra password '$NEWPW'" >/dev/null
+OLDPW=$HP; HP=$NEWPW
+sec ambit-oauth-db --from-literal=dsn="$(dsn 17)"
+kubectl -n "$NS" rollout restart sts/ambit-hydra >/dev/null
+kubectl -n "$NS" rollout status sts/ambit-hydra --timeout=300s >/dev/null
+wait_for 60 'hydra_both_ready && jwks_ok' || fail "16 password rotation: Hydra pods are not Ready with the new password"
+wait "$PRB" || true
+REP=$(dbo report "$W/probe-rot.json"); echo "   password rotation: $REP"
+[[ "$REP" == *"end_ok=True"* ]] || fail "16 password rotation: Hydra did not recover: $REP"
+[[ "$(dbo refresh "$W/g.json" 0)" == "200 " ]] || fail "16 password rotation: a grant must refresh with the new password"
+! kubectl -n "$NS" logs ambit-hydra-0 -c hydra 2>&1 | grep -qE "$OLDPW|$NEWPW" || fail "16 password rotation: a Hydra log holds a password"
+NERR=$(sed -E 's/.* errors=([0-9]+) .*/\1/' <<<"$REP")
+pass "16 rotation of the database password (ALTER ROLE, a new Secret, the pods rolled one at a time): $NERR error probes of a 100 s run, Hydra on the new password, a grant refreshes, no log holds a password"
+# A file with two CAs (the middle of a CA rotation): the start check and verify-full accept it.
+cat "$W/other.pem" "$W/dbca.pem" > "$W/bundle.pem"
+sec ambit-oauth-db-ca-bundle --from-file=ca.crt="$W/bundle.pem"
+want cabundle ok 'database ok' "$(dsn 17)" 2 ambit-oauth-db-ca-bundle
+pass "16 a CA file with two certificates (an unrelated one first, the right one second) passes the database check with sslmode=verify-full"
+
 # Rollback by `hydra migrate sql down`: NOT a rollback for a live database. One step down (the latest Hydra migration of v26.2.0) removes every
 # login and consent record, and with them (a cascading rule of the database) every access and refresh token. Clients stay. This is why the runbook
 # restores the backup that was taken before the upgrade, and does not run `migrate sql down`.

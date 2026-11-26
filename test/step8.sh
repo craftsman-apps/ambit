@@ -248,10 +248,11 @@ pass "11 not charged: no token counts, a stream cut off before them, embeddings 
 
 fresh
 # 12 · a price change applies to new answers only (10 / 40 per million: 12 + 12 = 24 units an answer)
+s0=$(spent)   # 3 from check 11, or none when fresh moved to a new UTC day (#427)
 set_price 10 40; wait_policy '"mock/echo": 10000000u'
-ask "$M" mock/echo >/dev/null; wait_spent 27 "12 answer at the new price (3 + 24)"
+ask "$M" mock/echo >/dev/null; wait_spent $(( ${s0:-0} + 24 )) "12 answer at the new price (earlier spend ${s0:-0} + 24)"
 set_price 1.00 4.00; wait_policy '"mock/echo": 1000000u'
-pass "12 price change: earlier spend kept (3), the next answer charged at the new price (24)"
+pass "12 price change: earlier spend kept (${s0:-0}), the next answer charged at the new price (24)"
 
 fresh
 # 14 · the price changes while a streamed answer is still running (its usage arrives 25 s after it starts):
@@ -387,6 +388,7 @@ pass "20e the group's 4 a minute are shared by two people: $codes"
 budget_ml "userRequestsPerDay: 1, userRequestsPerMinute: 1"
 wait_rl "$NS" "ambit-llm.rpm_group_ml-research.rpm_user: unit=MINUTE requests_per_unit=1,"
 wait_rl "$NS" "ambit-llm.group_ml-research.user: unit=DAY requests_per_unit=0,"
+hold_for_midnight 150   # two minute changes below; the daily limit must not reset in between (#427)
 new_minute; M=$(token user09); f1=$(ask_m "$M" mock/echo f1); sleep 3; f2=$(ask_m "$M" mock/echo f2); ra=$(retry_after f2)
 new_minute; f3=$(ask_m "$M" mock/echo f3); rb=$(retry_after f3)
 [[ "$f1/$f2/$f3" == "200/429/429" ]] && (( ra <= 60 && rb > 60 )) ||

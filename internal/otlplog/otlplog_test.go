@@ -213,3 +213,60 @@ func TestCloseSendsRecordsQueuedBefore(t *testing.T) {
 		t.Errorf("record queued before Close: send failures %v, want 1", d)
 	}
 }
+
+// Flush and Close drain a queue of more than one batch without retries too (Codex review of #429): 150 records are two
+// batches, so a dead collector sees two export calls, not six.
+func TestFlushOfSeveralBatchesIsNotRetried(t *testing.T) {
+	f, addr := startFlaky(t, 1000)
+	dropped := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_flushbatches_dropped_total"}, []string{"reason"})
+	e, err := New(addr, "test", dropped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	for range 150 {
+		e.Send(Record(time.Now(), "x"))
+	}
+	e.Flush()
+	if calls, _ := f.state(); calls != 2 {
+		t.Errorf("%d export calls for 150 records, want 2 (two batches, no retries)", calls)
+	}
+	if d := testutil.ToFloat64(dropped.WithLabelValues(DropSendFailed)); d != 150 {
+		t.Errorf("send failures %v, want 150", d)
+	}
+}
+
+// Close during the wait before a retry ends the retries at once: the batch is dropped and counted, no further call is made.
+func TestCloseEndsRetries(t *testing.T) {
+	old := RetryWait
+	RetryWait = time.Hour
+	t.Cleanup(func() { RetryWait = old })
+	f, addr := startFlaky(t, 1000)
+	dropped := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_closeretry_dropped_total"}, []string{"reason"})
+	e, err := New(addr, "test", dropped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.Send(Record(time.Now(), "x"))
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if calls, _ := f.state(); calls == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no export call")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	start := time.Now()
+	e.Close()
+	if time.Since(start) > 2*time.Second {
+		t.Errorf("Close took %v while a retry was waiting", time.Since(start))
+	}
+	if calls, _ := f.state(); calls != 1 {
+		t.Errorf("%d export calls, want 1: Close must not try again", calls)
+	}
+	if d := testutil.ToFloat64(dropped.WithLabelValues(DropSendFailed)); d != 1 {
+		t.Errorf("send failures %v, want 1", d)
+	}
+}

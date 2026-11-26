@@ -38,7 +38,7 @@ A change to an `AccessRule` (create, edit or delete) does not take effect in the
 
 - **Delete (access is removed).** The first refusal came 16 to 39 ms after the controller had written the change (median 22 ms), and 13 to 194 ms with the machine busy. Counted from `kubectl delete`: median 70 ms, at most 124 ms (busy: median 111 ms, at most 476 ms).
 - **A change that arrives while the controller applies another one waits for that change first.** The controller applies each change in two steps, and after each step it waits until agentgateway has accepted it, then `access.activationSettle` (3 s). A deletion that arrives right after another change was first refused about 5.3 s later. If agentgateway does not accept a step, the change in progress waits up to `access.activationTimeout` (120 s) for each of its two steps before it stops, and a deletion waits for it (from the code; not measured).
-- **Create (access is granted).** The first successful call usually came about 5.4 s after `kubectl apply` (0.2 to 6 s), because a grant waits for both steps.
+- **Create (access is granted).** The first successful call usually came about 5.4 s after `kubectl apply` (0.2 to 6 s).
 
 These times are from one run on a kind cluster (12 deletions and 12 grants each on an idle machine and on a busy one; agentgateway v1.7.0, 2026-11-26), not guarantees. A test or a script that checks a deletion must repeat its call until it gets 403 and give up after a few seconds, not read the answer of the first call. This is what `test/step3.sh` does.
 

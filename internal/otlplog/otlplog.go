@@ -130,13 +130,12 @@ func (e *Exporter) run() {
 			batch = batch[:0]
 		}
 	}
-	flush := func() { send(true) }
-	drain := func() { // everything queued now
+	drain := func(retry bool) { // everything queued now
 		for {
 			select {
 			case rec := <-e.queue:
 				if batch = append(batch, rec); len(batch) >= Batch {
-					flush()
+					send(retry)
 				}
 			default:
 				return
@@ -147,16 +146,16 @@ func (e *Exporter) run() {
 		select {
 		case rec := <-e.queue:
 			if batch = append(batch, rec); len(batch) >= Batch {
-				flush()
+				send(true)
 			}
 		case <-tick.C:
-			flush()
+			send(true)
 		case ack := <-e.flush:
-			drain()
+			drain(false)
 			send(false)
 			close(ack)
 		case <-e.stop:
-			drain()
+			drain(false)
 			send(false)
 			return
 		}
@@ -164,15 +163,14 @@ func (e *Exporter) run() {
 }
 
 // export sends batch. With retry, a failed export is tried again after RetryWait, then twice as long, up to Retries
-// times; a stop during the wait ends the retries (one more try is made at once). The batch is dropped, and counted
-// once, when the last try failed.
+// times; a stop during the wait ends the retries. The batch is dropped, and counted once, when the last try failed.
 func (e *Exporter) export(batch []*logspb.LogRecord, retry bool) {
 	req := &collogs.ExportLogsServiceRequest{ResourceLogs: []*logspb.ResourceLogs{{
 		Resource:  &resourcepb.Resource{Attributes: []*commonpb.KeyValue{Str("service.name", e.service)}},
 		ScopeLogs: []*logspb.ScopeLogs{{LogRecords: batch}},
 	}}}
 	var err error
-	for try, wait := 0, RetryWait; ; try++ {
+	for try, wait := 0, RetryWait; ; try, wait = try+1, wait*2 {
 		ctx, cancel := context.WithTimeout(context.Background(), Timeout)
 		_, err = e.logs.Export(ctx, req)
 		cancel()
@@ -184,10 +182,10 @@ func (e *Exporter) export(batch []*logspb.LogRecord, retry bool) {
 		}
 		select {
 		case <-time.After(wait):
-		case <-e.stop:
-			retry = false
+			continue
+		case <-e.stop: // Close must end within Timeout: no more tries
 		}
-		wait *= 2
+		break
 	}
 	e.dropped.WithLabelValues(DropSendFailed).Add(float64(len(batch)))
 	if time.Since(e.warn) > time.Minute { // one line a minute, not one per batch

@@ -167,7 +167,8 @@ func probeToken(key json.RawMessage, pc ProbeClaims, now time.Time) (string, err
 // base is Hydra's public address, for example http://ambit-hydra-public:4444.
 func PublicKeyIDs(ctx context.Context, hc *http.Client, base string) ([]string, error) {
 	if hc == nil {
-		hc = &http.Client{Timeout: 10 * time.Second}
+		// No redirect is followed: an answer of Hydra's public port that points elsewhere (the admin API, which holds private keys) is an error, not a place to read.
+		hc = &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/.well-known/jwks.json", nil)
 	if err != nil {

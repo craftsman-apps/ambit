@@ -37,8 +37,8 @@ var Platforms = map[string]string{
 // Scopes are the OAuth scopes of Ambit: mcp (use the MCP route) and offline_access (a refresh token).
 var Scopes = []string{"mcp", "offline_access"}
 
-// redirectPathRE is the path of a registration entry: segments of ordinary characters, no "." or ".." segment, no empty segment, no query.
-var redirectPathRE = regexp.MustCompile(`^(/[A-Za-z0-9_~!$&'()*+;=:@%-][A-Za-z0-9._~!$&'()*+;=:@%-]*)+$`)
+// redirectPathRE is the path of a registration entry: segments of ordinary characters (no percent escape, no "$", "(" or ")": a path must mean the same to every reader), no "." or ".." segment, no empty segment, no query.
+var redirectPathRE = regexp.MustCompile(`^(/[A-Za-z0-9_~!&'*+;=:@-][A-Za-z0-9._~!&'*+;=:@-]*)+$`)
 
 // splitRedirectEntry splits an entry of RegistrationHosts: "chatgpt.com" (any path on the host) or "chatgpt.com/connector/oauth" (that path, and
 // the paths below it).
@@ -50,8 +50,8 @@ func splitRedirectEntry(e string) (host, path string) {
 }
 
 // RedirectAllowed reports whether a registered redirect address is on an entry of RegistrationHosts: the host is the entry's host, and the path is
-// whatever the entry names, or below it. An entry without a path allows every path of the host. A path with a dot segment, an empty segment, or an
-// encoded slash, dot or backslash is never allowed under an entry that names a path (a browser may read it as another path).
+// whatever the entry names, or below it. An entry without a path allows every path of the host. A path with a dot segment, an empty segment, a percent
+// escape or a backslash is never allowed under an entry that names a path (a browser or the platform may read it as another path).
 func (c Config) RedirectAllowed(u *url.URL) bool {
 	for _, e := range c.RegistrationHosts {
 		h, p := splitRedirectEntry(e)
@@ -61,8 +61,7 @@ func (c Config) RedirectAllowed(u *url.URL) bool {
 		if p == "" {
 			return true
 		}
-		raw := strings.ToLower(u.EscapedPath())
-		if strings.Contains(raw, "%2f") || strings.Contains(raw, "%2e") || strings.Contains(raw, "%5c") || strings.Contains(u.Path, "\\") {
+		if strings.Contains(u.EscapedPath(), "%") || strings.Contains(u.Path, "\\") { // an escaped spelling may be routed as another path by the platform
 			continue
 		}
 		if u.Path == p || (strings.HasPrefix(u.Path, p+"/") && redirectPathRE.MatchString(u.Path)) {

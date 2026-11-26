@@ -150,6 +150,7 @@ check("3 a token and a wrong key together: the key rule decides (403)", st == 40
 # the audience is exactly this MCP URL: a token with a VALID signature (made with Hydra's own key by the test) that lists the MCP URL and another audience is
 # refused by the rule (403), while the same claims with the MCP URL alone are accepted (200): so the refusal is the audience rule and not the signature
 MINT, JWK = os.environ.get("MINT"), os.environ.get("SIGNING_JWK")
+check("3 audience: the signer (MINT) and the signing key (SIGNING_JWK) are given: the audience checks are not skipped", bool(MINT and JWK))
 if MINT and JWK:
     def mint(**over):
         h, pl, sg = good.split(".")
@@ -160,7 +161,7 @@ if MINT and JWK:
             raise RuntimeError("the test signer failed: " + r.stderr[-200:])
         return r.stdout.strip()
     ctl_ok = mint()
-    check("3 audience: a token made by the test with Hydra's key and the MCP URL alone is accepted on every pod (the test's own tokens work)", all(tools(p, ctl_ok)[0] == 200 for p in PORTS))
+    check("3 audience: a token made by the test with Hydra's key and the MCP URL alone, as a list of one (the form Hydra writes), is accepted on every pod (the test's own tokens work)", all(tools(p, ctl_ok)[0] == 200 for p in PORTS))
     two = mint(aud=[MCP_URL, "https://other.example.com/mcp"])
     check("3 audience: the same token that lists another audience as well is refused (403) on every pod", all(tools(p, two)[0] == 403 for p in PORTS), [tools(p, two)[0] for p in PORTS])
     bare = mint(aud=MCP_URL)

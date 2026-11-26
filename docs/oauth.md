@@ -159,7 +159,9 @@ are accepted:
 no dot segment, empty segment, query or trailing slash). The default list names the callbacks of ChatGPT and Claude only: a person who is
 sent a sign-in link by an attacker gives the code to the redirect address that the attacker registered, so the address must be one that no
 third party can use to read the code (an open redirect, a page with user content, a leaked address in a `Referer` header) on any path of
-the host. **A bare host (`chatgpt.com`) allows every path of the host: add one only when nobody but the platform can publish a page or a
+the host. **A client that registered earlier keeps the addresses it registered**: removing an entry stops new registrations only. After you narrow the list, delete the
+clients that registered the removed paths (`GET /api/admin/oauth/clients`, `DELETE /api/admin/oauth/clients/{id}`) and stop their agents. Path entries
+accept no percent escape and no `$`. **A bare host (`chatgpt.com`) allows every path of the host: add one only when nobody but the platform can publish a page or a
 redirect there.** If a platform's callback differs from the default (the platform's documentation names it), add its exact path; a registration with
 another path is refused with `invalid_client_metadata`.
 
@@ -203,7 +205,8 @@ pod within 31 seconds in the test, and Ambit does not wait for the key set befor
 and `sub` are there, the person has an email that is not a service account, and the token carries an agent, a grant and a scope list
 (the consent page writes all three into every token). The same checks of every call as for a key then follow: the offboarding list, the
 stop list, the person's AccessRules **and** the scope of the token (`ambit_scope`): a tool outside the scope is not listed and not callable,
-on every call. Only servers that are on the front door are there at all. A controller that runs without the token issuer (a failed or slow upgrade that leaves an old controller in place) fails closed: on the public backend the
+on every call. Only servers that are on the front door are there at all. When you turn OAuth on, wait until `kubectl -n ambit-system rollout status deploy/ambit-controller` has finished before you tell anyone: while the old controller is still the only one, its
+policies know no token issuer. A controller that runs without the token issuer fails closed once it is the new one: on the public backend the
 scope clause is `false` for every token, so no token can use a tool until the controller knows the issuer.
 
 Tokens do not work on the private route (it takes tokens of your company's provider), and keys do not work on the sign-in host.
@@ -382,7 +385,7 @@ Run this once on your own database before you rely on OAuth. It does not depend 
 |---|---|
 | `StatefulSet ambit-hydra` (2 pods) | Hydra v26.2.0 (image pinned by digest). Init containers: `check-database`, `migrate` (`hydra migrate sql up`). Containers: `hydra`, `hydra-keys` (below). |
 | `Service ambit-hydra-public` (4444), `Service ambit-hydra-admin` (4445) | ClusterIP only. |
-| `NetworkPolicy ambit-hydra` | Port 4444: the public Gateway's pods, agentgateway's controller (it fetches the keys) and `ambit-auth` (its authorize front). Port 4445: `ambit-auth` and the console only. Every other pod is refused. |
+| `NetworkPolicy ambit-hydra` | Port 4444: the public Gateway's pods, agentgateway's controller (it fetches the keys), `ambit-auth` (its authorize front) and the console (the public key list, for the status of the signing keys). Port 4445: `ambit-auth` and the console only. Every other pod is refused. |
 | `Deployment ambit-auth` (2 pods), `Service ambit-auth`, `NetworkPolicy ambit-auth` | The sign-in pages, registration and the token hook. Stateless. Port 8080 (pages) is open to the public Gateway's pods only, 8081 (token hook) to Hydra's pods only, 8082 (health, metrics) to the cluster. It reads two ConfigMaps by name (`ambit-offboarded`, `ambit-agent-stops`) and writes nothing in Kubernetes. |
 | `HTTPRoute ambit-auth-app` | The pages: `GET /.well-known/oauth-authorization-server`, `/oauth2/auth`, `/login`, `/callback`, `/consent`, `/error`, `POST /consent`, `POST /register`. |
 | `HTTPRoute ambit-auth-hydra` | On the sign-in host, three exact paths: `POST /oauth2/token`, `POST /oauth2/revoke`, `GET /.well-known/jwks.json`. Everything else of Hydra (registration, discovery, user info, device flow, sessions, health, the admin API) has no route and answers 404. |

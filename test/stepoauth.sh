@@ -400,10 +400,11 @@ pass "15 emergency rotation of the signing keys"
 
 # --- 18 · the emergency block as an object of its own (test/oauthtest/block.py): `ambit oauth block on` survives a Helm upgrade and an Argo CD-style re-apply of the chart
 # (the old kind of block, an edit of the chart's policy, does not: the test shows that first)
+# (--force-conflicts: Helm 4 applies server-side, and the test's Argo CD-style re-apply has taken some fields of the chart's policies; Argo CD users do not run helm upgrade)
 go build -o "$W/ambit" ./cmd/ambit || fail "18 build the CLI"
 helm get values ambit -n "$NS" -a -o yaml > "$W/release-values.yaml" || fail "18 the values of the release"
 GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" NS="$NS" \
-  BLOCKCTL="$W/ambit" HELM_UPGRADE="helm upgrade ambit charts/ambit -n $NS --reuse-values --wait --timeout 8m" HELM_TEMPLATE="helm template ambit charts/ambit -n $NS -f $W/release-values.yaml" \
+  BLOCKCTL="$W/ambit" HELM_UPGRADE="helm upgrade ambit charts/ambit -n $NS --reuse-values --force-conflicts --wait --timeout 8m" HELM_TEMPLATE="helm template ambit charts/ambit -n $NS -f $W/release-values.yaml" \
   HTTP_TIMEOUT=90 KEY="$OKEY" ONE_TOOL=time_get_current_time "${PY[@]}" test/oauthtest/block.py || fail "18 the emergency block checks failed (see FAIL lines above)"
 pass "18 the emergency block (ambit oauth block on) survives a Helm upgrade and a re-apply of the chart; the old kind of block does not"
 

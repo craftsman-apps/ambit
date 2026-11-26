@@ -179,9 +179,11 @@ func (e *Exporter) run() {
 
 // retryable says whether a failed export can succeed when sent again: the collector is not reachable or not ready (the
 // OTLP specification's list). A rejected batch (InvalidArgument and the like) would fail the same way again.
+// ResourceExhausted is not on the list: the specification retries it only when the collector sends RetryInfo, and an
+// oversized batch would fail again.
 func retryable(err error) bool {
 	switch status.Code(err) {
-	case codes.Unavailable, codes.DeadlineExceeded, codes.Aborted, codes.Canceled, codes.ResourceExhausted, codes.DataLoss:
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Aborted, codes.Canceled, codes.OutOfRange, codes.DataLoss:
 		return true
 	}
 	return false
@@ -207,7 +209,11 @@ func (e *Exporter) export(batch []*logspb.LogRecord, retry bool) {
 		}
 		select {
 		case <-time.After(wait):
-			continue
+			select {
+			case <-e.stop: // the timer and the stop were ready together: the stop wins
+			default:
+				continue
+			}
 		case <-e.stop: // Close must end within Timeout: no more tries
 		}
 		break

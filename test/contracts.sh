@@ -131,19 +131,20 @@ metadata: { name: contract-eng }
 spec: { group: eng, userRequestsPerDay: 100000 }
 YAML
 key() { echo "ambit-llm_group_eng_user_user01@example.com_$(( $(date -u +%s) / 86400 * 86400 ))"; }   # the day is read at each use (#427)
-vget() { kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "$(key)" 2>/dev/null || true; }
+vget() { kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "$1" 2>/dev/null || true; }
 # The counter must grow with a new request (a counter left from earlier proves nothing).
 before=""; after=""
 for _ in $(seq 1 60); do
-  before=$(vget)
+  k=$(key)   # one key for the before and the after of this try, also when midnight passes in between
+  before=$(vget "$k")
   command curl -s -o /dev/null -H "Authorization: Bearer $A" -H 'Content-Type: application/json' \
     -d '{"model":"google/gemma-4-31b-it:free","max_tokens":4,"messages":[{"role":"user","content":"hi"}]}' http://llm.localtest.me:8080/v1/chat/completions || true
-  after=$(vget)
+  after=$(vget "$k")
   [[ -n "$after" && "$after" -gt "${before:-0}" ]] && break; sleep 3
 done
 kubectl -n "$NS" delete "budgets.$G" contract-eng --ignore-not-found >/dev/null
-[[ -n "$after" && "$after" -gt "${before:-0}" ]] || fail "C10 a new request did not increase $(key) in Valkey (key format changed? keys: $(kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli --scan --pattern 'ambit-llm*' 2>/dev/null | head -3 | tr '\n' ' '))"
-pass "C10 ratelimit counter key format unchanged; one request raised $(key) from ${before:-0} to $after"
+[[ -n "$after" && "$after" -gt "${before:-0}" ]] || fail "C10 a new request did not increase $k in Valkey (key format changed? keys: $(kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli --scan --pattern 'ambit-llm*' 2>/dev/null | head -3 | tr '\n' ' '))"
+pass "C10 ratelimit counter key format unchanged; one request raised $k from ${before:-0} to $after"
 
 # C11 · ClickHouse loaded Ambit's config (an unknown setting would stop it starting) and otel_logs has the
 #       columns Ambit reads.

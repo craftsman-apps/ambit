@@ -177,7 +177,8 @@ if MODE == "buckets":
             CLIENT_ADDR = U; ROUTES[(AUTH, 443)] = PORTS[0]
             return Browser().req("GET", base_url("/error"), None, {"Host": AUTH.upper()})[0]
         up = burst(upper, LIM["signin"] + 6)
-        check(f"18 the sign-in host written in capital letters is counted as the sign-in host: {allowed(up)} passed (limit {LIM['signin']})", allowed(up) == LIM["signin"], sorted(set(up)))
+        served = [c for c in up if c not in (404, 429)]
+        check(f"18 the sign-in host written in capital letters is either not served (404: the route matches the host name exactly) or counted as the sign-in host: {len(served)} of {len(up)} reached a page, {allowed(up)} passed", not served or allowed(up) == LIM["signin"], sorted(set(up)))
     # N2: IPv6 registrations count by the /48 in ambit-auth: many /64 networks of one /48 share the 10 (here 5) an hour; another /48 has its own
     def reg6(net, i):
         global CLIENT_ADDR

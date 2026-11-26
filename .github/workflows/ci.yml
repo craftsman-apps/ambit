@@ -245,7 +245,7 @@ jobs:
           - { name: f, steps: "agents agentconn", ui: false }
           - { name: d, steps: "12 ext savings evidence", ui: false }
           - { name: e, steps: "4a 4b 4c 4d 5 6 7 guard fd platforms", ui: false }
-          - { name: f, steps: "oauth", ui: false }
+          - { name: g, steps: "oauth", ui: false }
     steps:
       # The runner's disk held the kind images, the build cache and Go's caches until "no space left on device"
       # (2026-10-08). Preinstalled tools this job never uses are removed in the background.

@@ -284,7 +284,9 @@ wait_for 120 '[[ $(code -H "Authorization: Bearer $(token keytest)") == 200 && $
   fail "13 only keytest should reach mock-echo: $(cat "$W/llm")"
 wait_for 60 '[[ $(code -H "x-api-key: $UK") == 200 ]]' || fail "13 keytest's key is refused: $(cat "$W/llm")"
 [[ $(code -H "Authorization: Bearer $(token user10)") == 403 ]] || fail "13 user10 reached a rule naming only keytest: $(cat "$W/llm")"
-[[ $(kubectl -n "$NS" get "models.$G" mock-echo -o jsonpath='{.status.allowedUsers}') == *keytest@example.com* ]] || fail "13 Model status lacks allowedUsers"
+# The status is written when the controller's pass ends, after both steps; the calls above are served as soon as the
+# authorization is written (a removal ends the wait of the pass in progress, #430), so the status can be a few seconds behind.
+wait_for 60 '[[ $(kubectl -n "$NS" get "models.$G" mock-echo -o jsonpath="{.status.allowedUsers}") == *keytest@example.com* ]]' || fail "13 Model status lacks allowedUsers"
 wait_for 60 'try_tools "$(token keytest)"; [[ $TOOLS == *everything_echo* ]]' || fail "13 keytest does not see everything_echo: $TOOLS"
 tools "$(token user01)"; [[ $TOOLS != *everything_* ]] || fail "13 user01 sees a tool granted to keytest: $TOOLS"
 DEACTIVATED=1

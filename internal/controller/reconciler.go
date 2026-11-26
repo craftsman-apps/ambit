@@ -86,10 +86,13 @@ type Reconciler struct {
 	// AppRemovals records each deleted Server (MCP app removal) in otel_logs; nil: off (no evidence store).
 	AppRemovals *AppRemovals
 
-	stalled   *stalledStep                // the step a change stopped at (single worker, no lock)
-	gateRetry time.Duration               // the last wait before trying a stopped change again
-	accessLog *logState                   // the mode and rules version ambit-access-log was last written with
-	deletions func(context.Context) error // this pass's deletions of objects no longer generated; urgent runs them
+	passRules        []v1.AccessRule             // the AccessRules this pass compiled (single worker, no lock)
+	watchRevocations bool                        // this pass enforces: a removed or narrowed rule ends its waits (revocation.go)
+	carried          map[string]bool             // "<kind>/<name>" of what an ended wait still waited for; the next pass waits for it too
+	stalled          *stalledStep                // the step a change stopped at (single worker, no lock)
+	gateRetry        time.Duration               // the last wait before trying a stopped change again
+	accessLog        *logState                   // the mode and rules version ambit-access-log was last written with
+	deletions        func(context.Context) error // this pass's deletions of objects no longer generated; urgent runs them
 }
 
 // How often the tools of a running server are read again by default: servers may add or change tools.
@@ -326,7 +329,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: AccessModeConfigMap}, &published); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, err
 	}
-	changing := r.Activation != nil && (published.Data["mode"] != mode || published.Data["rulesVersion"] != version || r.stalled != nil || r.attachPending(ctx, res.Objects))
+	changing := r.Activation != nil && (published.Data["mode"] != mode || published.Data["rulesVersion"] != version || r.stalled != nil || len(r.carried) > 0 || r.attachPending(ctx, res.Objects))
 	steps := []step{
 		{"authorization", func() (w []gated, err error) {
 			applyFailed, w, err = r.applyAll(ctx, res.Objects, conds)
@@ -451,8 +454,18 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 		}
 		return nil
 	}
-	defer func() { r.deletions = nil }()
+	// Also in audit mode: the public MCP policy is not relaxed there (RelaxForAudit), so a removal for the front door
+	// must not wait either. The restarted pass keeps the order of its mode, and waits for what was carried.
+	r.passRules, r.watchRevocations = rules.Items, r.Activation != nil
+	defer func() { r.deletions, r.passRules, r.watchRevocations = nil, nil, false }()
 	stall, ran, err := r.runSteps(ctx, steps, changing, pending{Mode: mode, RulesVersion: version})
+	if errors.Is(err, errRulesRevoked) {
+		// #430: a removal must not wait for the change in progress (about 5 s with the default settle time, up to 2 x
+		// activationTimeout when agentgateway stalls). The next pass compiles the rules as they are now and writes
+		// the authorization first; a grant that is part of it waits as any change does.
+		logger.Info("an access rule was removed or narrowed while a change waited for agentgateway; starting the change again")
+		return reconcile.Result{Requeue: true}, nil
+	}
 	if err != nil {
 		return reconcile.Result{}, err
 	}

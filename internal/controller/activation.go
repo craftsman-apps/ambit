@@ -152,8 +152,8 @@ func (r *Reconciler) gate(ctx context.Context, objs []gated, seen nackSeen, time
 			log.FromContext(ctx).Info("agentgateway accepted the step; waiting the settle time", "settle", r.Activation.Settle.String())
 			// Offboarding and deletions must not wait for the settle time: apply them on every poll.
 			for end := r.now().Add(r.Activation.Settle); r.now().Before(end); {
-				if err := r.sleep(ctx, min(poll, end.Sub(r.now()))); err != nil {
-					return err
+				if err := r.sleepWatching(ctx, min(poll, end.Sub(r.now()))); err != nil {
+					return r.lastLook(ctx, err, objs, seen)
 				}
 				if err := r.urgent(ctx); err != nil {
 					return err
@@ -164,10 +164,23 @@ func (r *Reconciler) gate(ctx context.Context, objs []gated, seen nackSeen, time
 		if !r.now().Before(deadline) {
 			return &stalledError{msg: waiting}
 		}
-		if err := r.sleep(ctx, poll); err != nil {
-			return err
+		if err := r.sleepWatching(ctx, poll); err != nil {
+			return r.lastLook(ctx, err, objs, seen)
 		}
 	}
+}
+
+// lastLook: a wait that ends because a rule was revoked looks once more for a NACK or an Invalid verdict on what it
+// waited for. The next pass takes a new NACK baseline, so one that arrived since the last poll would be lost (#430).
+func (r *Reconciler) lastLook(ctx context.Context, err error, objs []gated, seen nackSeen) error {
+	if !errors.Is(err, errRulesRevoked) {
+		return err
+	}
+	var st *stalledError
+	if _, aerr := r.activated(ctx, objs, seen); errors.As(aerr, &st) {
+		return aerr
+	}
+	return err // also when the look itself failed to read: the carried objects must still be saved
 }
 
 // activated returns "" when every object is active, or what it waits for. A NACK or an Invalid verdict on the
@@ -455,7 +468,7 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 		anyChanged := false
 		for _, g := range objs {
 			switch {
-			case g.changed:
+			case g.changed, r.carried[g.kind+"/"+g.name]:
 				anyChanged = true
 			case remembered[g.kind+"/"+g.name], g.attachWait:
 			default:
@@ -483,12 +496,22 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 		} else {
 			err = r.gate(ctx, wait, seen, timeout)
 		}
+		if errors.Is(err, errRulesRevoked) {
+			// The next pass starts again: what this step still waited for (a grant that was written) is waited for
+			// there too, with the whole timeout, also when its spec is unchanged and agentgateway has no status yet.
+			if r.carried == nil {
+				r.carried = map[string]bool{}
+			}
+			for _, g := range wait {
+				r.carried[g.kind+"/"+g.name] = true
+			}
+		}
 		if err != nil {
 			var st *stalledError
 			if !errors.As(err, &st) {
 				return nil, ran, err
 			}
-			r.stalled = &stalledStep{step: s.name, seen: seen, objs: wait}
+			r.stalled, r.carried = &stalledStep{step: s.name, seen: seen, objs: wait}, nil
 			target.Error, target.Objects = st.msg, st.objects
 			if err := r.setPending(ctx, &target); err != nil {
 				return nil, ran, err
@@ -497,7 +520,7 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 		}
 		log.FromContext(ctx).Info("change step active in the gateway", "step", s.name, "mode", target.Mode, "rulesVersion", target.RulesVersion)
 	}
-	r.stalled = nil
+	r.stalled, r.carried = nil, nil
 	return nil, ran, nil
 }
 

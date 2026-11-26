@@ -272,6 +272,16 @@ oauth:
     resources:
       requests: { cpu: 50m, memory: 64Mi }
       limits: { memory: 256Mi }
+  # Hydra never deletes finished rows: expired tokens and abandoned sign-ins pile up in PostgreSQL. This runs `hydra janitor` once a
+  # day (docs/oauth.md, "Operations"). It keeps everything younger than an hour and everything that is still valid.
+  janitor:
+    enabled: true
+    # A cron expression, in the time zone of the cluster's controller (usually UTC).
+    schedule: "17 3 * * *"
+    # The run is stopped after this many minutes (it starts again at the next schedule).
+    timeoutMinutes: 30
+    # The most rows of each kind that one run deletes (in batches of 100).
+    limit: 10000
   # Sign in at your company's OIDC identity provider (Okta, Entra ID, Google, Keycloak). One issuer per install.
   # Register ONE confidential web client there: authorization code flow only, PKCE S256 required, the redirect URI exactly
   # https://<frontDoor.authHost>/callback, scopes openid email profile, a groups claim in the ID token, client

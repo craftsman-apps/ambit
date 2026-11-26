@@ -19,6 +19,8 @@ cleanup() {
   kubectl -n "$NS" delete pod -l "$L" --ignore-not-found --wait=false >/dev/null 2>&1 || true
   kubectl -n "$NS" delete secret -l "$L" --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" delete statefulset,deployment,service,configmap -l "$L" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete pvc -l "$L" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  kubectl -n "$NS" delete job ambit-hydra-janitor-e2e --ignore-not-found --wait=false >/dev/null 2>&1 || true
   kubectl -n "$NS" delete configmap ambit-offboarded ambit-agent-stops --ignore-not-found >/dev/null 2>&1 || true
 }
 trap 'rc=$?; cleanup; on_exit "$rc"' EXIT
@@ -391,6 +393,219 @@ wait_for 60 '(exec 3<>"/dev/tcp/127.0.0.1/$IDPP") 2>/dev/null && (exec 3<>"/dev/
 GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
   STOPCTL="$PWD/test/oauthtest/stopctl.sh" ADMIN_PW="$PW" HTTP_TIMEOUT=90 KEY="$OKEY" ONE_TOOL=time_get_current_time "${PY[@]}" test/oauthtest/gateway.py || fail "14 the gateway checks failed (see FAIL lines above)"
 pass "14 tokens at the public Gateway"
+
+# --- 16 · PostgreSQL operations (docs/oauth.md, "Operations"): TLS only, the pool, a dump, a restore into another instance and a name moved
+#         to it, a crash, a 30 second outage, and what a rollback by `hydra migrate sql down` does. Names P1 to P6 are those of the design.
+#         What the people see is checked with real grants (test/oauthtest/dbops.py). Needs the real console (check 14).
+oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --set agents.maxPerPerson=60 --wait --timeout 8m
+kubectl -n "$NS" rollout status deploy/ambit-console --timeout=300s >/dev/null
+kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
+reforward
+dbo() { GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
+  HTTP_TIMEOUT=60 KEY="$OKEY" ONE_TOOL=time_get_current_time "${PY[@]}" test/oauthtest/dbops.py "$@"; }
+now() { "${PY[@]}" -c 'import time;print("%.2f" % time.time())'; }
+live() { echo "$(kubectl -n "$NS" get svc ambit-pg17 -o jsonpath='{.spec.selector.app}')-0"; }  # the pod the name ambit-pg17 points to
+psq() { kubectl -n "$NS" exec "$(live)" -c postgres -- psql -q -At -U postgres -d hydra -c "$1"; }
+hydra_both_ready() { [[ "$(hydra_ready ambit-hydra-0)" == True && "$(hydra_ready ambit-hydra-1)" == True ]]; }
+jwks_ok() { [[ $(auth "$PA" GET /.well-known/jwks.json) == 200 ]]; }
+dbo grants 4 "$W/g.json" >/dev/null || fail "16 could not make four connections (grants) to keep"
+for i in 0 1 2 3; do [[ "$(dbo refresh "$W/g.json" $i)" == "200 " ]] || fail "16 grant $i does not refresh before the tests"; done
+
+# P1: TLS only. A connection without TLS is refused by the server; every connection of Hydra uses TLS.
+out=$(kubectl -n "$NS" exec ambit-pg17-0 -c postgres -- env PGPASSWORD="$HP" psql "host=127.0.0.1 sslmode=disable user=hydra dbname=hydra" -c 'select 1' 2>&1 || true)
+grep -qE 'pg_hba.conf (rejects|entry)' <<<"$out" || fail "16 P1 a connection without TLS must be refused by the server, got: $(head -c 200 <<<"$out")"
+! grep -q "$HP" <<<"$out" || fail "16 P1 the refusal repeats the password"
+TLSV=$(kubectl -n "$NS" exec ambit-pg17-0 -c postgres -- env PGPASSWORD="$HP" psql -q -At "host=127.0.0.1 sslmode=require user=hydra dbname=hydra" -c 'select version from pg_stat_ssl where pid = pg_backend_pid()')
+[[ "$TLSV" == TLSv1.* ]] || fail "16 P1 the session must use TLS, got '$TLSV'"
+SSLC=$(psq "select count(*) filter (where s.ssl), count(*) filter (where not s.ssl) from pg_stat_activity a join pg_stat_ssl s on s.pid = a.pid where a.usename = 'hydra'")
+[[ "$SSLC" == [1-9]*"|0" ]] || fail "16 P1 every connection of Hydra must use TLS (with TLS | without): $SSLC"
+pass "16 P1 PostgreSQL 17: a connection without TLS is refused; a session with TLS uses $TLSV; Hydra's connections (with TLS | without) = $SSLC"
+
+# P3: the pool. 60 concurrent clients straight to both Hydra pods for 15 s: the database sees at most pods x max_conns connections of the role.
+HPA=$(freeport); HPB=$(freeport)
+kubectl -n "$NS" port-forward pod/ambit-hydra-0 "$HPA:4444" >/dev/null 2>&1 & echo $! >> "$W/pids"
+kubectl -n "$NS" port-forward pod/ambit-hydra-1 "$HPB:4444" >/dev/null 2>&1 & echo $! >> "$W/pids"
+wait_for 30 '(exec 3<>"/dev/tcp/127.0.0.1/$HPA") 2>/dev/null && (exec 3<>"/dev/tcp/127.0.0.1/$HPB") 2>/dev/null' || fail "16 P3 port-forwards to Hydra"
+( for _ in $(seq 1 12); do psq "select count(*) from pg_stat_activity where usename = 'hydra'"; sleep 1; done > "$W/conns" 2>/dev/null ) & SAMPLER=$!
+dbo load 15 60 "$W/load.json" "$HPA" "$HPB" >/dev/null
+wait "$SAMPLER" 2>/dev/null || true
+MAXC=$(sort -n "$W/conns" | tail -1)
+"${PY[@]}" -c 'import json,sys
+r=json.load(open(sys.argv[1])); c=r["codes"]
+print("   %d requests, p50 %d ms, p95 %d ms, statuses %s" % (r["requests"], r["p50_ms"], r["p95_ms"], c))
+assert set(c) <= {"400", "401"}, c' "$W/load.json" || fail "16 P3 under load Hydra must answer 4xx for a made-up token and nothing else: $(cat "$W/load.json")"
+[[ -n "$MAXC" && "$MAXC" -le 16 ]] || fail "16 P3 the role used $MAXC connections, more than 2 pods x max_conns 8"
+pass "16 P3 60 concurrent clients for 15 s on both pods: at most $MAXC database connections (limit 2 x 8 = 16), no error answer"
+
+# P4: a logical dump of the live database.
+kubectl -n "$NS" exec ambit-pg17-0 -c postgres -- rm -f /tmp/hydra.dump
+t0=$(now)
+kubectl -n "$NS" exec ambit-pg17-0 -c postgres -- pg_dump -Fc -U postgres -d hydra -f /tmp/hydra.dump
+t1=$(now)
+DUMPB=$(kubectl -n "$NS" exec ambit-pg17-0 -c postgres -- stat -c %s /tmp/hydra.dump)
+CL0=$(psq "select count(*) from hydra_client"); RF0=$(psq "select count(*) from hydra_oauth2_refresh"); FL0=$(psq "select count(*) from hydra_oauth2_flow")
+[[ "$DUMPB" -gt 1000 && "$CL0" -gt 3 && "$RF0" -gt 3 ]] || fail "16 P4 dump $DUMPB bytes, clients $CL0, refresh tokens $RF0"
+DUMPS=$("${PY[@]}" -c "print(round($t1 - $t0, 1))")
+pass "16 P4 pg_dump -Fc of the live database: $DUMPB bytes in $DUMPS s ($CL0 clients, $RF0 refresh tokens, $FL0 login and consent records)"
+
+# A grant that refreshes AFTER the backup: its new refresh token is not in the dump.
+[[ "$(dbo refresh "$W/g.json" 1)" == "200 " ]] || fail "16 grant 1 does not refresh after the dump"
+
+# P5: restore into a new instance, then move the name ambit-pg17 to it and stop the old one, while probes run for 80 s.
+kubectl -n "$NS" scale sts/ambit-pg17r --replicas=1 >/dev/null
+kubectl -n "$NS" rollout status sts/ambit-pg17r --timeout=300s >/dev/null
+kubectl -n "$NS" exec ambit-pg17-0 -c postgres -- cat /tmp/hydra.dump | kubectl -n "$NS" exec -i ambit-pg17r-0 -c postgres -- sh -c 'cat > /tmp/hydra.dump'
+kubectl -n "$NS" exec ambit-pg17r-0 -c postgres -- psql -q -U postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE hydra LOGIN PASSWORD '$HP' NOSUPERUSER CONNECTION LIMIT 40" -c "CREATE DATABASE hydra OWNER hydra" >/dev/null
+t0=$(now)
+kubectl -n "$NS" exec ambit-pg17r-0 -c postgres -- pg_restore -U postgres -d hydra --exit-on-error /tmp/hydra.dump
+t1=$(now)
+RESTS=$("${PY[@]}" -c "print(round($t1 - $t0, 1))")
+r() { kubectl -n "$NS" exec ambit-pg17r-0 -c postgres -- psql -q -At -U postgres -d hydra -c "$1"; }
+[[ "$(r 'select count(*) from hydra_client')" == "$CL0" && "$(r 'select count(*) from hydra_oauth2_refresh')" == "$RF0" && "$(r 'select count(*) from hydra_oauth2_flow')" == "$FL0" ]] \
+  || fail "16 P5 the restored database must hold what the dump held (clients $CL0, refresh tokens $RF0, flows $FL0)"
+dbo probe 80 "$W/probe-failover.json" >/dev/null & PRB=$!; echo $PRB >> "$W/pids"
+sleep 8
+T_SWITCH=$(now)
+kubectl -n "$NS" patch svc ambit-pg17 --type merge -p '{"spec":{"selector":{"app":"ambit-pg17r"}}}' >/dev/null
+kubectl -n "$NS" scale sts/ambit-pg17 --replicas=0 >/dev/null
+wait "$PRB" || true
+REP=$(dbo report "$W/probe-failover.json"); echo "   fail-over probes: $REP"
+[[ "$REP" == *"end_ok=True"* ]] || fail "16 P5 Hydra did not recover after the name moved to the restored instance: $REP"
+wait_for 60 'hydra_both_ready && jwks_ok' || fail "16 P5 Hydra pods are not Ready on the restored instance"
+FIRST=$(sed -E 's/.* first=([0-9.]+) .*/\1/' <<<"$REP"); LAST=$(sed -E 's/.* last=([0-9.]+) .*/\1/' <<<"$REP"); NERR=$(sed -E 's/.* errors=([0-9]+) .*/\1/' <<<"$REP")
+FO=$("${PY[@]}" -c "f,l,s=$FIRST,$LAST,$T_SWITCH; print('no error' if $NERR==0 else f'{$NERR} error probes between {f-s:.1f} s and {l-s:.1f} s after the switch')")
+# What the people see: the grant that was not used since the dump refreshes; the one that refreshed after it must connect again.
+[[ "$(dbo refresh "$W/g.json" 0)" == "200 " ]] || fail "16 P5 a grant that was not used since the backup must refresh on the restored database"
+[[ "$(dbo refresh "$W/g.json" 1)" == "400 invalid_grant" ]] || fail "16 P5 a grant that refreshed after the backup must be refused with invalid_grant, got: $(dbo refresh "$W/g.json" 1)"
+dbo grants 1 "$W/g-new.json" >/dev/null || fail "16 P5 a new sign-in must work on the restored database"
+pass "16 P5 restore of the dump into a new PostgreSQL 17 in $RESTS s, the name ambit-pg17 moved to it and the old one stopped: $FO; a grant not used since the backup refreshes (200), one refreshed after it is refused (invalid_grant) and connects again, a new sign-in works"
+
+# P6: the database pod is deleted (its volume stays): Hydra recovers by itself, the data is there.
+dbo probe 45 "$W/probe-crash.json" >/dev/null & PRB=$!; echo $PRB >> "$W/pids"
+sleep 5
+T_DEL=$(now)
+kubectl -n "$NS" delete pod ambit-pg17r-0 --wait=false >/dev/null
+wait "$PRB" || true
+REP=$(dbo report "$W/probe-crash.json"); echo "   after deleting the database pod: $REP"
+[[ "$REP" == *"end_ok=True"* ]] || fail "16 P6 Hydra did not recover after the database pod was deleted: $REP"
+wait_for 60 'hydra_both_ready && jwks_ok' || fail "16 P6 Hydra pods are not Ready after the database pod came back"
+[[ "$(dbo refresh "$W/g.json" 0)" == "200 " ]] || fail "16 P6 the data must be there after the pod came back (a grant refreshes)"
+FIRST=$(sed -E 's/.* first=([0-9.]+) .*/\1/' <<<"$REP"); LAST=$(sed -E 's/.* last=([0-9.]+) .*/\1/' <<<"$REP"); NERR=$(sed -E 's/.* errors=([0-9]+) .*/\1/' <<<"$REP")
+P6=$("${PY[@]}" -c "f,l,s=$FIRST,$LAST,$T_DEL; print('no error' if $NERR==0 else f'{$NERR} error probes between {f-s:.1f} s and {l-s:.1f} s after the delete')")
+pass "16 P6 database pod deleted with its volume kept: $P6; the data is there (a grant refreshes)"
+
+# 30 second outage: the database is stopped for 30 s. An access token that was issued before keeps working at the gateway; sign-in and
+# refresh answer 5xx while no Hydra pod is Ready; recovery is measured from the moment the database accepts connections.
+[[ "$(dbo refresh "$W/g.json" 0)" == "200 " ]] || fail "16 outage: grant 0 does not refresh before the outage"
+[[ "$(dbo mcp "$W/g.json" 0)" == "200 200" ]] || fail "16 outage: the access token is not accepted at both pods before the outage: $(dbo mcp "$W/g.json" 0)"
+dbo probe 100 "$W/probe-outage.json" >/dev/null & PRB=$!; echo $PRB >> "$W/pids"
+sleep 5
+T_DOWN=$(now)
+kubectl -n "$NS" scale sts/ambit-pg17r --replicas=0 >/dev/null
+kubectl -n "$NS" wait --for=delete pod/ambit-pg17r-0 --timeout=60s >/dev/null 2>&1 || true
+T_NOTREADY=""; MCP_DURING=""
+for _ in $(seq 1 40); do
+  [[ -z "$T_NOTREADY" && "$(hydra_ready ambit-hydra-0)" != True && "$(hydra_ready ambit-hydra-1)" != True ]] && T_NOTREADY=$(now)
+  [[ $("${PY[@]}" -c "print(int($(now) - $T_DOWN))") -ge 30 ]] && break
+  sleep 1
+done
+MCP_DURING=$(dbo mcp "$W/g.json" 0)
+T_UP=$(now)
+kubectl -n "$NS" scale sts/ambit-pg17r --replicas=1 >/dev/null
+kubectl -n "$NS" rollout status sts/ambit-pg17r --timeout=300s >/dev/null
+T_DBREADY=$(now)
+wait "$PRB" || true
+REP=$(dbo report "$W/probe-outage.json"); echo "   30 second outage: $REP"
+[[ "$REP" == *"end_ok=True"* && "$REP" != *"errors=0 "* ]] || fail "16 outage: the probes must show errors during the outage and none at the end: $REP"
+[[ -n "$T_NOTREADY" ]] || fail "16 outage: both Hydra pods must be NotReady while the database is down"
+[[ "$MCP_DURING" == "200 200" ]] || fail "16 outage: an access token that was issued before must keep working at the gateway during the outage, got: $MCP_DURING"
+LAST=$(sed -E 's/.* last=([0-9.]+) .*/\1/' <<<"$REP"); FIRST=$(sed -E 's/.* first=([0-9.]+) .*/\1/' <<<"$REP")
+OUT=$("${PY[@]}" -c "print(f'first error {$FIRST-$T_DOWN:.1f} s after the stop, last error {$LAST-$T_DBREADY:+.1f} s from the moment the database was Ready; Hydra NotReady {$T_NOTREADY-$T_DOWN:.1f} s after the stop; database down for {$T_UP-$T_DOWN:.0f} s')")
+RECOV=$("${PY[@]}" -c "print($LAST-$T_DBREADY)")
+"${PY[@]}" -c "import sys;sys.exit(0 if $RECOV < 60 else 1)" || fail "16 outage: sign-in and refresh took more than 60 s to recover after the database was Ready: $OUT"
+wait_for 60 'hydra_both_ready && jwks_ok' || fail "16 outage: Hydra pods are not Ready after the database came back"
+[[ "$(dbo refresh "$W/g.json" 0)" == "200 " ]] || fail "16 outage: a refresh must work after the outage"
+pass "16 30 second outage of the database: $OUT; the access token kept working at both gateway pods during it ($MCP_DURING); refresh works again"
+
+# Rollback by `hydra migrate sql down`: NOT a rollback for a live database. One step down (the latest Hydra migration of v26.2.0) removes every
+# login and consent record, and with them (a cascading rule of the database) every access and refresh token. Clients stay. This is why the runbook
+# restores the backup that was taken before the upgrade, and does not run `migrate sql down`.
+CL1=$(psq "select count(*) from hydra_client"); RF1=$(psq "select count(*) from hydra_oauth2_refresh"); SM1=$(psq "select count(*) from schema_migration")
+hyrun() { # hyrun NAME ARGS...: one run of Hydra's image on the live database (the Secret ambit-oauth-db); prints Succeeded or Failed
+  local n=$1; shift
+  kubectl -n "$NS" delete pod "$n" --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" apply -f - >/dev/null <<EOY
+apiVersion: v1
+kind: Pod
+metadata: { name: $n, labels: { ambitproject.dev/oauth-test: "true" } }
+spec:
+  restartPolicy: Never
+  containers:
+    - name: m
+      image: $HYIMG
+      args: [$(printf '"%s", ' "$@" | sed 's/, $//')]
+      env: [{ name: DSN, valueFrom: { secretKeyRef: { name: ambit-oauth-db, key: dsn } } }]
+      volumeMounts: [{ name: ca, mountPath: /ca }]
+  volumes: [{ name: ca, secret: { secretName: ambit-oauth-db-ca, items: [{ key: ca.crt, path: ca.crt }] } }]
+EOY
+  await "$n"
+}
+[[ "$(hyrun mig-down migrate sql down -e --yes --steps 1)" == Succeeded ]] || fail "16 migrate down failed: $(kubectl -n "$NS" logs mig-down | tail -c 300)"
+[[ "$(psq 'select count(*) from schema_migration')" == "$((SM1 - 1))" ]] || fail "16 one step down must remove one migration"
+RF2=$(psq "select count(*) from hydra_oauth2_refresh"); FL2=$(psq "select count(*) from hydra_oauth2_flow")
+[[ "$(hyrun mig-up migrate sql up -e --yes)" == Succeeded ]] || fail "16 migrate up failed: $(kubectl -n "$NS" logs mig-up | tail -c 300)"
+[[ "$(psq 'select count(*) from schema_migration')" == "$SM1" && "$(psq 'select count(*) from hydra_client')" == "$CL1" ]] || fail "16 after up again the migrations and the clients must be as before"
+[[ "$RF2" == 0 && "$FL2" == 0 && "$RF1" -gt 0 ]] || fail "16 one step down: expected the flows and refresh tokens to go (flows $FL2, refresh tokens $RF2, before: refresh tokens $RF1)"
+[[ "$(dbo refresh "$W/g.json" 0)" == "400 invalid_grant" ]] || fail "16 after migrate down every grant must be refused with invalid_grant, got: $(dbo refresh "$W/g.json" 0)"
+dbo grants 1 "$W/g-new2.json" >/dev/null || fail "16 a new sign-in must work after migrate down and up"
+pass "16 P2 \`hydra migrate sql down --steps 1\` then \`up\`: the clients stay ($CL1), the login and consent records and all $RF1 refresh tokens are gone, every grant must connect again, a new sign-in works. A rollback is a restore of the backup, not migrate down"
+
+# --- 17 · the clean-up: `hydra janitor` (the CronJob, run once by hand) and the clients that nobody used (ambit-auth)
+# Rows are made old by SQL (a token lives 15 minutes and a refresh token 30 days: the test cannot wait): a grant whose tokens are 40 days old,
+# a sign-in that stopped at the login page two days ago, and a live grant whose login and consent record is two days old (10 minutes is the
+# janitor's limit for a record): the janitor must remove the first two and must not touch the third, nor any grant younger than an hour.
+dbo grants 3 "$W/j.json" >/dev/null || fail "17 could not make three connections"
+JLIVE=$("${PY[@]}" -c 'import json,sys;print(json.load(open(sys.argv[1]))[0]["cid"])' "$W/j.json")
+JOLD=$("${PY[@]}" -c 'import json,sys;print(json.load(open(sys.argv[1]))[2]["cid"])' "$W/j.json")
+ABAN=$(dbo abandon)
+cnt() { psq "select count(*) from hydra_oauth2_$1 where client_id = '$2'"; }
+[[ "$(cnt flow "$ABAN")" == 1 && "$(cnt access "$JOLD")" -ge 1 && "$(cnt refresh "$JOLD")" -ge 1 && "$(cnt refresh "$JLIVE")" -ge 1 ]] || fail "17 the test rows are not there"
+for t in access refresh; do psq "update hydra_oauth2_$t set requested_at = now() - interval '40 days', expires_at = now() - interval '39 days' where client_id = '$JOLD'" >/dev/null; done
+psq "update hydra_oauth2_flow set requested_at = now() - interval '2 days' where client_id in ('$ABAN', '$JLIVE')" >/dev/null
+TOTAL_BEFORE=$(psq "select (select count(*) from hydra_oauth2_access) + (select count(*) from hydra_oauth2_refresh) + (select count(*) from hydra_oauth2_flow)")
+kubectl -n "$NS" delete job ambit-hydra-janitor-e2e --ignore-not-found >/dev/null
+kubectl -n "$NS" create job ambit-hydra-janitor-e2e --from=cronjob/ambit-hydra-janitor >/dev/null
+kubectl -n "$NS" wait --for=condition=complete job/ambit-hydra-janitor-e2e --timeout=300s >/dev/null 2>&1 || fail "17 the janitor job did not complete: $(kubectl -n "$NS" logs job/ambit-hydra-janitor-e2e --tail=5 2>&1 | head -c 400)"
+kubectl -n "$NS" logs job/ambit-hydra-janitor-e2e > "$W/janitor.log" 2>&1
+for what in 'access tokens' 'refresh tokens' 'login-consent requests' 'grants'; do grep -q "Successfully completed Janitor run on $what" "$W/janitor.log" || fail "17 the janitor log must say it completed $what: $(tail -c 300 "$W/janitor.log")"; done
+! grep -q "$HP" "$W/janitor.log" || fail "17 the janitor log repeats the database password"
+JT=$(kubectl -n "$NS" get job ambit-hydra-janitor-e2e -o jsonpath='{.status.startTime} {.status.completionTime}' | "${PY[@]}" -c 'import sys,datetime as d;a,b=sys.stdin.read().split();f=lambda x:d.datetime.strptime(x,"%Y-%m-%dT%H:%M:%SZ");print(int((f(b)-f(a)).total_seconds()))')
+TOTAL_AFTER=$(psq "select (select count(*) from hydra_oauth2_access) + (select count(*) from hydra_oauth2_refresh) + (select count(*) from hydra_oauth2_flow)")
+[[ "$(cnt access "$JOLD")" == 0 && "$(cnt refresh "$JOLD")" == 0 ]] || fail "17 the tokens that are 40 days old must be gone"
+[[ "$(cnt flow "$ABAN")" == 0 ]] || fail "17 the sign-in that stopped at the login page two days ago must be gone"
+[[ "$(cnt refresh "$JLIVE")" -ge 1 && "$(cnt access "$JLIVE")" -ge 1 && "$(cnt flow "$JLIVE")" -ge 1 ]] || fail "17 the live grant lost rows to the janitor"
+[[ "$(dbo refresh "$W/j.json" 0)" == "200 " ]] || fail "17 the live grant must still refresh after the janitor ran: $(dbo refresh "$W/j.json" 0)"
+[[ "$(dbo refresh "$W/j.json" 2)" == "400 invalid_grant" ]] || fail "17 the grant with 40 day old tokens must be refused: $(dbo refresh "$W/j.json" 2)"
+[[ "$(dbo refresh "$W/j.json" 1)" == "200 " ]] || fail "17 a young grant must still refresh after the janitor ran"
+pass "17 the Hydra janitor (CronJob ambit-hydra-janitor, run once by hand): $TOTAL_BEFORE rows of tokens and records before, $TOTAL_AFTER after, in ${JT} s; 40 day old tokens and a two day old abandoned sign-in are gone; a live grant (with a two day old login and consent record) and a young grant still refresh; the log holds no password"
+
+# Unused clients. ambit-auth deletes a client that was registered dynamically and not used for 30 days, when it starts and every 10 minutes: one that was
+# used 31 days ago goes, one used 29 days ago stays, and a client that an admin made stays however old it is.
+IDS=($(dbo dcr 2)); [[ ${#IDS[@]} -eq 2 ]] || fail "17 two registrations"
+setused() { # setused ID DAYS: the last use of a client in Hydra, DAYS days ago
+  [[ $(adm ambit-hydra-0 GET "/admin/clients/$1") == 200 ]] || fail "17 client $1 is not in Hydra"
+  local body; body=$("${PY[@]}" -c 'import json,sys,datetime as d;c=json.load(open(sys.argv[1]));c.setdefault("metadata",{})["last_used"]=(d.datetime.now(d.timezone.utc)-d.timedelta(days=int(sys.argv[2]))).strftime("%Y-%m-%dT%H:%M:%SZ");print(json.dumps(c))' "$W/adm" "$2")
+  [[ $(adm ambit-hydra-0 PUT "/admin/clients/$1" "$body") == 200 ]] || fail "17 could not change client $1: $(head -c 200 "$W/adm")"
+}
+setused "${IDS[0]}" 31; setused "${IDS[1]}" 29
+[[ $(adm ambit-hydra-0 POST /admin/clients '{"client_id":"admin-made-e2e","redirect_uris":["https://chatgpt.com/cb"],"grant_types":["authorization_code"],"response_types":["code"],"token_endpoint_auth_method":"none","metadata":{"registered_via":"admin","last_used":"2020-01-01T00:00:00Z"}}') == 201 ]] || fail "17 could not make the admin client: $(head -c 200 "$W/adm")"
+kubectl -n "$NS" rollout restart deploy/ambit-auth >/dev/null
+kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
+wait_for 120 '[[ $(adm ambit-hydra-0 GET "/admin/clients/${IDS[0]}") == 404 ]]' || fail "17 a client that was not used for 31 days is still there after ambit-auth started"
+[[ $(adm ambit-hydra-0 GET "/admin/clients/${IDS[1]}") == 200 ]] || fail "17 a client used 29 days ago was deleted"
+[[ $(adm ambit-hydra-0 GET /admin/clients/admin-made-e2e) == 200 ]] || fail "17 a client that an admin made was deleted"
+adm ambit-hydra-0 DELETE /admin/clients/admin-made-e2e >/dev/null; adm ambit-hydra-0 DELETE "/admin/clients/${IDS[1]}" >/dev/null
+pass "17 ambit-auth deletes a dynamically registered client that was not used for 31 days, keeps one used 29 days ago and a client that an admin made (clean-up on start and every 10 minutes)"
 
 # --- 13 · off again: everything of OAuth goes, the front door stays
 helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/frontdoor/values.yaml \

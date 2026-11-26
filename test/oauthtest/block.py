@@ -131,7 +131,7 @@ check("N1e status says that tokens are blocked by the policy", rc == 0 and "BLOC
 # N1f · off lifts it
 rc, text = ambit("oauth", "block", "off", "--yes")
 check("N1f ambit oauth block off succeeds", rc == 0 and "lifted" in text, text[-300:])
-check("N1f the policy is gone", kube("get", BLOCK, "-o", "name") == "")
+check("N1f the policy is gone", kube("get", BLOCK, "-o", "name", "--ignore-not-found") == "")
 renewed = renew()
 check("N1f after the block is lifted a connection works again on every pod", renewed and wait(works, 60, 1))
 rc, text = ambit("oauth", "block", "status")

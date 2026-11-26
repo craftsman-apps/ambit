@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta/testrestmapper"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -45,8 +46,8 @@ func getBlock(t *testing.T, r *installRig) (*unstructured.Unstructured, bool) {
 func TestOAuthBlockOnMakesAPolicyOfItsOwn(t *testing.T) {
 	r := oauthRig(t, true)
 	code, s := r.run("oauth", "block", "on", "--yes")
-	// no gateway in the fake cluster: the command says that the policy is made and that the gateway has not yet said that it is accepted
-	if code != 0 || !strings.Contains(s, "is created") || !strings.Contains(s, "has not reported it accepted") || strings.Contains(s, "and the gateway has accepted it") {
+	// no gateway in the fake cluster: the policy is made, and the command fails: nobody may rely on a block that no gateway has accepted
+	if code == 0 || !strings.Contains(s, "is created") || !strings.Contains(s, "no gateway has reported it accepted") || strings.Contains(s, "and the gateway has accepted it") {
 		t.Fatalf("exit %d\n%s", code, s)
 	}
 	o, ok := getBlock(t, r)
@@ -71,7 +72,7 @@ func TestOAuthBlockOnMakesAPolicyOfItsOwn(t *testing.T) {
 	}
 	// a second call changes nothing; it does not claim a block that the gateway has not accepted
 	code, s = r.run("oauth", "block", "on", "--yes")
-	if code != 0 || !strings.Contains(s, "exists in namespace") || !strings.Contains(s, "has not reported it accepted") || strings.Contains(s, "already blocked") {
+	if code == 0 || !strings.Contains(s, "exists in namespace") || !strings.Contains(s, "no gateway has reported it accepted") || strings.Contains(s, "already blocked") {
 		t.Fatalf("second call while pending: exit %d\n%s", code, s)
 	}
 	o, _ = getBlock(t, r)
@@ -83,6 +84,35 @@ func TestOAuthBlockOnMakesAPolicyOfItsOwn(t *testing.T) {
 	if code != 0 || !strings.Contains(s, "already blocked") {
 		t.Fatalf("second call after acceptance: exit %d\n%s", code, s)
 	}
+}
+
+// When a gateway accepts the new policy in time, `on` says so and exits 0.
+func TestOAuthBlockOnSucceedsWhenTheGatewayAccepts(t *testing.T) {
+	r := oauthRig(t, true)
+	was := oauthBlockWait
+	oauthBlockWait = 5 * time.Second
+	t.Cleanup(func() { oauthBlockWait = was })
+	go func() { // the gateway: reports the policy accepted shortly after it appears
+		for i := 0; i < 50; i++ {
+			time.Sleep(100 * time.Millisecond)
+			if o, ok := getBlockQuiet(r); ok {
+				_ = unstructured.SetNestedSlice(o.Object, []any{map[string]any{"conditions": []any{map[string]any{"type": "Accepted", "status": "True"}}}}, "status", "ancestors")
+				if r.ctrl.Update(context.Background(), o) == nil {
+					return
+				}
+			}
+		}
+	}()
+	code, s := r.run("oauth", "block", "on", "--yes")
+	if code != 0 || !strings.Contains(s, "OAuth tokens are blocked") || !strings.Contains(s, "the gateway has accepted it") {
+		t.Fatalf("exit %d\n%s", code, s)
+	}
+}
+
+func getBlockQuiet(r *installRig) (*unstructured.Unstructured, bool) {
+	o := policyObject("ambit-system", oauthBlockPolicy)
+	err := r.ctrl.Get(context.Background(), client.ObjectKeyFromObject(o), o)
+	return o, err == nil
 }
 
 func TestOAuthBlockOnAsksFirst(t *testing.T) {
@@ -101,9 +131,7 @@ func TestOAuthBlockOnAsksFirst(t *testing.T) {
 		t.Fatal("the policy was made after an answer of n")
 	}
 	r.stdin = "y\n"
-	if code, s := r.run("oauth", "block", "on"); code != 0 {
-		t.Fatalf("an answer of y: exit %d\n%s", code, s)
-	}
+	r.run("oauth", "block", "on") // an answer of y makes the policy (the fake cluster has no gateway: the exit code is not the point here)
 	if _, ok := getBlock(t, r); !ok {
 		t.Fatal("no policy after y")
 	}

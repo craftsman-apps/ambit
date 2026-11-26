@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/craftsman-apps/ambit/internal/cli/kube"
@@ -135,11 +136,12 @@ func accepted(o *unstructured.Unstructured) bool {
 }
 
 // waitAccepted waits up to oauthBlockWait for a gateway to report the policy accepted, and says whether it did.
-func waitAccepted(ctx context.Context, c *kube.Clients, ns string) bool {
+func waitAccepted(ctx context.Context, c *kube.Clients, ns string, uid types.UID) bool {
 	got := policyObject(ns, oauthBlockPolicy)
 	deadline := time.Now().Add(oauthBlockWait)
 	for {
-		if err := c.Ctrl.Get(ctx, client.ObjectKeyFromObject(got), got); err == nil && accepted(got) {
+		// the same object (not one that replaced it) and still the block
+		if err := c.Ctrl.Get(ctx, client.ObjectKeyFromObject(got), got); err == nil && got.GetUID() == uid && isBlock(got) && accepted(got) {
 			return true
 		}
 		if !time.Now().Before(deadline) {
@@ -147,6 +149,13 @@ func waitAccepted(ctx context.Context, c *kube.Clients, ns string) bool {
 		}
 		time.Sleep(time.Second)
 	}
+}
+
+// notAccepted is the end of `on` when no gateway has reported the policy accepted in time: an error, so that a script does not go on as if tokens were blocked.
+func notAccepted(p *out.Printer, ns, what string) error {
+	p.Line("%s Policy %s %s in namespace %s, but no gateway has reported it accepted.", p.Mark("warn"), oauthBlockPolicy, what, ns)
+	return &out.Error{What: "tokens may not be blocked yet", Why: "the gateway has not reported the policy " + oauthBlockPolicy + " accepted within " + oauthBlockWait.String(),
+		Next: "kubectl -n " + ns + " get agentgatewaypolicy " + oauthBlockPolicy + " -o jsonpath='{.status.ancestors[*].conditions}'; try a token on each public gateway pod; run the command again"}
 }
 
 func (a *app) oauthBlock(ctx context.Context, on bool) error {
@@ -178,13 +187,11 @@ func (a *app) oauthBlock(ctx context.Context, on bool) error {
 	}
 	if on {
 		if exists {
-			if waitAccepted(ctx, c, ns) {
+			if waitAccepted(ctx, c, ns, existing.GetUID()) {
 				p.Line("%s OAuth tokens are already blocked (policy %s in namespace %s, accepted by the gateway).", p.Mark("ok"), oauthBlockPolicy, ns)
-			} else {
-				p.Line("%s Policy %s exists in namespace %s, but the gateway has not reported it accepted: tokens may not be blocked yet. Check it, and try a token:", p.Mark("warn"), oauthBlockPolicy, ns)
-				p.Line("  kubectl -n %s get agentgatewaypolicy %s -o jsonpath='{.status.ancestors[*].conditions}'", ns, oauthBlockPolicy)
+				return nil
 			}
-			return nil
+			return notAccepted(p, ns, "exists")
 		}
 		if err := kube.Confirm(p, a.stdin(), a.stdinTTY(), a.g.yes, []string{
 			fmt.Sprintf("Blocking every OAuth token on the public MCP route in context %s (%s), namespace %s.", c.Context, c.Server, ns),
@@ -192,7 +199,8 @@ func (a *app) oauthBlock(ctx context.Context, on bool) error {
 		}, "Block now?"); err != nil {
 			return err
 		}
-		if err := c.Ctrl.Create(ctx, blockPolicy(ns)); err != nil {
+		made := blockPolicy(ns)
+		if err := c.Ctrl.Create(ctx, made); err != nil {
 			if !apierrors.IsAlreadyExists(err) { // another operator made it meanwhile: it must be the block
 				return &out.Error{What: "the policy " + oauthBlockPolicy + " was not created", Why: err.Error(), Next: "kubectl auth can-i create agentgatewaypolicies -n " + ns}
 			}
@@ -200,17 +208,17 @@ func (a *app) oauthBlock(ctx context.Context, on bool) error {
 				return &out.Error{What: "a policy named " + oauthBlockPolicy + " exists, but it is not the block", Why: "it was made while this command ran",
 					Next: "kubectl -n " + ns + " get agentgatewaypolicy " + oauthBlockPolicy + " -o yaml"}
 			}
+			made = existing
 		}
-		// The block is in force when a gateway has accepted the policy; say what is known.
-		ok := waitAccepted(ctx, c, ns)
-		if ok {
-			p.Line("%s OAuth tokens are blocked: policy %s created in namespace %s, and the gateway has accepted it.", p.Mark("ok"), oauthBlockPolicy, ns)
-		} else {
-			p.Line("%s Policy %s is created in namespace %s, but the gateway has not reported it accepted yet. Check it, and try a token:", p.Mark("warn"), oauthBlockPolicy, ns)
-			p.Line("  kubectl -n %s get agentgatewaypolicy %s -o jsonpath='{.status.ancestors[*].conditions}'", ns, oauthBlockPolicy)
+		// The block is attached when a gateway has accepted the policy; that says nothing about a pod that still serves an older configuration, so the
+		// command asks to try a token. Without acceptance it exits with an error: the policy is made, but nobody may rely on it yet.
+		if waitAccepted(ctx, c, ns, made.GetUID()) {
+			p.Line("%s OAuth tokens are blocked: policy %s created in namespace %s, and the gateway has accepted it. Try a token on each public gateway pod (docs/oauth.md): a pod answers within a second of the acceptance.", p.Mark("ok"), oauthBlockPolicy, ns)
+			p.Line("Requests and event streams that were admitted before the block run on until they end; to cut them, restart the public gateway pods (docs/oauth.md).")
+			p.Line("Helm and Argo CD do not own this policy: an upgrade or self-heal leaves it. Lift it with: ambit oauth block off")
+			return nil
 		}
-		p.Line("Helm and Argo CD do not own this policy: an upgrade or self-heal leaves it. Lift it with: ambit oauth block off")
-		return nil
+		return notAccepted(p, ns, "is created")
 	}
 	if !exists {
 		p.Line("There is no block made by this command (no policy %s in namespace %s). If tokens are still refused, the block is in the policy %s (oauth.emergencyBlock, or an edit of it): see docs/oauth.md.",

@@ -264,10 +264,13 @@ policy**: a `helm upgrade`, Argo CD self-heal (`ambit init --gitops argocd` writ
 do not remove it, because it is in no chart and in no Git repository. It stays until you run `ambit oauth block off` (or delete the policy). An admission
 policy (`ambit-oauth-block-fence`) refuses every write of this policy by Ambit's own controller, console and sign-in server: only an operator makes and removes it. (The fence protects this one object. A person or component that may write any authorization policy on the public route or its Gateway may still weaken the
 protection by another policy: keep the right to write `agentgatewaypolicies` for operators.)
-The command waits up to 20 seconds for a gateway to report the policy accepted and says if it did not; a gateway pod applies it within a second of that (measured in the
+The command waits up to 20 seconds for a gateway to report the policy accepted; **if none does it exits with an error** (the policy is made, but do not rely on it until
+you have tried a token on each public gateway pod); a gateway pod applies it within a second of that (measured in the
 end-to-end test: refused on every pod 0.1 s after the command). The protected-resource metadata document (`/.well-known/oauth-protected-resource/mcp`) stays public:
 it holds no secret and starts the sign-in of a platform.
 Platforms get 403 on `/mcp`: they stay connected, and work again when you lift the block.
+A request that a pod admitted before the block, and an open event stream, run on until they end. To cut them in an incident, restart the public gateway pods
+(`kubectl -n ambit-system rollout restart deploy -l gateway.networking.k8s.io/gateway-name=ambit-public`); a new request is refused either way.
 
 What GitOps users do: the same. The block is an object that is not in Git, so no tool puts it back or removes it; do not add it to Git
 during the incident (a tool that prunes by Git would then own it, and a revert of the commit would lift the block). `oauth.emergencyBlock: true`

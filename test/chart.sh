@@ -547,6 +547,7 @@ k=one("AgentgatewayPolicy","ambit-mcp-public-auth")["spec"]["traffic"]["authoriz
 assert "false" not in k, "the keys rule must not be touched"' "oauth.emergencyBlock adds a false clause to the token rule only, never to the key rule" )
 none=$(helm template ambit charts/ambit -n ambit-system "${fdv[@]}")
 ! grep -q 'ambit-mcp-public-oauth\|sectionName: keys\|ambit-console-oauth\|ambit-console-tokenreview' <<<"$none" || { echo "FAIL chart: nothing of OAuth in the front door's objects without OAuth"; exit 1; }
+<<<<<<< HEAD
 # Rate limits of the sign-in host: separate buckets, counted at the Gateway before the route and the credential, by the address of the connection.
 check_oa 'e=one("AgentgatewayPolicy","ambit-public-source-limit")["spec"]["traffic"]["extAuth"]["http"]["body"]
 b=e.split("\"fd_bucket\", \"value\": ",1)[1].split("}, {\"key\": \"fd_source\"",1)[0]
@@ -571,6 +572,27 @@ MSG='oauth.rateLimit.signInPerMinute' refuse "a sign-in limit of 0" --set oauth.
 MSG='whole number' refuse "a sign-in limit with a fraction" --set oauth.rateLimit.signInPerMinute=77.5
 MSG='oauth.rateLimit.tokenPerMinute' refuse "a token limit of 0" --set oauth.rateLimit.tokenPerMinute=0
 MSG='oauth.rateLimit.discoveryPerMinute' refuse "a discovery limit of 0" --set oauth.rateLimit.discoveryPerMinute=0
+=======
+# The Hydra janitor: a daily CronJob on the same database Secret, with Hydra's own lifetimes, one run at a time, no secret in it; off with
+# oauth.janitor.enabled=false, and not there at all without OAuth.
+check_oa 'j=one("CronJob","ambit-hydra-janitor")["spec"]
+assert j["schedule"]=="17 * * * *" and j["concurrencyPolicy"]=="Forbid", j
+t=j["jobTemplate"]["spec"]; p=t["template"]["spec"]; c=p["containers"][0]
+assert t["activeDeadlineSeconds"]==1800 and t["backoffLimit"]==2 and p["restartPolicy"]=="Never", t
+assert c["args"][-4:]==["--batch-size","1000","--limit","100000"], c["args"]
+assert c["args"][:6]==["janitor","-e","-c","/etc/hydra/hydra.yml","--tokens","--requests"] and "--grants" in c["args"] and "--keep-if-younger" in c["args"], c["args"]
+assert c["image"]==[x for x in one("StatefulSet","ambit-hydra")["spec"]["template"]["spec"]["containers"] if x["name"]=="hydra"][0]["image"], "the janitor runs the image of Hydra"
+assert [e["name"] for e in c["env"]]==["DSN"] and "secretKeyRef" in c["env"][0]["valueFrom"] and "value" not in c["env"][0], c["env"]
+assert c["securityContext"]["readOnlyRootFilesystem"] is True and p["securityContext"]["runAsNonRoot"] is True and p["automountServiceAccountToken"] is False, p
+assert {v["name"] for v in p["volumes"]}=={"config","ca","tmp"} and [v for v in p["volumes"] if v["name"]=="config"][0]["configMap"]["name"]=="ambit-hydra", p["volumes"]' "the Hydra janitor: a daily CronJob, one run at a time, the image and database Secret of Hydra, Hydra's own lifetimes, read-only and non-root, no secret value"
+off_j=$(oat --set oauth.janitor.enabled=false)
+! grep -q 'ambit-hydra-janitor' <<<"$off_j" || { echo "FAIL chart: oauth.janitor.enabled=false must render no janitor"; exit 1; }
+! grep -q 'ambit-hydra-janitor' <<<"$fd" || { echo "FAIL chart: no janitor without OAuth"; exit 1; }
+small=$(oat --set oauth.janitor.limit=3 | sed -n '/^kind: CronJob/,/^---/p')
+grep -q '"--batch-size", "3"\|--batch-size, "3", --limit, "3"' <<<"$small" || { echo "FAIL chart: a batch is never larger than the limit (Hydra refuses it)"; exit 1; }
+sch=$(oat --set oauth.janitor.schedule='5 4 * * 0' --set oauth.janitor.timeoutMinutes=10 | sed -n '/^kind: CronJob/,/^---/p')
+grep -q 'schedule: "5 4 \* \* 0"' <<<"$sch" && grep -q 'activeDeadlineSeconds: 600' <<<"$sch" || { echo "FAIL chart: the janitor schedule and time limit are values"; exit 1; }
+>>>>>>> origin/main
 MSG='maxGrantDays' refuse "a grant life of 400 days" --set oauth.maxGrantDays=400
 one_r=$(oat --set oauth.hydra.replicas=1)
 ! grep -q 'name: ambit-hydra$' <(sed -n '/kind: PodDisruptionBudget/,/^---/p' <<<"$one_r") || { echo "FAIL chart: one Hydra pod needs no PodDisruptionBudget"; exit 1; }

@@ -99,10 +99,15 @@ tok = js(body)
 claims = jwt_claims(tok["access_token"]) if st == 200 else {}
 shape("token-code", st == 200 and tok.get("token_type", "").lower() == "bearer" and 800 < tok.get("expires_in", 0) <= 900 and tok.get("refresh_token") and "mcp" in tok.get("scope", "")
       and tok["access_token"].count(".") == 2 and h.get("cache-control") == "no-store" and claims.get("iss") == ISS and MCP_URL in (claims["aud"] if isinstance(claims.get("aud"), list) else [claims.get("aud")]), (st, sorted(tok), claims))
-st, h, body = raw("POST", ISS + "/oauth2/token", urllib.parse.urlencode({"grant_type": "authorization_code", "code": CODE, "redirect_uri": REDIRECT, "client_id": CID, "code_verifier": V}).encode(),
+# a code that was used once is refused the second time, and Hydra then revokes what the first use issued (RFC 6749 4.1.2): this runs on a code of its own
+V8, CH8 = pkce(); kind8, det8 = sign_in(Browser(), CID, "bob", challenge=CH8)
+st8, t8 = token(CID, grant_type="authorization_code", code=det8["code"], redirect_uri=REDIRECT, code_verifier=V8, resource=MCP_URL)
+st, h, body = raw("POST", ISS + "/oauth2/token", urllib.parse.urlencode({"grant_type": "authorization_code", "code": det8["code"], "redirect_uri": REDIRECT, "client_id": CID, "code_verifier": V8}).encode(),
                   {"Content-Type": "application/x-www-form-urlencoded"})
 e = js(body)
-shape("token-error", st == 400 and e.get("error") == "invalid_grant" and e.get("error_description"), (st, e))  # the code was used once already
+shape("token-error", st8 == 200 and st == 400 and e.get("error") == "invalid_grant" and e.get("error_description"), (st8, st, e))  # the code was used once already
+st9r, _ = token(CID, grant_type="refresh_token", refresh_token=t8.get("refresh_token", ""))
+check("19 shape token-error: the tokens that the first use of a code issued are revoked when the code is used a second time", st9r == 400, st9r)
 V9, CH9 = pkce(); kind9, det9 = sign_in(Browser(), CID, "bob", challenge=CH9)
 st9, e9 = token(CID, grant_type="authorization_code", code=det9["code"], redirect_uri=REDIRECT, code_verifier=pkce()[0], resource=MCP_URL)  # a fresh code, another verifier
 check("19 shape token-error: a fresh code with a verifier that is not the one of the request is refused (invalid_grant)", kind9 == "code" and st9 == 400 and e9.get("error") == "invalid_grant", (kind9, st9, e9))

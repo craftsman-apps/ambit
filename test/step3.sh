@@ -95,6 +95,50 @@ kubectl -n "$NS" apply -f test/llm/objects.yaml >/dev/null
 wait_expr nemotron-3-super '(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in ["ml-research"])'
 pass "7 no rule -> expression false -> 403; rule restored"
 
+# 7b · #430: a rule that is deleted while another change is in progress is refused at once. The change in progress
+#      (here a new rule for another group) used to hold the removal back until its steps and settle times were over
+#      (about 5.3 s with the default 3 s settle time). Uses the mock model; no provider is called.
+now() { uv run --no-project python -c 'import time;print(time.time())'; }
+mock_rule() { # mock_rule apply|delete: the rule that lets ml-research use the mock model (test/llm/mock.yaml)
+  kubectl -n "$NS" "$1" -f - >/dev/null <<YAML
+apiVersion: $G/v1alpha1
+kind: AccessRule
+metadata: { name: ml-research-mock }
+spec: { groups: [ml-research], models: [mock-echo] }
+YAML
+}
+wait_mock() { # wait_mock STATUS SECONDS: user09's call of the mock model answers STATUS; prints the seconds it took
+  local t0 t; t0=$(now); M=$(token user09)
+  while :; do
+    [[ "$(llm "$M" mock/echo)" == "$1" ]] && break
+    t=$(now); uv run --no-project python -c "import sys;sys.exit(0 if $t - $t0 < $2 else 1)" || fail "7b the mock model did not answer $1 within $2 s (last body: $(head -c 200 "$W/llm"))"
+    sleep 0.05
+  done
+  uv run --no-project python -c "print(round($(now) - $t0, 2))"
+}
+wait_mock 200 40 >/dev/null                 # the rule is active
+# the change of check 7 (its rule was restored) must be over: no step is pending in ambit-access-mode
+for _ in $(seq 1 400); do [[ -z "$(kubectl -n "$NS" get configmap ambit-access-mode -o jsonpath='{.data.pending}' 2>/dev/null)" ]] && break; sleep 0.1; done
+[[ -z "$(kubectl -n "$NS" get configmap ambit-access-mode -o jsonpath='{.data.pending}' 2>/dev/null)" ]] || fail "7b the change of check 7 is still pending after 40 s"
+kubectl -n "$NS" apply -f - >/dev/null <<YAML  # the change in progress
+apiVersion: $G/v1alpha1
+kind: AccessRule
+metadata: { name: probe-7b }
+spec: { groups: [probe-7b], models: [gemma-4-31b] }
+YAML
+# the change must be in progress: its first step is pending in ambit-access-mode (it is not, if the controller has not
+# started on it yet, and then the removal would be written with it, which proves nothing)
+for _ in $(seq 1 50); do [[ -n "$(kubectl -n "$NS" get configmap ambit-access-mode -o jsonpath='{.data.pending}' 2>/dev/null)" ]] && break; sleep 0.1; done
+[[ -n "$(kubectl -n "$NS" get configmap ambit-access-mode -o jsonpath='{.data.pending}' 2>/dev/null)" ]] || fail "7b the controller did not start the change of the probe rule"
+sleep 1
+mock_rule delete
+took=$(wait_mock 403 15)
+kubectl -n "$NS" delete "accessrules.$G" probe-7b --ignore-not-found >/dev/null
+mock_rule apply
+wait_mock 200 60 >/dev/null                 # restored: a grant takes its steps (envtest: the access log step waits for the verdict)
+uv run --no-project python -c "import sys;sys.exit(0 if $took < 3 else 1)" || fail "7b the rule was refused only $took s after it was deleted during another change (want under 3 s; 5.3 s without the fix)"
+pass "7b a rule deleted one second into another change is refused after $took s (5.3 s before #430)"
+
 # 8 · a rule naming a missing model is Degraded, and says which name
 kubectl -n "$NS" apply -f - >/dev/null <<YAML
 apiVersion: $G/v1alpha1

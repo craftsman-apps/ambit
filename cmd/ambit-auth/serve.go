@@ -54,6 +54,9 @@ func serve(ctx context.Context) error {
 	if cfg.UnusedClientDays, err = envInt("AMBIT_AUTH_UNUSED_CLIENT_DAYS", 30); err != nil {
 		return err
 	}
+	if cfg.NeverUsedHours, err = envInt("AMBIT_AUTH_NEVER_USED_CLIENT_HOURS", 24); err != nil {
+		return err
+	}
 	if cfg.MaxGrantDays, err = envInt("AMBIT_AUTH_MAX_GRANT_DAYS", 30); err != nil {
 		return err
 	}

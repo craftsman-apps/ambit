@@ -208,7 +208,7 @@ curl -X POST https://auth.example.com/oauth2/token \
 ```
 
 The access token is a signed JWT whose `aud` is the MCP address; it is valid for **15 minutes** (`expires_in`). Store the refresh
-token as a secret. A code that was used, expired, or sent with another verifier or redirect address is answered like this:
+token as a secret. A code that was used, expired, or sent with another verifier or redirect address is answered like this. **Never send a code twice:** when a code is used a second time, the server also revokes the tokens that its first use issued (RFC 6749, 4.1.2), and the connection ends.
 
 <!-- shape: token-error -->
 ```json

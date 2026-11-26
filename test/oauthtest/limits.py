@@ -167,50 +167,74 @@ elif MODE == "second":
 
 elif MODE == "nat":
     # One company address, many people. A platform registers once (one client for all of its users), then each person signs in. All from one address.
+    # The people sign in at the same time (WORKERS at once): that is what an announcement does, and a sign-in takes seconds on a small cluster.
+    import threading
+    WORKERS = 8
     COUNT = {"signin": 0, "token": 0, "discovery": 0}
+    lock = threading.Lock()
     orig = Browser.req
 
     def counted(self, method, url, data=None, headers=None):
         p = urllib.parse.urlparse(url)
         if p.hostname == AUTH:
-            if p.path in ("/oauth2/auth", "/login", "/callback", "/consent", "/error"): COUNT["signin"] += 1
-            elif p.path in ("/oauth2/token", "/oauth2/revoke"): COUNT["token"] += 1
-            elif p.path.startswith("/.well-known/"): COUNT["discovery"] += 1
+            with lock:
+                if p.path in ("/oauth2/auth", "/login", "/callback", "/consent", "/error"): COUNT["signin"] += 1
+                elif p.path in ("/oauth2/token", "/oauth2/revoke"): COUNT["token"] += 1
+                elif p.path.startswith("/.well-known/"): COUNT["discovery"] += 1
         return orig(self, method, url, data, headers)
     Browser.req = counted
+
+    def one_signin(cid, who):
+        kind, res = sign_in(Browser(), cid, f"person{who}", tick=("time",))
+        if kind != "code":
+            return ("page", res[0]) if kind == "page" else (kind, res)
+        st, tok = exchange(cid, res)
+        return None if st == 200 else ("token", st)
+
+    # 1. what one sign-in costs: alone, from an address of its own
+    CLIENT_ADDR = "203.0.113.99"
+    cid0 = register(REDIRECT, "NAT cost")[2].get("client_id")
+    for k in COUNT: COUNT[k] = 0
+    bad = one_signin(cid0, 190)
+    cost = dict(COUNT)
+    check(f"18 NAT: one whole sign-in alone costs {cost['signin']} requests in the sign-in bucket and {cost['token']} in the token bucket", bad is None and cost["signin"] >= 6, (bad, cost))
+    typical = max(cost["signin"], 1)
+    # 2. many at once from one address, until the limit answers 429
     result = None
     for attempt in range(3):
         addr = f"203.0.113.{100 + attempt}"
         start_of_window("minute")
         CLIENT_ADDR = addr
         t0, w0 = time.time(), minute_now()
-        st, _, reg = register(REDIRECT, "NAT test")
-        cid = reg.get("client_id")
-        for k in COUNT: COUNT[k] = 0
-        ok, fail_kind, per = 0, None, []
-        while time.time() - t0 < 58:
-            before = COUNT["signin"]
-            kind, res = sign_in(Browser(), cid, f"person{100 + ok}", tick=("time",))
-            if kind != "code":
-                fail_kind = (kind, res[0] if kind == "page" else res); break
-            st, tok = exchange(cid, res)
-            if st != 200:
-                fail_kind = ("token", st); break
-            ok += 1; per.append(COUNT["signin"] - before)
+        cid = register(REDIRECT, "NAT test")[2].get("client_id")
+        state = {"ok": 0, "next": 0, "fail": None}
+
+        def worker():
+            while state["fail"] is None and time.time() - t0 < 58:
+                with lock:
+                    who = 100 + state["next"]; state["next"] += 1
+                bad = one_signin(cid, who % 190)
+                with lock:
+                    if bad is None: state["ok"] += 1
+                    elif state["fail"] is None: state["fail"] = bad
+        ts = [threading.Thread(target=worker) for _ in range(WORKERS)]
+        [t.start() for t in ts]; [t.join() for t in ts]
         elapsed = time.time() - t0
-        if minute_now() == w0 and fail_kind and fail_kind[0] == "page" and fail_kind[1] == 429:
-            result = (ok, per, elapsed, addr); break
-        print(f"   attempt {attempt + 1} not valid (window crossed or no 429: {fail_kind}, {ok} sign-ins in {elapsed:.0f} s)", flush=True)
+        if minute_now() == w0 and state["fail"] == ("page", 429):
+            result = (state["ok"], elapsed, addr); break
+        print(f"   attempt {attempt + 1} not valid (window crossed or no 429: {state['fail']}, {state['ok']} sign-ins in {elapsed:.0f} s)", flush=True)
     check("18 NAT: one address reaches the sign-in limit within one minute and is then answered 429", result is not None)
-    ok, per, elapsed, addr = result
-    typical = sorted(per)[len(per) // 2]
-    print(f"   NAT: one shared address made {ok} whole sign-ins in {elapsed:.0f} s before the sign-in limit ({LIM['signin']} a minute) answered 429; "
-          f"a sign-in costs {typical} requests in the sign-in bucket and one code exchange in the token bucket", flush=True)
-    check(f"18 NAT: {ok} sign-ins from one address in a minute fit the default sign-in limit of {LIM['signin']} ({typical} requests each)", typical >= 6 and ok in (LIM["signin"] // typical, LIM["signin"] // typical - 1), (ok, per))
+    ok, elapsed, addr = result
+    expect = LIM["signin"] // typical
+    print(f"   NAT: one shared address made {ok} whole sign-ins in {elapsed:.0f} s ({WORKERS} at a time) before the sign-in limit ({LIM['signin']} a minute) answered 429; "
+          f"a sign-in costs {typical} requests in the sign-in bucket and {cost['token']} in the token bucket, so the limit is {expect} sign-ins", flush=True)
+    check(f"18 NAT: {ok} sign-ins from one address in a minute fit the default sign-in limit of {LIM['signin']} ({typical} requests each; the {WORKERS} that were under way when it answered 429 did not finish)",
+          expect - WORKERS <= ok <= expect, (ok, expect))
     other = "203.0.113.150"
     CLIENT_ADDR = other
-    kind, res = sign_in(Browser(), cid, "bob", tick=("time",))
+    kind, res = sign_in(Browser(), cid, "person199", tick=("time",))
     check("18 NAT: another address signs in while the first one is limited", kind == "code", (kind, res if kind != "code" else ""))
+
 else:
     sys.exit("unknown mode " + MODE)
 

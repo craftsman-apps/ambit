@@ -121,6 +121,14 @@ func TestAgentScopeForThePublicBackendFailsClosedWithoutTheIssuer(t *testing.T) 
 	if !evalAgent(t, AgentScopeFor(hydra, true), map[string]any{}, jwtOf, "crm", "read") || evalAgent(t, AgentScopeFor(hydra, true), map[string]any{}, jwtOf, "wiki", "read") {
 		t.Error("public backend with the issuer: the scope decides")
 	}
+	// the public backend refuses a token of another issuer than the configured one; the private backend does not limit it
+	other := map[string]any{"iss": "https://old-issuer.example.com", "ambit_scope": []any{"crm"}}
+	if evalAgent(t, AgentScopeFor(hydra, true), map[string]any{}, other, "crm", "read") {
+		t.Error("public backend: a token of another issuer than the configured one was allowed")
+	}
+	if !evalAgent(t, AgentScopeFor(hydra, false), map[string]any{}, other, "crm", "read") {
+		t.Error("private backend: a token of the company's provider is not limited")
+	}
 	// a key (an agent key with a scope) is judged the same on both
 	key := map[string]any{"keyId": "k", "agent": "a", "agentScope": []any{"crm"}}
 	if !evalAgent(t, AgentScopeFor("", true), key, map[string]any{}, "crm", "read") || evalAgent(t, AgentScopeFor("", true), key, map[string]any{}, "wiki", "read") {

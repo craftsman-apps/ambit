@@ -1205,7 +1205,7 @@ func TestRegistrationRedirectPathAllowList(t *testing.T) {
 		}
 	}
 	// the list itself is validated: a bad path is refused at start
-	for name, entry := range map[string]string{"dot segment": "chatgpt.com/a/../b", "query": "chatgpt.com/a?b=c", "empty segment": "chatgpt.com//a", "trailing slash": "chatgpt.com/a/", "no host": "/a/b", "wildcard": "*.example.com/a", "percent escape": "chatgpt.com/a%2fb", "variable reference": "chatgpt.com/$(MCP_URL)"} {
+	for name, entry := range map[string]string{"dot segment": "chatgpt.com/a/../b", "query": "chatgpt.com/a?b=c", "empty segment": "chatgpt.com//a", "trailing slash": "chatgpt.com/a/", "no host": "/a/b", "wildcard": "*.example.com/a", "percent escape": "chatgpt.com/a%2fb", "variable reference": "chatgpt.com/$(MCP_URL)", "path parameter": "chatgpt.com/a;b=c"} {
 		cfg := Config{PublicURL: "https://auth.example.com", Resource: "https://mcp.example.com/mcp", IdPIssuer: "https://idp.example.com", IdPClientID: "a", IdPClientSecret: "b",
 			RegistrationHosts: []string{entry}, MaxClients: 500, UnusedClientDays: 30}
 		if err := cfg.Validate(); err == nil {
@@ -1237,14 +1237,14 @@ func TestPublicKeyIDsFollowsNoRedirect(t *testing.T) {
 		http.Redirect(w, r, admin.URL, http.StatusFound)
 	}))
 	defer pub.Close()
-	if ids, err := PublicKeyIDs(context.Background(), nil, pub.URL); err == nil {
+	if ids, err := PublicKeyIDs(context.Background(), pub.URL); err == nil {
 		t.Fatalf("a redirect was followed: %v", ids)
 	}
 	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"keys":[{"kid":"b"},{"kid":"a"}]}`))
 	}))
 	defer ok.Close()
-	if ids, err := PublicKeyIDs(context.Background(), nil, ok.URL); err != nil || strings.Join(ids, ",") != "a,b" {
+	if ids, err := PublicKeyIDs(context.Background(), ok.URL); err != nil || strings.Join(ids, ",") != "a,b" {
 		t.Fatalf("%v %v", ids, err)
 	}
 }

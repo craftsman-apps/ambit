@@ -160,8 +160,10 @@ no dot segment, empty segment, query or trailing slash). The default list names 
 sent a sign-in link by an attacker gives the code to the redirect address that the attacker registered, so the address must be one that no
 third party can use to read the code (an open redirect, a page with user content, a leaked address in a `Referer` header) on any path of
 the host. **A client that registered earlier keeps the addresses it registered**: removing an entry stops new registrations only. After you narrow the list, delete the
-clients that registered the removed paths (`GET /api/admin/oauth/clients`, `DELETE /api/admin/oauth/clients/{id}`) and stop their agents. Path entries
-accept no percent escape and no `$`. **A bare host (`chatgpt.com`) allows every path of the host: add one only when nobody but the platform can publish a page or a
+clients that registered the removed paths (`GET /api/admin/oauth/clients` shows each client's `redirectUris` with the path, `DELETE /api/admin/oauth/clients/{id}`)
+and stop their agents. Take out **every** entry that matches the address (the defaults have two for ChatGPT), and remember that a native client may always register a
+loopback address. The list decides which callback addresses may register; to exclude a platform as such, turn dynamic registration off and register the clients you
+accept yourself. Path entries accept no percent escape, no semicolon and no `$`. **A bare host (`chatgpt.com`) allows every path of the host: add one only when nobody but the platform can publish a page or a
 redirect there.** If a platform's callback differs from the default (the platform's documentation names it), add its exact path; a registration with
 another path is refused with `invalid_client_metadata`.
 

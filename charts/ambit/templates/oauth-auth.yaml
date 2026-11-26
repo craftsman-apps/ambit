@@ -17,7 +17,7 @@ Hydra's token hook. Stateless: a pending sign-in is in the person's browser, cou
 {{- if not .Values.limits.enabled }}{{ fail "oauth.enabled=true needs limits.enabled=true: sign-in and registration limits are counted in Valkey, shared by all replicas" }}{{ end }}
 {{- if $dcr.enabled }}
 {{- if not $dcr.redirectHosts }}{{ fail "oauth.registration.dynamic.redirectHosts must name at least one host, or set oauth.registration.dynamic.enabled=false" }}{{ end }}
-{{- range $h := $dcr.redirectHosts }}{{ if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+((/[A-Za-z0-9_~!&'*+;=:@-][A-Za-z0-9._~!&'*+;=:@-]*)+)?$" $h) }}{{ fail (printf "oauth.registration.dynamic.redirectHosts: %q must be a lower-case host name with an optional path (no scheme, port, wildcard, query, percent escape, dot segment or trailing slash)" $h) }}{{ end }}{{ end }}
+{{- range $h := $dcr.redirectHosts }}{{ if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+((/[A-Za-z0-9_~!&'*+=:@-][A-Za-z0-9._~!&'*+=:@-]*)+)?$" $h) }}{{ fail (printf "oauth.registration.dynamic.redirectHosts: %q must be a lower-case host name with an optional path (no scheme, port, wildcard, query, percent escape, dot segment or trailing slash)" $h) }}{{ end }}{{ end }}
 {{- if or (lt (int $dcr.perSourcePerHour) 1) (gt (int $dcr.perSourcePerHour) 100000) }}{{ fail "oauth.registration.dynamic.perSourcePerHour must be 1 to 100000" }}{{ end }}
 {{- if or (lt (int $dcr.maxClients) 1) (gt (int $dcr.maxClients) 5000) }}{{ fail "oauth.registration.dynamic.maxClients must be 1 to 5000" }}{{ end }}
 {{- if lt (int $dcr.unusedClientDays) 1 }}{{ fail "oauth.registration.dynamic.unusedClientDays must be 1 or more" }}{{ end }}

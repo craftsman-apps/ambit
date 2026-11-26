@@ -257,7 +257,7 @@ func TestOAuthClientsAdminAPI(t *testing.T) {
 	c.listOAuthClients(w, httptest.NewRequest("GET", "/api/admin/oauth/clients", nil), Session{Role: RoleAdmin})
 	var out struct{ Clients []oauthClientView }
 	_ = json.Unmarshal(w.Body.Bytes(), &out)
-	if w.Code != 200 || len(out.Clients) != 1 || out.Clients[0].Name != "ChatGPT" || len(out.Clients[0].RedirectHosts) != 1 || out.Clients[0].RedirectHosts[0] != "chatgpt.com" || out.Clients[0].Via != "dcr" || out.Clients[0].LastUsed.IsZero() {
+	if w.Code != 200 || len(out.Clients) != 1 || out.Clients[0].Name != "ChatGPT" || len(out.Clients[0].RedirectHosts) != 1 || out.Clients[0].RedirectHosts[0] != "chatgpt.com" || out.Clients[0].Via != "dcr" || len(out.Clients[0].RedirectURIs) != 2 || out.Clients[0].RedirectURIs[0] != "https://chatgpt.com/cb" || out.Clients[0].LastUsed.IsZero() {
 		t.Fatalf("%d %s", w.Code, w.Body.String())
 	}
 	r := httptest.NewRequest("DELETE", "/api/admin/oauth/clients/c1", nil)

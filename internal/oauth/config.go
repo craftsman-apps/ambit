@@ -37,8 +37,8 @@ var Platforms = map[string]string{
 // Scopes are the OAuth scopes of Ambit: mcp (use the MCP route) and offline_access (a refresh token).
 var Scopes = []string{"mcp", "offline_access"}
 
-// redirectPathRE is the path of a registration entry: segments of ordinary characters (no percent escape, no "$", "(" or ")": a path must mean the same to every reader), no "." or ".." segment, no empty segment, no query.
-var redirectPathRE = regexp.MustCompile(`^(/[A-Za-z0-9_~!&'*+;=:@-][A-Za-z0-9._~!&'*+;=:@-]*)+$`)
+// redirectPathRE is the path of a registration entry: segments of ordinary characters (no percent escape, no "$", "(", ")" or ";": a path must mean the same to every reader), no "." or ".." segment, no empty segment, no query.
+var redirectPathRE = regexp.MustCompile(`^(/[A-Za-z0-9_~!&'*+=:@-][A-Za-z0-9._~!&'*+=:@-]*)+$`)
 
 // splitRedirectEntry splits an entry of RegistrationHosts: "chatgpt.com" (any path on the host) or "chatgpt.com/connector/oauth" (that path, and
 // the paths below it).

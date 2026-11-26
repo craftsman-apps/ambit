@@ -160,12 +160,13 @@ if MINT and JWK:
         if r.returncode != 0 or r.stdout.count(".") != 2:
             raise RuntimeError("the test signer failed: " + r.stderr[-200:])
         return r.stdout.strip()
-    ctl_ok = mint()
-    check("3 audience: a token made by the test with Hydra's key and the MCP URL alone, as a list of one (the form Hydra writes), is accepted on every pod (the test's own tokens work)", all(tools(p, ctl_ok)[0] == 200 for p in PORTS))
+    def listed(tok): return all((lambda r: r[0] == 200 and TOOL in (r[1] or []))(tools(p, tok)) for p in PORTS)
+    ctl_ok = mint(aud=[MCP_URL])
+    check("3 audience: a token made by the test with Hydra's key and the MCP URL alone, as a list of one, is accepted on every pod and lists the consented tool (the test's own tokens work)", listed(ctl_ok))
     two = mint(aud=[MCP_URL, "https://other.example.com/mcp"])
     check("3 audience: the same token that lists another audience as well is refused (403) on every pod", all(tools(p, two)[0] == 403 for p in PORTS), [tools(p, two)[0] for p in PORTS])
     bare = mint(aud=MCP_URL)
-    check("3 audience: the MCP URL as a single string is accepted (RFC 7519 allows it)", all(tools(p, bare)[0] == 200 for p in PORTS))
+    check("3 audience: the MCP URL as a single string is accepted (RFC 7519 allows it) and lists the consented tool", listed(bare))
     other = mint(aud=["https://other.example.com/mcp"])
     check("3 audience: another audience alone is refused (401) on every pod", all(tools(p, other)[0] == 401 for p in PORTS), [tools(p, other)[0] for p in PORTS])
 

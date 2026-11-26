@@ -71,7 +71,7 @@ func (c *Catalog) getSigningKey(w http.ResponseWriter, r *http.Request, _ Sessio
 		writeErr(w, http.StatusNotFound, "OAuth sign-in is not turned on")
 		return
 	}
-	ids, err := oauth.PublicKeyIDs(r.Context(), nil, c.HydraPublic)
+	ids, err := oauth.PublicKeyIDs(r.Context(), c.HydraPublic)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, "the OAuth server did not answer")
 		return

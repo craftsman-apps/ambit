@@ -7,10 +7,10 @@ const sidebars: SidebarsConfig = {
       'guides/models-per-team', 'guides/mcp-apps', 'guides/request-an-app', 'guides/claude-desktop', 'guides/claude-desktop-mcp', 'guides/spending-limits', 'guides/someone-leaves', 'guides/access-review', 'guides/audit-only', 'guides/sandbox-openshell',
     ]},
     {type: 'category', label: 'Hosted agents (experimental)', collapsed: true, items: [
-      'guides/agents/grok-bot', 'guides/agents/copilot-studio', 'guides/agents/agentcore', 'guides/agents/cloudflare',
+      'guides/agents/grok-bot', 'guides/agents/copilot-studio', 'guides/agents/agentcore', 'guides/agents/cloudflare', 'guides/oauth-mcp-client',
     ]},
     {type: 'category', label: 'Reference', collapsed: false, items: [
-      'cli', 'install-by-hand', 'providers', 'api-keys', 'agents', 'front-door', 'service-accounts', 'presets', 'budgets', 'routing', 'savings', 'offboarding', 'alerts', 'compliance', 'performance', 'upgrading',
+      'cli', 'install-by-hand', 'providers', 'api-keys', 'agents', 'front-door', 'oauth', 'service-accounts', 'presets', 'budgets', 'routing', 'savings', 'offboarding', 'alerts', 'compliance', 'performance', 'upgrading',
     ]},
   ],
 };

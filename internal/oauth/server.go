@@ -126,7 +126,11 @@ func securityHeaders(h http.Handler) http.Handler {
 // limited counts the request against the caller's address in a bucket, then runs h.
 func (s *Server) limited(bucket string, h http.HandlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key, fromGW := ClientKey(r)
+		bits := 64
+		if bucket == BucketRegister {
+			bits = RegistrationKeyBits
+		}
+		key, fromGW := ClientKeyBits(r, bits)
 		if !fromGW {
 			s.log().Warn("no client address header from the Gateway: callers are counted together", "bucket", bucket)
 		}
@@ -429,6 +433,12 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		invalidMeta(w, "the number of registered clients has reached its limit")
+		return
+	}
+	if ok, _ := s.Limits.Allow(ctx, BucketRegisterAll, "all"); !ok { // after the checks: a request that is refused does not use up the room of the others
+		mLimited.WithLabelValues(BucketRegisterAll).Inc()
+		w.Header().Set("Retry-After", "3600")
+		http.Error(w, "too many registrations, try again later", http.StatusTooManyRequests)
 		return
 	}
 	now := s.now().UTC()

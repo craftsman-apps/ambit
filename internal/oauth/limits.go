@@ -19,25 +19,32 @@ const ClientAddrHeader = "X-Ambit-Client-Address"
 // ClientKey is the address that limits count: an IPv4 address as it is, an IPv6 address by its /64 (a customer owns a
 // /64, so one more address in it is not a new caller). With no usable header it falls back to the peer's address, which
 // is the Gateway pod: the limits then count every caller together, which is safe and loud (the log says so).
-func ClientKey(r *http.Request) (key string, fromGateway bool) {
+func ClientKey(r *http.Request) (key string, fromGateway bool) { return ClientKeyBits(r, 64) }
+
+// RegistrationKeyBits: registrations count IPv6 callers by their /48, the network that a free tunnel gives one person, so that one
+// person cannot register 10 clients an hour from each of 65,000 /64 networks (security review N2).
+const RegistrationKeyBits = 48
+
+// ClientKeyBits is ClientKey with the prefix length that an IPv6 address counts by.
+func ClientKeyBits(r *http.Request, v6bits int) (key string, fromGateway bool) {
 	if ip := net.ParseIP(strings.TrimSpace(r.Header.Get(ClientAddrHeader))); ip != nil {
-		return prefixKey(ip), true
+		return prefixKey(ip, v6bits), true
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		host = r.RemoteAddr
 	}
 	if ip := net.ParseIP(host); ip != nil {
-		return prefixKey(ip), false
+		return prefixKey(ip, v6bits), false
 	}
 	return "unknown", false
 }
 
-func prefixKey(ip net.IP) string {
+func prefixKey(ip net.IP, v6bits int) string {
 	if v4 := ip.To4(); v4 != nil {
 		return v4.String()
 	}
-	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
+	return ip.Mask(net.CIDRMask(v6bits, 128)).String() + "/" + itoa(int64(v6bits))
 }
 
 // Limiter counts events in fixed windows. The count is shared by every replica when it lives in Valkey.
@@ -139,6 +146,9 @@ const (
 	BucketDiscovery = "discovery"
 	BucketSignIn    = "signin"
 	BucketRegister  = "register"
+	// BucketRegisterAll counts the registrations that were accepted, all callers together (key "all"): the cap on how fast the clients can
+	// grow, whoever asks. Requests that fail the checks do not count (security review N2).
+	BucketRegisterAll = "register-all"
 )
 
 // DefaultRates are per caller address.
@@ -147,6 +157,8 @@ func DefaultRates() map[string]Rate {
 		BucketDiscovery: {Limit: 600, Window: time.Minute},
 		BucketSignIn:    {Limit: 300, Window: time.Minute},
 		BucketRegister:  {Limit: 10, Window: time.Hour},
+		// 15 an hour: the windows are fixed clock hours, so 25 of them overlap the 24 hours that a client that was never used stays: at most 375, below the cap of 500
+		BucketRegisterAll: {Limit: 15, Window: time.Hour},
 	}
 }
 

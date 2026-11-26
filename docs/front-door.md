@@ -97,21 +97,37 @@ No route except `ambit-mcp-public` may list `ambit-public`.
 
 ## Load balancers and the client address
 
-The gateway has to know the real address of the caller. The per-source rate limit and the audit record use it. Ambit
-**never trusts `X-Forwarded-For`**: a caller can write any value into that header.
+The gateway has to know the real address of the caller. The rate limits (below, on the MCP host **and** on the sign-in host) and the
+audit record use it. Ambit **never trusts `X-Forwarded-For`**, `X-Real-IP`, `Forwarded` or any other header for this: a caller can write
+any value into them. The Gateway takes the address from the connection, or from the PROXY protocol header that your load balancer sends,
+and for the sign-in pages it writes that address into its own header toward `ambit-auth`, replacing whatever the caller sent.
 
-| `frontDoor.clientAddress` | Use it when | Notes |
-|---|---|---|
-| `direct` (default) | The load balancer passes the caller's address through (a layer-4 balancer that keeps the source address). | The Service has `externalTrafficPolicy: Local` (default), so a node does not hide the caller behind its own address. |
-| `proxyProtocol` | The load balancer sends the PROXY protocol (version 1 or 2) before the TLS handshake. | The gateway then **refuses every connection without the PROXY header**. Turn the PROXY protocol on at the load balancer first, then set this value. **Only the load balancer may reach the gateway pods.** The header is not signed: anyone who can connect to the pods directly can write any address into it. So do not use `frontDoor.service.type: NodePort` (the chart refuses it), and close every other way in: a cloud firewall, `loadBalancerSourceRanges`, a network policy of your own. |
+**Supported modes.** Set `frontDoor.clientAddress` to match how traffic reaches the gateway pods:
 
-Not supported in this release: a layer-7 load balancer or a CDN that ends TLS and sends a new request with
-`X-Forwarded-For`. Every request would count as coming from the load balancer. Use a layer-4 load balancer.
+| # | How traffic reaches the gateway | `frontDoor.clientAddress` | What else must be true |
+|---|---|---|---|
+| 1 | A layer-4 (TCP) load balancer that keeps the caller's source address, or a service of your own that does (MetalLB, `hostPort`, a cloud network load balancer with client address preservation) | `direct` (default) | `frontDoor.service.externalTrafficPolicy: Local` (the default), so that a node does not replace the caller's address with its own. |
+| 2 | A layer-4 load balancer that sends the **PROXY protocol** (version 1 or 2) before the TLS handshake (for example AWS NLB with proxy protocol v2 turned on, HAProxy, nginx `proxy_protocol`) | `proxyProtocol` | Turn the PROXY protocol on at the load balancer **first**, then set the value: the gateway then refuses every connection without the header. **Only the load balancer may reach the gateway pods**: the header is not signed. The chart refuses `proxyProtocol` with `frontDoor.service.type: NodePort`; also close every other way in (cloud firewall, `loadBalancerSourceRanges`, a network policy of your own). |
+| 3 | `kubectl port-forward`, an SSH tunnel or a local test | `direct` | Every caller counts as the address of the tunnel. For tests only. |
 
-Ambit does not test cloud load balancers in CI. What is tested on kind: a connection with no PROXY header (`direct`), and
-a connection that sends a made-up client address in a PROXY header (`proxyProtocol`). On your cloud, check the address
-once after install: call the front door from a machine whose address you know, then read the record in Audit or in
-ClickHouse (`LogAttributes['client.address']`).
+**Not supported:** a layer-7 load balancer, an HTTP reverse proxy, an ingress controller, or a CDN that ends TLS and sends a new request
+with `X-Forwarded-For` (AWS ALB, Cloudflare proxy, and similar). The gateway would see the proxy's address for every caller, so all callers
+would **share one set of limits**: the first flood would lock everyone out. Use a layer-4 balancer. If you cannot, put the limits at that
+proxy, where the real address is known, and raise the limits of this chart so that they do not count every caller as one.
+
+**What happens when the mode is wrong.** With `direct` behind a balancer that hides the address, or behind a node that replaces it (`externalTrafficPolicy: Cluster`),
+all callers share one address: the limits count them together. With `proxyProtocol` and a balancer that does not send the header, every
+connection is refused. Check once after install.
+
+**Check the address once.** Call the front door from a machine whose public address you know, then read the record in Audit (`client.address`) or in
+ClickHouse (`LogAttributes['client.address']`). For the sign-in host, open a sign-in from that machine, and read `ambit-auth`'s log:
+`kubectl -n ambit-system logs deploy/ambit-auth | grep "no client address"` must print nothing (the line appears when a request reaches it without
+the Gateway's header: then the limits count every caller together).
+
+**What is tested.** Ambit does not test cloud load balancers in CI. On kind, in CI: a connection with no PROXY header (`direct`); a
+connection that sends a made-up client address in a PROXY header (`proxyProtocol`), on the MCP host (`test/stepfd.sh`, check 8) and on the
+sign-in host (`test/stepoauth.sh`, check 19: five buckets, several made-up addresses, two Gateway pods); and callers that write
+`X-Forwarded-For`, `X-Real-IP`, `Forwarded` and `X-Ambit-Client-Address` (check 19: no effect on the count, in both directions).
 
 ## Rate limits
 
@@ -119,9 +135,22 @@ Limits protect the gateway and the keys. They are on by default. Values are in `
 
 | Limit | Default | Counted | Counts |
 |---|---|---|---|
-| `perSourcePerMinute` | 120 | by the ratelimit service and Valkey, **shared by all gateway pods**, **before** the route is matched and before the key is checked | **every** request from one source address: a valid key, no key, a wrong key, an unknown path |
-| `perCredentialPerMinute` | 600 | by the same service, shared, after authentication | requests with one valid key (by key ID) |
+| `perSourcePerMinute` (bucket **mcp**) | 120 | by the ratelimit service and Valkey, **shared by all gateway pods**, **before** the route is matched and before the key is checked | **every** request from one source address that is not in a bucket below: a valid key, a wrong key, an unknown path, a call with a token |
+| `perCredentialPerMinute` | 600 | by the same service, shared, after authentication | requests with one valid key (by key ID), or with one token (by its agent: one connection of one person to one platform), so that tokens do not share one counter |
 | `perPodPerSecond` | 200 | in each gateway pod, after authentication | every request that reaches the limit check. A second line: it still works when the ratelimit service is down. |
+
+With `oauth.enabled` there are four more **buckets of the source limit**, on the same address, counted the same way (before the route and
+the credential, refused requests included, shared by all gateway pods). A flood of one kind never uses up another kind:
+
+| Bucket | Default | Which requests |
+|---|---|---|
+| **discovery** (`oauth.rateLimit.discoveryPerMinute`) | 600 a minute | `/.well-known/*` on both hosts (the metadata documents, the key list), and `POST /mcp` on the MCP host **without any credential** (no `x-api-key`, no `Authorization`): the 401 that starts a sign-in |
+| **sign-in** (`oauth.rateLimit.signInPerMinute`) | 300 a minute | on the sign-in host: `/oauth2/auth`, `/login`, `/callback`, `/consent`, `/error`, and every other path of that host that is not one of the three above or below (an unknown path) |
+| **token** (`oauth.rateLimit.tokenPerMinute`) | 600 a minute | on the sign-in host: `/oauth2/token`, `/oauth2/revoke` |
+| **registration** (`oauth.registration.dynamic.perSourcePerHour`) | 10 an hour | on the sign-in host: `/register` |
+
+The bucket is chosen by the **host name**, the path, and whether a credential header is present, nothing else. The buckets of the sign-in host exist only on that host, and the discovery of the MCP host only there: a flood on the MCP host that uses sign-in paths (they are 404 there) stays in **mcp** and cannot spread over the other buckets. A request to any other host name is in **mcp**. The host is compared as the client wrote it, with or without a port.
+`ambit-auth` counts the first two buckets and the registration again with the same numbers, as a second line when the ratelimit service is down.
 
 A request over a limit gets **429** (or, for an MCP request, `200` with a JSON-RPC error: agentgateway reports some errors of
 an MCP request that way). The first two limits are per minute (a fixed window that starts at each full minute).
@@ -158,12 +187,12 @@ an MCP request that way). The first two limits are per minute (a fixed window th
   a cluster network that enforces network policies, and only while nobody who can create pods in the namespace is untrusted
   (the policy admits pods by label). A pod of the private gateway can still use port 8081, which the budgets need, and another network policy in the
   namespace that admits more pods widens the access.
-- **Cheap and expensive calls.** In this release there is only one kind of public call (`/mcp`), so there is one source
-  limit. When sign-in endpoints are added later, they get their own, lower limit, so that a flood of sign-in attempts
-  cannot use up the limit of MCP calls from the same address.
-- **Many people behind one company address.** Callers behind one NAT address share the source limit. 120 per minute is a
-  starting value for a small number of hosted agents, not for a company office. If agents of one platform call from a few
-  addresses, raise `perSourcePerMinute` or put your own limit at the edge, where you know the traffic.
+- **Many people behind one company address.** Callers behind one NAT address share the buckets of that address. One sign-in costs 7
+  requests in the sign-in bucket (`/oauth2/auth` three times, `/login`, `/callback`, `/consent` twice), and one request in the token bucket.
+  Measured on kind with the default limits: one shared address made 40 whole sign-ins in one minute before the sign-in bucket answered 429, and
+  another address was not affected (docs/oauth.md, "Limits"). That is the number to compare with your largest group that connects at the same time
+  (an announcement, a training); raise `oauth.rateLimit.signInPerMinute` for it. 120 MCP calls a minute (bucket **mcp**) are a starting value for a small number of hosted agents, not for
+  a company office or a platform that serves many people from a few addresses: raise `perSourcePerMinute`, or put your own limit at the edge, where you know the traffic.
 - **When the ratelimit service is down.** `frontDoor.rateLimit.failureMode: FailOpen` (default) lets requests through
   uncounted, and the per-pod limit still applies. `FailClosed` refuses requests until the service is back. When you first
   turn the front door on, an old ratelimit pod can still lack the new limits for a moment (it answers "allowed" even with

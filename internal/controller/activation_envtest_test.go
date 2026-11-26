@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -734,5 +735,94 @@ func TestRejectedModelsAreNamedInTheStalledChange(t *testing.T) {
 				t.Errorf("pending %+v, want error %q objects %v", p, c.message, c.objects)
 			}
 		})
+	}
+}
+
+// #431: the first image server of a cluster is not in the shared MCP backend until it answers, which the reconciler
+// finds out after the step; its policy cannot attach before that. The step must not wait for the attachment (it ran
+// into activationTimeout), but still waits for agentgateway to accept the policy.
+func TestFirstImageServerDoesNotStallTheAuthorizationStep(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-gate-mcp-first"
+	namespace(t, ns)
+	createBase(t, ns)
+	ctx := t.Context()
+	if err := envClient.Create(ctx, &v1.Server{ObjectMeta: metav1.ObjectMeta{Name: "time", Namespace: ns},
+		Spec: v1.ServerSpec{Image: timeImage, Transport: "stdio"}}); err != nil {
+		t.Fatal(err)
+	}
+	answers, skew := false, time.Duration(0)
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
+		Now:        func() time.Time { return time.Now().Add(skew) },
+		Activation: &Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond},
+		ListTools: func(context.Context, v1.Server) ([]v1.Tool, error) {
+			if !answers {
+				return nil, errors.New("connection refused")
+			}
+			return []v1.Tool{{Name: "get_current_time"}}, nil
+		}}
+	done := reconcileAsync(r)
+	eventually(t, "the access policy is written", func() error { _, err := genGet(ctx, ns, "AgentgatewayPolicy", MCPBackendName+"-access"); return err })
+	if _, err := genGet(ctx, ns, "AgentgatewayBackend", MCPBackendName); !apierrors.IsNotFound(err) {
+		t.Fatalf("the backend exists before a server answers: %v", err)
+	}
+	// agentgateway accepts the policy; it cannot attach it, because the backend is not there.
+	o, err := genGet(ctx, ns, "AgentgatewayPolicy", MCPBackendName+"-access")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cond := func(typ, status, reason string) any {
+		return map[string]any{"type": typ, "status": status, "reason": reason, "message": "m", "observedGeneration": o.GetGeneration(),
+			"lastTransitionTime": time.Now().UTC().Format(time.RFC3339)}
+	}
+	_ = unstructured.SetNestedSlice(o.Object, []any{map[string]any{"controllerName": agentgatewayController,
+		"ancestorRef": map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": "ambit"},
+		"conditions":  []any{cond("Accepted", "True", "Valid"), cond("Attached", "False", "Pending")}}}, "status", "ancestors")
+	// Accepted is still waited for: the access log step does not start before the verdict.
+	stays(t, "the access log step waits for the verdict on the policy", func() error {
+		if _, err := accessLogOf(ctx, ns); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("access log written before the verdict: %v", err)
+		}
+		return nil
+	})
+	if err := envClient.Status().Update(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	// Waiting for the attachment would hold the access log step for the 10 s timeout and stop the change.
+	eventually(t, "the access log step starts (the authorization step did not wait for the attachment)", func() error {
+		_, err := accessLogOf(ctx, ns)
+		return err
+	})
+	playAgentgateway(t, ns, "AgentgatewayPolicy", AccessLogPolicy)
+	wait(t, done)
+	if d, _ := accessMode(ctx, ns); d["mode"] != "enforce" || d["pending"] != "" {
+		t.Errorf("not published: %v", d)
+	}
+
+	// The server answers: its backend appears. The rules version does not change, but the first attachment of the
+	// policy is waited for (a NACK or an unattached policy must not stay unnoticed).
+	setMCPServerReady(t, ns, "time", true)
+	answers = true
+	skew = admissionRetry + time.Second
+	second := reconcileAsync(r)
+	eventually(t, "the backend is written", func() error { _, err := genGet(ctx, ns, "AgentgatewayBackend", MCPBackendName); return err })
+	eventually(t, "the change is pending at the authorization step", func() error {
+		if p := pendingOf(t, ns); p["step"] != "authorization" {
+			return fmt.Errorf("pending %v", p)
+		}
+		return nil
+	})
+	stays(t, "the change waits for the attachment of the policy", func() error {
+		select {
+		case err := <-second:
+			return fmt.Errorf("the pass ended without the attachment: %v", err)
+		default:
+		}
+		return nil
+	})
+	playAgentgateway(t, ns, "AgentgatewayPolicy", MCPBackendName+"-access") // Accepted and Attached
+	wait(t, second)
+	if d, _ := accessMode(ctx, ns); d["pending"] != "" {
+		t.Errorf("not published: %v", d)
 	}
 }

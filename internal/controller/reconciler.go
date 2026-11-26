@@ -326,7 +326,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: AccessModeConfigMap}, &published); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, err
 	}
-	changing := r.Activation != nil && (published.Data["mode"] != mode || published.Data["rulesVersion"] != version)
+	changing := r.Activation != nil && (published.Data["mode"] != mode || published.Data["rulesVersion"] != version || r.stalled != nil || r.attachPending(ctx, res.Objects))
 	steps := []step{
 		{"authorization", func() (w []gated, err error) {
 			applyFailed, w, err = r.applyAll(ctx, res.Objects, conds)
@@ -737,7 +737,10 @@ func (r *Reconciler) applyAll(ctx context.Context, objs []*unstructured.Unstruct
 			continue
 		}
 		if kind == "AgentgatewayModel" || kind == "AgentgatewayPolicy" {
-			written = append(written, gated{kind: kind, name: name, generation: desired.GetGeneration(), changed: desired.GetGeneration() != current.GetGeneration()})
+			written = append(written, gated{kind: kind, name: name, generation: desired.GetGeneration(),
+				changed:      desired.GetGeneration() != current.GetGeneration(),
+				attachWait:   awaitsAttachment(current, desired, objs),
+				acceptedOnly: kind == "AgentgatewayPolicy" && attachesToAbsentTarget(desired, objs)})
 		}
 		switch kind {
 		case "AgentgatewayModel":
@@ -750,6 +753,88 @@ func (r *Reconciler) applyAll(ctx context.Context, objs []*unstructured.Unstruct
 		}
 	}
 	return applyFailed, written, nil
+}
+
+// attachesToAbsentTarget is true for a policy that targets an AgentgatewayBackend (or one of its targets, by
+// sectionName) that this pass does not generate. agentgateway cannot attach such a policy ("Attached is False: the
+// backend is not found"), so the step waits only until agentgateway has accepted it (an Invalid verdict or a NACK
+// still stops the change), not for the attachment (#431). The shared MCP backend is left out while no image
+// server answers (compileServers), and a server joins it only when the reconciler has set Serving, after the step: a
+// wait here ran into activationTimeout on the first MCP Server of a new cluster. The policy is still written, so the
+// backend never comes back before its authorization.
+func attachesToAbsentTarget(p *unstructured.Unstructured, objs []*unstructured.Unstructured) bool {
+	refs, _, _ := unstructured.NestedSlice(p.Object, "spec", "targetRefs")
+	for _, r := range refs {
+		ref, _ := r.(map[string]any)
+		if ref["kind"] != "AgentgatewayBackend" {
+			continue
+		}
+		var backend *unstructured.Unstructured
+		for _, o := range objs {
+			if o.GetKind() == "AgentgatewayBackend" && o.GetName() == ref["name"] {
+				backend = o
+			}
+		}
+		if backend == nil {
+			return true
+		}
+		section, _ := ref["sectionName"].(string)
+		if section == "" {
+			continue
+		}
+		targets, _, _ := unstructured.NestedSlice(backend.Object, "spec", "mcp", "targets")
+		found := false
+		for _, t := range targets {
+			if tm, _ := t.(map[string]any); tm["name"] == section {
+				found = true
+			}
+		}
+		if !found {
+			return true
+		}
+	}
+	return false
+}
+
+// attachPending: a policy of this pass waits for its attachment (see awaitsAttachment), so the change is gated.
+func (r *Reconciler) attachPending(ctx context.Context, objs []*unstructured.Unstructured) bool {
+	for _, o := range objs {
+		if o.GetKind() != "AgentgatewayPolicy" {
+			continue
+		}
+		current := &unstructured.Unstructured{}
+		current.SetGroupVersionKind(o.GroupVersionKind())
+		if err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: o.GetName()}, current); err == nil && awaitsAttachment(current, o, objs) {
+			return true
+		}
+	}
+	return false
+}
+
+// awaitsAttachment is true for a policy of a backend (or target) that this pass generates, which agentgateway has
+// reported as not attached: it was accepted while its backend was absent (attachesToAbsentTarget). The rules version
+// does not change when the backend appears, so without this the first attachment would not be waited for (#431).
+func awaitsAttachment(current, desired *unstructured.Unstructured, objs []*unstructured.Unstructured) bool {
+	if desired.GetKind() != "AgentgatewayPolicy" || attachesToAbsentTarget(desired, objs) {
+		return false
+	}
+	if refs, _, _ := unstructured.NestedSlice(desired.Object, "spec", "targetRefs"); len(refs) == 0 {
+		return false
+	} else if ref, _ := refs[0].(map[string]any); ref["kind"] != "AgentgatewayBackend" {
+		return false
+	}
+	entries, _, _ := unstructured.NestedSlice(current.Object, "status", "ancestors")
+	for _, e := range entries {
+		em, _ := e.(map[string]any)
+		if em["controllerName"] != agentgatewayController {
+			continue
+		}
+		conds, _ := em["conditions"].([]any)
+		if c := findCond(conds, "Attached"); c != nil && c["status"] == "False" {
+			return true
+		}
+	}
+	return false
 }
 
 // readTools returns the server's tools, reading them again when they are older than toolsRefresh.

@@ -387,3 +387,71 @@ func TestGateFailsOnANackOfThePublicGateway(t *testing.T) {
 		}
 	}
 }
+
+// #431: agentgateway cannot attach a policy to a backend that is not there, so a step must not wait for the attachment. An image
+// server joins the MCP backend only when it answers (Serving), which the same reconciler sets after the step: waiting
+// stalled the whole change for activationTimeout (120 s) on the first MCP Server of a new cluster.
+func TestPolicyOfAnAbsentBackendOrTargetIsNotGated(t *testing.T) {
+	policy := func(kind, name, section string) *unstructured.Unstructured {
+		ref := map[string]any{"group": "agentgateway.dev", "kind": kind, "name": name}
+		if section != "" {
+			ref["sectionName"] = section
+		}
+		return generated("agentgateway.dev/v1alpha1", "AgentgatewayPolicy", "p", "ambit-system", map[string]any{"targetRefs": []any{ref}})
+	}
+	backend := func(targets ...string) *unstructured.Unstructured {
+		var ts []any
+		for _, n := range targets {
+			ts = append(ts, map[string]any{"name": n, "static": map[string]any{"host": "h", "port": int64(80)}})
+		}
+		return generated("agentgateway.dev/v1alpha1", "AgentgatewayBackend", "ambit-mcp", "ambit-system", map[string]any{"mcp": map[string]any{"targets": ts}})
+	}
+	for _, c := range []struct {
+		name string
+		p    *unstructured.Unstructured
+		objs []*unstructured.Unstructured
+		want bool
+	}{
+		{"no backend generated (no server answers yet)", policy("AgentgatewayBackend", "ambit-mcp", ""), nil, true},
+		{"another backend only", policy("AgentgatewayBackend", "ambit-mcp-public", ""), []*unstructured.Unstructured{backend("time")}, true},
+		{"backend generated", policy("AgentgatewayBackend", "ambit-mcp", ""), []*unstructured.Unstructured{backend("time")}, false},
+		{"section is a generated target", policy("AgentgatewayBackend", "ambit-mcp", "time"), []*unstructured.Unstructured{backend("time", "crm")}, false},
+		{"section is not a target (server not serving)", policy("AgentgatewayBackend", "ambit-mcp", "everything"), []*unstructured.Unstructured{backend("time")}, true},
+		{"policy of a route is always gated", policy("HTTPRoute", "ambit", ""), nil, false},
+	} {
+		if got := attachesToAbsentTarget(c.p, c.objs); got != c.want {
+			t.Errorf("%s: attachesToAbsentTarget = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// #431: a policy whose backend is not generated yet is waited for until agentgateway has accepted it, not until it is
+// attached; an Invalid verdict still stops the change at once, and a policy that is not accepted yet still waits.
+func TestAcceptedOnlyGateIgnoresAttachedButNotInvalid(t *testing.T) {
+	g := []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 1, acceptedOnly: true}}
+	pending := agwCond("Attached", "False", "Pending", 1)
+
+	r, _ := gateReconciler(gatedPolicy(1, ancestor(agentgatewayController, agwCond("Accepted", "True", "Valid", 1), pending)))
+	if err := r.gate(t.Context(), g, nil, 120*time.Second); err != nil {
+		t.Errorf("accepted, not attached: %v (must pass)", err)
+	}
+	// the same object waits when it is not acceptedOnly: that was the 120 s stall
+	r, _ = gateReconciler(gatedPolicy(1, ancestor(agentgatewayController, agwCond("Accepted", "True", "Valid", 1), pending)))
+	if err := r.gate(t.Context(), []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 1}}, nil, 10*time.Second); err == nil {
+		t.Error("an attachable policy passed while Attached is False")
+	}
+	r, _ = gateReconciler(gatedPolicy(1, ancestor(agentgatewayController, agwCond("Accepted", "False", "Invalid", 1), pending)))
+	err := r.gate(t.Context(), g, nil, 120*time.Second)
+	if err == nil || !strings.Contains(err.Error(), "Accepted is False (Invalid") {
+		t.Errorf("an Invalid policy of an absent backend must stop the change: %v", err)
+	}
+	r, _ = gateReconciler(gatedPolicy(1))
+	if err := r.gate(t.Context(), g, nil, 10*time.Second); err == nil {
+		t.Error("a policy without any status passed")
+	}
+	// PartiallyValid: translated with errors, not attached: not a pass
+	r, _ = gateReconciler(gatedPolicy(1, ancestor(agentgatewayController, agwCond("Accepted", "True", "PartiallyValid", 1), pending)))
+	if err := r.gate(t.Context(), g, nil, 10*time.Second); err == nil {
+		t.Error("a PartiallyValid policy passed")
+	}
+}

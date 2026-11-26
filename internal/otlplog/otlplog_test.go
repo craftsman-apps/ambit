@@ -284,6 +284,7 @@ func TestCloseEndsRetries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(e.Close) // runs before the RetryWait restore above, also after a t.Fatal
 	e.Send(Record(time.Now(), "x"))
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -305,5 +306,16 @@ func TestCloseEndsRetries(t *testing.T) {
 	}
 	if d := testutil.ToFloat64(dropped.WithLabelValues(DropSendFailed)); d != 1 {
 		t.Errorf("send failures %v, want 1", d)
+	}
+}
+
+// The OTLP specification's retryable statuses (without RetryInfo, ResourceExhausted is not one).
+func TestRetryableStatuses(t *testing.T) {
+	for c, want := range map[codes.Code]bool{codes.Unavailable: true, codes.DeadlineExceeded: true, codes.Aborted: true,
+		codes.Canceled: true, codes.OutOfRange: true, codes.DataLoss: true,
+		codes.ResourceExhausted: false, codes.InvalidArgument: false, codes.PermissionDenied: false, codes.Unauthenticated: false} {
+		if got := retryable(status.Error(c, "x")); got != want {
+			t.Errorf("retryable(%v) = %v, want %v", c, got, want)
+		}
 	}
 }

@@ -58,6 +58,12 @@ type gated struct {
 	kind, name string
 	generation int64
 	changed    bool // the write created it or changed its spec
+	// acceptedOnly: the policy's target is not generated yet, so it cannot be attached; waiting for Attached would last
+	// until the timeout (#431). Accepted (and so an Invalid verdict) still counts.
+	acceptedOnly bool
+	// attachWait: agentgateway has the policy as not attached while its backend is now generated (awaitsAttachment): the
+	// step waits for it like for a written object, but it is not a fresh write (a retry still checks once).
+	attachWait bool
 }
 
 // stalledError is a step that agentgateway did not apply: the change stops there. objects are the objects that
@@ -309,6 +315,9 @@ func activationOf(o *unstructured.Unstructured, g gated) (waiting string, invali
 	if g.kind == "AgentgatewayModel" {
 		field, types = "parents", []string{"Accepted"}
 	}
+	if g.acceptedOnly {
+		types = []string{"Accepted"}
+	}
 	entries, _, _ := unstructured.NestedSlice(o.Object, "status", field)
 	seen := false
 	for _, e := range entries {
@@ -326,6 +335,9 @@ func activationOf(o *unstructured.Unstructured, g gated) (waiting string, invali
 				detail = typ + " is missing"
 			case observed(c) < g.generation:
 				detail = fmt.Sprintf("%s is %v (%v: %v) for generation %d", typ, c["status"], c["reason"], c["message"], observed(c))
+			case g.acceptedOnly && typ == "Accepted" && c["status"] == "True" && c["reason"] != "Valid":
+				// PartiallyValid: agentgateway built the policy with translation errors and does not attach it
+				detail = fmt.Sprintf("%s is %v (%v: %v)", typ, c["status"], c["reason"], c["message"])
 			case c["status"] != "True":
 				detail = fmt.Sprintf("%s is %v (%v: %v)", typ, c["status"], c["reason"], c["message"])
 				if c["status"] == "False" && c["reason"] == "Invalid" {
@@ -445,7 +457,7 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 			switch {
 			case g.changed:
 				anyChanged = true
-			case remembered[g.kind+"/"+g.name]:
+			case remembered[g.kind+"/"+g.name], g.attachWait:
 			default:
 				o := &unstructured.Unstructured{}
 				o.SetGroupVersionKind(AgentgatewayPolicyGVK.GroupVersion().WithKind(g.kind))

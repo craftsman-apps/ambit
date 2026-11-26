@@ -171,7 +171,7 @@ elif MODE == "nat":
     # One company address, many people. A platform registers once (one client for all of its users), then each person signs in. All from one address.
     # The people sign in at the same time (WORKERS at once): that is what an announcement does, and a sign-in takes seconds on a small cluster.
     import threading
-    WORKERS = 8
+    WORKERS = 4
     COUNT = {"signin": 0, "token": 0, "discovery": 0}
     lock = threading.Lock()
     orig = Browser.req

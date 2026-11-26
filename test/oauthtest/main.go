@@ -58,6 +58,13 @@ type user struct {
 	CbIss      string // an iss parameter on the redirect to the callback
 }
 
+func init() {
+	// person0 to person199: many different people, for the checks that connect more platforms than one person may (agents.maxPerPerson is 10 at most)
+	for i := 0; i < 200; i++ {
+		users[fmt.Sprintf("person%d", i)] = user{Email: fmt.Sprintf("person%d@acme.test", i), Sub: fmt.Sprintf("u-person%d", i), Verified: true, Groups: []string{"eng"}}
+	}
+}
+
 var users = map[string]user{
 	"alice":         {Email: "alice@acme.test", Sub: "u-alice", Verified: true, Groups: []string{"eng", "ml-research"}},
 	"bob":           {Email: "bob@acme.test", Sub: "u-bob", Verified: true, Groups: []string{"eng"}},

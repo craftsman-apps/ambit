@@ -4,7 +4,7 @@ library only. The database side (dump, restore, a switched Service, a stopped po
 the database must keep, and looks at what a platform and a person would see.
 
 Modes (python3 dbops.py MODE ...), environment as gateway.py:
-  grants N FILE            N connections of the person bob (each a new client and agent): FILE = [{cid, refresh, access}, ...]
+  grants N FILE [FIRST]    N connections, each of another person (person<FIRST> ...; a person may have 10 agents at most), each a new client and agent: FILE = [{cid, refresh, access}, ...]
   refresh FILE INDEX       one refresh of grant INDEX; prints "HTTP-status error-code"; on 200 the new refresh token goes into FILE
   mcp FILE INDEX           an MCP tool list with the access token of grant INDEX at every public pod; prints the statuses
   dcr N                    N clients registered like a platform does; prints their IDs
@@ -21,9 +21,10 @@ import threading
 mode = ARGV[1]
 if mode == "grants":
     n, out = int(ARGV[2]), ARGV[3]
+    first = int(ARGV[4]) if len(ARGV) > 4 else 0
     gs = []
     for i in range(n):
-        cid, tok = connect("bob", ("time",), name=f"Platform {i}")
+        cid, tok = connect(f"person{first + i}", ("time",), name=f"Platform {i}")
         gs.append({"cid": cid, "refresh": tok["refresh_token"], "access": tok["access_token"]})
     json.dump(gs, open(out, "w"))
     print(f"{n} grants")

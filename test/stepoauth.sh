@@ -397,7 +397,7 @@ pass "14 tokens at the public Gateway"
 # --- 16 · PostgreSQL operations (docs/oauth.md, "Operations"): TLS only, the pool, a dump, a restore into another instance and a name moved
 #         to it, a crash, a 30 second outage, and what a rollback by `hydra migrate sql down` does. Names P1 to P6 are those of the design.
 #         What the people see is checked with real grants (test/oauthtest/dbops.py). Needs the real console (check 14).
-oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --set agents.maxPerPerson=60 --wait --timeout 8m
+oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --wait --timeout 8m
 kubectl -n "$NS" rollout status deploy/ambit-console --timeout=300s >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
 reforward
@@ -409,7 +409,7 @@ live() { echo "$(kubectl -n "$NS" get svc ambit-pg17 -o jsonpath='{.spec.selecto
 psq() { kubectl -n "$NS" exec "$(live)" -c postgres -- psql -q -At -U postgres -d hydra -c "$1"; }
 hydra_both_ready() { [[ "$(hydra_ready ambit-hydra-0)" == True && "$(hydra_ready ambit-hydra-1)" == True ]]; }
 jwks_ok() { [[ $(auth "$PA" GET /.well-known/jwks.json) == 200 ]]; }
-dbo grants 4 "$W/g.json" >/dev/null || fail "16 could not make four connections (grants) to keep"
+dbo grants 4 "$W/g.json" 0 >/dev/null || fail "16 could not make four connections (grants) to keep"
 for i in 0 1 2 3; do [[ "$(dbo refresh "$W/g.json" $i)" == "200 " ]] || fail "16 grant $i does not refresh before the tests"; done
 
 # P1: TLS only. A connection without TLS is refused by the server; every connection of Hydra uses TLS.
@@ -480,7 +480,7 @@ FO=$("${PY[@]}" -c "f,l,s=$FIRST,$LAST,$T_SWITCH; print('no error' if $NERR==0 e
 # What the people see: the grant that was not used since the dump refreshes; the one that refreshed after it must connect again.
 [[ "$(dbo refresh "$W/g.json" 0)" == "200 " ]] || fail "16 P5 a grant that was not used since the backup must refresh on the restored database"
 [[ "$(dbo refresh "$W/g.json" 1)" == "400 invalid_grant" ]] || fail "16 P5 a grant that refreshed after the backup must be refused with invalid_grant, got: $(dbo refresh "$W/g.json" 1)"
-dbo grants 1 "$W/g-new.json" >/dev/null || fail "16 P5 a new sign-in must work on the restored database"
+dbo grants 1 "$W/g-new.json" 10 >/dev/null || fail "16 P5 a new sign-in must work on the restored database"
 pass "16 P5 restore of the dump into a new PostgreSQL 17 in $RESTS s, the name ambit-pg17 moved to it and the old one stopped: $FO; a grant not used since the backup refreshes (200), one refreshed after it is refused (invalid_grant) and connects again, a new sign-in works"
 
 # P6: the database pod is deleted (its volume stays): Hydra recovers by itself, the data is there.
@@ -600,7 +600,7 @@ RF2=$(psq "select count(*) from hydra_oauth2_refresh"); FL2=$(psq "select count(
 [[ "$(psq 'select count(*) from schema_migration')" == "$SM1" && "$(psq 'select count(*) from hydra_client')" == "$CL1" ]] || fail "16 after up again the migrations and the clients must be as before"
 [[ "$RF2" == 0 && "$FL2" == 0 && "$AC2" == 0 && "$RF1" -gt 0 ]] || fail "16 one step down: expected the flows, refresh tokens and access tokens to go (flows $FL2, refresh tokens $RF2, access tokens $AC2, before: refresh tokens $RF1)"
 [[ "$(dbo refresh "$W/g.json" 0)" == "400 invalid_grant" ]] || fail "16 after migrate down every grant must be refused with invalid_grant, got: $(dbo refresh "$W/g.json" 0)"
-dbo grants 1 "$W/g-new2.json" >/dev/null || fail "16 a new sign-in must work after migrate down and up"
+dbo grants 1 "$W/g-new2.json" 20 >/dev/null || fail "16 a new sign-in must work after migrate down and up"
 pass "16 P2 \`hydra migrate sql down --steps 1\` then \`up\`: the clients stay ($CL1), the login and consent records and all $RF1 refresh tokens are gone, every grant must connect again, a new sign-in works. A rollback is a restore of the backup, not migrate down"
 
 # --- 17 · the clean-up: `hydra janitor` (the CronJob, run once by hand) and the clients that nobody used (ambit-auth)
@@ -608,7 +608,7 @@ pass "16 P2 \`hydra migrate sql down --steps 1\` then \`up\`: the clients stay (
 # live grant whose login and consent record is two days old (10 minutes is the janitor's limit for a record): the janitor must remove the tokens of the
 # first and must not touch the second (the record of a sign-in holds the refresh token by a cascading rule of the database: if the janitor deleted
 # it, the connection would end), nor any grant younger than an hour.
-dbo grants 3 "$W/j.json" >/dev/null || fail "17 could not make three connections"
+dbo grants 3 "$W/j.json" 30 >/dev/null || fail "17 could not make three connections"
 JLIVE=$("${PY[@]}" -c 'import json,sys;print(json.load(open(sys.argv[1]))[0]["cid"])' "$W/j.json")
 JOLD=$("${PY[@]}" -c 'import json,sys;print(json.load(open(sys.argv[1]))[2]["cid"])' "$W/j.json")
 cnt() { psq "select count(*) from hydra_oauth2_$1 where client_id = '$2'"; }

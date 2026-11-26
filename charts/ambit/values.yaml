@@ -298,6 +298,9 @@ oauth:
       redirectHosts: [chatgpt.com, claude.ai]
       # Registrations allowed per caller address and hour (counted in Valkey, shared by all replicas).
       perSourcePerHour: 10
+      # Registrations that ambit-auth accepts in an hour, all callers together (security review N2): a flood from many networks cannot fill the cap faster than this.
+      # 20 an hour is 480 a day, below maxClients. IPv6 callers count by their /48 for perSourcePerHour in ambit-auth.
+      globalPerHour: 20
       # At most this many registered clients; one that nobody used for unusedClientDays is deleted.
       maxClients: 500
       unusedClientDays: 30

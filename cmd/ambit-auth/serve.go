@@ -130,6 +130,11 @@ func serve(ctx context.Context) error {
 		return errors.New("AMBIT_AUTH_REGISTER_PER_HOUR must be 1 or more")
 	}
 	rates[oauth.BucketRegister] = oauth.Rate{Limit: perHour, Window: time.Hour}
+	globalPerHour, err := envInt("AMBIT_AUTH_REGISTER_GLOBAL_PER_HOUR", rates[oauth.BucketRegisterAll].Limit)
+	if err != nil || globalPerHour < 1 {
+		return errors.New("AMBIT_AUTH_REGISTER_GLOBAL_PER_HOUR must be 1 or more")
+	}
+	rates[oauth.BucketRegisterAll] = oauth.Rate{Limit: globalPerHour, Window: time.Hour}
 	for env, bucket := range map[string]string{"AMBIT_AUTH_DISCOVERY_PER_MINUTE": oauth.BucketDiscovery, "AMBIT_AUTH_SIGNIN_PER_MINUTE": oauth.BucketSignIn} {
 		n, err := envInt(env, rates[bucket].Limit)
 		if err != nil || n < 1 {

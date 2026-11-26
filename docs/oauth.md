@@ -174,7 +174,7 @@ caller looks like one address: see [The public front door](front-door.md#load-ba
 Separate buckets per caller address, so that a flood of one kind never uses up another. The **address** is the one the public Gateway sees: the
 connection, or the PROXY protocol header of your load balancer ([supported modes](front-door.md#load-balancers-and-the-client-address)). A header that the
 caller writes (`X-Forwarded-For`, `X-Real-IP`, `Forwarded`, `X-Ambit-Client-Address`) is never read, and the Gateway removes it before a request
-reaches `ambit-auth`. An IPv6 caller counts by its /64 in `ambit-auth`, and by the single address at the Gateway.
+reaches `ambit-auth`. An IPv6 caller counts by its /64 in `ambit-auth` (by its **/48** for registration: a free tunnel gives a person 65,000 /64 networks), and by the single address at the Gateway.
 
 Two places count, with the same numbers:
 
@@ -189,10 +189,13 @@ Two places count, with the same numbers:
 | discovery | `/.well-known/*`, and `POST /mcp` without a credential | `oauth.rateLimit.discoveryPerMinute` | 600 per minute |
 | sign-in | `/oauth2/auth`, `/login`, `/callback`, `/consent`, `/error` | `oauth.rateLimit.signInPerMinute` | 300 per minute |
 | token | `/oauth2/token`, `/oauth2/revoke` | `oauth.rateLimit.tokenPerMinute` | 600 per minute |
-| registration | `/register` | `oauth.registration.dynamic.perSourcePerHour` | 10 per hour |
+| registration | `/register` | `oauth.registration.dynamic.perSourcePerHour` | 10 per hour per address (per **/48** for an IPv6 caller, in `ambit-auth`) |
+| registrations, all callers | `/register`, only a request that passed the checks | `oauth.registration.dynamic.globalPerHour` | 20 per hour in all (480 a day, below the cap of 500), counted in `ambit-auth` |
 
-Over a limit the Gateway answers **429**. The registration also stops at `maxClients` (500) and a client that nobody used for `unusedClientDays` (30)
-is deleted ([Registering clients](#registering-clients)).
+Over a limit the Gateway answers **429**. The registration also stops at `maxClients` (500); a client that nobody used for `unusedClientDays` (30), and a client that no
+consent and no refresh ever used 24 hours after it registered, is deleted ([Registering clients](#registering-clients)). So a flood of registrations from many networks (security review N2) is held by the
+global limit (it cannot fill the cap faster than 480 a day) and by the clean-up (a client that is never used goes after a day). **The price:** while a flood uses the global limit, a real platform
+that registers in the same hour can get 429 (`Retry-After: 3600`); pre-registered clients and existing connections are not affected. Raise `globalPerHour` if your platforms register often.
 
 ### How many people can sign in from one company address
 

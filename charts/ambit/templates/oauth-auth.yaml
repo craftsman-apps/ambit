@@ -103,6 +103,7 @@ spec:
             - { name: AMBIT_AUTH_REGISTRATION_HOSTS, value: {{ join "," $dcr.redirectHosts | quote }} }
             - { name: AMBIT_AUTH_MAX_CLIENTS, value: {{ $dcr.maxClients | quote }} }
             - { name: AMBIT_AUTH_REGISTER_PER_HOUR, value: {{ $dcr.perSourcePerHour | quote }} }
+            - { name: AMBIT_AUTH_REGISTER_GLOBAL_PER_HOUR, value: {{ $dcr.globalPerHour | default 20 | quote }} }
             - { name: AMBIT_AUTH_UNUSED_CLIENT_DAYS, value: {{ $dcr.unusedClientDays | quote }} }
             {{- else }}
             - { name: AMBIT_AUTH_REGISTRATION, value: "off" }

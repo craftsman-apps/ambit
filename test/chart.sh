@@ -544,10 +544,12 @@ none=$(helm template ambit charts/ambit -n ambit-system "${fdv[@]}")
 # Rate limits of the sign-in host: separate buckets, counted at the Gateway before the route and the credential, by the address of the connection.
 check_oa 'e=one("AgentgatewayPolicy","ambit-public-source-limit")["spec"]["traffic"]["extAuth"]["http"]["body"]
 b=e.split("\"fd_bucket\", \"value\": ",1)[1].split("}, {\"key\": \"fd_source\"",1)[0]
-for want in ("\"/oauth2/token\"","\"/oauth2/revoke\"","\"/register\"","\"/oauth2/auth\"","\"/login\"","\"/callback\"","\"/consent\"","\"/error\"","\"/.well-known/\"","\"/mcp\"","\"x-api-key\"","\"authorization\""):
+for want in ("\"/oauth2/token\"","\"/oauth2/revoke\"","\"/register\"","\"/.well-known/\"","\"/mcp\"","\"x-api-key\"","\"authorization\""):  # every other path of the sign-in host is the sign-in bucket
     assert want in b, (want, b)
 for bucket in ("token","registration","signin","discovery","mcp"):
-    assert "? \"%s\"" % bucket in b or b.endswith(": \"%s\"" % bucket), (bucket, b)
+    assert "\"%s\"" % bucket in b, (bucket, b)
+assert b.count("request.host")==4 and "\"auth.localtest.me\"" in b and "\"mcp-public.localtest.me\"" in b, b  # the host is part of the choice: the sign-in buckets only on the sign-in host (security review N8)
+assert b.index("request.host")<b.index("\"/oauth2/token\""), b
 assert "string(source.address)" in e and "x-forwarded" not in e.lower() and "x-ambit-client-address" not in e.lower() and "forwarded" not in b.lower(), e
 c=yaml.safe_load(one("ConfigMap","ambit-ratelimit-front-door")["data"]["front-door.yaml"])
 got={d["value"]:(d["descriptors"][0]["key"],d["descriptors"][0]["rate_limit"]["unit"],d["descriptors"][0]["rate_limit"]["requests_per_unit"]) for d in c["descriptors"] if d["key"]=="fd_bucket"}
@@ -556,7 +558,7 @@ env={e["name"]:e["value"] for e in one("Deployment","ambit-auth")["spec"]["templ
 g=one("AgentgatewayPolicy","ambit-public-limits")["spec"]["traffic"]["rateLimit"]["global"]["descriptors"][0]["entries"][0]["expression"]
 assert "jwt.ambit_agent" in g and "apiKey.keyId" in g and g.endswith("\"none\")"), g  # a token counts for its agent, not in one counter for every token; no credential: no counter
 assert c["descriptors"][0]=={"key":"fd_credential","value":"none","rate_limit":{"unlimited":True}} and c["descriptors"][1]["key"]=="fd_credential" and "value" not in c["descriptors"][1], c["descriptors"][:2]
-assert env["AMBIT_AUTH_DISCOVERY_PER_MINUTE"]=="600" and env["AMBIT_AUTH_SIGNIN_PER_MINUTE"]=="300" and env["AMBIT_AUTH_REGISTER_PER_HOUR"]=="10", env' "the source limit has five buckets (mcp, discovery, sign-in, token, registration): the Gateway reads the path and two header names, never a client address header; ambit-auth gets the same numbers"
+assert env["AMBIT_AUTH_DISCOVERY_PER_MINUTE"]=="600" and env["AMBIT_AUTH_SIGNIN_PER_MINUTE"]=="300" and env["AMBIT_AUTH_REGISTER_PER_HOUR"]=="10" and env["AMBIT_AUTH_REGISTER_GLOBAL_PER_HOUR"]=="20", env' "the source limit has five buckets (mcp, discovery, sign-in, token, registration): the Gateway reads the path and two header names, never a client address header; ambit-auth gets the same numbers"
 set_rl=$(oat --set oauth.rateLimit.signInPerMinute=77 --set oauth.registration.dynamic.perSourcePerHour=3)
 grep -q 'requests_per_unit: 77' <<<"$set_rl" && grep -q 'requests_per_unit: 3 }' <<<"$set_rl" && grep -q 'AMBIT_AUTH_SIGNIN_PER_MINUTE, value: "77"' <<<"$set_rl" || { echo "FAIL chart: the bucket values must reach the ratelimit config and ambit-auth"; exit 1; }
 MSG='oauth.rateLimit.signInPerMinute' refuse "a sign-in limit of 0" --set oauth.rateLimit.signInPerMinute=0

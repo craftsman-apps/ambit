@@ -144,12 +144,12 @@ the credential, refused requests included, shared by all gateway pods). A flood 
 
 | Bucket | Default | Which requests |
 |---|---|---|
-| **discovery** (`oauth.rateLimit.discoveryPerMinute`) | 600 a minute | `GET /.well-known/*` on both hosts (the metadata documents, the key list), and `POST /mcp` **without any credential** (no `x-api-key`, no `Authorization`): the 401 that starts a sign-in |
-| **sign-in** (`oauth.rateLimit.signInPerMinute`) | 300 a minute | `/oauth2/auth`, `/login`, `/callback`, `/consent`, `/error` of the sign-in host |
-| **token** (`oauth.rateLimit.tokenPerMinute`) | 600 a minute | `/oauth2/token`, `/oauth2/revoke` |
-| **registration** (`oauth.registration.dynamic.perSourcePerHour`) | 10 an hour | `/register` |
+| **discovery** (`oauth.rateLimit.discoveryPerMinute`) | 600 a minute | `/.well-known/*` on both hosts (the metadata documents, the key list), and `POST /mcp` on the MCP host **without any credential** (no `x-api-key`, no `Authorization`): the 401 that starts a sign-in |
+| **sign-in** (`oauth.rateLimit.signInPerMinute`) | 300 a minute | on the sign-in host: `/oauth2/auth`, `/login`, `/callback`, `/consent`, `/error`, and every other path of that host that is not one of the three above or below (an unknown path) |
+| **token** (`oauth.rateLimit.tokenPerMinute`) | 600 a minute | on the sign-in host: `/oauth2/token`, `/oauth2/revoke` |
+| **registration** (`oauth.registration.dynamic.perSourcePerHour`) | 10 an hour | on the sign-in host: `/register` |
 
-The bucket is chosen by the path and by whether a credential header is present, nothing else. A path that no route serves is in **mcp**.
+The bucket is chosen by the **host name**, the path, and whether a credential header is present, nothing else. The buckets of the sign-in host exist only on that host, and the discovery of the MCP host only there: a flood on the MCP host that uses sign-in paths (they are 404 there) stays in **mcp** and cannot spread over the other buckets. A request to any other host name is in **mcp**. The host is compared as the client wrote it, with or without a port.
 `ambit-auth` counts the first two buckets and the registration again with the same numbers, as a second line when the ratelimit service is down.
 
 A request over a limit gets **429** (or, for an MCP request, `200` with a JSON-RPC error: agentgateway reports some errors of

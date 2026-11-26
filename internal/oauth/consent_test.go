@@ -477,6 +477,78 @@ func TestManyUsersBehindOneAddress(t *testing.T) {
 	}
 }
 
+// Security review N2: one /48 (a free IPv6 tunnel) has 65,000 /64 networks. Registrations count by the /48, not by the /64.
+func TestRegistrationsCountIPv6By48(t *testing.T) {
+	e := newEnv(t)
+	e.srv.Cfg.MaxClients = 500
+	e.lim.Rates[BucketRegisterAll] = Rate{Limit: 1000, Window: time.Hour}
+	ok := 0
+	for i := 0; i < 30; i++ { // 30 different /64 networks of one /48
+		b := e.browser()
+		b.addr = fmt.Sprintf("2001:db8:48:%x::1", i+1)
+		if w, _ := post(b, reg("https://chatgpt.com/cb"), nil); w.Code == 201 {
+			ok++
+		} else if w.Code != 429 {
+			t.Fatalf("network %d: %d", i, w.Code)
+		}
+	}
+	if ok != 10 {
+		t.Fatalf("10 registrations an hour for one /48, got %d", ok)
+	}
+	other := e.browser()
+	other.addr = "2001:db8:49::1" // another /48
+	if w, _ := post(other, reg("https://chatgpt.com/cb"), nil); w.Code != 201 {
+		t.Fatalf("another /48: %d", w.Code)
+	}
+	// the sign-in pages still count by the /64 (a company's /48 holds many people)
+	k1, _ := ClientKey(&http.Request{Header: http.Header{ClientAddrHeader: {"2001:db8:48:1::1"}}})
+	k2, _ := ClientKey(&http.Request{Header: http.Header{ClientAddrHeader: {"2001:db8:48:2::1"}}})
+	if k1 == k2 {
+		t.Fatal("the sign-in pages must count a /48 by its /64 networks")
+	}
+}
+
+// Security review N2: one limit for the registrations of all callers together, so that a flood from many networks cannot fill the cap faster
+// than it, and a request that is refused does not use it up.
+func TestRegistrationGlobalLimit(t *testing.T) {
+	e := newEnv(t)
+	e.srv.Cfg.MaxClients = 500
+	e.lim.Rates[BucketRegister] = Rate{Limit: 1000, Window: time.Hour}
+	e.lim.Rates[BucketRegisterAll] = Rate{Limit: 5, Window: time.Hour}
+	for i := 0; i < 20; i++ { // refused requests (a wrong redirect address) from many networks do not count
+		b := e.browser()
+		b.addr = fmt.Sprintf("203.0.113.%d", i+1)
+		if w, _ := post(b, reg("https://evil.example.com/cb"), nil); w.Code != 400 {
+			t.Fatalf("refused request %d: %d", i, w.Code)
+		}
+	}
+	created, limited := 0, 0
+	var retry string
+	for i := 0; i < 12; i++ { // accepted ones from 12 different networks
+		b := e.browser()
+		b.addr = fmt.Sprintf("198.51.100.%d", i+1)
+		w, _ := post(b, reg("https://chatgpt.com/cb"), nil)
+		switch w.Code {
+		case 201:
+			created++
+		case 429:
+			limited++
+			retry = w.Header().Get("Retry-After")
+		default:
+			t.Fatalf("registration %d: %d", i, w.Code)
+		}
+	}
+	if created != 5 || limited != 7 || retry != "3600" {
+		t.Fatalf("created %d, limited %d, Retry-After %q; want 5, 7, 3600", created, limited, retry)
+	}
+	e.now = e.now.Add(61 * time.Minute)
+	b := e.browser()
+	b.addr = "198.51.100.200"
+	if w, _ := post(b, reg("https://chatgpt.com/cb"), nil); w.Code != 201 {
+		t.Fatalf("after the hour: %d", w.Code)
+	}
+}
+
 func TestLimitFallsBackToTheLocalCounterWhenSharedFails(t *testing.T) {
 	e := newEnv(t)
 	e.lim.Shared = failingLimiter{}

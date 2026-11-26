@@ -360,7 +360,9 @@ Restore into a **new** instance; never over the live one.
 1. Create the new instance with the same TLS rules (a certificate for the name Hydra uses, the same CA), the role and the empty database `hydra`, then restore:
    `pg_restore -U <superuser> -d hydra --exit-on-error /tmp/hydra.dump` (a managed service: its "restore to a new instance").
 2. Check it: the counts of `hydra_client` and `hydra_oauth2_refresh` are what you expect.
-3. **Stop the old database first**, or take the login away from its role (`ALTER ROLE ... NOLOGIN`), so that no Hydra pod can still write to it while another pod already uses the new one. A rolling
+3. **Block the tokens, and stop the old database first.** Set `oauth.emergencyBlock: true` and upgrade (or use the `kubectl patch` of "If a signing key may be stolen"): no token of the sign-in host is accepted
+   at the gateway until step 5 is done, so a restored credential that should be dead cannot be used meanwhile. Then **stop the old database** (not only `ALTER ROLE ... NOLOGIN`: that does not end the sessions that
+   exist; if you cannot stop it, also end them with `pg_terminate_backend`), so that no Hydra pod can still write to it while another pod already uses the new one. A rolling
    change of the address leaves for a short time pods on both: a refresh that succeeds on the old side (and rotates the token there) can fail on the next call on the new side.
    Then point Hydra at the new instance: change the Secret `oauth.database.dsnSecret` (or move the DNS name or Service), then roll Hydra's pods one at a time:
    `kubectl -n ambit-system rollout restart statefulset/ambit-hydra`. Hydra does not notice a changed Secret by itself. If the name moved and the old instance
@@ -369,14 +371,15 @@ Restore into a **new** instance; never over the live one.
    `invalid_grant`: the new refresh token that the platform holds is not in the backup. Those people connect the platform again (a new sign-in and consent). Clients that
    registered after the backup are missing: that platform gets `invalid_client` and registers again. A person who ended a connection after the backup does not get it back:
    the stop and the offboarding live in Kubernetes. Tell the people: "connections you made or used in the last <time since the backup> may ask you to connect again".
-5. **Re-apply what the backup does not know.** Changes in Hydra after the backup are undone: an OAuth client that an admin deleted is back, and a refresh token that a platform revoked
-   (`/oauth2/revoke`) works again until its agent ends. Read the History of the console for deletions of OAuth clients since the backup, and delete them again; ended connections (agents) stay ended.
+5. **Re-apply what the backup does not know, then lift the block.** Changes in Hydra after the backup are undone: an OAuth client that an admin deleted is back, and a refresh token that a platform revoked
+   (`/oauth2/revoke`) works again, and cannot be found again (Ambit does not keep a list of them): end those connections in Agents if it matters. Read the History of the console for deletions of OAuth clients since the backup, and delete
+   them again; ended connections (agents) stay ended. Then set `oauth.emergencyBlock: false`.
 6. Take a new backup.
 
 ### Fail-over
 
 A managed service's fail-over usually keeps the DNS name and moves it to a replica. Hydra reconnects by itself: no action. *Measured on kind (a Service moved to another
-instance, the old one stopped, so no pod wrote to two databases):* no error in 147 probes over 80 s What kind cannot show: how long your provider's fail-over takes, and how much of the last seconds the replica has (your
+instance and the old one stopped a moment later; the test writes nothing during the move):* no error in 147 probes over 80 s What kind cannot show: how long your provider's fail-over takes, and how much of the last seconds the replica has (your
 RPO). Measure both with checklist items 1 and 2. If the name does not move (a new address), change the Secret and roll the pods as in Restore.
 
 ### Pool sizing

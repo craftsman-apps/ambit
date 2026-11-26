@@ -116,7 +116,10 @@ wait_mock() { # wait_mock STATUS SECONDS: user09's call of the mock model answer
   done
   uv run --no-project python -c "print(round($(now) - $t0, 2))"
 }
-wait_mock 200 40 >/dev/null                 # the rule is active, and the change of check 7 is over
+wait_mock 200 40 >/dev/null                 # the rule is active
+# the change of check 7 (its rule was restored) must be over: no step is pending in ambit-access-mode
+for _ in $(seq 1 400); do [[ -z "$(kubectl -n "$NS" get configmap ambit-access-mode -o jsonpath='{.data.pending}' 2>/dev/null)" ]] && break; sleep 0.1; done
+[[ -z "$(kubectl -n "$NS" get configmap ambit-access-mode -o jsonpath='{.data.pending}' 2>/dev/null)" ]] || fail "7b the change of check 7 is still pending after 40 s"
 kubectl -n "$NS" apply -f - >/dev/null <<YAML  # the change in progress
 apiVersion: $G/v1alpha1
 kind: AccessRule

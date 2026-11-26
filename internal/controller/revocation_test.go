@@ -136,8 +136,8 @@ func TestGateEndsWhenARuleIsRevoked(t *testing.T) {
 	}
 }
 
-// Without watching (audit mode, or no activation) a revoked rule does not end the wait.
-func TestGateDoesNotWatchWhenNotEnforcing(t *testing.T) {
+// Without watching (no activation) a revoked rule does not end the wait.
+func TestGateDoesNotWatchWithoutTheFlag(t *testing.T) {
 	r, clock := gateReconciler(gatedPolicy(1))
 	r.passRules, r.watchRevocations = []v1.AccessRule{{ObjectMeta: metav1.ObjectMeta{Name: "gone", Namespace: "ambit-system"}}}, false
 	err := r.gate(t.Context(), []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 1}}, nil, 10*time.Second)

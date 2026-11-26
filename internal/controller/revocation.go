@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
@@ -77,9 +78,10 @@ func normArgs(in []v1.ArgumentRule) []v1.ArgumentRule {
 		a.OneOf, a.NotContains = slices.Sorted(slices.Values(a.OneOf)), slices.Sorted(slices.Values(a.NotContains))
 		out[i] = a
 	}
-	slices.SortFunc(out, func(a, b v1.ArgumentRule) int {
-		return cmp.Compare(a.Name+"\x00"+a.Min+"\x00"+a.Max, b.Name+"\x00"+b.Min+"\x00"+b.Max)
-	})
+	key := func(a v1.ArgumentRule) string {
+		return strings.Join([]string{a.Name, a.Min, a.Max, strings.Join(a.OneOf, "\x01"), strings.Join(a.NotContains, "\x01")}, "\x00")
+	}
+	slices.SortFunc(out, func(a, b v1.ArgumentRule) int { return cmp.Compare(key(a), key(b)) })
 	if len(out) == 0 {
 		return nil
 	}
@@ -87,9 +89,8 @@ func normArgs(in []v1.ArgumentRule) []v1.ArgumentRule {
 }
 
 // rulesRevoked reports whether an AccessRule that the change in progress compiled has been deleted or narrowed since
-// (read from the API server). Only a change that enforces watches: in audit mode every signed-in request is allowed
-// and a removal changes records only. A grant (a new or wider rule) is not a revocation and keeps the order and the
-// waits of the change.
+// (read from the API server). A grant (a new or wider rule) is not a revocation and keeps the order and the waits of
+// the change.
 func (r *Reconciler) rulesRevoked(ctx context.Context) (bool, error) {
 	if !r.watchRevocations {
 		return false, nil

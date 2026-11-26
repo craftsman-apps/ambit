@@ -221,8 +221,16 @@ if STOPCTL:
     def ctl(*a):
         r = subprocess.run([STOPCTL, *a], capture_output=True, text=True, timeout=180)
         return r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
-    cidA, tokA = connect("alice", ("time",), "StopMe")
-    cidB, tokB = connect("alice", ("time",), "KeepMe")
+    def connect_wait(*a):
+        """A console that has just restarted takes a while to become the one that may write agent records: a consent answers 503 until then."""
+        end = time.time() + 120
+        while True:
+            try: return connect(*a)
+            except RuntimeError as e:
+                if "503" not in str(e) or time.time() > end: raise
+                time.sleep(3)
+    cidA, tokA = connect_wait("alice", ("time",), "StopMe")
+    cidB, tokB = connect_wait("alice", ("time",), "KeepMe")
     agentA = jwt_claims(tokA["access_token"])["ambit_agent"]
     check("7 two connections, two agents", agentA != jwt_claims(tokB["access_token"])["ambit_agent"])
     check("7 both tokens work on every pod before the stop", accepted_everywhere(tokA["access_token"], 120) and accepted_everywhere(tokB["access_token"], 120))

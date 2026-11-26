@@ -79,7 +79,12 @@ wait_expr nemotron-3-super false
 # object changed was still allowed). Measured on kind: 13 to 194 ms; docs/concepts.md, "When a rule change takes
 # effect". Call with a fresh token (user09 is in ml-research again) until the gateway refuses with the denial code,
 # for at most 15 s, and say what it answered if it never does.
-M=$(token user09); end=$((SECONDS + 15)); code=""
+M=$(token user09)
+uv run --no-project python -c 'import base64,json,sys
+p=sys.argv[1].split(".")[1]; p+="="*(-len(p)%4)
+sys.exit(0 if "ml-research" in json.loads(base64.urlsafe_b64decode(p)).get("groups", []) else 1)' "$M" ||
+  fail "7 user09's new token has no ml-research group (check 6 did not restore it): a 403 would prove nothing"
+end=$((SECONDS + 15)); code=""
 while :; do
   code=$(llm "$M" "$NEMO")
   [[ "$code" == 403 ]] && grep -q '"code":"model_authorization_denied"' "$W/llm" && break

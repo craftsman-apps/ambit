@@ -160,7 +160,7 @@ YAML
 }
 # fresh: new tokens for user01 and user09 (the waits in these checks outlast a Keycloak access token), and the UTC day
 # of the counters: a check must not run across midnight, or its charge lands under the next day's key (#427)
-fresh() { hold_for_midnight 120; day=$(( $(date -u +%s) / 86400 * 86400 )); A=$(token user01); M=$(token user09); }
+fresh() { hold_for_midnight 150; day=$(( $(date -u +%s) / 86400 * 86400 )); A=$(token user01); M=$(token user09); }
 # wait_policy [TEXT]: the budget policy is accepted by agentgateway at its current generation (and its cost
 # expression contains TEXT)
 wait_policy() {
@@ -388,7 +388,7 @@ pass "20e the group's 4 a minute are shared by two people: $codes"
 budget_ml "userRequestsPerDay: 1, userRequestsPerMinute: 1"
 wait_rl "$NS" "ambit-llm.rpm_group_ml-research.rpm_user: unit=MINUTE requests_per_unit=1,"
 wait_rl "$NS" "ambit-llm.group_ml-research.user: unit=DAY requests_per_unit=0,"
-hold_for_midnight 150   # two minute changes below; the daily limit must not reset in between (#427)
+hold_for_midnight 200   # two waits for a new minute below (up to 125 s); f3 must run more than 60 s before midnight, or its Retry-After is the day's end (#427)
 new_minute; M=$(token user09); f1=$(ask_m "$M" mock/echo f1); sleep 3; f2=$(ask_m "$M" mock/echo f2); ra=$(retry_after f2)
 new_minute; f3=$(ask_m "$M" mock/echo f3); rb=$(retry_after f3)
 [[ "$f1/$f2/$f3" == "200/429/429" ]] && (( ra <= 60 && rb > 60 )) ||

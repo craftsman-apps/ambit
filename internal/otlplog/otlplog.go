@@ -15,7 +15,9 @@ import (
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -119,47 +121,70 @@ func (e *Exporter) Close() {
 	_ = e.conn.Close()
 }
 
+// batcher collects the queued records into batches of Batch and exports each full one.
+type batcher struct {
+	e     *Exporter
+	batch []*logspb.LogRecord
+}
+
+// send exports what is collected, with retries when retry is true.
+func (b *batcher) send(retry bool) {
+	if len(b.batch) > 0 {
+		b.e.export(b.batch, retry)
+		b.batch = b.batch[:0]
+	}
+}
+
+// add collects rec and exports the batch when it is full.
+func (b *batcher) add(rec *logspb.LogRecord, retry bool) {
+	if b.batch = append(b.batch, rec); len(b.batch) >= Batch {
+		b.send(retry)
+	}
+}
+
+// drain collects everything queued now; Flush and Close drain without retries.
+func (b *batcher) drain(retry bool) {
+	for {
+		select {
+		case rec := <-b.e.queue:
+			b.add(rec, retry)
+		default:
+			return
+		}
+	}
+}
+
 func (e *Exporter) run() {
 	defer close(e.done)
 	tick := time.NewTicker(Flush)
 	defer tick.Stop()
-	var batch []*logspb.LogRecord
-	send := func(retry bool) {
-		if len(batch) > 0 {
-			e.export(batch, retry)
-			batch = batch[:0]
-		}
-	}
-	drain := func(retry bool) { // everything queued now
-		for {
-			select {
-			case rec := <-e.queue:
-				if batch = append(batch, rec); len(batch) >= Batch {
-					send(retry)
-				}
-			default:
-				return
-			}
-		}
-	}
+	b := &batcher{e: e}
 	for {
 		select {
 		case rec := <-e.queue:
-			if batch = append(batch, rec); len(batch) >= Batch {
-				send(true)
-			}
+			b.add(rec, true)
 		case <-tick.C:
-			send(true)
+			b.send(true)
 		case ack := <-e.flush:
-			drain(false)
-			send(false)
+			b.drain(false)
+			b.send(false)
 			close(ack)
 		case <-e.stop:
-			drain(false)
-			send(false)
+			b.drain(false)
+			b.send(false)
 			return
 		}
 	}
+}
+
+// retryable says whether a failed export can succeed when sent again: the collector is not reachable or not ready (the
+// OTLP specification's list). A rejected batch (InvalidArgument and the like) would fail the same way again.
+func retryable(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Aborted, codes.Canceled, codes.ResourceExhausted, codes.DataLoss:
+		return true
+	}
+	return false
 }
 
 // export sends batch. With retry, a failed export is tried again after RetryWait, then twice as long, up to Retries
@@ -177,7 +202,7 @@ func (e *Exporter) export(batch []*logspb.LogRecord, retry bool) {
 		if err == nil {
 			return
 		}
-		if !retry || try >= Retries {
+		if !retry || try >= Retries || !retryable(err) {
 			break
 		}
 		select {

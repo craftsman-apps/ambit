@@ -12,6 +12,7 @@ import (
 	collogs "go.opentelemetry.io/proto/otlp/collector/logs/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
 
@@ -20,6 +21,7 @@ import (
 type flakyCollector struct {
 	collogs.UnimplementedLogsServiceServer
 	mu    sync.Mutex
+	code  codes.Code // the status of a refused call; Unavailable when unset
 	fail  int
 	calls int
 	got   int
@@ -30,7 +32,11 @@ func (f *flakyCollector) Export(_ context.Context, r *collogs.ExportLogsServiceR
 	defer f.mu.Unlock()
 	f.calls++
 	if f.calls <= f.fail {
-		return nil, status.Error(codes.Unavailable, "collector not ready")
+		c := f.code
+		if c == codes.OK {
+			c = codes.Unavailable
+		}
+		return nil, status.Error(c, "collector refuses")
 	}
 	for _, rl := range r.ResourceLogs {
 		for _, sl := range rl.ScopeLogs {
@@ -214,25 +220,56 @@ func TestCloseSendsRecordsQueuedBefore(t *testing.T) {
 	}
 }
 
-// Flush and Close drain a queue of more than one batch without retries too (Codex review of #429): 150 records are two
-// batches, so a dead collector sees two export calls, not six.
-func TestFlushOfSeveralBatchesIsNotRetried(t *testing.T) {
+// Draining (Flush and Close) sends a queue of more than one batch without retries (Codex review of #429): 150 records
+// are two batches, so a dead collector sees two export calls, not six. The batcher is driven directly: no worker runs.
+func TestDrainOfSeveralBatchesIsNotRetried(t *testing.T) {
 	f, addr := startFlaky(t, 1000)
-	dropped := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_flushbatches_dropped_total"}, []string{"reason"})
-	e, err := New(addr, "test", dropped)
+	dropped := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_drainbatches_dropped_total"}, []string{"reason"})
+	e := newExporter("test", dropped, 1000)
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer e.Close()
+	defer conn.Close()
+	e.conn, e.logs = conn, collogs.NewLogsServiceClient(conn)
 	for range 150 {
-		e.Send(Record(time.Now(), "x"))
+		e.queue <- Record(time.Now(), "x")
 	}
-	e.Flush()
+	b := &batcher{e: e}
+	b.drain(false)
+	b.send(false)
 	if calls, _ := f.state(); calls != 2 {
 		t.Errorf("%d export calls for 150 records, want 2 (two batches, no retries)", calls)
 	}
 	if d := testutil.ToFloat64(dropped.WithLabelValues(DropSendFailed)); d != 150 {
 		t.Errorf("send failures %v, want 150", d)
+	}
+}
+
+// A batch the collector rejects (InvalidArgument) would be rejected again: it is dropped after the first try.
+func TestRejectedBatchIsNotRetried(t *testing.T) {
+	old := RetryWait
+	RetryWait = 10 * time.Millisecond
+	t.Cleanup(func() { RetryWait = old })
+	f, addr := startFlaky(t, 1000)
+	f.code = codes.InvalidArgument
+	dropped := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_rejected_dropped_total"}, []string{"reason"})
+	e, err := New(addr, "test", dropped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	e.Send(Record(time.Now(), "x"))
+	deadline := time.Now().Add(5 * time.Second)
+	for testutil.ToFloat64(dropped.WithLabelValues(DropSendFailed)) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the batch was not dropped")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond) // a wrong retry would show here
+	if calls, _ := f.state(); calls != 1 {
+		t.Errorf("%d export calls, want 1: a rejected batch is not sent again", calls)
 	}
 }
 

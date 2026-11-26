@@ -411,6 +411,13 @@ OARL=(--set oauth.rateLimit.discoveryPerMinute=30 --set oauth.rateLimit.signInPe
 rl_phase 30 40 50 5
 MODE=buckets lim LIM_DISCOVERY=30 LIM_SIGNIN=40 LIM_TOKEN=50 LIM_REGISTRATION=5 || fail "18 the bucket checks failed (see FAIL lines above)"
 pass "18 five buckets (mcp, discovery, sign-in, token, registration): each stops at its own limit and leaves the others open; headers that name an address change nothing; two Gateway pods count together; the 401 for a call without a credential is in the discovery bucket"
+# the second line: with the ratelimit service stopped (FailOpen) ambit-auth's own counter is what limits the sign-in pages
+kubectl -n "$NS" scale deploy/ambit-ratelimit --replicas=0 >/dev/null
+kubectl -n "$NS" wait --for=delete pod -l app.kubernetes.io/name=ambit-ratelimit --timeout=120s >/dev/null 2>&1 || true
+MODE=second lim LIM_DISCOVERY=30 LIM_SIGNIN=40 LIM_TOKEN=50 LIM_REGISTRATION=5 || { kubectl -n "$NS" scale deploy/ambit-ratelimit --replicas=1 >/dev/null; fail "18 the second line failed (see FAIL lines above)"; }
+kubectl -n "$NS" scale deploy/ambit-ratelimit --replicas=1 >/dev/null
+kubectl -n "$NS" rollout status deploy/ambit-ratelimit --timeout=180s >/dev/null
+pass "18 with the ratelimit service stopped, ambit-auth's own counter stops the sign-in pages at the same limit (the second line)"
 # the chart's own values: the NAT measurement
 OARL=()
 rl_phase 600 300 600 10

@@ -7,6 +7,7 @@ balancer would tell the Gateway. What is checked (MINOR 3 of the design review, 
             for a call to the MCP URL without a credential is in the discovery bucket, a call with a credential is not; headers that name another
             address (X-Forwarded-For, X-Real-IP, Forwarded, X-Ambit-Client-Address) change nothing, and a caller behind another address that writes
             the limited address into them is not limited; two Gateway pods count together (the limit is not doubled)
+  second    (low limits, the ratelimit service stopped) ambit-auth's own counter stops the sign-in pages at the same limit
   nat       (default limits) one shared address: how many whole sign-ins it makes in one minute before the limit, how many requests a sign-in
             costs in each bucket, and that another address is not affected
 
@@ -114,6 +115,15 @@ if MODE == "buckets":
     both = [send(D, "signin", port=p) for p in PORTS]
     check("18 ... and the address is limited on both pods", both == [429, 429], both)
     # ambit-auth's second line: its own counter in Valkey, shared by its replicas, with the same numbers (seen in its metrics by the shell script)
+
+elif MODE == "second":
+    # The ratelimit service is down (FailOpen): the Gateway lets requests through uncounted, and ambit-auth's own counter (Valkey, shared by its replicas,
+    # the same numbers) is the second line.
+    addr = "203.0.113.60"
+    codes = burst(lambda i: send(addr, "signin", port=PORTS[i % 2]), LIM["signin"] + 6)
+    check(f"18 ratelimit service down: ambit-auth stops the sign-in pages at the same limit ({allowed(codes)} passed of {len(codes)}, limit {LIM['signin']})", allowed(codes) == LIM["signin"], codes)
+    check("18 ... and it is ambit-auth that answers 429 (it sends Retry-After), not the Gateway", GW_ANSWER.get("signin") == "ambit-auth", GW_ANSWER)
+    check("18 ... the discovery bucket of the same address is its own", send(addr, "discovery") == 200)
 
 elif MODE == "nat":
     # One company address, many people. A platform registers once (one client for all of its users), then each person signs in. All from one address.

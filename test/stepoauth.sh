@@ -28,7 +28,9 @@ rnd() { openssl rand -hex "${1:-16}"; }
 oaset() { helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/frontdoor/values.yaml -f test/oauth/values.yaml \
   --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 \
   --set "oauth.signIn.issuer=https://ambit-oauth-idp.$NS.svc" --set "oauth.auth.consoleURL=http://ambit-oauth-console.$NS.svc:8085" \
-  ${OARL[@]+"${OARL[@]}"} "$@" >/dev/null; }
+  ${OARL[@]+"${OARL[@]}"} ${OAREG[@]+"${OAREG[@]}"} "$@" >/dev/null; }
+# OAREG: from check 12 on the registration limits are high for every upgrade (the key rotation of check 15 upgrades too), because the checks register many clients
+OAREG=()
 # OARL: the sign-in buckets are far above what the checks send from one address (check 18 sets them back to the chart's values)
 OARL=(--set oauth.rateLimit.discoveryPerMinute=100000 --set oauth.rateLimit.signInPerMinute=100000 --set oauth.rateLimit.tokenPerMinute=100000)
 # oaset_real: the same, with the real console behind ambit-auth (the stand-in is for the sign-in checks of step 12)
@@ -356,6 +358,7 @@ flow() { GW_PORT=$PA IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_H
 # the registration limit first, at its default of 10 per hour and address (the counter is per hour: nothing registered before)
 flow limits
 # then the limit is raised, so that the many registrations of the other checks pass
+OAREG=(--set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000)
 oaset --set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000 --wait --timeout 8m
 wait_rl "$NS" "unit=HOUR requests_per_unit=1000"  # the Gateway counts registrations too: its limit must be the new one before the checks register
 kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null

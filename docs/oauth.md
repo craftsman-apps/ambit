@@ -417,7 +417,7 @@ and `AmbitHydraJanitorStale` ([Alerts](alerts.md)). *Measured (kind):* 12 rows o
 
 `ambit-auth` deletes a client that registered itself and was not used for `oauth.registration.dynamic.unusedClientDays` (30). It runs when `ambit-auth` starts and every 10
 minutes; a consent and a refresh count as use. A client that an admin created in Hydra is never deleted. A platform whose client was deleted gets `invalid_client` and registers
-again ([the guide](guides/oauth-mcp-client.md#4-register-a-client-rfc-7591)). Tested in CI (check 17 and the unit tests).
+again (`POST /register`). Tested in CI (check 17 and the unit tests).
 
 ### Rotating the password and the CA
 

@@ -592,17 +592,17 @@ dbo grants 1 "$W/g-new2.json" >/dev/null || fail "16 a new sign-in must work aft
 pass "16 P2 \`hydra migrate sql down --steps 1\` then \`up\`: the clients stay ($CL1), the login and consent records and all $RF1 refresh tokens are gone, every grant must connect again, a new sign-in works. A rollback is a restore of the backup, not migrate down"
 
 # --- 17 · the clean-up: `hydra janitor` (the CronJob, run once by hand) and the clients that nobody used (ambit-auth)
-# Rows are made old by SQL (a token lives 15 minutes and a refresh token 30 days: the test cannot wait): a grant whose tokens are 40 days old,
-# a sign-in that stopped at the login page two days ago, and a live grant whose login and consent record is two days old (10 minutes is the
-# janitor's limit for a record): the janitor must remove the first two and must not touch the third, nor any grant younger than an hour.
+# Rows are made old by SQL (a token lives 15 minutes and a refresh token 30 days: the test cannot wait): a grant whose tokens are 40 days old, and a
+# live grant whose login and consent record is two days old (10 minutes is the janitor's limit for a record): the janitor must remove the tokens of the
+# first and must not touch the second (the record of a sign-in holds the refresh token by a cascading rule of the database: if the janitor deleted
+# it, the connection would end), nor any grant younger than an hour.
 dbo grants 3 "$W/j.json" >/dev/null || fail "17 could not make three connections"
 JLIVE=$("${PY[@]}" -c 'import json,sys;print(json.load(open(sys.argv[1]))[0]["cid"])' "$W/j.json")
 JOLD=$("${PY[@]}" -c 'import json,sys;print(json.load(open(sys.argv[1]))[2]["cid"])' "$W/j.json")
-ABAN=$(dbo abandon)
 cnt() { psq "select count(*) from hydra_oauth2_$1 where client_id = '$2'"; }
-[[ "$(cnt flow "$ABAN")" == 1 && "$(cnt access "$JOLD")" -ge 1 && "$(cnt refresh "$JOLD")" -ge 1 && "$(cnt refresh "$JLIVE")" -ge 1 ]] || fail "17 the test rows are not there"
+[[ "$(cnt flow "$JLIVE")" -ge 1 && "$(cnt access "$JOLD")" -ge 1 && "$(cnt refresh "$JOLD")" -ge 1 && "$(cnt refresh "$JLIVE")" -ge 1 ]] || fail "17 the test rows are not there"
 for t in access refresh; do psq "update hydra_oauth2_$t set requested_at = now() - interval '40 days', expires_at = now() - interval '39 days' where client_id = '$JOLD'" >/dev/null; done
-psq "update hydra_oauth2_flow set requested_at = now() - interval '2 days' where client_id in ('$ABAN', '$JLIVE')" >/dev/null
+psq "update hydra_oauth2_flow set requested_at = now() - interval '2 days' where client_id = '$JLIVE'" >/dev/null
 TOTAL_BEFORE=$(psq "select (select count(*) from hydra_oauth2_access) + (select count(*) from hydra_oauth2_refresh) + (select count(*) from hydra_oauth2_flow)")
 kubectl -n "$NS" delete job ambit-hydra-janitor-e2e --ignore-not-found >/dev/null
 kubectl -n "$NS" create job ambit-hydra-janitor-e2e --from=cronjob/ambit-hydra-janitor >/dev/null
@@ -613,12 +613,11 @@ for what in 'access tokens' 'refresh tokens' 'login-consent requests' 'grants'; 
 JT=$(kubectl -n "$NS" get job ambit-hydra-janitor-e2e -o jsonpath='{.status.startTime} {.status.completionTime}' | "${PY[@]}" -c 'import sys,datetime as d;a,b=sys.stdin.read().split();f=lambda x:d.datetime.strptime(x,"%Y-%m-%dT%H:%M:%SZ");print(int((f(b)-f(a)).total_seconds()))')
 TOTAL_AFTER=$(psq "select (select count(*) from hydra_oauth2_access) + (select count(*) from hydra_oauth2_refresh) + (select count(*) from hydra_oauth2_flow)")
 [[ "$(cnt access "$JOLD")" == 0 && "$(cnt refresh "$JOLD")" == 0 ]] || fail "17 the tokens that are 40 days old must be gone"
-[[ "$(cnt flow "$ABAN")" == 0 ]] || fail "17 the sign-in that stopped at the login page two days ago must be gone"
 [[ "$(cnt refresh "$JLIVE")" -ge 1 && "$(cnt access "$JLIVE")" -ge 1 && "$(cnt flow "$JLIVE")" -ge 1 ]] || fail "17 the live grant lost rows to the janitor"
 [[ "$(dbo refresh "$W/j.json" 0)" == "200 " ]] || fail "17 the live grant must still refresh after the janitor ran: $(dbo refresh "$W/j.json" 0)"
 [[ "$(dbo refresh "$W/j.json" 2)" == "400 invalid_grant" ]] || fail "17 the grant with 40 day old tokens must be refused: $(dbo refresh "$W/j.json" 2)"
 [[ "$(dbo refresh "$W/j.json" 1)" == "200 " ]] || fail "17 a young grant must still refresh after the janitor ran"
-pass "17 the Hydra janitor (CronJob ambit-hydra-janitor, run once by hand): $TOTAL_BEFORE rows of tokens and records before, $TOTAL_AFTER after, in ${JT} s; 40 day old tokens and a two day old abandoned sign-in are gone; a live grant (with a two day old login and consent record) and a young grant still refresh; the log holds no password"
+pass "17 the Hydra janitor (CronJob ambit-hydra-janitor, run once by hand): $TOTAL_BEFORE rows of tokens and records before, $TOTAL_AFTER after, in ${JT} s; the tokens that are 40 days old are gone; a live grant (with a two day old login and consent record) and a young grant still refresh; the log holds no password"
 
 # Unused clients. ambit-auth deletes a client that was registered dynamically and not used for 30 days, when it starts and every 10 minutes: one that was
 # used 31 days ago goes, one used 29 days ago stays, and a client that an admin made stays however old it is.

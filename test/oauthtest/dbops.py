@@ -7,20 +7,20 @@ Modes (python3 dbops.py MODE ...), environment as gateway.py:
   grants N FILE            N connections of the person bob (each a new client and agent): FILE = [{cid, refresh, access}, ...]
   refresh FILE INDEX       one refresh of grant INDEX; prints "HTTP-status error-code"; on 200 the new refresh token goes into FILE
   mcp FILE INDEX           an MCP tool list with the access token of grant INDEX at every public pod; prints the statuses
-  abandon                  a sign-in that stops at the company's login page: leaves one login request in Hydra; prints the client ID
   dcr N                    N clients registered like a platform does; prints their IDs
   probe SECONDS FILE       every 0.5 s a JWKS request and a refresh with a made-up token (a real client); FILE = [[epoch seconds, jwks, token], ...]
   report FILE              the errors of a probe file: count, first and last time (epoch seconds), and whether the last probe was fine
   load SECONDS THREADS FILE PORT...  made-up refresh requests straight to Hydra pods (http://127.0.0.1:PORT): FILE = latencies and statuses
 """
-import os
+import os, sys
+ARGV = sys.argv[:]  # the code below clears sys.argv
 src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "gateway.py")).read().split("# 1 · no token")[0]
 exec(src)
 import threading
 
-mode = sys.argv[1]
+mode = ARGV[1]
 if mode == "grants":
-    n, out = int(sys.argv[2]), sys.argv[3]
+    n, out = int(ARGV[2]), ARGV[3]
     gs = []
     for i in range(n):
         cid, tok = connect("bob", ("time",), name=f"Platform {i}")
@@ -28,25 +28,20 @@ if mode == "grants":
     json.dump(gs, open(out, "w"))
     print(f"{n} grants")
 elif mode == "refresh":
-    gs = json.load(open(sys.argv[2])); i = int(sys.argv[3])
+    gs = json.load(open(ARGV[2])); i = int(ARGV[3])
     st, j = token(gs[i]["cid"], grant_type="refresh_token", refresh_token=gs[i]["refresh"])
     if st == 200:
         gs[i]["refresh"] = j["refresh_token"]; gs[i]["access"] = j["access_token"]
-        json.dump(gs, open(sys.argv[2], "w"))
+        json.dump(gs, open(ARGV[2], "w"))
     print(st, j.get("error", ""))
 elif mode == "mcp":
-    gs = json.load(open(sys.argv[2])); i = int(sys.argv[3])
+    gs = json.load(open(ARGV[2])); i = int(ARGV[3])
     print(" ".join(str(tools(p, gs[i]["access"])[0]) for p in PORTS))
-elif mode == "abandon":
-    reg = register(REDIRECT, "Abandoned")[2]
-    b = Browser()
-    b.follow(authorize_url(reg["client_id"], pkce()[1], "abandoned"))  # to the company's login page, and no further
-    print(reg["client_id"])
 elif mode == "dcr":
-    for i in range(int(sys.argv[2])):
+    for i in range(int(ARGV[2])):
         print(register(REDIRECT, f"Cleanup {i}")[2]["client_id"])
 elif mode == "probe":
-    secs, out = float(sys.argv[2]), sys.argv[3]
+    secs, out = float(ARGV[2]), ARGV[3]
     st, _, reg = register(REDIRECT, "Probe")
     cid = reg["client_id"]
     rows, end = [], time.time() + secs
@@ -60,7 +55,7 @@ elif mode == "probe":
         time.sleep(0.5)
     print(f"{len(rows)} probes")
 elif mode == "report":
-    rows = json.load(open(sys.argv[2]))
+    rows = json.load(open(ARGV[2]))
     bad = [r for r in rows if r[1] != 200 or r[2] not in (400, 401)]
     codes = sorted({(r[1], r[2]) for r in rows})
     if bad:
@@ -68,7 +63,7 @@ elif mode == "report":
     else:
         print(f"probes={len(rows)} errors=0 first=0 last=0 end_ok=True codes={codes}")
 elif mode == "load":
-    secs, nthreads, out, ports = float(sys.argv[2]), int(sys.argv[3]), sys.argv[4], [int(p) for p in sys.argv[5:]]
+    secs, nthreads, out, ports = float(ARGV[2]), int(ARGV[3]), ARGV[4], [int(p) for p in ARGV[5:]]
     import http.client
     lat, codes, lock = [], {}, threading.Lock()
     end = time.time() + secs

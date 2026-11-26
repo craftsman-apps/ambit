@@ -273,34 +273,159 @@ kubectl -n ambit-system logs ambit-hydra-1 -c check-database
 
 ### What was tested, exactly
 
-| Tested on kind in CI | What it shows |
+**In CI, on kind** (`test/stepoauth.sh`, checks 4 to 10, 16 and 17), with PostgreSQL 17 and 15 that this test runs itself, TLS only, one instance, no replication:
+
+| What | Result |
 |---|---|
-| PostgreSQL 17 and 15, TLS only (a `hostnossl` line that rejects plain connections) | Hydra starts, migrates and serves on both. |
+| PostgreSQL 17 and 15, TLS only (`hostnossl` rejects plain connections) | Hydra starts, migrates and serves on both. |
+| **P1** TLS | A connection without TLS is refused by the server; a session with TLS uses @@TLSV@@; every connection of Hydra uses TLS. |
 | The start check, 16 cases | Every refused `sslmode`, a missing CA or `max_conns`, a wrong CA, a name that is not in the certificate, a superuser, too few connections and a wrong password; no log repeats a password. A login role that differs from the role in effect or from the user in the address is covered by unit tests only. |
-| Two migrations of an empty PostgreSQL 15 database started one after the other, and a repeat | Two that overlap can fail, one or both (Hydra v26.2.0 races on its first table; the test starts them at once but does not prove that they overlap); a run on its own succeeds. This is why Hydra's pods start one at a time. |
-| Changing the address from one database to another and back (a Secret change) | A new, empty database gets its own signing key; going back finds the first key again. |
+| Two migrations of an empty PostgreSQL 15 database | Two that overlap can fail, one or both (Hydra v26.2.0 races on its first table); a run on its own succeeds. This is why Hydra's pods start one at a time. |
+| Changing the address from one database to another and back | A new, empty database gets its own signing key; going back finds the first key again. |
+| **P3** pool | 60 concurrent clients for 15 s on both Hydra pods: @@P3@@ |
+| **P4** logical dump | `pg_dump -Fc` of the live database: @@P4@@ |
+| **P5** restore and a moved name | The dump restored into a new PostgreSQL 17 (@@P5RESTORE@@); the Kubernetes Service `ambit-pg17` pointed at the new instance and the old one stopped, while a probe asked Hydra twice a second: @@P5FAIL@@. Then, as a platform and a person see it: a connection that was not used since the dump refreshes (200); a connection that refreshed after the dump is refused with `invalid_grant` and must connect again; a new sign-in works. |
+| **P6** the database pod is deleted (its volume stays) | @@P6@@ The data is there: a connection refreshes. |
+| **30 second outage** (the database is stopped, then started) | @@OUTAGE@@ |
+| Rotation of the database password (a role change, a new Secret, the pods rolled one at a time) | @@ROT@@ |
+| A CA file with two certificates | Passes the start check with `sslmode=verify-full` (the middle of a CA rotation). |
+| **Upgrade rollback** with `hydra migrate sql down` | **Do not do this on a live database.** @@MIG@@ |
+| The janitor (CronJob `ambit-hydra-janitor`, run once by hand) | @@JAN@@ |
+| The clean-up of unused clients | A client that was registered dynamically and not used for 31 days is deleted when `ambit-auth` starts; one used 29 days ago and a client that an admin made are kept (also unit: `TestJanitorDeletesUnusedClients`). |
 
-Measured separately on kind during the design (a prototype, not in CI): a logical dump and restore (`pg_dump -Fc`,
-`pg_restore`), reconnection of Hydra after the database was replaced behind its Service name (switching a Kubernetes
-Service to another instance: no errors in 90 s), a 30 second outage (sign-in and refresh answered 503 for 27 to 33
-seconds, then recovered), and one migration step down and up again.
-
-**Not tested:** any managed PostgreSQL service (Amazon RDS or Aurora, Google Cloud SQL, Azure Database for PostgreSQL,
-CloudNativePG), its fail-over, replication, point-in-time restore, certificate or password rotation, and an upgrade of
-Hydra across schema versions. Do not read this page as saying they work. Use the checklist below.
+**What this shows, and what it does not.** It shows how Hydra behaves when its database is stopped, deleted, restored from a dump or moved to another
+instance on one cluster, and what people see. **It is not a test of any managed PostgreSQL service.** Not tested: Amazon RDS or Aurora, Google Cloud SQL,
+Azure Database for PostgreSQL, CloudNativePG or any other service; **their fail-over** (a real replica taking over, a DNS name that moves, the time it
+takes), replication lag, point-in-time restore, the loss of the last seconds before a crash (RPO), the certificate (CA) rotation of a real service, the
+rotation of a password by the service, and an upgrade of Hydra across schema versions. **Do not read this page as saying that they work.** Use the checklist below
+on your own database. What kind showed is how Hydra behaves; your provider's numbers are yours to measure.
 
 ### Acceptance checklist for your database
 
-Run this once on your own database before you rely on OAuth. It does not depend on a provider. Write down the numbers.
+Run this once on your own database before you rely on OAuth. It does not depend on a provider. Write down the numbers, with the date.
 
 | # | Check | You have it when |
 |---|---|---|
-| 1 | **RPO and RTO.** Ask your provider what a fail-over and a restore lose and how long they take. | You know how many minutes of changes you can lose (RPO) and how long sign-in and refresh may be down (RTO), and both fit what your platforms need. |
-| 2 | **A real refresh across a fail-over.** Connect a platform (or use a test client), keep its refresh token, trigger a fail-over of your database, then refresh. | The refresh succeeds, and sign-in works again within your RTO. Hydra reconnects by itself; if it does not, the pods are restarted. |
-| 3 | **Restore point.** Restore a backup to a new instance and point the Secret `oauth.database.dsnSecret` at it. | Connections that were refreshed **after** the backup was taken fail with `invalid_grant`: those people connect their platform again. Connections not used since the backup keep working. Stops and offboarding are not lost: they live in Kubernetes, not in PostgreSQL. |
-| 4 | **Password and CA rotation.** Change the Secret, then delete the Hydra pods one at a time. | The pods start with the new password or CA and the start check passes. Rotate the CA with both CAs in the file during the change. |
-| 5 | **Upgrade rollback.** Before you upgrade Ambit (a new Hydra version), take a backup. | You have restored that backup once on a test database and started the previous Hydra version on it. A Hydra migration is not always reversible; the backup is the way back. |
-| 6 | **Monitoring.** | You are alerted when Hydra's pods are not Ready, and when `POST /oauth2/token` answers 5xx. |
+| 1 | **RPO and RTO.** Ask your provider what a fail-over and a restore lose and how long they take, then measure both once. | You know how many minutes of changes you can lose (RPO) and how long sign-in and refresh may be down (RTO), and both fit what your platforms need. On kind, with a stopped database, sign-in and refresh were down about as long as the database (@@OUTAGEREC@@ after it was back). |
+| 2 | **A real refresh across a fail-over.** Connect a platform (or use a test client), keep its refresh token, trigger a fail-over of your database, then refresh with that token. | The refresh succeeds (200, a new refresh token), and sign-in works again within your RTO. Hydra reconnects by itself; if it does not within a few minutes, delete the Hydra pods. A refresh that fails with `invalid_grant` means that the fail-over lost the last refresh: the data of your replica was older than the primary (that is your RPO, measured). |
+| 3 | **Restore point.** Restore the newest backup to a new instance and point the Secret `oauth.database.dsnSecret` at it (or move the name). | Connections that refreshed **after** the backup was taken fail with `invalid_grant`: those people connect their platform again. Connections not used since the backup keep working. Connections that were ended (stopped, deleted, offboarded) stay ended: the stop list and the offboarding list are in Kubernetes, and the token hook asks the console whether the connection is still active. |
+| 4 | **Password and CA rotation.** Change the role's password, then the Secret, then roll the pods one at a time (see [Rotating the password and the CA](#rotating-the-password-and-the-ca)). Do the same with your CA: put both CAs in the file, roll, then remove the old one. | The pods start with the new password or CA and the start check passes; a refresh works afterwards; the errors during the change are within what you accept. |
+| 5 | **Upgrade rollback from the previous Hydra schema.** Before you upgrade Ambit (a new Hydra version), take a backup. On a copy of your database, restore that backup, start the **previous** Hydra version on it, and refresh a connection. | The previous version starts on the restored database and serves. **Do not use `hydra migrate sql down` as the rollback:** on Hydra v26.2.0 one step down deleted every login and consent record and, through the database's cascade rule, every token. The backup is the way back. |
+| 6 | **Monitoring.** | You are alerted when Hydra's pods are not Ready, when `POST /oauth2/token` answers 5xx, when the newest backup is old and when connections run out ([Alerts](alerts.md)); and you have seen each alert fire once on a test. |
+
+## Operations
+
+This is the runbook for whoever runs the database and the cluster. Every number from kind is from the tests above: your database is not kind.
+"Measured" means measured there. Commands use the namespace `ambit-system`.
+
+### What people see when the database is not there
+
+| Part | Database down | After it is back |
+|---|---|---|
+| A call with an access token that was already issued | **works** for up to 15 minutes (`oauth.accessTokenMinutes`), also at the gateway: it needs no database | works |
+| A new sign-in (connecting a platform), registration | fails (503): Hydra's pods are not Ready | works again by itself |
+| A refresh | fails (503). The platform tries again later; a refresh that Hydra answered with an error does not use up the refresh token | works again by itself |
+| Stops and offboarding | work: they live in Kubernetes | |
+| The database check at start | a pod that starts while the database is down fails in its init container `check-database` and is tried again by Kubernetes: it starts a few minutes after the database is back, at most (the retry back-off); the pods that already run are not affected | |
+
+### Outage
+
+*Measured:* @@OUTAGE@@
+
+1. **Find out** which part is down: `kubectl -n ambit-system get pods -l app.kubernetes.io/name=ambit-hydra`; `kubectl -n ambit-system logs ambit-hydra-0 -c hydra | tail`. Hydra's readiness includes the database, so Hydra not Ready means "the database does not answer", "the password or the CA is wrong" or "the signing key set is not one key" (the log says which).
+2. **Fix the database.** Ambit does not restart Hydra for you, and does not need to: its connection pool reconnects. Do not delete the Hydra pods unless a pod stays NotReady for minutes after the database is back.
+3. **Check** that sign-in and refresh work again: `curl -s -o /dev/null -w '%{http_code}\n' https://<authHost>/.well-known/jwks.json` is `200`, and a platform's refresh answers 200.
+
+### Backup
+
+Back up: (1) **the whole database**, with your database's backup (managed backups, or `pg_dump -Fc`), at least daily and before every Ambit upgrade;
+(2) **the Secret `oauth.hydra.systemSecret`** (`system`): it encrypts Hydra's keys and tokens, and without it a restored database cannot be read. Keep it where
+you keep the backups, not in the same place as the database. The other Secrets (address, CA, cookie secret, identity provider's client secret) are yours already.
+
+```
+kubectl -n <database namespace> exec <database pod> -- pg_dump -Fc -U <owner role> -d hydra -f /tmp/hydra.dump
+```
+
+*Measured:* @@P4@@ Check a backup by restoring it somewhere once (below): a backup that was never restored is a guess.
+
+### Restore
+
+Restore into a **new** instance; never over the live one.
+
+1. Create the new instance with the same TLS rules (a certificate for the name Hydra uses, the same CA), the role and the empty database `hydra`, then restore:
+   `pg_restore -U <superuser> -d hydra --exit-on-error /tmp/hydra.dump` (a managed service: its "restore to a new instance").
+2. Check it: the counts of `hydra_client` and `hydra_oauth2_refresh` are what you expect.
+3. Point Hydra at it: change the Secret `oauth.database.dsnSecret` (or move the DNS name or Service), then roll Hydra's pods one at a time:
+   `kubectl -n ambit-system rollout restart statefulset/ambit-hydra`. Hydra does not notice a changed Secret by itself. If the name moved and the old instance
+   is stopped, the pods reconnect by themselves.
+4. **What people see** (measured, P5): connections that were **not used since the backup** keep working. Connections that **refreshed after the backup** are refused with
+   `invalid_grant`: the new refresh token that the platform holds is not in the backup. Those people connect the platform again (a new sign-in and consent). Clients that
+   registered after the backup are missing: that platform gets `invalid_client` and registers again. A person who ended a connection after the backup does not get it back:
+   the stop and the offboarding live in Kubernetes. Tell the people: "connections you made or used in the last <time since the backup> may ask you to connect again".
+5. Take a new backup.
+
+### Fail-over
+
+A managed service's fail-over usually keeps the DNS name and moves it to a replica. Hydra reconnects by itself: no action. *Measured on kind (a Service moved to another
+instance, the old one stopped):* @@P5FAIL@@ What kind cannot show: how long your provider's fail-over takes, and how much of the last seconds the replica has (your
+RPO). Measure both with checklist items 1 and 2. If the name does not move (a new address), change the Secret and roll the pods as in Restore.
+
+### Pool sizing
+
+Each Hydra pod keeps at most `max_conns` connections (in the address; the chart's example is 8). The database role needs room for `pods × max_conns` **plus one more run of
+a pod that uses the same address**: the janitor (a Job) and a migration use `max_conns` too. For 2 pods and `max_conns=8` that is `(2 + 1) × 8 = 24`; the start check
+counts `pods × max_conns + 1`, so set the role's `CONNECTION LIMIT` to `(pods + 1) × max_conns` or more, and the server's `max_connections` above the sum of all clients.
+*Measured (P3):* @@P3@@ Raise `max_conns` only when Hydra's answers are slow while connections are all in use; more connections do not make a small database faster.
+
+### Daily clean-up (the janitor)
+
+Hydra never deletes finished rows. The CronJob **`ambit-hydra-janitor`** (`oauth.janitor.*`, 03:17 every day) runs `hydra janitor` with Hydra's own lifetimes
+(the same ConfigMap), so **a token that is still valid is never deleted**. It deletes **expired access and refresh tokens**, and keeps everything younger than an
+hour. One run at a time (`concurrencyPolicy: Forbid`), stopped after 30 minutes, at most 10,000 rows of each kind per run (the next day goes on). It does not touch clients.
+
+**What it does not delete** (measured on Hydra v26.2.0 with a database in which the rows were made old by hand): authorization codes, and the records of sign-ins that
+were completed, **also when they are old**. A refresh token is tied to the record of its sign-in by a cascading rule of the database, so a record that is deleted ends the
+connection: the janitor leaves the records of completed sign-ins alone (tested: a live connection whose record is two days old still refreshes after a run). A sign-in that is
+abandoned or denied writes no row in this version. The rows that stay are small (about 1.3 KB for a code and 0.6 KB for a record, plus what Ambit's claims add) and they grow
+with the number of sign-ins, not with the number of connections: at 1,000 sign-ins a day that is a few MB a day. Look at the size of `hydra_oauth2_code` and
+`hydra_oauth2_flow` once a quarter. Ambit does not delete them: it does not edit Hydra's tables.
+
+Run it by hand, and read the log:
+
+```
+kubectl -n ambit-system create job --from=cronjob/ambit-hydra-janitor janitor-now
+kubectl -n ambit-system logs job/janitor-now
+kubectl -n ambit-system delete job janitor-now
+```
+
+The log says `Successfully completed Janitor run on access tokens`, `... refresh tokens`, `... login-consent requests` and `... grants`. Alerts: `AmbitHydraJanitorFailed`
+and `AmbitHydraJanitorStale` ([Alerts](alerts.md)). *Measured (kind):* @@JAN@@ To pause it: `oauth.janitor.enabled: false`.
+
+### Unused clients (registered dynamically)
+
+`ambit-auth` deletes a client that registered itself and was not used for `oauth.registration.dynamic.unusedClientDays` (30). It runs when `ambit-auth` starts and every 10
+minutes; a consent and a refresh count as use. A client that an admin created in Hydra is never deleted. A platform whose client was deleted gets `invalid_client` and registers
+again ([the guide](guides/oauth-mcp-client.md#4-register-a-client-rfc-7591)). Tested in CI (check 17 and the unit tests).
+
+### Rotating the password and the CA
+
+**The database password:** (1) change the role's password in the database; (2) change the Secret `oauth.database.dsnSecret` (a URL-safe password); (3) roll the pods one at a time:
+`kubectl -n ambit-system rollout restart statefulset/ambit-hydra`. A connection that exists keeps working (a password is checked when a connection starts), so only new
+connections fail between step 1 and the end of step 3. The janitor Job reads the Secret each time it runs. *Measured:* @@ROT@@
+**The CA:** put the old and the new CA, one after the other, in the file of `oauth.database.caSecret` (a file with several certificates is accepted: tested), change the
+server's certificate, roll the pods, then remove the old CA from the file and roll again. A rotation of the server's own certificate by a real service is not tested.
+
+### Upgrading Hydra, and rolling back
+
+1. Back up (above). 2. Read Hydra's release notes for schema changes. 3. Upgrade Ambit: the first pod that restarts runs `hydra migrate sql up` in its init container.
+**Rolling back:** deploy the previous Ambit version **and restore the backup you took in step 1** (Restore, above). **Do not run `hydra migrate sql down` on a live database.**
+Measured on v26.2.0: one step down, then up again, left the clients, and removed every login and consent record and, with them (a cascading rule of the database), all
+@@MIGN@@ refresh tokens and every access token: every connection had to connect again. A rollback that way is a reconnect of everybody.
+
+### Alerts
+
+See [Alerts](alerts.md): `AmbitHydraNotReady`, `AmbitOAuthTokenErrors`, `AmbitHydraJanitorFailed`, `AmbitHydraJanitorStale`, and, with your own expressions,
+`AmbitOAuthDatabaseBackupOld` and `AmbitOAuthDatabaseConnectionsHigh`.
 
 ## What runs
 

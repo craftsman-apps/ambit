@@ -123,6 +123,10 @@ kind: AccessRule
 metadata: { name: probe-7b }
 spec: { groups: [probe-7b], models: [gemma-4-31b] }
 YAML
+# the change must be in progress: its first step is pending in ambit-access-mode (it is not, if the controller has not
+# started on it yet, and then the removal would be written with it, which proves nothing)
+for _ in $(seq 1 50); do [[ -n "$(kubectl -n "$NS" get configmap ambit-access-mode -o jsonpath='{.data.pending}' 2>/dev/null)" ]] && break; sleep 0.1; done
+[[ -n "$(kubectl -n "$NS" get configmap ambit-access-mode -o jsonpath='{.data.pending}' 2>/dev/null)" ]] || fail "7b the controller did not start the change of the probe rule"
 sleep 1
 mock_rule delete
 took=$(wait_mock 403 15)

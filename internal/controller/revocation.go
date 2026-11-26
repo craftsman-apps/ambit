@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"reflect"
@@ -41,36 +42,48 @@ func narrows(prev, next v1.AccessRuleSpec) bool {
 		}
 	}
 	for _, ps := range prev.Servers {
-		var ns []v1.ServerAccess
-		for _, s := range next.Servers {
-			if s.Name == ps.Name {
-				ns = append(ns, s)
-			}
-		}
-		if len(ns) == 0 {
+		if !covered(ps, next.Servers) {
 			return true
-		}
-		for _, s := range ns {
-			if !reflect.DeepEqual(ps.Arguments, s.Arguments) {
-				return true
-			}
-			if len(ps.Tools) == 0 { // every tool before
-				if len(s.Tools) > 0 {
-					return true
-				}
-				continue
-			}
-			if len(s.Tools) == 0 {
-				continue // every tool now: wider
-			}
-			for _, t := range ps.Tools {
-				if !slices.Contains(s.Tools, t) {
-					return true
-				}
-			}
 		}
 	}
 	return false
+}
+
+// covered: some entry of next names the same server with the same argument limits and allows at least the tools of ps
+// (a rule may name a server in several entries, so each entry is compared with every entry of next, not with the sum).
+func covered(ps v1.ServerAccess, next []v1.ServerAccess) bool {
+	for _, s := range next {
+		if s.Name != ps.Name || !reflect.DeepEqual(normArgs(ps.Arguments), normArgs(s.Arguments)) {
+			continue
+		}
+		if len(s.Tools) == 0 { // every tool
+			return true
+		}
+		if len(ps.Tools) == 0 {
+			continue
+		}
+		if !slices.ContainsFunc(ps.Tools, func(t string) bool { return !slices.Contains(s.Tools, t) }) {
+			return true
+		}
+	}
+	return false
+}
+
+// normArgs: the limits as a set (the order of the rules and of their lists does not matter). A changed limit is not
+// compared further: it counts as narrowing (a restart of the change costs only time).
+func normArgs(in []v1.ArgumentRule) []v1.ArgumentRule {
+	out := make([]v1.ArgumentRule, len(in))
+	for i, a := range in {
+		a.OneOf, a.NotContains = slices.Sorted(slices.Values(a.OneOf)), slices.Sorted(slices.Values(a.NotContains))
+		out[i] = a
+	}
+	slices.SortFunc(out, func(a, b v1.ArgumentRule) int {
+		return cmp.Compare(a.Name+"\x00"+a.Min+"\x00"+a.Max, b.Name+"\x00"+b.Min+"\x00"+b.Max)
+	})
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // rulesRevoked reports whether an AccessRule that the change in progress compiled has been deleted or narrowed since

@@ -48,6 +48,19 @@ func TestNarrows(t *testing.T) {
 			t.Errorf("%s: narrows = %v, want %v", c.name, got, c.want)
 		}
 	}
+	// A rule that names one server in several entries does not narrow itself.
+	split := v1.AccessRuleSpec{Servers: []v1.ServerAccess{{Name: "time", Tools: []string{"t1"}}, {Name: "time", Tools: []string{"t2"}}}}
+	if narrows(split, split) {
+		t.Error("a rule with two entries for one server narrows itself")
+	}
+	// Merging them keeps every tool; splitting one entry in two is treated as narrowing (conservative).
+	merged := v1.AccessRuleSpec{Servers: []v1.ServerAccess{{Name: "time", Tools: []string{"t1", "t2"}}}}
+	if narrows(split, merged) {
+		t.Error("merging two entries counted as narrowing")
+	}
+	if !narrows(merged, split) {
+		t.Error("splitting an entry was not treated as narrowing")
+	}
 	if !narrows(v1.AccessRuleSpec{AllSignedIn: true}, v1.AccessRuleSpec{Groups: []string{"eng"}}) {
 		t.Error("allSignedIn turned off was not a narrowing")
 	}
@@ -130,5 +143,20 @@ func TestGateDoesNotWatchWhenNotEnforcing(t *testing.T) {
 	err := r.gate(t.Context(), []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 1}}, nil, 10*time.Second)
 	if err == nil || errors.Is(err, errRulesRevoked) || clock.Sub(gateStart) < 10*time.Second {
 		t.Errorf("err %v after %v", err, clock.Sub(gateStart))
+	}
+}
+
+// The same limits in another order are not a change.
+func TestNarrowsIgnoresTheOrderOfArgumentLimits(t *testing.T) {
+	mk := func(args ...v1.ArgumentRule) v1.AccessRuleSpec {
+		return v1.AccessRuleSpec{Servers: []v1.ServerAccess{{Name: "db", Tools: []string{"q"}, Arguments: args}}}
+	}
+	a := mk(v1.ArgumentRule{Name: "b", OneOf: []string{"x", "y"}}, v1.ArgumentRule{Name: "a", Max: "5", Min: "1"})
+	b := mk(v1.ArgumentRule{Name: "a", Max: "5", Min: "1"}, v1.ArgumentRule{Name: "b", OneOf: []string{"y", "x"}})
+	if narrows(a, b) || narrows(b, a) {
+		t.Error("the order of the limits counted as a change")
+	}
+	if !narrows(a, mk(v1.ArgumentRule{Name: "a", Max: "9", Min: "1"}, v1.ArgumentRule{Name: "b", OneOf: []string{"x", "y"}})) {
+		t.Error("a changed limit did not count (conservative)")
 	}
 }

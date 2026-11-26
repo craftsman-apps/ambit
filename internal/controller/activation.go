@@ -455,7 +455,7 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 		anyChanged := false
 		for _, g := range objs {
 			switch {
-			case g.changed:
+			case g.changed, r.carried[g.kind+"/"+g.name]:
 				anyChanged = true
 			case remembered[g.kind+"/"+g.name], g.attachWait:
 			default:
@@ -483,12 +483,22 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 		} else {
 			err = r.gate(ctx, wait, seen, timeout)
 		}
+		if errors.Is(err, errRulesRevoked) {
+			// The next pass starts again: what this step still waited for (a grant that was written) is waited for
+			// there too, with the whole timeout, also when its spec is unchanged and agentgateway has no status yet.
+			if r.carried == nil {
+				r.carried = map[string]bool{}
+			}
+			for _, g := range wait {
+				r.carried[g.kind+"/"+g.name] = true
+			}
+		}
 		if err != nil {
 			var st *stalledError
 			if !errors.As(err, &st) {
 				return nil, ran, err
 			}
-			r.stalled = &stalledStep{step: s.name, seen: seen, objs: wait}
+			r.stalled, r.carried = &stalledStep{step: s.name, seen: seen, objs: wait}, nil
 			target.Error, target.Objects = st.msg, st.objects
 			if err := r.setPending(ctx, &target); err != nil {
 				return nil, ran, err
@@ -497,7 +507,7 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 		}
 		log.FromContext(ctx).Info("change step active in the gateway", "step", s.name, "mode", target.Mode, "rulesVersion", target.RulesVersion)
 	}
-	r.stalled = nil
+	r.stalled, r.carried = nil, nil
 	return nil, ran, nil
 }
 

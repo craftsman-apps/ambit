@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func modelExpr(ctx context.Context, ns, name string) (string, error) {
@@ -86,6 +87,53 @@ func TestRemovedRuleIsWrittenWithoutWaitingForTheChangeInProgress(t *testing.T) 
 	if d, _ := accessMode(ctx, ns); len(d["rulesVersion"]) != 12 || d["pending"] != "" {
 		t.Errorf("published %v", d)
 	}
+}
+
+// A restart keeps what the ended wait still waited for: a Model that the first pass wrote and that agentgateway has not
+// reported on yet is waited for in the next pass too (its spec is unchanged there), so the rules version is not
+// published without a verdict on it.
+func TestRestartedChangeStillWaitsForWhatTheEndedWaitWaitedFor(t *testing.T) {
+	needEnv(t)
+	ns := "ambit-revoke-carried"
+	gateFixture(t, ns) // model gemma, rule eng
+	ctx := t.Context()
+	for _, o := range []client.Object{
+		&v1.Model{ObjectMeta: metav1.ObjectMeta{Name: "other", Namespace: ns}, Spec: v1.ModelSpec{Provider: "Openrouter", Model: "google/other", CredentialsRef: &v1.SecretRef{Name: "ambit-llm-k"}}},
+		&v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "ops-a", Namespace: ns}, Spec: v1.AccessRuleSpec{Groups: []string{"ops"}, Models: []string{"other"}}},
+		&v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "ops-b", Namespace: ns}, Spec: v1.AccessRuleSpec{Groups: []string{"ops"}, Models: []string{"other"}}},
+	} {
+		if err := envClient.Create(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
+		Activation: &Activation{Timeout: 20 * time.Second, Poll: 50 * time.Millisecond}}
+	done := reconcileAsync(r)
+	eventually(t, "both models written", func() error {
+		for _, m := range []string{"gemma", "other"} {
+			if _, err := genGet(ctx, ns, "AgentgatewayModel", m); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	// ops-b is removed: ops-a still grants the same people, so no expression changes in the next pass.
+	if err := envClient.Delete(ctx, &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "ops-b", Namespace: ns}}); err != nil {
+		t.Fatal(err)
+	}
+	wait(t, done)
+	next := reconcileAsync(r)
+	stays(t, "the access log still waits for the verdicts on both models", func() error {
+		if _, err := accessLogOf(ctx, ns); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("access log written before the verdicts: %v", err)
+		}
+		return nil
+	})
+	playAgentgateway(t, ns, "AgentgatewayModel", "gemma")
+	playAgentgateway(t, ns, "AgentgatewayModel", "other")
+	eventually(t, "access log written after the verdicts", func() error { _, err := accessLogOf(ctx, ns); return err })
+	playAgentgateway(t, ns, "AgentgatewayPolicy", AccessLogPolicy)
+	wait(t, next)
 }
 
 // A grant (a new rule) does not restart the change in progress: the order and the waits stay.

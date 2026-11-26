@@ -89,9 +89,8 @@ def hydra_up():
 cidA, tokA = connect_wait("alice", ("time",), "BeforeRotation")
 kidA = header(tokA["access_token"]).get("kid")
 code, st0 = ctl_json("keys")
-access = [s for s in st0.get("sets", []) if s["set"] == "hydra.jwt.access-token"]
-all_kids = sorted(k for s_ in st0.get("sets", []) for k in s_["kids"])
-check("R0 each signing set is one key, the token carries the access token key's ID, and the published keys are the keys of both sets", code == "200" and len(st0.get("sets", [])) == 2 and all(len(s_["kids"]) == 1 for s_ in st0["sets"]) and access and access[0]["kids"] == [kidA] and jwks_kids() == all_kids, (code, st0, kidA, jwks_kids()))
+all_kids = sorted(st0.get("published", []))
+check("R0 the status shows the published keys (public key list only): the key of the token, and one key per signing set", code == "200" and len(all_kids) == 2 and kidA in all_kids and jwks_kids() == all_kids and "sets" not in st0, (code, st0, kidA, jwks_kids()))
 check("R0 the token works on every pod", accepted_everywhere(tokA["access_token"], 120))
 # a second connection, only for R4 (the refresh of a grant made before a rotation), so that R4 does not depend on E2
 cidC, tokC = connect_wait("alice", ("time",), "BeforeRotationToo")
@@ -183,7 +182,7 @@ st, j = token(cidB, grant_type="refresh_token", refresh_token=tokB["refresh_toke
 check("R7 a new grant refreshes and the token carries the new key ID", st == 200 and j.get("access_token") and header(j["access_token"]).get("kid") == newKid, st)
 check("R7 the refreshed token works on every pod", accepted_everywhere(j["access_token"], 60))
 code, st1 = ctl_json("keys")
-check("E1 the status shows the new key and the time of the rotation", code == "200" and "lastRotation" in st1 and any(s["kids"] == [newKid] for s in st1["sets"] if s["set"] == "hydra.jwt.access-token"), (code, st1))
+check("E1 the status shows the new keys and the time of the rotation", code == "200" and "lastRotation" in st1 and sorted(st1.get("published", [])) == new_kids and kidA not in st1.get("published", []), (code, st1))
 
 print()
 print("FAILED: " + ", ".join(fails) if fails else "all checks passed")

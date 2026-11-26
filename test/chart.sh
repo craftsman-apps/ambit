@@ -451,10 +451,10 @@ check_oa 'for n in ("ambit-hydra-public","ambit-hydra-admin"):
 n=one("NetworkPolicy","ambit-hydra")["spec"]
 assert n["policyTypes"]==["Ingress"] and n["podSelector"]=={"matchLabels":{"app.kubernetes.io/name":"ambit-hydra"}}, n
 pub=[i for i in n["ingress"] if i["ports"]==[{"port":4444}]][0]; adm=[i for i in n["ingress"] if i["ports"]==[{"port":4445}]][0]
-assert sorted(list(f["podSelector"]["matchLabels"].values())[0] for f in pub["from"])==["agentgateway","ambit-auth","ambit-public"], pub
+assert sorted(list(f["podSelector"]["matchLabels"].values())[0] for f in pub["from"])==["agentgateway","ambit-auth","ambit-console","ambit-public"], pub
 assert sorted(list(f["podSelector"]["matchLabels"].values())[0] for f in adm["from"])==["ambit-auth","ambit-console"], adm
 assert len(n["ingress"])==2, n
-pdb=one("PodDisruptionBudget","ambit-hydra")["spec"]; assert pdb["minAvailable"]==1' "Hydra: ClusterIP Services, the admin port only for ambit-auth and the console, the public port only for the public Gateway and the controller"
+pdb=one("PodDisruptionBudget","ambit-hydra")["spec"]; assert pdb["minAvailable"]==1' "Hydra: ClusterIP Services, the admin port only for ambit-auth and the console, the public port only for the public Gateway, the controller, ambit-auth and the console (the public key list)"
 check_oa 'r=one("HTTPRoute","ambit-auth-app")["spec"]
 assert r["parentRefs"]==[{"name":"ambit-public","sectionName":"https-auth"}] and r["hostnames"]==["auth.localtest.me"] and len(r["rules"])==1, r
 m=sorted((x["method"],x["path"]["type"],x["path"]["value"]) for x in r["rules"][0]["matches"])
@@ -497,6 +497,9 @@ MSG='limits.enabled' refuse "OAuth without shared limits" --set limits.enabled=f
 MSG='redirectHosts' refuse "dynamic registration without hosts" --set 'oauth.registration.dynamic.redirectHosts={}'
 MSG='lower-case host name' refuse "a wildcard registration host" --set 'oauth.registration.dynamic.redirectHosts={*.example.com}'
 MSG='lower-case host name' refuse "a registration host with a scheme" --set 'oauth.registration.dynamic.redirectHosts={https://chatgpt.com}'
+MSG='optional path' refuse "a registration path with a dot segment" --set 'oauth.registration.dynamic.redirectHosts={chatgpt.com/a/../b}'
+MSG='optional path' refuse "a registration path with a trailing slash" --set 'oauth.registration.dynamic.redirectHosts={chatgpt.com/a/}'
+MSG='optional path' refuse "a registration path with a query" --set 'oauth.registration.dynamic.redirectHosts={chatgpt.com/a?b=c}'
 MSG='perSourcePerHour' refuse "a registration limit of 0" --set oauth.registration.dynamic.perSourcePerHour=0
 MSG='maxClients' refuse "a client cap of 0" --set oauth.registration.dynamic.maxClients=0
 check_oa 'r=one("HTTPRoute","ambit-mcp-public")["spec"]
@@ -539,6 +542,9 @@ assert "ambit-oauth-emergency-block" in v["matchConditions"][0]["expression"] an
 b=one("ValidatingAdmissionPolicyBinding","ambit-oauth-block-fence")["spec"]
 assert b["validationActions"]==["Deny"] and b["policyName"]=="ambit-oauth-block-fence", b' "the emergency block policy is written by an operator only: Ambit's controller, console and sign-in server are refused (admission), checked by the old object's name on a delete"
 [[ "$fd" != *ambit-oauth-block-fence* ]] || { echo "FAIL chart: the block fence is rendered without OAuth"; exit 1; }
+check_oa 'ex=one("AgentgatewayPolicy","ambit-mcp-public-oauth")["spec"]["traffic"]["authorization"]["policy"]["matchExpressions"]
+aud=[e for e in ex if "jwt.aud" in e]
+assert len(aud)==1 and aud[0].count("https://mcp-public.localtest.me/mcp")==2 and "jwt.aud == [" in aud[0], ex' "the token rule requires the audience to be exactly the MCP URL (not only to contain it)"
 blk=$(oat --set oauth.emergencyBlock=true)
 # (not "oa=$blk check_oa": a variable set for one call is exported, and the rendered chart is more than the 128 KB that Linux allows in one)
 ( oa=$blk; check_oa 'ex=one("AgentgatewayPolicy","ambit-mcp-public-oauth")["spec"]["traffic"]["authorization"]["policy"]["matchExpressions"]
@@ -547,6 +553,25 @@ k=one("AgentgatewayPolicy","ambit-mcp-public-auth")["spec"]["traffic"]["authoriz
 assert "false" not in k, "the keys rule must not be touched"' "oauth.emergencyBlock adds a false clause to the token rule only, never to the key rule" )
 none=$(helm template ambit charts/ambit -n ambit-system "${fdv[@]}")
 ! grep -q 'ambit-mcp-public-oauth\|sectionName: keys\|ambit-console-oauth\|ambit-console-tokenreview' <<<"$none" || { echo "FAIL chart: nothing of OAuth in the front door's objects without OAuth"; exit 1; }
+# The Hydra janitor: a daily CronJob on the same database Secret, with Hydra's own lifetimes, one run at a time, no secret in it; off with
+# oauth.janitor.enabled=false, and not there at all without OAuth.
+check_oa 'j=one("CronJob","ambit-hydra-janitor")["spec"]
+assert j["schedule"]=="17 * * * *" and j["concurrencyPolicy"]=="Forbid", j
+t=j["jobTemplate"]["spec"]; p=t["template"]["spec"]; c=p["containers"][0]
+assert t["activeDeadlineSeconds"]==1800 and t["backoffLimit"]==2 and p["restartPolicy"]=="Never", t
+assert c["args"][-4:]==["--batch-size","1000","--limit","100000"], c["args"]
+assert c["args"][:6]==["janitor","-e","-c","/etc/hydra/hydra.yml","--tokens","--requests"] and "--grants" in c["args"] and "--keep-if-younger" in c["args"], c["args"]
+assert c["image"]==[x for x in one("StatefulSet","ambit-hydra")["spec"]["template"]["spec"]["containers"] if x["name"]=="hydra"][0]["image"], "the janitor runs the image of Hydra"
+assert [e["name"] for e in c["env"]]==["DSN"] and "secretKeyRef" in c["env"][0]["valueFrom"] and "value" not in c["env"][0], c["env"]
+assert c["securityContext"]["readOnlyRootFilesystem"] is True and p["securityContext"]["runAsNonRoot"] is True and p["automountServiceAccountToken"] is False, p
+assert {v["name"] for v in p["volumes"]}=={"config","ca","tmp"} and [v for v in p["volumes"] if v["name"]=="config"][0]["configMap"]["name"]=="ambit-hydra", p["volumes"]' "the Hydra janitor: a daily CronJob, one run at a time, the image and database Secret of Hydra, Hydra's own lifetimes, read-only and non-root, no secret value"
+off_j=$(oat --set oauth.janitor.enabled=false)
+! grep -q 'ambit-hydra-janitor' <<<"$off_j" || { echo "FAIL chart: oauth.janitor.enabled=false must render no janitor"; exit 1; }
+! grep -q 'ambit-hydra-janitor' <<<"$fd" || { echo "FAIL chart: no janitor without OAuth"; exit 1; }
+small=$(oat --set oauth.janitor.limit=3 | sed -n '/^kind: CronJob/,/^---/p')
+grep -q '"--batch-size", "3"\|--batch-size, "3", --limit, "3"' <<<"$small" || { echo "FAIL chart: a batch is never larger than the limit (Hydra refuses it)"; exit 1; }
+sch=$(oat --set oauth.janitor.schedule='5 4 * * 0' --set oauth.janitor.timeoutMinutes=10 | sed -n '/^kind: CronJob/,/^---/p')
+grep -q 'schedule: "5 4 \* \* 0"' <<<"$sch" && grep -q 'activeDeadlineSeconds: 600' <<<"$sch" || { echo "FAIL chart: the janitor schedule and time limit are values"; exit 1; }
 MSG='maxGrantDays' refuse "a grant life of 400 days" --set oauth.maxGrantDays=400
 one_r=$(oat --set oauth.hydra.replicas=1)
 ! grep -q 'name: ambit-hydra$' <(sed -n '/kind: PodDisruptionBudget/,/^---/p' <<<"$one_r") || { echo "FAIL chart: one Hydra pod needs no PodDisruptionBudget"; exit 1; }

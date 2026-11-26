@@ -4,6 +4,7 @@
 //	                   signed ID tokens, and users that misbehave on purpose (another issuer, a wrong nonce, ...)
 //	oauthtest console  the console's internal OAuth API that ambit-auth calls (servers, agents, active), with a /_state
 //	                   page that tells the test what ambit-auth asked for
+//	oauthtest mint     signs the claims on standard input with the key in SIGNING_JWK (run on the test host, not in the cluster)
 package main
 
 import (
@@ -29,13 +30,15 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		log.Fatal("usage: oauthtest idp|console")
+		log.Fatal("usage: oauthtest idp|console|mint")
 	}
 	switch os.Args[1] {
 	case "idp":
 		idp()
 	case "console":
 		console()
+	case "mint":
+		mint()
 	default:
 		log.Fatal("unknown command")
 	}
@@ -56,6 +59,13 @@ type user struct {
 	Aud        string
 	Expired    bool
 	CbIss      string // an iss parameter on the redirect to the callback
+}
+
+func init() {
+	// person0 to person199: many different people, for the checks that connect more platforms than one person may (agents.maxPerPerson is 10 at most)
+	for i := 0; i < 200; i++ {
+		users[fmt.Sprintf("person%d", i)] = user{Email: fmt.Sprintf("person%d@acme.test", i), Sub: fmt.Sprintf("u-person%d", i), Verified: true, Groups: []string{"eng"}}
+	}
 }
 
 var users = map[string]user{

@@ -16,6 +16,7 @@ type oauthClientView struct {
 	ID            string    `json:"id"`
 	Name          string    `json:"name"` // as the platform declared it
 	RedirectHosts []string  `json:"redirectHosts"`
+	RedirectURIs  []string  `json:"redirectUris"`  // as registered: with the path (to find the clients of an entry that was removed from the list)
 	Via           string    `json:"registeredVia"` // dcr (the platform registered itself) or another
 	LastUsed      time.Time `json:"lastUsed,omitempty"`
 	Created       time.Time `json:"created,omitempty"`
@@ -35,7 +36,7 @@ func (c *Catalog) listOAuthClients(w http.ResponseWriter, r *http.Request, _ Ses
 	}
 	out := []oauthClientView{}
 	err := c.Hydra.ListClients(r.Context(), func(cl oauth.Client) error {
-		v := oauthClientView{ID: cl.ID, Name: cl.Name, RedirectHosts: []string{}, Created: cl.CreatedAt}
+		v := oauthClientView{ID: cl.ID, Name: cl.Name, RedirectHosts: []string{}, RedirectURIs: append([]string{}, cl.RedirectURIs...), Created: cl.CreatedAt}
 		seen := map[string]bool{}
 		for _, u := range cl.RedirectURIs {
 			if h := hostOf(u); h != "" && !seen[h] {

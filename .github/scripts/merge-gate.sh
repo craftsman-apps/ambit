@@ -15,24 +15,25 @@
 # Prints one line per job and exits 1 when any job does not count.
 set -u
 bad=0
-# the legs of the matrix jobs in ci.yml, one per line (a test compares the e2e parts with ci.yml); no bash 4 features: macOS has 3.2
+# the legs of the matrix jobs, one per line; no bash 4 features: macOS has 3.2
 legs_of() {
   case "$1" in
     cli-unit) printf '%s\n' "cli-unit (ubuntu-latest)" "cli-unit (macos-latest)" "cli-unit (windows-latest)" ;;
-    e2e) # E2E_PARTS: the parts a manual run was limited to
-      parts=${E2E_PARTS:-}; [ -n "${parts// /}" ] || parts="a b c d e"
-      for p in $parts; do echo "e2e ($p)"; done ;;
+    # every part of the matrix (.github/scripts/e2e-parts.sh is its one definition), or only the E2E_PARTS a manual run
+    # was limited to; a failure of the script is an error, so the gate fails instead of expecting no legs
+    e2e) "$(dirname "$0")/e2e-parts.sh" "${E2E_PARTS:-all}" | jq -er '.[].name | "e2e (\(.))"' ;;
   esac
 }
 
 legs_ok() { # legs_ok <job>: every leg of a matrix job succeeded
   [ -n "${JOBS_FILE:-}" ] || return 0
   [ -r "$JOBS_FILE" ] || { echo "     the list of jobs $JOBS_FILE cannot be read"; return 1; }
-  local leg ok=0
+  local leg ok=0 legs
+  legs=$(legs_of "$1") || { echo "     the legs of $1 cannot be listed (e2e-parts.sh or jq failed)"; return 1; }
   while IFS= read -r leg; do
     grep -qxF "$leg|success" "$JOBS_FILE" || { echo "     leg '$leg' did not succeed"; ok=1; }
   done <<LEGS
-$(legs_of "$1")
+$legs
 LEGS
   return $ok
 }

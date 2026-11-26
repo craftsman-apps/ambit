@@ -273,6 +273,17 @@ oauth:
     resources:
       requests: { cpu: 50m, memory: 64Mi }
       limits: { memory: 256Mi }
+  # Hydra never deletes finished rows: expired tokens pile up in PostgreSQL. This runs `hydra janitor` every hour
+  # (docs/oauth.md, "Operations"). It keeps everything younger than an hour and everything that is still valid.
+  janitor:
+    enabled: true
+    # A cron expression, in the time zone of the cluster's controller (usually UTC).
+    schedule: "17 * * * *"
+    # The run is stopped after this many minutes (it starts again at the next schedule).
+    timeoutMinutes: 30
+    # The most rows of each kind that one run deletes (in batches of 1000). A connection in steady use writes one refresh token row a refresh,
+    # about 96 a day (measured, docs/oauth.md, "Clean-up of the tokens"): 100,000 a run and 24 runs a day cover about 25,000 such connections.
+    limit: 100000
   # Sign in at your company's OIDC identity provider (Okta, Entra ID, Google, Keycloak). One issuer per install.
   # Register ONE confidential web client there: authorization code flow only, PKCE S256 required, the redirect URI exactly
   # https://<frontDoor.authHost>/callback, scopes openid email profile, a groups claim in the ID token, client
@@ -293,14 +304,19 @@ oauth:
   registration:
     dynamic:
       # Hosted platforms that have no pre-registered client register themselves (RFC 7591). Only redirect addresses on
-      # these hosts (and loopback addresses for native clients) are accepted. false: no /register.
+      # these entries (and loopback addresses for native clients) are accepted. false: no /register.
+      # An entry is a host with the path of the platform's callback ("chatgpt.com/connector/oauth": that path and the paths below it), or
+      # a bare host (every path of it: add a bare host only when nobody can publish a page or a redirect there).
       enabled: true
-      redirectHosts: [chatgpt.com, claude.ai]
+      redirectHosts: [chatgpt.com/connector_platform_oauth_redirect, chatgpt.com/connector/oauth, claude.ai/api/mcp/auth_callback]
       # Registrations allowed per caller address and hour (counted in Valkey, shared by all replicas).
       perSourcePerHour: 10
       # At most this many registered clients; one that nobody used for unusedClientDays is deleted.
       maxClients: 500
       unusedClientDays: 30
+      # A client that registered and that no consent and no refresh has ever used is deleted this many hours after it registered, so that
+      # a flood of registrations cannot fill the cap for a month (docs/oauth.md, "Unused clients").
+      neverUsedClientHours: 24
   auth:
     # ambit-auth pods (stateless: a pending sign-in is in the browser, counters are in Valkey).
     replicas: 2
@@ -372,6 +388,17 @@ alerts:
   enabled: false
   # Labels your Prometheus selects rules and monitors by, e.g. { release: kube-prometheus-stack }.
   labels: {}
+  # OAuth (oauth.enabled): the database is yours, so its metrics are yours. Put a PromQL expression here to get the alert; leave it empty for none.
+  # The names depend on your database and its exporter, so Ambit does not guess them (docs/alerts.md has examples).
+  oauth:
+    # The janitor alert fires when its last success is older than this many hours (6 for the hourly schedule; raise it if you change oauth.janitor.schedule).
+    janitorMaxAgeHours: 6
+    # Seconds since the newest backup, e.g. for CloudNativePG: time() - max(cnpg_collector_last_available_backup_timestamp)
+    backupAgeSecondsExpr: ""
+    backupMaxAgeHours: 26
+    # A ratio from 0 to 1, e.g. with postgres_exporter: sum(pg_stat_activity_count) / max(pg_settings_max_connections)
+    connectionsUsedRatioExpr: ""
+    connectionsMaxRatio: 0.8
 
 protection:
   # MCP guardrails (ambit-guard): tool pinning and masking of personal data in tool results.

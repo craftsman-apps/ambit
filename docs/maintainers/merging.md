@@ -57,7 +57,7 @@ The kind cluster lock (`/tmp/ambit-kind.lock`) is for local clusters and does no
 |---|---|---|
 | Draft pull request | The quick checks: `changes`, `build`, `image`, `cli-unit` on three systems, the `cli-*` jobs the path filter asks for. No quickstart, no e2e. | about 10 minutes: the slowest job is `cli-snapshot` (9 minutes), then `build` (5) and `image` (4) |
 | Pull request that is ready | The same, plus `quickstart` when the path filter asks for it. **No e2e** once the queue is on. | about 10 minutes, the same jobs plus `quickstart` (2 minutes) |
-| Merge queue (event `merge_group`) | Everything the path filter asks for: the quick checks, `quickstart`, and the full e2e (`e2e (a)` to `e2e (e)`, every part of the matrix in `ci.yml`). | about 21 minutes: `image` (4) and then the slowest e2e part (17) |
+| Merge queue (event `merge_group`) | Everything the path filter asks for: the quick checks, `quickstart`, and the full e2e (`e2e (a)` to `e2e (g)`, every part of the matrix in `.github/scripts/e2e-parts.sh`). | about 21 minutes: `image` (4) and then the slowest e2e part (17) |
 | A manual run (event `workflow_dispatch`) | Everything, for any branch, whatever files changed; with `-f parts=...` only the e2e parts you name. | about 21 minutes, as in the queue |
 
 The rule that keeps `main` safe: the one required check is `merge-gate`. On a queue branch it fails when e2e was skipped
@@ -125,7 +125,7 @@ it. A job skipped on purpose (for example e2e for a change to documentation only
 rule, "skipped never counts unless the path filter skips it on purpose", written as code and tested in
 `.github/scripts/merge-gate_test.sh`.
 
-Why not require `e2e (a)` to `e2e (e)` by name: when e2e is skipped on purpose, GitHub reports one check named
+Why not require `e2e (a)` to `e2e (g)` by name: when e2e is skipped on purpose, GitHub reports one check named
 `e2e (${{ matrix.part.name }})`, and the five part names never arrive. A required check that never arrives blocks the
 queue for ever. `merge-gate` always arrives.
 
@@ -148,11 +148,11 @@ Only the owner changes the repository rules. The recommended values:
 
 | Setting | Value | Why |
 |---|---|---|
-| Required status check | `merge-gate` (only this one) | It covers every job, quickstart and e2e included, and every leg of the matrix jobs (`cli-unit`, `e2e`). Do not require `e2e (a)` to `e2e (e)` by name. |
+| Required status check | `merge-gate` (only this one) | It covers every job, quickstart and e2e included, and every leg of the matrix jobs (`cli-unit`, `e2e`). The gate reads the parts from `.github/scripts/e2e-parts.sh`, so a new part is required at once. Do not require `e2e (a)` to `e2e (g)` by name. |
 | Branch rule "Require branches to be up to date before merging" | Off | The queue builds on the current `main` itself. With the rule on, every merge of another pull request would mark the others out of date. |
 | Merge method | Merge commit | The merge rule for this repository. |
 | Maximum pull requests to build | 3 | Up to three queue branches are tested at the same time; each one includes the ones ahead of it. |
-| Maximum pull requests to merge | 3 | Up to three pull requests can be merged by one run. One e2e run takes about 50 minutes of Actions time, so grouping saves minutes. |
+| Maximum pull requests to merge | 5 | Up to five pull requests can be merged by one run. One e2e run takes about 50 minutes of Actions time, so grouping saves minutes. |
 | Minimum pull requests to merge | 1 | A single pull request does not wait for others. (The setting "wait time to meet the minimum" then does nothing.) |
 | Status check timeout | 120 minutes | The e2e parts take 15 to 20 minutes when a runner is free. The runner pool is shared, and jobs have waited more than an hour for a runner. |
 | Required checks of a group | Every entry must pass (the default) | The combined commit of every entry is tested; a group that fails is split and its pull requests are tested again without the failing one. |

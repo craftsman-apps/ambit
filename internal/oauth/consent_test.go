@@ -519,9 +519,10 @@ func TestJanitorDeletesUnusedClients(t *testing.T) {
 	set := func(id string, ago time.Duration) {
 		e.hydra.clients[id]["metadata"].(map[string]any)["last_used"] = e.now.Add(-ago).Format(time.RFC3339)
 	}
-	set(ids[0], 31*24*time.Hour) // unused for 31 days: goes
-	set(ids[1], 29*24*time.Hour) // 29 days: stays
-	set(ids[2], 40*24*time.Hour) // goes
+	e.hydra.clients[ids[1]]["metadata"].(map[string]any)["used"] = true // a consent or a refresh used it: only the 30 days count
+	set(ids[0], 31*24*time.Hour)                                        // unused for 31 days: goes
+	set(ids[1], 29*24*time.Hour)                                        // used, 29 days: stays
+	set(ids[2], 40*24*time.Hour)                                        // goes
 	n, err := e.srv.Janitor(context.Background())
 	if err != nil || n != 2 {
 		t.Fatalf("deleted %d, %v", n, err)
@@ -544,6 +545,70 @@ func TestJanitorDeletesUnusedClients(t *testing.T) {
 	}
 }
 
+// Security review N2: a client that registered and was never used by a consent or a refresh goes after 24 hours, not after 30 days.
+func TestJanitorDeletesNeverUsedClientsAfterADay(t *testing.T) {
+	e := newEnv(t)
+	e.srv.Cfg.MaxClients = 100
+	e.lim.Rates[BucketRegister] = Rate{Limit: 1000, Window: time.Hour}
+	b := e.browser()
+	var ids []string
+	for i := 0; i < 4; i++ {
+		_, out := post(b, reg("https://chatgpt.com/cb"), nil)
+		ids = append(ids, out["client_id"].(string))
+	}
+	age := func(id string, ago time.Duration) {
+		e.hydra.clients[id]["metadata"].(map[string]any)["last_used"] = e.now.Add(-ago).Format(time.RFC3339)
+	}
+	age(ids[0], 25*time.Hour) // never used, 25 hours: goes
+	age(ids[1], 23*time.Hour) // never used, 23 hours: stays
+	age(ids[2], 25*time.Hour) // 25 hours old, but a consent used it: stays
+	e.hydra.clients[ids[2]]["metadata"].(map[string]any)["used"] = true
+	e.hydra.clients["admin-made"] = map[string]any{"client_id": "admin-made", "metadata": map[string]any{"registered_via": "admin", "last_used": "2020-01-01T00:00:00Z"}}
+	n, err := e.srv.Janitor(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("deleted %d, %v", n, err)
+	}
+	for id, want := range map[string]bool{ids[0]: false, ids[1]: true, ids[2]: true, ids[3]: true, "admin-made": true} {
+		if _, ok := e.hydra.clients[id]; ok != want {
+			t.Fatalf("client %s present=%v, want %v", id, ok, want)
+		}
+	}
+	// the use is what the consent writes: a client that a consent touched is not deleted after a day
+	e.now = e.now.Add(3 * 24 * time.Hour)
+	if n, err := e.srv.Janitor(context.Background()); err != nil || n != 2 { // ids[1] and ids[3] were never used: gone; ids[2] was used: stays
+		t.Fatalf("three days later: deleted %d, %v", n, err)
+	}
+	if _, ok := e.hydra.clients[ids[2]]; !ok {
+		t.Fatal("a client that was used was deleted after a day")
+	}
+}
+
+// Security review N2: the flood that fills the cap of clients (from many networks) frees itself after a day, and a real platform can register again.
+func TestFloodOfRegistrationsFreesTheCapAfterADay(t *testing.T) {
+	e := newEnv(t)
+	e.srv.Cfg.MaxClients = 20
+	e.lim.Rates[BucketRegister] = Rate{Limit: 1000, Window: time.Hour}
+	for i := 0; i < 20; i++ { // 20 different networks, one registration each
+		b := e.browser()
+		b.addr = fmt.Sprintf("203.0.113.%d", i+1)
+		if w, out := post(b, reg("https://chatgpt.com/cb"), nil); w.Code != 201 {
+			t.Fatalf("flood %d: %d %v", i, w.Code, out)
+		}
+	}
+	real := e.browser()
+	real.addr = "198.51.100.7"
+	if w, out := post(real, reg("https://claude.ai/cb"), nil); w.Code != 400 || out["error"] != "invalid_client_metadata" {
+		t.Fatalf("a real platform while the cap is full: %d %v", w.Code, out)
+	}
+	e.now = e.now.Add(25 * time.Hour)
+	if n, err := e.srv.Janitor(context.Background()); err != nil || n != 20 {
+		t.Fatalf("clean-up after 25 hours: deleted %d, %v", n, err)
+	}
+	if w, out := post(real, reg("https://claude.ai/cb"), nil); w.Code != 201 {
+		t.Fatalf("a real platform after the clean-up: %d %v", w.Code, out)
+	}
+}
+
 func TestConsentTouchesTheClientOncePerDay(t *testing.T) {
 	e := newEnv(t)
 	e.lim.Rates[BucketRegister] = Rate{Limit: 1000, Window: time.Hour}
@@ -558,6 +623,9 @@ func TestConsentTouchesTheClientOncePerDay(t *testing.T) {
 	b.do("POST", "/consent", f, origin)
 	if got := e.hydra.clients[id]["metadata"].(map[string]any)["last_used"]; got != e.now.Format(time.RFC3339) {
 		t.Fatalf("last_used %v, want %v", got, e.now.Format(time.RFC3339))
+	}
+	if used, _ := e.hydra.clients[id]["metadata"].(map[string]any)["used"].(bool); !used {
+		t.Fatal("a consent must mark the client as used (otherwise the clean-up of never-used clients deletes it after a day)")
 	}
 }
 
@@ -1170,5 +1238,81 @@ func TestConfigDenyReadsTheRotationTime(t *testing.T) {
 	data[RotationConfigMap] = map[string]string{"since": "yesterday"}
 	if err := d.Refresh(context.Background()); err == nil {
 		t.Fatal("an unreadable time was accepted")
+	}
+}
+
+// An entry of the registration list may name a path: only that path, and the ones below it, are accepted for the host (docs/oauth.md, "Registering clients").
+func TestRegistrationRedirectPathAllowList(t *testing.T) {
+	c := Config{RegistrationHosts: []string{"chatgpt.com/connector_platform_oauth_redirect", "chatgpt.com/connector/oauth", "claude.ai/api/mcp/auth_callback", "open.example.com"}}
+	for raw, want := range map[string]bool{
+		"https://chatgpt.com/connector_platform_oauth_redirect":      true,
+		"https://chatgpt.com/connector/oauth":                        true,
+		"https://chatgpt.com/connector/oauth/abc123":                 true,
+		"https://claude.ai/api/mcp/auth_callback":                    true,
+		"https://open.example.com/any/path/at/all":                   true, // an entry without a path: every path
+		"https://chatgpt.com/other":                                  false,
+		"https://chatgpt.com/connector_platform_oauth_redirectX":     false, // a prefix of the text, not of the path
+		"https://chatgpt.com/connector_platform_oauth_redirect/x":    true,
+		"https://chatgpt.com/connector/oauth/../../evil":             false, // a dot segment
+		"https://chatgpt.com/connector/oauth/%2e%2e/evil":            false, // an encoded dot segment
+		"https://chatgpt.com/connector/oauth%2fx":                    false, // an encoded slash
+		"https://chatgpt.com/connector/oauth//x":                     false, // an empty segment
+		"https://chatgpt.com/connector/oauth/a%5cb":                  false,
+		"https://chatgpt.com/":                                       false,
+		"https://claude.ai/api/mcp/auth_callback_x":                  false,
+		"https://claude.ai/login":                                    false,
+		"https://evil.example.com/connector_platform_oauth_redirect": false,
+		"https://chatgpt.com.evil.example.com/connector/oauth":       false,
+	} {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		if got := c.RedirectAllowed(u); got != want {
+			t.Errorf("%s: allowed=%v, want %v", raw, got, want)
+		}
+	}
+	// the list itself is validated: a bad path is refused at start
+	for name, entry := range map[string]string{"dot segment": "chatgpt.com/a/../b", "query": "chatgpt.com/a?b=c", "empty segment": "chatgpt.com//a", "trailing slash": "chatgpt.com/a/", "no host": "/a/b", "wildcard": "*.example.com/a", "percent escape": "chatgpt.com/a%2fb", "variable reference": "chatgpt.com/$(MCP_URL)", "path parameter": "chatgpt.com/a;b=c"} {
+		cfg := Config{PublicURL: "https://auth.example.com", Resource: "https://mcp.example.com/mcp", IdPIssuer: "https://idp.example.com", IdPClientID: "a", IdPClientSecret: "b",
+			RegistrationHosts: []string{entry}, MaxClients: 500, UnusedClientDays: 30}
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("%s: %q was accepted", name, entry)
+		}
+	}
+}
+
+// With a path entry a client cannot register another path of the host.
+func TestRegistrationRefusesAPathThatIsNotListed(t *testing.T) {
+	e := newEnv(t)
+	e.srv.Cfg.RegistrationHosts = []string{"chatgpt.com/connector_platform_oauth_redirect"}
+	b := e.browser()
+	if w, out := post(b, map[string]any{"client_name": "x", "redirect_uris": []string{"https://chatgpt.com/some/other/page"}}, nil); w.Code != 400 || len(e.hydra.clients) != 0 {
+		t.Fatalf("another path: %d %v", w.Code, out)
+	}
+	if w, out := post(b, map[string]any{"client_name": "ChatGPT", "redirect_uris": []string{"https://chatgpt.com/connector_platform_oauth_redirect"}}, nil); w.Code != 201 && w.Code != 200 {
+		t.Fatalf("the listed path: %d %v", w.Code, out)
+	}
+}
+
+// The status call reads Hydra's public key list and follows no redirect: an answer that points at another address is an error.
+func TestPublicKeyIDsFollowsNoRedirect(t *testing.T) {
+	admin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"keys":[{"kid":"private-one","d":"SECRET"}]}`))
+	}))
+	defer admin.Close()
+	pub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, admin.URL, http.StatusFound)
+	}))
+	defer pub.Close()
+	if ids, err := PublicKeyIDs(context.Background(), pub.URL); err == nil {
+		t.Fatalf("a redirect was followed: %v", ids)
+	}
+	ok := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"keys":[{"kid":"b"},{"kid":"a"}]}`))
+	}))
+	defer ok.Close()
+	if ids, err := PublicKeyIDs(context.Background(), ok.URL); err != nil || strings.Join(ids, ",") != "a,b" {
+		t.Fatalf("%v %v", ids, err)
 	}
 }

@@ -132,10 +132,17 @@ func (m *MemRegistry) Once(_ context.Context, key string, ttl time.Duration) (bo
 	return true, nil
 }
 
-// Janitor deletes the dynamic clients that nobody used for Config.UnusedClientDays and makes the registry match Hydra.
-// Replicas may run it together: deleting a deleted client is not an error. It returns how many clients it deleted.
+// Janitor deletes the dynamic clients that nobody used for Config.UnusedClientDays, and the ones that never were used at all
+// (no consent, no refresh) NeverUsedHours after they registered, and makes the registry match Hydra. The short time for the
+// second kind keeps a flood of registrations from filling the cap of clients for a month (security review N2). Replicas may
+// run it together: deleting a deleted client is not an error. It returns how many clients it deleted.
 func (s *Server) Janitor(ctx context.Context) (int, error) {
 	cutoff := s.now().Add(-time.Duration(s.Cfg.UnusedClientDays) * 24 * time.Hour)
+	neverHours := s.Cfg.NeverUsedHours
+	if neverHours < 1 {
+		neverHours = 24
+	}
+	neverCutoff := s.now().Add(-time.Duration(neverHours) * time.Hour)
 	began := time.Now() // the registry's own clock: a client registered after this moment may be missing from the listing
 	var keep []string
 	deleted := 0
@@ -149,7 +156,8 @@ func (s *Server) Janitor(ctx context.Context) (int, error) {
 				last = t
 			}
 		}
-		if !last.IsZero() && last.Before(cutoff) {
+		used, _ := c.Metadata["used"].(bool)
+		if !last.IsZero() && (last.Before(cutoff) || (!used && last.Before(neverCutoff))) {
 			if err := s.Hydra.DeleteClient(ctx, c.ID); err != nil {
 				return err
 			}

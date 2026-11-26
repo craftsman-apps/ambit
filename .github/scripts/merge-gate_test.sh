@@ -59,8 +59,8 @@ grep -q '^  workflow_dispatch:' ../workflows/ci.yml && echo "ok   ci.yml: a manu
 
 # Matrix legs: a matrix that reports success is checked leg by leg (GitHub has reported success for a cancelled leg).
 JOBS=$(mktemp); trap 'rm -f "$JOBS"' EXIT
-all_legs() { printf '%s\n' "cli-unit (ubuntu-latest)|success" "cli-unit (macos-latest)|success" "cli-unit (windows-latest)|success" \
-  "e2e (a)|success" "e2e (b)|success" "e2e (c)|success" "e2e (d)|success" "e2e (e)|success"; }
+all_legs() { printf '%s\n' "cli-unit (ubuntu-latest)|success" "cli-unit (macos-latest)|success" "cli-unit (windows-latest)|success"
+  ./e2e-parts.sh | jq -r '.[].name | "e2e (\(.))|success"'; }
 all_legs > "$JOBS";                                                     run 0 "every leg succeeded" JOBS_FILE="$JOBS"
 all_legs | grep -v "e2e (c)" > "$JOBS";                                  run 1 "a leg of e2e is missing although e2e reports success" JOBS_FILE="$JOBS"
 all_legs | sed 's/e2e (e)|success/e2e (e)|cancelled/' > "$JOBS";         run 1 "a leg of e2e was cancelled" JOBS_FILE="$JOBS"
@@ -69,12 +69,16 @@ all_legs | grep -v "e2e" > "$JOBS";                                      run 0 "
 # a manual run limited to some parts: only those legs are expected
 { all_legs | grep -v "e2e"; echo "e2e (f)|success"; } > "$JOBS";                             run 0 "a manual run of part f: only leg f is expected" JOBS_FILE="$JOBS" E2E_PARTS=f
 { all_legs | grep -v "e2e"; echo "e2e (f)|cancelled"; } > "$JOBS";                              run 1 "a manual run of part f: leg f cancelled" JOBS_FILE="$JOBS" E2E_PARTS=f
-all_legs | grep -v "e2e (f)" > "$JOBS";                                  run 0 "E2E_PARTS with only spaces: the default legs" JOBS_FILE="$JOBS" E2E_PARTS="  "
+all_legs > "$JOBS";                                                     run 0 "E2E_PARTS with only spaces: every leg" JOBS_FILE="$JOBS" E2E_PARTS="  "
+all_legs | grep -v "e2e (f)" > "$JOBS";                                  run 1 "leg f is missing (a part the old gate did not know)" JOBS_FILE="$JOBS"
+all_legs | sed 's/e2e (g)|success/e2e (g)|failure/' > "$JOBS";           run 1 "leg g failed although e2e reports success" JOBS_FILE="$JOBS"
 run 1 "the list of jobs cannot be read" JOBS_FILE=/nonexistent
-# the e2e parts the gate expects are the parts of the matrix in ci.yml
-parts=$(./e2e-parts.sh | jq -r '[.[].name | select(test("^[a-e]$"))] | join(" ")')
-gate=$(sed -n 's/.*|| parts="\([a-e ]*\)".*/\1/p' merge-gate.sh)
-if [ -n "$parts" ] && [ "$parts" = "$gate" ]; then echo "ok   the e2e parts of the gate are the parts of ci.yml ($parts)"; else echo "FAIL gate parts '$gate', ci.yml parts '$parts'"; fails=$((fails + 1)); fi
+# every part of the matrix is a leg the gate requires: with any one leg of the matrix missing, the gate fails
+for part in $(./e2e-parts.sh | jq -r '.[].name'); do
+  all_legs | grep -vxF "e2e ($part)|success" > "$JOBS"; run 1 "the gate requires leg $part of the matrix" JOBS_FILE="$JOBS"
+done
+# ci.yml takes its matrix from e2e-parts.sh (the one list)
+grep -q 'part: ${{ fromJSON(needs.changes.outputs.e2e_parts) }}' ../workflows/ci.yml && echo "ok   ci.yml: the e2e matrix comes from e2e-parts.sh" || { echo "FAIL ci.yml e2e matrix is not from e2e-parts.sh"; fails=$((fails + 1)); }
 
 [ "$fails" -eq 0 ] || { echo "$fails failed"; exit 1; }
 echo "all passed"

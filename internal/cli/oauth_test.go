@@ -69,10 +69,19 @@ func TestOAuthBlockOnMakesAPolicyOfItsOwn(t *testing.T) {
 	if len(o.GetOwnerReferences()) != 0 || o.GetAnnotations()["meta.helm.sh/release-name"] != "" {
 		t.Error("the policy has an owner")
 	}
-	// a second call changes nothing and says so
+	// a second call changes nothing; it does not claim a block that the gateway has not accepted
+	code, s = r.run("oauth", "block", "on", "--yes")
+	if code != 0 || !strings.Contains(s, "exists in namespace") || !strings.Contains(s, "has not reported it accepted") || strings.Contains(s, "already blocked") {
+		t.Fatalf("second call while pending: exit %d\n%s", code, s)
+	}
+	o, _ = getBlock(t, r)
+	_ = unstructured.SetNestedSlice(o.Object, []any{map[string]any{"conditions": []any{map[string]any{"type": "Accepted", "status": "True"}}}}, "status", "ancestors")
+	if err := r.ctrl.Update(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
 	code, s = r.run("oauth", "block", "on", "--yes")
 	if code != 0 || !strings.Contains(s, "already blocked") {
-		t.Fatalf("second call: exit %d\n%s", code, s)
+		t.Fatalf("second call after acceptance: exit %d\n%s", code, s)
 	}
 }
 
@@ -201,5 +210,57 @@ func TestOAuthBlockStatus(t *testing.T) {
 	r3 := oauthRig(t, false)
 	if _, s := r3.run("oauth", "block", "status"); !strings.Contains(s, "not turned on") {
 		t.Fatalf("OAuth off:\n%s", s)
+	}
+}
+
+// The spec must be exactly the block's: the same rule plus another setting is not the block, and is never deleted.
+func TestOAuthBlockIsTheWholeSpec(t *testing.T) {
+	r := oauthRig(t, true)
+	other := blockPolicy("ambit-system")
+	_ = unstructured.SetNestedField(other.Object, "Allow", "spec", "traffic", "authorization", "action") // another action
+	if isBlock(other) {
+		t.Fatal("a different action was taken for the block")
+	}
+	extra := blockPolicy("ambit-system")
+	_ = unstructured.SetNestedField(extra.Object, map[string]any{"x": "y"}, "spec", "backend", "mcp")
+	if isBlock(extra) {
+		t.Fatal("the same rule with another setting was taken for the block")
+	}
+	if !isBlock(blockPolicy("ambit-system")) {
+		t.Fatal("the block is not the block")
+	}
+	if err := r.ctrl.Create(context.Background(), extra); err != nil {
+		t.Fatal(err)
+	}
+	if code, s := r.run("oauth", "block", "off", "--yes"); code == 0 || !strings.Contains(s, "is not the block") {
+		t.Fatalf("exit %d\n%s", code, s)
+	}
+	if _, ok := getBlock(t, r); !ok {
+		t.Fatal("a policy with other settings was deleted")
+	}
+}
+
+// A condition about an older version of the policy does not count as accepted.
+func TestAcceptedNeedsTheCurrentGeneration(t *testing.T) {
+	o := blockPolicy("ambit-system")
+	o.SetGeneration(3)
+	cond := func(gen int64, attached string) []any {
+		c := []any{map[string]any{"type": "Accepted", "status": "True", "observedGeneration": gen}}
+		if attached != "" {
+			c = append(c, map[string]any{"type": "Attached", "status": attached, "observedGeneration": gen})
+		}
+		return []any{map[string]any{"conditions": c}}
+	}
+	for name, tc := range map[string]struct {
+		anc  []any
+		want bool
+	}{"current": {cond(3, ""), true}, "stale": {cond(2, ""), false}, "attached false": {cond(3, "False"), false}, "attached true": {cond(3, "True"), true}, "none": {nil, false}} {
+		_ = unstructured.SetNestedSlice(o.Object, tc.anc, "status", "ancestors")
+		if tc.anc == nil {
+			unstructured.RemoveNestedField(o.Object, "status")
+		}
+		if got := accepted(o); got != tc.want {
+			t.Errorf("%s: %v, want %v", name, got, tc.want)
+		}
 	}
 }

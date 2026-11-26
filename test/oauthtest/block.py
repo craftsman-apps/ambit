@@ -101,7 +101,9 @@ check("N1b every token is refused with 403 on every pod", len(seen) == len(PORTS
 print(f"   ambit oauth block on: refused on every pod {max(seen.values()) if seen else float('nan'):.1f} s after the command was started", flush=True)
 check("N1b API keys keep working on the same route (the tool list holds the front-door tool)", all(TOOL in (tools(p, key=KEY)[1] or []) for p in PORTS))
 rc, text = sh("helm get manifest ambit -n %s" % NSN)[0:2]
-check("N1b the policy is in no Helm release (the manifest of the release was read)", rc == 0 and "kind: AgentgatewayPolicy" in text and "ambit-oauth-emergency-block" not in text)
+docs = [d for d in re.split(r"(?m)^---\s*$", text) if re.search(r"(?m)^kind: AgentgatewayPolicy\s*$", d)]
+check("N1b no AgentgatewayPolicy of the Helm release is the block (the manifest of the release was read; the admission fence names it, which is fine)",
+      rc == 0 and len(docs) > 3 and not any(re.search(r"(?m)^  name: ambit-oauth-emergency-block\s*$", d) for d in docs), (rc, len(docs)))
 # N1g · no Ambit component may lift it: the controller has the right to delete policies (it makes many), and the admission policy refuses it for this one
 # (the console and the sign-in server have no such right at all; the unit test of the chart checks that the policy names all three)
 for sa in ("ambit-controller",):

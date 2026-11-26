@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -92,30 +94,59 @@ func blockPolicy(ns string) *unstructured.Unstructured {
 // oauthBlockWait is how long `on` waits for the gateway to report the policy accepted.
 var oauthBlockWait = 20 * time.Second
 
-// isBlock reports whether the object is the block that `on` makes: a Require rule on the public route that is false for every request with a token.
+// isBlock reports whether the object is the block that `on` makes: its whole spec is the spec that blockPolicy writes (a Require rule on the public route that
+// is false for every request with a token, and nothing else), so that an object of the same name with other settings is never taken for the block, or deleted.
 func isBlock(o *unstructured.Unstructured) bool {
-	refs, _, _ := unstructured.NestedSlice(o.Object, "spec", "targetRefs")
-	action, _, _ := unstructured.NestedString(o.Object, "spec", "traffic", "authorization", "action")
-	exprs, _, _ := unstructured.NestedStringSlice(o.Object, "spec", "traffic", "authorization", "policy", "matchExpressions")
-	if len(refs) != 1 || action != "Require" || len(exprs) != 1 || exprs[0] != "!has(jwt.iss)" {
-		return false
-	}
-	r, ok := refs[0].(map[string]any)
-	return ok && r["kind"] == "HTTPRoute" && r["name"] == oauthPublicRoute && r["sectionName"] == nil
+	have, _, _ := unstructured.NestedMap(o.Object, "spec")
+	want, _, _ := unstructured.NestedMap(blockPolicy(o.GetNamespace()).Object, "spec")
+	h, err1 := json.Marshal(have)
+	w, err2 := json.Marshal(want)
+	return err1 == nil && err2 == nil && bytes.Equal(h, w)
 }
 
-// accepted reports whether a gateway has accepted the policy (status.ancestors[].conditions: Accepted True).
+// accepted reports whether a gateway has accepted the current version of the policy (status.ancestors[].conditions: Accepted True for the current
+// generation, and Attached not False). It says that the policy is attached; it does not say that every pod has loaded it.
 func accepted(o *unstructured.Unstructured) bool {
 	anc, _, _ := unstructured.NestedSlice(o.Object, "status", "ancestors")
 	for _, a := range anc {
-		conds, _, _ := unstructured.NestedSlice(a.(map[string]any), "conditions")
+		m, _ := a.(map[string]any)
+		conds, _, _ := unstructured.NestedSlice(m, "conditions")
+		acc, attachedFalse := false, false
 		for _, c := range conds {
-			if m, ok := c.(map[string]any); ok && m["type"] == "Accepted" && m["status"] == "True" {
-				return true
+			cm, ok := c.(map[string]any)
+			if !ok {
+				continue
 			}
+			if g, has := cm["observedGeneration"]; has && fmt.Sprint(g) != fmt.Sprint(o.GetGeneration()) {
+				continue // a condition about an older version of the policy
+			}
+			switch cm["type"] {
+			case "Accepted":
+				acc = cm["status"] == "True"
+			case "Attached":
+				attachedFalse = cm["status"] == "False"
+			}
+		}
+		if acc && !attachedFalse {
+			return true
 		}
 	}
 	return false
+}
+
+// waitAccepted waits up to oauthBlockWait for a gateway to report the policy accepted, and says whether it did.
+func waitAccepted(ctx context.Context, c *kube.Clients, ns string) bool {
+	got := policyObject(ns, oauthBlockPolicy)
+	deadline := time.Now().Add(oauthBlockWait)
+	for {
+		if err := c.Ctrl.Get(ctx, client.ObjectKeyFromObject(got), got); err == nil && accepted(got) {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(time.Second)
+	}
 }
 
 func (a *app) oauthBlock(ctx context.Context, on bool) error {
@@ -147,7 +178,12 @@ func (a *app) oauthBlock(ctx context.Context, on bool) error {
 	}
 	if on {
 		if exists {
-			p.Line("%s OAuth tokens are already blocked (policy %s in namespace %s).", p.Mark("ok"), oauthBlockPolicy, ns)
+			if waitAccepted(ctx, c, ns) {
+				p.Line("%s OAuth tokens are already blocked (policy %s in namespace %s, accepted by the gateway).", p.Mark("ok"), oauthBlockPolicy, ns)
+			} else {
+				p.Line("%s Policy %s exists in namespace %s, but the gateway has not reported it accepted: tokens may not be blocked yet. Check it, and try a token:", p.Mark("warn"), oauthBlockPolicy, ns)
+				p.Line("  kubectl -n %s get agentgatewaypolicy %s -o jsonpath='{.status.ancestors[*].conditions}'", ns, oauthBlockPolicy)
+			}
 			return nil
 		}
 		if err := kube.Confirm(p, a.stdin(), a.stdinTTY(), a.g.yes, []string{
@@ -166,19 +202,7 @@ func (a *app) oauthBlock(ctx context.Context, on bool) error {
 			}
 		}
 		// The block is in force when a gateway has accepted the policy; say what is known.
-		got := policyObject(ns, oauthBlockPolicy)
-		deadline := time.Now().Add(oauthBlockWait)
-		ok := false
-		for {
-			if err := c.Ctrl.Get(ctx, client.ObjectKeyFromObject(got), got); err == nil && accepted(got) {
-				ok = true
-				break
-			}
-			if !time.Now().Before(deadline) {
-				break
-			}
-			time.Sleep(time.Second)
-		}
+		ok := waitAccepted(ctx, c, ns)
 		if ok {
 			p.Line("%s OAuth tokens are blocked: policy %s created in namespace %s, and the gateway has accepted it.", p.Mark("ok"), oauthBlockPolicy, ns)
 		} else {

@@ -240,11 +240,11 @@ ambit oauth block status      # says whether tokens are blocked, and by what
 ambit oauth block off         # lifts it (only when the check on every pod is done: see below)
 ```
 
-The command creates `AgentgatewayPolicy ambit-oauth-emergency-block`. You can apply the same object yourself, with the operator's own rights, if
-you have no `ambit` binary at hand:
+The command creates `AgentgatewayPolicy ambit-oauth-emergency-block`. You can create the same object yourself, with the operator's own rights, if
+you have no `ambit` binary at hand (`create`, not `apply`: an object of that name that already exists must not be changed):
 
 ```
-kubectl -n ambit-system apply -f - <<'YAML'
+kubectl -n ambit-system create -f - <<'YAML'
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata: { name: ambit-oauth-emergency-block }
@@ -262,7 +262,8 @@ Every request with a token now gets 403 on every public Gateway pod, also with a
 after it has checked the signature; a request with a key has no token, and the key rule is not touched). **Helm and Argo CD do not own this
 policy**: a `helm upgrade`, Argo CD self-heal (`ambit init --gitops argocd` writes an Application with `selfHeal`) and Flux drift correction
 do not remove it, because it is in no chart and in no Git repository. It stays until you run `ambit oauth block off` (or delete the policy). An admission
-policy (`ambit-oauth-block-fence`) refuses every write of this policy by Ambit's own controller, console and sign-in server: only an operator makes and removes it.
+policy (`ambit-oauth-block-fence`) refuses every write of this policy by Ambit's own controller, console and sign-in server: only an operator makes and removes it. (The fence protects this one object. A person or component that may write any authorization policy on the public route or its Gateway may still weaken the
+protection by another policy: keep the right to write `agentgatewaypolicies` for operators.)
 The command waits up to 20 seconds for a gateway to report the policy accepted and says if it did not; a gateway pod applies it within a second of that (measured in the
 end-to-end test: refused on every pod 0.1 s after the command). The protected-resource metadata document (`/.well-known/oauth-protected-resource/mcp`) stays public:
 it holds no secret and starts the sign-in of a platform.

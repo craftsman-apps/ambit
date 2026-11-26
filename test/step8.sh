@@ -283,9 +283,9 @@ d=$(( $(spent) - ${s0:-0} ))
   fail "15 include_usage false: user09 $cm charged $d units (want 200, 3, usage in her stream); user01 $ca, usage in hers: $(grep -c '"usage"' "$W/nu-a")"
 pass "15 include_usage false: user09's stream reported usage and was charged 3 units; user01's reported usage too"
 
-fresh
 kubectl -n "$NS" apply -f test/llm/router.yaml >/dev/null
 kubectl -n "$NS" wait modelrouters.ambitproject.dev/auto --for=condition=Ready --timeout=120s >/dev/null
+fresh   # after the wait above, which can take minutes: the UTC day of checks 16 and 17 is read here
 route_ask() { command curl -s -o "$W/$2" -w '%{http_code}' --max-time 60 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' -d "$3" "$MOCK/chat/completions"; }
 # 16 · a routed answer is charged at the answering model's price (mock-echo: 3 units)
 s0=$(spent)
@@ -388,7 +388,7 @@ pass "20e the group's 4 a minute are shared by two people: $codes"
 budget_ml "userRequestsPerDay: 1, userRequestsPerMinute: 1"
 wait_rl "$NS" "ambit-llm.rpm_group_ml-research.rpm_user: unit=MINUTE requests_per_unit=1,"
 wait_rl "$NS" "ambit-llm.group_ml-research.user: unit=DAY requests_per_unit=0,"
-hold_for_midnight 200   # two waits for a new minute below (up to 125 s); f3 must run more than 60 s before midnight, or its Retry-After is the day's end (#427)
+hold_for_midnight 300   # two waits for a new minute below (up to 65 s each); f3 must run more than 60 s before midnight, or its Retry-After is the day's end (#427)
 new_minute; M=$(token user09); f1=$(ask_m "$M" mock/echo f1); sleep 3; f2=$(ask_m "$M" mock/echo f2); ra=$(retry_after f2)
 new_minute; f3=$(ask_m "$M" mock/echo f3); rb=$(retry_after f3)
 [[ "$f1/$f2/$f3" == "200/429/429" ]] && (( ra <= 60 && rb > 60 )) ||

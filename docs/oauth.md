@@ -243,10 +243,69 @@ clause after it has checked the signature, and `false` is never true). The next 
 `oauth.emergencyBlock: true`. To lift it, remove the clause (`"op":"remove"` with its index, the last one) or set the value to `false` and
 upgrade. Platforms then get 403 on `/mcp`: they stay connected, and work again when you lift the block.
 
-The block does **not** replace the new key: a token signed with the stolen key is valid again as soon as the block is lifted, until the
-gateway's copy of the old key is gone. The removal and replacement of the key (every connection then connects again) comes with the next change;
-keep the block until it is done. Measured in the end-to-end test, with Hydra down and the old key cached on the gateways, the block takes
-a fraction of a second (the numbers are in the pull request).
+The block does **not** replace the key: a token signed with the stolen key is valid again as soon as the block is lifted, until the
+gateway's copy of the old key is gone. Replace the key as below, keep the block until the check on every gateway pod says that the old key is
+gone, and then lift it. Measured in the end-to-end test, with Hydra down and the old key cached on the gateways, the block takes
+a fraction of a second.
+
+### Emergency rotation of the signing keys
+
+**What it does.** One admin call replaces the key of **both** signing sets (`hydra.jwt.access-token` and `hydra.openid.id-token`) by a new key
+and ends **every OAuth connection of every platform**: each platform has to connect again, and each person sees the consent page again. This
+cannot be avoided in Hydra v26.2.0: a refreshed access token gets the key ID that its grant was first signed with, which no longer exists
+after a rotation. There is no scheduled rotation in 0.6.0 (a key lives until you replace it). Private keys are kept by Hydra in PostgreSQL,
+encrypted with `oauth.hydra.systemSecret`; a hardware or cloud key service is not part of 0.6.0.
+
+**Steps**, with `$CONSOLE` the console's address and `$COOKIES` the cookie jar of an admin who is signed in (as in [Agents](agents.md)):
+
+```
+# 1. Block every token (seconds; no Hydra needed). Keep it until step 4 says the old key is gone.
+#    Do not run helm upgrade until the end: it removes the edit. To make the block survive an upgrade, set oauth.emergencyBlock: true.
+kubectl -n ambit-system patch agentgatewaypolicy ambit-mcp-public-oauth --type json \
+  -p '[{"op":"add","path":"/spec/traffic/authorization/policy/matchExpressions/-","value":"false"}]'
+#    Check that the block is in force on EVERY public gateway pod before you rotate: a token that worked (a real one, or a connection of a
+#    test platform) must now get 403 from each pod (the check of step 4 works the same way).
+
+# 2. Rotate. The answer has the old and new key ID of each set and two probe tokens. Run it again if it fails (a failure says so).
+umask 077   # the file holds tokens signed with the real keys
+curl -s -b "$COOKIES" -X POST "$CONSOLE/api/admin/oauth/signing-key/emergency-rotation" -H 'Content-Type: application/json' \
+  -d '{"confirm":"every connection must connect again"}' > rotation.json
+
+# 3. Hydra publishes the new keys only (one per signing set: the access token key and the ID token key), and its pods stay Ready.
+curl -s https://auth.example.com/.well-known/jwks.json      # two keys, the new key IDs of the answer of step 2
+kubectl -n ambit-system get pods -l app.kubernetes.io/name=ambit-hydra
+
+# 4. The check on EVERY public gateway pod (a gateway fetches the keys again every 5 minutes, so this can take that long).
+```
+
+Step 4, for each pod `P` of `kubectl -n ambit-system get pods -l gateway.networking.k8s.io/gateway-name=ambit-public` (use `kubectl port-forward`
+to the pod and send the request to it, with the real host name `mcp.example.com` in the `Host` header and certificate check):
+`POST /mcp` with `Authorization: Bearer <probe.old from rotation.json>` must answer **401** (the pod no longer knows the old key), and with
+`<probe.new>` must answer **403** (the pod knows the new key; the token is valid but names no agent, so the rules refuse it, and the block refuses
+everything anyway). Repeat until every pod answers like that. **Only then** lift the block (remove the last clause of the policy, as above). If one pod
+still answers 403 for the old probe, keep the block on and check that pod again; do not lift the block for the others. The probe tokens
+carry no agent, grant or scope: no route accepts them, and they expire after an hour. They are signed with the real keys, so treat the answer of
+step 2 as secret and delete `rotation.json` after the check.
+
+`GET /api/admin/oauth/signing-key` shows the key IDs of both sets (never the keys) and the time of the last rotation. Every rotation is in the
+key events of the console (`oauth-signing-key-rotation`).
+
+A connection that a person makes in the same second as the end of the call is over too (the time is kept in whole seconds); the platform shows an error at its
+first refresh, and the person connects again.
+
+**What happens in the order of the call.** The console first writes the time into the ConfigMap `ambit-oauth-rotation` (only the console may write it): from then on
+the token hook refuses the refresh of every grant that is older, whatever Hydra does. Then, for each set, it makes the new key in a temporary
+set, replaces the signing set in **one** call (it never holds two keys), removes the temporary set and reads the result back. A set that does not hold
+exactly one key is not touched (fix that first). If Hydra is down, the call fails with 502 and says to run it again; **the time is already
+written**, so every older grant is already refused, but the key is the same: keep the block on until a rotation has finished.
+
+**Measured** in the end-to-end test (`test/stepoauth.sh`, check 15; the numbers are in the pull request): the block (one edit) 0.05 s; the rotation request 1 to 2
+seconds; the old key refused and the new key accepted on every gateway pod after a number of seconds that is the gateway's fetch cycle (up to
+5 minutes). The block time and the rotation time are separate: the block protects you during the rotation time.
+
+**If Hydra's key endpoint is down** (for example during an incident), the gateways keep the last keys they fetched, also after the cache time and
+also after a restart of the gateway controller (tested for more than 5 minutes), so issued tokens keep working; but a rotation cannot run (it needs
+Hydra), and the stolen key stays valid at the gateway. The block is then the only protection; it does not depend on Hydra.
 
 ## PostgreSQL
 
@@ -355,8 +414,8 @@ to keep is your decision (the pod's log says `key set ... holds 2 keys`).
 
 There is no scheduled key rotation in 0.6.0. After a rotation, refreshed tokens of existing connections carry the old key
 ID and are refused until the person connects again (a known defect of Hydra v26.2.0). A key
-rotation is therefore a planned reconnect of every OAuth connection. The procedure comes with the next changes of this
-series.
+rotation is therefore a reconnect of every OAuth connection: the emergency rotation of
+[If a signing key may be stolen](#if-a-signing-key-may-be-stolen) does it in one call, and the token hook refuses the refresh of every older grant.
 
 ## Operating
 
@@ -401,7 +460,9 @@ registered, last use) and deletes one with `DELETE /api/admin/oauth/clients/{id}
 - The public endpoints on `frontDoor.authHost`: `POST /oauth2/token`, `POST /oauth2/revoke`, `GET /.well-known/jwks.json`,
   `GET /.well-known/oauth-authorization-server`, `GET /oauth2/auth`, `GET /login`, `GET /callback`, `GET` and `POST
   /consent`, `GET /error`, `POST /register`.
-- The console endpoints `GET /api/admin/oauth/clients`, `DELETE /api/admin/oauth/clients/{id}`, and the internal API above.
+- The console endpoints `GET /api/admin/oauth/clients`, `DELETE /api/admin/oauth/clients/{id}`, `GET /api/admin/oauth/signing-key`,
+  `POST /api/admin/oauth/signing-key/emergency-rotation` (body `{"confirm":"every connection must connect again"}`), and the internal API above.
+- The ConfigMap `ambit-oauth-rotation` (key `since`: the time of the last emergency rotation; only the console writes it).
 - The routes rule names `keys` and `oauth` of `HTTPRoute ambit-mcp-public`, the policy `ambit-mcp-public-oauth`, and `oauth.emergencyBlock`, `oauth.maxGrantDays`.
 - The access token claims `email`, `groups`, `ambit_agent`, `ambit_agent_mode`, `ambit_agent_owner_at_issue`,
   `ambit_platform_declared`, `ambit_grant`, `ambit_scope`.

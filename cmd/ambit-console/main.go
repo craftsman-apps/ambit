@@ -447,7 +447,7 @@ func run(ctx context.Context) error {
 		evidence = &console.EvidenceExports{MaxRows: maxRows, MaxDays: maxDays, Retention: env("AMBIT_EVIDENCE_RETENTION", "8760h"), Version: os.Getenv("AMBIT_VERSION")}
 	}
 	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), loginOpts,
-		&console.Catalog{Hydra: hydra, Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, AppAudit: appAudit, Evidence: evidence, Budgets: budgets, Dependencies: deps, AccessMode: os.Getenv("AMBIT_ACCESS_MODE"), Prices: prices, Tools: reader, Presets: catalogPresets,
+		&console.Catalog{Hydra: hydra, OAuthIssuer: os.Getenv("AMBIT_OAUTH_ISSUER"), OAuthResource: os.Getenv("AMBIT_OAUTH_RESOURCE"), Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, AppAudit: appAudit, Evidence: evidence, Budgets: budgets, Dependencies: deps, AccessMode: os.Getenv("AMBIT_ACCESS_MODE"), Prices: prices, Tools: reader, Presets: catalogPresets,
 			Groups: groupStore, Keys: keySvc, LLMURL: os.Getenv("AMBIT_LLM_URL"), MCPURL: os.Getenv("AMBIT_MCP_URL")}), ReadHeaderTimeout: 10 * time.Second}
 	shutDone := make(chan struct{})
 	go func() {

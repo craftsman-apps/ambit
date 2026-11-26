@@ -91,16 +91,16 @@ for s in ['system:serviceaccount:ambit-system:ambit-console','authentication.kub
   assert s in we, s
 assert [v['expression'] for v in w['validations']]==['variables.console || variables.cleanup'], w['validations']
 assert w['validations'][0]['message']=='only the Ambit console may write personal API key objects', w
-sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event','ambitproject.dev/agent','ambitproject.dev/agent-stops']
+sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event','ambitproject.dev/agent','ambitproject.dev/agent-stops','ambitproject.dev/oauth-rotation']
 bs={x['metadata']['name']:x['spec'] for x in docs if x['kind']=='ValidatingAdmissionPolicyBinding'}
-assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(5)}|{'ambit-key-lease','ambit-agent-ack-writer','ambit-keys-writer-stops-name'}, list(bs)
+assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(6)}|{'ambit-key-lease','ambit-agent-ack-writer','ambit-keys-writer-stops-name'}, list(bs)
 assert all('paramRef' not in b for b in bs.values()), bs
 bs.pop('ambit-key-lease'); bs.pop('ambit-agent-ack-writer'); bs.pop('ambit-keys-writer-stops-name')
 for n,b in bs.items():
   i=int(n[-1])
   assert b['policyName']=='ambit-keys-writer' and b['validationActions']==['Deny'], b
   assert b['matchResources']['namespaceSelector']=={'matchLabels':{'kubernetes.io/metadata.name':'ambit-system'}}, b
-  assert b['matchResources']['objectSelector']=={'matchExpressions':[{'key':sel[i],'operator':'Exists'}]}, b" "admission: console-only writes to key objects (five label bindings), cleanup exempt, no Lease-holder check"
+  assert b['matchResources']['objectSelector']=={'matchExpressions':[{'key':sel[i],'operator':'Exists'}]}, b" "admission: console-only writes to key objects (six label bindings), cleanup exempt, no Lease-holder check"
 check_qs "p=one('ValidatingAdmissionPolicy','ambit-key-lease')['spec']
 assert p['failurePolicy']=='Fail' and 'paramKind' not in p, p
 r=p['matchConstraints']['resourceRules'][0]
@@ -267,6 +267,10 @@ grep -q 'AMBIT_INJECTION_GUARD' <<<"$igold" && grep -q 'mode.*audit' <<<"$igold"
 fdv=(-f deploy/quickstart.yaml -f test/frontdoor/values.yaml)
 fdt() { helm template ambit charts/ambit -n ambit-system "${fdv[@]}" "$@"; }
 dflt=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set limits.enabled=true)
+uv run --no-project --with pyyaml python -c "import sys,yaml
+d=[x for x in yaml.safe_load_all(sys.stdin) if x and x['kind']=='NetworkPolicy' and x['metadata']['name']=='ambit-ratelimit'][0]
+r=d['spec']['ingress']
+assert r==[{'from':[{'podSelector':{'matchLabels':{'gateway.networking.k8s.io/gateway-name':'ambit'}}}],'ports':[{'port':8081}]}], r  # no port 8080 rule without the front door, none open to all pods" <<<"$dflt" || { echo "FAIL chart: the ratelimit network policy opens only port 8081, to the gateway pods, without the front door"; exit 1; }
 ! grep -q '/json: the public front door' <<<"$dflt" || { echo "FAIL chart: the ratelimit Service publishes port 8080 only with the front door"; exit 1; }
 ! grep -q 'ambit-public' <<<"$dflt" || { echo "FAIL chart: nothing of the front door is rendered by default"; exit 1; }
 ! grep -q 'ambit.ingress' <<<"$dflt" || { echo "FAIL chart: no ambit.ingress attribute without the front door"; exit 1; }
@@ -322,8 +326,13 @@ c=yaml.safe_load(one("ConfigMap","ambit-ratelimit-front-door")["data"]["front-do
 assert c=={"domain":"ambit-public","descriptors":[{"key":"fd_credential","rate_limit":{"unit":"minute","requests_per_unit":600}},{"key":"fd_source","rate_limit":{"unit":"minute","requests_per_unit":120}}]}, c
 v=one("Deployment","ambit-ratelimit")["spec"]["template"]["spec"]["volumes"][0]
 assert [s["configMap"]["name"] for s in v["projected"]["sources"]]==["ambit-ratelimit-config","ambit-ratelimit-front-door"], v
-n=one("NetworkPolicy","ambit-ratelimit")["spec"]["ingress"][0]["from"]
-assert {"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"ambit-public"}}} in n, n' "limits: per key (after authentication) and per source address (before authentication, every request) shared through the ratelimit service, plus a per-pod limit; the ratelimit service admits the public gateway pods"
+ing=one("NetworkPolicy","ambit-ratelimit")["spec"]["ingress"]
+n=ing[0]["from"]
+assert {"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"ambit-public"}}} in n, n
+# port 8080 (/json, no authentication) is for the public gateway pods only, never for every pod (#417)
+assert ing[0]["from"]==[{"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"ambit"}}},{"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"ambit-public"}}}], ing  # port 8081: both gateways
+assert ing[0]["ports"]==[{"port":8081}] and ing[1]=={"from":[{"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"ambit-public"}}}],"ports":[{"port":8080}]} and len(ing)==2, ing
+assert all("from" in r for r in ing), ing' "limits: per key (after authentication) and per source address (before authentication, every request) shared through the ratelimit service, plus a per-pod limit; the ratelimit service admits the public gateway pods"
 check_fd 'v=one("ValidatingAdmissionPolicy","ambit-public-routes")["spec"]
 assert v["failurePolicy"]=="Fail" and set(v["matchConstraints"]["resourceRules"][0]["resources"])=={"httproutes","grpcroutes","tlsroutes","tcproutes","udproutes"}, v
 e=v["validations"][0]["expression"]
@@ -469,12 +478,12 @@ assert env["AMBIT_AUTH_REGISTRATION_HOSTS"]["value"]=="chatgpt.com,claude.ai" an
 assert env["AMBIT_AUTH_VALKEY_ADDRESS"]["value"]=="ambit-valkey:6379" and "AMBIT_AUTH_VALKEY_TLS" not in env, env
 pr=p["volumes"][0]["projected"]["sources"][0]["serviceAccountToken"]; assert pr["audience"]=="ambit-console", pr
 role=one("Role","ambit-auth")["rules"]
-assert role==[{"apiGroups":[""],"resources":["configmaps"],"resourceNames":["ambit-offboarded","ambit-agent-stops"],"verbs":["get"]}], role
+assert role==[{"apiGroups":[""],"resources":["configmaps"],"resourceNames":["ambit-offboarded","ambit-agent-stops","ambit-oauth-rotation"],"verbs":["get"]}], role
 n=one("NetworkPolicy","ambit-auth")["spec"]["ingress"]
 assert n[0]["ports"]==[{"port":8080}] and n[0]["from"][0]["podSelector"]["matchLabels"]=={"gateway.networking.k8s.io/gateway-name":"ambit-public"}, n
 assert n[1]["ports"]==[{"port":8081}] and n[1]["from"][0]["podSelector"]["matchLabels"]=={"app.kubernetes.io/name":"ambit-hydra"}, n
 vk=[x for x in docs if x["kind"]=="NetworkPolicy" and x["metadata"]["name"]=="ambit-valkey"][0]["spec"]["ingress"][0]["from"]
-assert {"podSelector":{"matchLabels":{"app.kubernetes.io/name":"ambit-auth"}}} in vk, vk' "ambit-auth: two replicas, secrets from Secrets only, a token for the console only, reads two ConfigMaps by name, pages reachable from the public Gateway only, the hook from Hydra only, allowed to reach Valkey"
+assert {"podSelector":{"matchLabels":{"app.kubernetes.io/name":"ambit-auth"}}} in vk, vk' "ambit-auth: two replicas, secrets from Secrets only, a token for the console only, reads three ConfigMaps by name, pages reachable from the public Gateway only, the hook from Hydra only, allowed to reach Valkey"
 off_dcr=$(oat --set oauth.registration.dynamic.enabled=false)
 ! grep -q 'value: /register' <<<"$off_dcr" && ! grep -q 'path: { type: Exact, value: /register }' <<<"$off_dcr" || { echo "FAIL chart: no /register route when dynamic registration is off"; exit 1; }
 grep -q 'AMBIT_AUTH_REGISTRATION' <<<"$off_dcr" || { echo "FAIL chart: ambit-auth must be told that registration is off"; exit 1; }
@@ -517,6 +526,7 @@ c=[x for x in one("Deployment","ambit-controller")["spec"]["template"]["spec"]["
 assert "--agent-token-issuer=https://auth.localtest.me" in c, c' "the public MCP route: a keys rule and a token rule (more specific match first), each with its own policy; tokens of the sign-in host only, for this MCP URL, a person and an agent and a grant; the controller reads agent claims from that issuer"
 check_oa 'e=[x for x in one("Deployment","ambit-console")["spec"]["template"]["spec"]["containers"][0]["env"]]
 assert {"name":"AMBIT_OAUTH_ADDR","value":":8085"} in e and {"name":"AMBIT_HYDRA_ADMIN","value":"http://ambit-hydra-admin:4445"} in e, e
+assert {"name":"AMBIT_OAUTH_ISSUER","value":"https://auth.localtest.me"} in e and {"name":"AMBIT_OAUTH_RESOURCE","value":"https://mcp-public.localtest.me/mcp"} in e, e
 assert {"name":"oauth","port":8085,"targetPort":"oauth"} in one("Service","ambit-console")["spec"]["ports"]
 n=one("NetworkPolicy","ambit-console-oauth")["spec"]["ingress"]
 assert n[1]=={"from":[{"podSelector":{"matchLabels":{"app.kubernetes.io/name":"ambit-auth"}}}],"ports":[{"port":8085}]}, n

@@ -13,7 +13,7 @@
 {{- if or (lt (int ($sa.exposureDays | default 0)) 0) (gt (int ($sa.exposureDays | default 0)) 30) }}{{ fail "serviceAccounts.exposureDays must be 0-30" }}{{ end }}
 {{- $ns := .Release.Namespace }}
 {{- $console := printf "system:serviceaccount:%s:ambit-console" $ns }}
-{{- $labels := list "ambitproject.dev/key" "ambitproject.dev/key-owner-record" "ambitproject.dev/key-event" "ambitproject.dev/agent" "ambitproject.dev/agent-stops" }}
+{{- $labels := list "ambitproject.dev/key" "ambitproject.dev/key-owner-record" "ambitproject.dev/key-event" "ambitproject.dev/agent" "ambitproject.dev/agent-stops" "ambitproject.dev/oauth-rotation" }}
 # Personal API keys: key Secrets, owner records (Secrets) and key events (ConfigMaps) carry a label that starts with
 # ambitproject.dev/key. Agent records (ConfigMaps, label ambitproject.dev/agent) are fenced the same way. ambit-keys-writer lets only the console's service account (with a pod name) write them, and
 # lets the namespace controller and the garbage collector delete them (so a namespace with keys can always be
@@ -140,4 +140,4 @@ spec:
         apiVersions: [v1]
         operations: [CREATE, UPDATE, DELETE]
         resources: [configmaps]
-        resourceNames: [ambit-agent-stops]
+        resourceNames: [ambit-agent-stops, ambit-oauth-rotation] # the time of the last signing-key rotation: only the console writes it

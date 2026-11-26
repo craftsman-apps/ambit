@@ -455,7 +455,11 @@ pass "16 P4 pg_dump -Fc of the live database: $DUMPB bytes in $DUMPS s ($CL0 cli
 # P5: restore into a new instance, then move the name ambit-pg17 to it and stop the old one, while probes run for 80 s.
 kubectl -n "$NS" scale sts/ambit-pg17r --replicas=1 >/dev/null
 kubectl -n "$NS" rollout status sts/ambit-pg17r --timeout=300s >/dev/null
-kubectl -n "$NS" exec ambit-pg17-0 -c postgres -- cat /tmp/hydra.dump | kubectl -n "$NS" exec -i ambit-pg17r-0 -c postgres -- sh -c 'cat > /tmp/hydra.dump'
+# the dump leaves the database pod as a file on this machine (as the runbook says), then goes into the new one
+kubectl -n "$NS" exec ambit-pg17-0 -c postgres -- cat /tmp/hydra.dump > "$W/hydra.dump"
+[[ "$(wc -c < "$W/hydra.dump" | tr -d ' ')" == "$DUMPB" ]] || fail "16 P5 the dump that came out of the pod has $(wc -c < "$W/hydra.dump") bytes, not $DUMPB"
+kubectl -n "$NS" exec -i ambit-pg17r-0 -c postgres -- sh -c 'cat > /tmp/hydra.dump' < "$W/hydra.dump"
+[[ "$(kubectl -n "$NS" exec ambit-pg17r-0 -c postgres -- stat -c %s /tmp/hydra.dump)" == "$DUMPB" ]] || fail "16 P5 the dump did not arrive whole in the new database pod"
 kubectl -n "$NS" exec ambit-pg17r-0 -c postgres -- psql -q -U postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE hydra LOGIN PASSWORD '$HP' NOSUPERUSER CONNECTION LIMIT 40" -c "CREATE DATABASE hydra OWNER hydra" >/dev/null
 t0=$(now)
 kubectl -n "$NS" exec ambit-pg17r-0 -c postgres -- pg_restore -U postgres -d hydra --exit-on-error /tmp/hydra.dump

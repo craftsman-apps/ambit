@@ -416,7 +416,8 @@ a=$(pod_curl "ambitproject.dev/test=other" "$RLJ" -X POST -d "$RLBODY")
 b=$(pod_curl "ambitproject.dev/test=other" "http://ambit-ratelimit.$NS.svc:8080/healthcheck")
 c=$(pod_curl "gateway.networking.k8s.io/gateway-name=ambit" "$RLJ" -X POST -d "$RLBODY")
 d=$(pod_curl "$PUBPOD" "$RLJ" -X POST -d "$RLBODY")
-e=$(pod_curl "ambitproject.dev/test=other" "http://ambit-guard.$NS.svc:8081/")   # a control: a port that is open to every pod, from the same kind of pod
+GUARDIP=$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=ambit-guard -o jsonpath='{.items[0].status.podIP}')
+e=$(pod_curl "ambitproject.dev/test=other" "http://$GUARDIP:8081/")   # a control: the guard's health port (8081, no Service) is open to every pod
 [[ "$e" != 000 ]] || fail "12 the pod with no label cannot reach any port (the check pod does not work), so a refusal below proves nothing"
 [[ "$a" == 000 ]] || fail "12 a pod with no label reached /json of the ratelimit service (HTTP $a): it could change any counter"
 [[ "$b" == 000 ]] || fail "12 a pod with no label reached port 8080 of the ratelimit service (HTTP $b)"

@@ -400,7 +400,7 @@ pass "14 tokens at the public Gateway"
 lim() { env GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
   HTTP_TIMEOUT=60 KEY="$OKEY" ONE_TOOL=time_get_current_time "$@" "${PY[@]}" test/oauthtest/limits.py "$MODE"; }
 rl_phase() { # rl_phase DISCOVERY SIGNIN TOKEN REGISTRATION: the buckets, the Gateway in PROXY protocol mode, the loaded limits
-  oaset_real --set frontDoor.clientAddress=proxyProtocol --set agents.maxPerPerson=100 --set oauth.registration.dynamic.perSourcePerHour="$4" --wait --timeout 8m
+  oaset_real --set frontDoor.clientAddress=proxyProtocol --set oauth.registration.dynamic.perSourcePerHour="$4" --wait --timeout 8m
   kubectl -n "$NS" rollout status deploy/ambit-public --timeout=300s >/dev/null
   kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
   reforward
@@ -425,7 +425,7 @@ MODE=nat lim LIM_DISCOVERY=600 LIM_SIGNIN=300 LIM_TOKEN=600 LIM_REGISTRATION=10 
 pass "18 many people behind one address: measured with the chart's default limits (the numbers are printed above)"
 # back to the other mode and the high limits of the other checks
 OARL=(--set oauth.rateLimit.discoveryPerMinute=100000 --set oauth.rateLimit.signInPerMinute=100000 --set oauth.rateLimit.tokenPerMinute=100000)
-oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --set agents.maxPerPerson=100 --wait --timeout 8m
+oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --wait --timeout 8m
 kubectl -n "$NS" rollout status deploy/ambit-public --timeout=300s >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
 reforward

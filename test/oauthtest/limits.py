@@ -138,7 +138,6 @@ elif MODE == "nat":
             elif p.path.startswith("/.well-known/"): COUNT["discovery"] += 1
         return orig(self, method, url, data, headers)
     Browser.req = counted
-    people = ["alice", "bob"]
     result = None
     for attempt in range(3):
         addr = f"203.0.113.{100 + attempt}"
@@ -151,7 +150,7 @@ elif MODE == "nat":
         ok, fail_kind, per = 0, None, []
         while time.time() - t0 < 58:
             before = COUNT["signin"]
-            kind, res = sign_in(Browser(), cid, people[ok % 2], tick=("time",))
+            kind, res = sign_in(Browser(), cid, f"person{100 + ok}", tick=("time",))
             if kind != "code":
                 fail_kind = (kind, res[0] if kind == "page" else res); break
             st, tok = exchange(cid, res)

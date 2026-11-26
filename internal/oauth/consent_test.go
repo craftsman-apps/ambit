@@ -680,6 +680,7 @@ func TestFloodOfRegistrationsFreesTheCapAfterADay(t *testing.T) {
 	e := newEnv(t)
 	e.srv.Cfg.MaxClients = 20
 	e.lim.Rates[BucketRegister] = Rate{Limit: 1000, Window: time.Hour}
+	e.lim.Rates[BucketRegisterAll] = Rate{Limit: 1000, Window: time.Hour} // the flood here comes from many networks over many hours: the global limit has its own test
 	for i := 0; i < 20; i++ { // 20 different networks, one registration each
 		b := e.browser()
 		b.addr = fmt.Sprintf("203.0.113.%d", i+1)

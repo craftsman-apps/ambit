@@ -97,7 +97,7 @@ func (r *Reconciler) rulesRevoked(ctx context.Context) (bool, error) {
 	}
 	var now v1.AccessRuleList
 	if err := r.Live.List(ctx, &now, client.InNamespace(r.Namespace)); err != nil {
-		return false, err
+		return false, nil // a failed read is looked at again in 250 ms; it must not end the wait without its objects being carried
 	}
 	cur := map[string]v1.AccessRuleSpec{}
 	for _, ar := range now.Items {

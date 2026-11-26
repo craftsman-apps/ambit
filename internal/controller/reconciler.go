@@ -86,10 +86,8 @@ type Reconciler struct {
 	// AppRemovals records each deleted Server (MCP app removal) in otel_logs; nil: off (no evidence store).
 	AppRemovals *AppRemovals
 
-	passRules        []v1.AccessRule // the AccessRules this pass compiled (single worker, no lock)
-	watchRevocations bool            // this pass enforces: a removed or narrowed rule ends its waits (revocation.go)
-	carriedStep      string          // the step of carried, and the NACK baseline of its first write
-	carriedSeen      nackSeen
+	passRules        []v1.AccessRule             // the AccessRules this pass compiled (single worker, no lock)
+	watchRevocations bool                        // this pass enforces: a removed or narrowed rule ends its waits (revocation.go)
 	carried          map[string]bool             // "<kind>/<name>" of what an ended wait still waited for; the next pass waits for it too
 	stalled          *stalledStep                // the step a change stopped at (single worker, no lock)
 	gateRetry        time.Duration               // the last wait before trying a stopped change again

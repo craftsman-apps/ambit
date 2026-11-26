@@ -153,7 +153,7 @@ func (r *Reconciler) gate(ctx context.Context, objs []gated, seen nackSeen, time
 			// Offboarding and deletions must not wait for the settle time: apply them on every poll.
 			for end := r.now().Add(r.Activation.Settle); r.now().Before(end); {
 				if err := r.sleepWatching(ctx, min(poll, end.Sub(r.now()))); err != nil {
-					return err
+					return r.lastLook(ctx, err, objs, seen)
 				}
 				if err := r.urgent(ctx); err != nil {
 					return err
@@ -165,9 +165,21 @@ func (r *Reconciler) gate(ctx context.Context, objs []gated, seen nackSeen, time
 			return &stalledError{msg: waiting}
 		}
 		if err := r.sleepWatching(ctx, poll); err != nil {
-			return err
+			return r.lastLook(ctx, err, objs, seen)
 		}
 	}
+}
+
+// lastLook: a wait that ends because a rule was revoked looks once more for a NACK or an Invalid verdict on what it
+// waited for. The next pass takes a new NACK baseline, so one that arrived since the last poll would be lost (#430).
+func (r *Reconciler) lastLook(ctx context.Context, err error, objs []gated, seen nackSeen) error {
+	if !errors.Is(err, errRulesRevoked) {
+		return err
+	}
+	if _, aerr := r.activated(ctx, objs, seen); aerr != nil {
+		return aerr
+	}
+	return err
 }
 
 // activated returns "" when every object is active, or what it waits for. A NACK or an Invalid verdict on the
@@ -435,9 +447,6 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 			if seen, err = r.nacksSeen(ctx); err != nil {
 				return nil, ran, err
 			}
-			if r.carriedStep == s.name && r.carriedSeen != nil {
-				seen = r.carriedSeen // a NACK since the first write of what is carried still counts
-			}
 		}
 		objs, err := s.write()
 		var notWritten *stalledError
@@ -490,7 +499,7 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 			// The next pass starts again: what this step still waited for (a grant that was written) is waited for
 			// there too, with the whole timeout, also when its spec is unchanged and agentgateway has no status yet.
 			if r.carried == nil {
-				r.carried, r.carriedStep, r.carriedSeen = map[string]bool{}, s.name, seen
+				r.carried = map[string]bool{}
 			}
 			for _, g := range wait {
 				r.carried[g.kind+"/"+g.name] = true
@@ -501,7 +510,7 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 			if !errors.As(err, &st) {
 				return nil, ran, err
 			}
-			r.stalled, r.carried, r.carriedSeen = &stalledStep{step: s.name, seen: seen, objs: wait}, nil, nil
+			r.stalled, r.carried = &stalledStep{step: s.name, seen: seen, objs: wait}, nil
 			target.Error, target.Objects = st.msg, st.objects
 			if err := r.setPending(ctx, &target); err != nil {
 				return nil, ran, err
@@ -510,7 +519,7 @@ func (r *Reconciler) runSteps(ctx context.Context, steps []step, changing bool, 
 		}
 		log.FromContext(ctx).Info("change step active in the gateway", "step", s.name, "mode", target.Mode, "rulesVersion", target.RulesVersion)
 	}
-	r.stalled, r.carried, r.carriedSeen = nil, nil, nil
+	r.stalled, r.carried = nil, nil
 	return nil, ran, nil
 }
 

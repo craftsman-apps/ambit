@@ -160,3 +160,33 @@ func TestNarrowsIgnoresTheOrderOfArgumentLimits(t *testing.T) {
 		t.Error("a changed limit did not count (conservative)")
 	}
 }
+
+// A wait that ends because a rule was revoked still reports a NACK that arrived since the last poll: the next pass takes
+// a new baseline and would not see it.
+func TestRevokedWaitStillReportsANack(t *testing.T) {
+	r, clock := gateReconciler(gatedPolicy(1))
+	sch := runtime.NewScheme()
+	_ = corev1.AddToScheme(sch)
+	_ = v1.AddToScheme(sch)
+	rule := &v1.AccessRule{ObjectMeta: metav1.ObjectMeta{Name: "eng", Namespace: "ambit-system"}, Spec: v1.AccessRuleSpec{Groups: []string{"a"}}}
+	cl := fake.NewClientBuilder().WithScheme(sch).WithObjects(rule).
+		WithIndex(&corev1.Event{}, "reason", func(o client.Object) []string { return []string{o.(*corev1.Event).Reason} }).Build()
+	r.Client, r.Live = cl, cl
+	_ = cl.Create(t.Context(), gatedPolicy(1))
+	r.passRules, r.watchRevocations = []v1.AccessRule{*rule.DeepCopy()}, true
+	inner := r.Activation.Sleep
+	done := false
+	r.Activation.Sleep = func(ctx context.Context, d time.Duration) error {
+		if !done && clock.Sub(gateStart) >= time.Second {
+			done = true
+			_ = cl.Delete(ctx, rule)
+			_ = cl.Create(ctx, nack(gateStart.Add(time.Second)))
+		}
+		return inner(ctx, d)
+	}
+	err := r.gate(t.Context(), []gated{{kind: "AgentgatewayPolicy", name: AccessLogPolicy, generation: 1}}, nackSeen{}, 120*time.Second)
+	var st *stalledError
+	if errors.Is(err, errRulesRevoked) || !errors.As(err, &st) {
+		t.Fatalf("error %v, want the NACK as a stalled change", err)
+	}
+}

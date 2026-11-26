@@ -267,7 +267,10 @@ kubectl -n "$NS" wait --for=delete pod -l app.kubernetes.io/name=ambit-valkey --
 wait_for 60 '[[ $(pubk "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K3") == other:400 ]]' || fail "7 Valkey down (FailOpen): want HTTP 400 from the source check, got $(pubk "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K3")"
 kubectl -n "$NS" scale deploy/ambit-valkey --replicas=1 >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-valkey --timeout=120s >/dev/null
-wait_for 90 '[[ $(pubk "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K3") == ok ]]' || fail "7 the front door does not recover when Valkey is back"
+# The ratelimit service reconnects to Valkey one connection at a time: right after one good answer another request can still
+# get 400 (seen in the merge queue, 2026-11-26). Ask for 15 good answers in a row, on both pods.
+valkey_back() { local p i; for p in "$PA" "$PB"; do for i in $(seq 1 15); do [[ $(pub "$p" /nothing) == 404 ]] || return 1; done; done; }
+wait_for 120 'valkey_back' || fail "7 the front door does not recover when Valkey is back (an unknown path: $(pub "$PA" /nothing))"
 pass "7 Valkey down with the ratelimit service up: every request is refused with HTTP 400 (documented); back to normal when Valkey returns"
 
 # --- 8 · the client address: direct (this test: the connection) and the PROXY protocol

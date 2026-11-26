@@ -146,7 +146,7 @@ an MCP request that way). The first two limits are per minute (a fixed window th
 - **A failed check on the way in.** `frontDoor.rateLimit.failureMode` also applies to the source check: with `FailOpen`
   (default) requests pass when the ratelimit service cannot be reached, and the per-pod limit still applies; with `FailClosed`
   they are refused with 403. If the ratelimit service answers but **Valkey is down**, the service reports its error as HTTP
-  400, and the front door refuses every request with 400 until Valkey is back, whatever `failureMode` says. If Valkey is slow
+  400, and the front door refuses every request with 400 until Valkey is back (and for a few seconds after, while the service reconnects), whatever `failureMode` says. If Valkey is slow
   instead of failed, the check waits 2 seconds and then follows `failureMode`.
 - **A flood is still read by the limiter.** Every request, also one that is already over its limit, costs one call to the
   ratelimit service and one operation in Valkey. The limit makes a flood cheap for the gateway pods and for the MCP servers,

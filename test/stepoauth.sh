@@ -198,9 +198,9 @@ kubectl -n "$NS" wait pod -l "$L" --for=condition=Ready --timeout=180s >/dev/nul
 [[ $(reach np-gw "$HPUB") == 200 && $(reach np-gw "$HADM") == no ]] || fail "3 the public Gateway must reach 4444 and not 4445"
 [[ $(reach np-agw "$HPUB") == 200 && $(reach np-agw "$HADM") == no ]] || fail "3 agentgateway's controller must reach 4444 and not 4445"
 [[ $(reach np-auth "$HADM") == 200 && $(reach np-auth "$HPUB") == 200 ]] || fail "3 ambit-auth must reach 4445 and 4444 (the authorize front)"
-[[ $(reach np-console "$HADM") == 200 && $(reach np-console "$HPUB") == no ]] || fail "3 the console must reach 4445 and not 4444"
+[[ $(reach np-console "$HADM") == 200 && $(reach np-console "$HPUB") == 200 ]] || fail "3 the console must reach 4445 (the admin API) and 4444 (the public key list)"
 kubectl -n "$NS" delete pod -l "$L" --wait=false >/dev/null
-pass "3 Hydra's public port is open to the public Gateway and the controller only; the admin port to ambit-auth and the console only (ambit-auth also reaches the public port, for its authorize front)"
+pass "3 Hydra's public port is open to the public Gateway and the controller only; the admin port to ambit-auth and the console only (ambit-auth also reaches the public port, for its authorize front, and the console, for the public key list)"
 
 # --- 4 · the database check, one pod per case (the init container of Hydra's pods, run alone)
 chk() { # chk NAME DSN [replicas [ca secret]]: runs check-database; prints "ok" or "refused", the log in $W/chk-NAME
@@ -388,8 +388,14 @@ PA=$(forward "${PODS[0]}"); PB=$(forward "${PODS[1]}")
 IDPP=$(freeport); kubectl -n "$NS" port-forward svc/ambit-oauth-idp "$IDPP:443" >/dev/null 2>&1 & echo $! >> "$W/pids"
 CONP=$(freeport); kubectl -n "$NS" port-forward svc/ambit-oauth-console "$CONP:8085" >/dev/null 2>&1 & echo $! >> "$W/pids"
 wait_for 60 '(exec 3<>"/dev/tcp/127.0.0.1/$IDPP") 2>/dev/null && (exec 3<>"/dev/tcp/127.0.0.1/$CONP") 2>/dev/null' || fail "14 port-forwards"
+# A token with a valid signature but two audiences: the test signs it with Hydra's own key (read through a port-forward to the Hydra pod, which the
+# NetworkPolicy does not stop) and a small signer built from test/oauthtest (check 3 of gateway.py, "audience").
+HAP=$(freeport); kubectl -n "$NS" port-forward pod/ambit-hydra-0 "$HAP:4445" >/dev/null 2>&1 & echo $! >> "$W/pids"
+wait_for 30 '(exec 3<>"/dev/tcp/127.0.0.1/$HAP") 2>/dev/null' || fail "14 port-forward to Hydra's admin port"
+curl -s "http://127.0.0.1:$HAP/admin/keys/hydra.jwt.access-token" | uv run --no-project python -c 'import json,sys;json.dump(json.load(sys.stdin)["keys"][0],open(sys.argv[1],"w"))' "$W/signing.jwk" || fail "14 the signing key could not be read"
+chmod 600 "$W/signing.jwk"; go build -o "$W/oauthmint" ./test/oauthtest || fail "14 build the test signer"
 GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
-  STOPCTL="$PWD/test/oauthtest/stopctl.sh" ADMIN_PW="$PW" HTTP_TIMEOUT=90 KEY="$OKEY" ONE_TOOL=time_get_current_time "${PY[@]}" test/oauthtest/gateway.py || fail "14 the gateway checks failed (see FAIL lines above)"
+  MINT="$W/oauthmint" SIGNING_JWK="$W/signing.jwk" STOPCTL="$PWD/test/oauthtest/stopctl.sh" ADMIN_PW="$PW" HTTP_TIMEOUT=90 KEY="$OKEY" ONE_TOOL=time_get_current_time "${PY[@]}" test/oauthtest/gateway.py || fail "14 the gateway checks failed (see FAIL lines above)"
 pass "14 tokens at the public Gateway"
 
 # --- 15 · the emergency rotation of the signing keys (test/oauthtest/rotate.py): the JWKS failures J1 to J3, a rotation that fails while Hydra is down (E2),

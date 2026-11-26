@@ -118,9 +118,17 @@ func scopeMatch(list string) string {
 // (CEL's `in` also finds the keys of a map) matches nothing. A key without an agent and
 // a JWT of another issuer are not limited. tokenIssuer is the issuer whose tokens may carry agent claims ("" in
 // 0.6.0 until OAuth is on: no JWT is then limited).
-func AgentScope(tokenIssuer string) string {
+func AgentScope(tokenIssuer string) string { return AgentScopeFor(tokenIssuer, false) }
+
+// AgentScopeFor is AgentScope for one backend. On the public backend (public true) every JWT is an OAuth token of Ambit's own sign-in host (the
+// public route accepts no other), so without a token issuer it may use nothing: a controller that was started without the issuer (a failed or
+// slow upgrade) must not let a token past its scope.
+func AgentScopeFor(tokenIssuer string, public bool) string {
 	key := `has(apiKey.keyId) ? (!has(apiKey.agent) || (has(apiKey.agentScope) && type(apiKey.agentScope) == list && ` + scopeMatch("apiKey.agentScope") + `)) : `
 	if tokenIssuer == "" {
+		if public {
+			return key + `!has(jwt.iss)`
+		}
 		return key + `true`
 	}
 	return key + `((has(jwt.iss) && jwt.iss == ` + strconv.Quote(tokenIssuer) + `) ? (has(jwt.ambit_scope) && type(jwt.ambit_scope) == list && ` + scopeMatch("jwt.ambit_scope") + `) : true)`

@@ -24,11 +24,6 @@ const rotationLabel = "ambitproject.dev/oauth-rotation"
 
 var rotating sync.Mutex // one rotation at a time (one console replica; a second console would read the list that the first wrote)
 
-type signingKeyView struct {
-	Set  string   `json:"set"`
-	KIDs []string `json:"kids"`
-}
-
 func (c *Catalog) registerOAuthKeys(mux *http.ServeMux, adminRead func(func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc,
 	allow func(string, func(http.ResponseWriter, *http.Request, Session), ...string) http.HandlerFunc) {
 	mux.HandleFunc("GET /api/admin/oauth/signing-key", adminRead(c.getSigningKey))
@@ -69,30 +64,24 @@ func (c *Catalog) markRotation(r *http.Request, at time.Time) error {
 	return err
 }
 
+// getSigningKey shows the key IDs that Hydra publishes and the time of the last rotation. It reads the PUBLIC key list: the console never reads a private
+// key for a status call (only the rotation handles private keys).
 func (c *Catalog) getSigningKey(w http.ResponseWriter, r *http.Request, _ Session) {
-	if c.Hydra == nil {
+	if c.Hydra == nil || c.HydraPublic == "" {
 		writeErr(w, http.StatusNotFound, "OAuth sign-in is not turned on")
 		return
 	}
-	out := []signingKeyView{}
-	for _, set := range oauth.SigningSets {
-		keys, err := c.Hydra.KeySet(r.Context(), set)
-		if err != nil {
-			writeErr(w, http.StatusBadGateway, "the OAuth server did not answer")
-			return
-		}
-		v := signingKeyView{Set: set, KIDs: []string{}}
-		for _, k := range keys {
-			v.KIDs = append(v.KIDs, oauth.KeyID(k)) // the key ID only: the keys themselves are private
-		}
-		out = append(out, v)
+	ids, err := oauth.PublicKeyIDs(r.Context(), nil, c.HydraPublic)
+	if err != nil {
+		writeErr(w, http.StatusBadGateway, "the OAuth server did not answer")
+		return
 	}
 	at, err := c.readRotation(r)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "the time of the last rotation is unreadable")
 		return
 	}
-	res := map[string]any{"sets": out}
+	res := map[string]any{"published": ids}
 	if !at.IsZero() {
 		res["lastRotation"] = at
 	}

@@ -31,6 +31,9 @@ var AgentTokenIssuer = ""
 // credential allows. It does not depend on the number of agents.
 func agentScope() string { return identity.AgentScope(AgentTokenIssuer) }
 
+// publicAgentScope is the same for the public backend: a token there is always an OAuth token, so without the issuer it is refused (identity.AgentScopeFor).
+func publicAgentScope() string { return identity.AgentScopeFor(AgentTokenIssuer, true) }
+
 // agentHeader is the value of x-ambit-agent that the gateway sends to the token broker, from the verified credential only:
 //   - a valid key: the key's agent name, or "-" when the key is not an agent's;
 //   - with an agent token issuer, a token of that issuer: the claim ambit_agent;

@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"sort"
 	"time"
 
 	"github.com/go-jose/go-jose/v4"
@@ -158,4 +161,38 @@ func probeToken(key json.RawMessage, pc ProbeClaims, now time.Time) (string, err
 		return "", errors.New("the probe token cannot be signed")
 	}
 	return tok, nil
+}
+
+// PublicKeyIDs are the key IDs that Hydra publishes (its public key list, the same that the gateways fetch): no key material, only public keys.
+// base is Hydra's public address, for example http://ambit-hydra-public:4444.
+func PublicKeyIDs(ctx context.Context, hc *http.Client, base string) ([]string, error) {
+	if hc == nil {
+		hc = &http.Client{Timeout: 10 * time.Second}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/.well-known/jwks.json", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return nil, errors.New("the public key list could not be read")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("the public key list answered HTTP %d", resp.StatusCode)
+	}
+	var set struct {
+		Keys []struct {
+			KID string `json:"kid"`
+		} `json:"keys"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&set); err != nil {
+		return nil, errors.New("the public key list is not JSON")
+	}
+	ids := []string{}
+	for _, k := range set.Keys {
+		ids = append(ids, k.KID)
+	}
+	sort.Strings(ids)
+	return ids, nil
 }

@@ -180,6 +180,8 @@ spec:
         - podSelector: { matchLabels: { app.kubernetes.io/name: agentgateway } }
         # ambit-auth's authorize front passes /oauth2/auth to Hydra's public port (it checks the request first).
         - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-auth } }
+        # The console reads the public key list for the status of the signing keys (public keys only).
+        - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-console } }
       ports: [{ port: 4444 }]
     - from:
         - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-auth } }

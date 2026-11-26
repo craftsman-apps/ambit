@@ -11,7 +11,7 @@ import (
 )
 
 // evalAgent evaluates expr in cel-go for one MCP call (not agentgateway's CEL; test/stepagents.sh covers that).
-func evalAgent(t *testing.T, expr string, key, jwt map[string]any, target, tool string) any {
+func evalAgentAny(t *testing.T, expr string, key, jwt map[string]any, target, tool string) any {
 	t.Helper()
 	m := cel.MapType(cel.StringType, cel.DynType)
 	env, err := cel.NewEnv(ext.Strings(), cel.Variable("jwt", m), cel.Variable("apiKey", m), cel.Variable("mcp", m), cel.Variable("request", m))
@@ -36,6 +36,11 @@ func evalAgent(t *testing.T, expr string, key, jwt map[string]any, target, tool 
 }
 
 const hydra = "https://auth.example.com"
+
+func evalAgent(t *testing.T, expr string, key, jwt map[string]any, target, tool string) any {
+	t.Helper()
+	return evalAgentAny(t, expr, key, jwt, target, tool)
+}
 
 func TestAgentScopeKeys(t *testing.T) {
 	for _, c := range []struct {
@@ -93,6 +98,33 @@ func TestAgentScopeTokens(t *testing.T) {
 		if got := evalAgent(t, AgentScope(c.issuer), map[string]any{}, c.jwt, c.target, c.tool); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// On the public backend every JWT is an OAuth token: without a token issuer (a controller that started without it) it may use nothing.
+// A key is judged as before, and on the private backend a token without an issuer is still not limited.
+func TestAgentScopeForThePublicBackendFailsClosedWithoutTheIssuer(t *testing.T) {
+	evalAgent := func(t *testing.T, expr string, key, jwt map[string]any, target, tool string) bool {
+		return evalAgentAny(t, expr, key, jwt, target, tool) == true
+	}
+	jwtOf := map[string]any{"iss": hydra, "ambit_scope": []any{"crm"}, "email": "a@x.com"}
+	if evalAgent(t, AgentScopeFor("", true), map[string]any{}, jwtOf, "crm", "read") {
+		t.Error("public backend, no issuer: a token with a scope was allowed")
+	}
+	if evalAgent(t, AgentScopeFor("", true), map[string]any{}, map[string]any{"iss": "https://dex.example.com"}, "crm", "read") {
+		t.Error("public backend, no issuer: any token must be refused")
+	}
+	if !evalAgent(t, AgentScopeFor("", false), map[string]any{}, jwtOf, "crm", "read") {
+		t.Error("private backend, no issuer: a token is not limited")
+	}
+	// with the issuer the public backend behaves as AgentScope does
+	if !evalAgent(t, AgentScopeFor(hydra, true), map[string]any{}, jwtOf, "crm", "read") || evalAgent(t, AgentScopeFor(hydra, true), map[string]any{}, jwtOf, "wiki", "read") {
+		t.Error("public backend with the issuer: the scope decides")
+	}
+	// a key (an agent key with a scope) is judged the same on both
+	key := map[string]any{"keyId": "k", "agent": "a", "agentScope": []any{"crm"}}
+	if !evalAgent(t, AgentScopeFor("", true), key, map[string]any{}, "crm", "read") || evalAgent(t, AgentScopeFor("", true), key, map[string]any{}, "wiki", "read") {
+		t.Error("a key's scope is not judged as before")
 	}
 }
 

@@ -23,7 +23,12 @@ const (
 	Batch   = 100             // records in one export call
 	Flush   = time.Second     // longest wait before a partly filled batch is sent
 	Timeout = 5 * time.Second // one export call
+	Retries = 2               // a periodic or full-batch export that fails is tried again this many times
 )
+
+// RetryWait is the wait before the first retry; each retry waits twice as long as the one before. A variable so that
+// tests can shorten it.
+var RetryWait = time.Second
 
 // Drop reasons. The caller's counter has a "reason" label.
 const (
@@ -33,7 +38,8 @@ const (
 )
 
 // Exporter queues records and sends them in batches. Send never blocks and never fails: a record that cannot be
-// kept is dropped and counted in Dropped.
+// kept is dropped and counted in Dropped. A batch whose export fails is sent again up to Retries times (#415: the first
+// connection of a new pod, or a collector that restarts, must not lose a record); Flush and Close do not retry.
 type Exporter struct {
 	conn    *grpc.ClientConn
 	logs    collogs.LogsServiceClient
@@ -118,12 +124,13 @@ func (e *Exporter) run() {
 	tick := time.NewTicker(Flush)
 	defer tick.Stop()
 	var batch []*logspb.LogRecord
-	flush := func() {
+	send := func(retry bool) {
 		if len(batch) > 0 {
-			e.export(batch)
+			e.export(batch, retry)
 			batch = batch[:0]
 		}
 	}
+	flush := func() { send(true) }
 	drain := func() { // everything queued now
 		for {
 			select {
@@ -146,29 +153,46 @@ func (e *Exporter) run() {
 			flush()
 		case ack := <-e.flush:
 			drain()
-			flush()
+			send(false)
 			close(ack)
 		case <-e.stop:
 			drain()
-			flush()
+			send(false)
 			return
 		}
 	}
 }
 
-func (e *Exporter) export(batch []*logspb.LogRecord) {
-	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
-	defer cancel()
+// export sends batch. With retry, a failed export is tried again after RetryWait, then twice as long, up to Retries
+// times; a stop during the wait ends the retries (one more try is made at once). The batch is dropped, and counted
+// once, when the last try failed.
+func (e *Exporter) export(batch []*logspb.LogRecord, retry bool) {
 	req := &collogs.ExportLogsServiceRequest{ResourceLogs: []*logspb.ResourceLogs{{
 		Resource:  &resourcepb.Resource{Attributes: []*commonpb.KeyValue{Str("service.name", e.service)}},
 		ScopeLogs: []*logspb.ScopeLogs{{LogRecords: batch}},
 	}}}
-	if _, err := e.logs.Export(ctx, req); err != nil {
-		e.dropped.WithLabelValues(DropSendFailed).Add(float64(len(batch)))
-		if time.Since(e.warn) > time.Minute { // one line a minute, not one per batch
-			e.warn = time.Now()
-			slog.Warn("records not delivered to the collector", "service", e.service, "dropped", len(batch), "err", err)
+	var err error
+	for try, wait := 0, RetryWait; ; try++ {
+		ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+		_, err = e.logs.Export(ctx, req)
+		cancel()
+		if err == nil {
+			return
 		}
+		if !retry || try >= Retries {
+			break
+		}
+		select {
+		case <-time.After(wait):
+		case <-e.stop:
+			retry = false
+		}
+		wait *= 2
+	}
+	e.dropped.WithLabelValues(DropSendFailed).Add(float64(len(batch)))
+	if time.Since(e.warn) > time.Minute { // one line a minute, not one per batch
+		e.warn = time.Now()
+		slog.Warn("records not delivered to the collector", "service", e.service, "dropped", len(batch), "err", err)
 	}
 }
 

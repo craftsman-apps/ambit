@@ -154,9 +154,10 @@ an MCP request that way). The first two limits are per minute (a fixed window th
 - **The ratelimit port.** The check uses port 8080 of the ratelimit service (`/json`). That endpoint counts a hit for any
   domain and descriptor and has no password, so the network policy `ambit-ratelimit` admits **only the public gateway pods**
   to it (and the gateway pods to port 8081, as before). No other pod in the namespace, such as an MCP server, can raise or
-  fill a counter. The kubelet's readiness probe comes from the node, which a network policy does not limit. The rule holds on
+  fill a counter through `/json`. The kubelet's readiness probe comes from the node, which a network policy does not limit. The rule holds on
   a cluster network that enforces network policies, and only while nobody who can create pods in the namespace is untrusted
-  (the policy admits pods by label).
+  (the policy admits pods by label). A pod of the private gateway can still use port 8081, which the budgets need, and another network policy in the
+  namespace that admits more pods widens the access.
 - **Cheap and expensive calls.** In this release there is only one kind of public call (`/mcp`), so there is one source
   limit. When sign-in endpoints are added later, they get their own, lower limit, so that a flood of sign-in attempts
   cannot use up the limit of MCP calls from the same address.

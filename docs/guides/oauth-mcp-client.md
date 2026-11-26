@@ -328,6 +328,6 @@ registration does not work for redirect addresses that are not on the admin's li
 ## What was tested
 
 Every request above (the shapes marked in this page) is sent by `test/oauthtest/shapes.py` to a test installation on kind, with a
-test identity provider in place of the company's, in the continuous integration test of OAuth (`test/stepoauth.sh`, check 19). The
+test identity provider in place of the company's, in the continuous integration test of OAuth (`test/stepoauth.sh`, check 20). The
 test fails when this page names a shape that it does not send. **Not tested:** any named platform or client product, a real
 company identity provider, an installation on the internet. A platform may add steps of its own that this page does not know.

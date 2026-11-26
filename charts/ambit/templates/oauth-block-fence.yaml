@@ -1,0 +1,35 @@
+{{- if (.Values.oauth | default dict).enabled }}
+# The emergency block of OAuth tokens (ambit oauth block on, docs/oauth.md) is a policy that an operator makes with kubectl or the CLI. Ambit's own
+# components never write it, so none of them may: a compromised console, controller or sign-in server then cannot lift the block. (A delete of a
+# collection of objects is checked per object, by the old object's name.)
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: ambit-oauth-block-fence
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [agentgateway.dev]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE, DELETE]
+        resources: [agentgatewaypolicies]
+  matchConditions:
+    - name: the-block
+      expression: >-
+        (request.operation == "DELETE" ? oldObject.metadata.name : object.metadata.name) == "ambit-oauth-emergency-block"
+  validations:
+    - expression: >-
+        !(request.userInfo.username in [{{ printf "system:serviceaccount:%s:ambit-controller" .Release.Namespace | quote }}, {{ printf "system:serviceaccount:%s:ambit-console" .Release.Namespace | quote }}, {{ printf "system:serviceaccount:%s:ambit-auth" .Release.Namespace | quote }}])
+      message: "the policy ambit-oauth-emergency-block is made and removed by an operator (ambit oauth block on|off), not by an Ambit component"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ambit-oauth-block-fence
+spec:
+  policyName: ambit-oauth-block-fence
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Release.Namespace }} } }
+{{- end }}

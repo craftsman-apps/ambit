@@ -13,7 +13,7 @@ TESTED = []
 
 
 def shape(name, cond, detail=""):
-    check(f"19 shape {name}", cond, detail)
+    check(f"20 shape {name}", cond, detail)
     TESTED.append(name)
 
 
@@ -107,10 +107,10 @@ st, h, body = raw("POST", ISS + "/oauth2/token", urllib.parse.urlencode({"grant_
 e = js(body)
 shape("token-error", st8 == 200 and st == 400 and e.get("error") == "invalid_grant" and e.get("error_description"), (st8, st, e))  # the code was used once already
 st9r, _ = token(CID, grant_type="refresh_token", refresh_token=t8.get("refresh_token", ""))
-check("19 shape token-error: the tokens that the first use of a code issued are revoked when the code is used a second time", st9r == 400, st9r)
+check("20 shape token-error: the tokens that the first use of a code issued are revoked when the code is used a second time", st9r == 400, st9r)
 V9, CH9 = pkce(); kind9, det9 = sign_in(Browser(), CID, "bob", challenge=CH9)
 st9, e9 = token(CID, grant_type="authorization_code", code=det9["code"], redirect_uri=REDIRECT, code_verifier=pkce()[0], resource=MCP_URL)  # a fresh code, another verifier
-check("19 shape token-error: a fresh code with a verifier that is not the one of the request is refused (invalid_grant)", kind9 == "code" and st9 == 400 and e9.get("error") == "invalid_grant", (kind9, st9, e9))
+check("20 shape token-error: a fresh code with a verifier that is not the one of the request is refused (invalid_grant)", kind9 == "code" and st9 == 400 and e9.get("error") == "invalid_grant", (kind9, st9, e9))
 
 # 8 · a call with the token
 AT = tok.get("access_token")
@@ -150,7 +150,7 @@ shape("jwks", st == 200 and len(ks) >= 1 and all(k.get("kty") == "RSA" and k.get
 # the guide and this test must name the same shapes
 guide = open(os.environ["GUIDE"]).read()
 named = re.findall(r"<!-- shape: ([a-z0-9-]+) -->", guide)
-check("19 the guide names every shape once, and every shape of the guide is tested here", sorted(named) == sorted(TESTED) and len(set(named)) == len(named), (sorted(set(named) ^ set(TESTED)), named))
+check("20 the guide names every shape once, and every shape of the guide is tested here", sorted(named) == sorted(TESTED) and len(set(named)) == len(named), (sorted(set(named) ^ set(TESTED)), named))
 
 print()
 print("FAILED: " + ", ".join(fails) if fails else "all checks passed")

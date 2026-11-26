@@ -126,8 +126,8 @@ the Gateway's header: then the limits count every caller together).
 
 **What is tested.** Ambit does not test cloud load balancers in CI. On kind, in CI: a connection with no PROXY header (`direct`); a
 connection that sends a made-up client address in a PROXY header (`proxyProtocol`), on the MCP host (`test/stepfd.sh`, check 8) and on the
-sign-in host (`test/stepoauth.sh`, check 18: five buckets, several made-up addresses, two Gateway pods); and callers that write
-`X-Forwarded-For`, `X-Real-IP`, `Forwarded` and `X-Ambit-Client-Address` (check 18: no effect on the count, in both directions).
+sign-in host (`test/stepoauth.sh`, check 19: five buckets, several made-up addresses, two Gateway pods); and callers that write
+`X-Forwarded-For`, `X-Real-IP`, `Forwarded` and `X-Ambit-Client-Address` (check 19: no effect on the count, in both directions).
 
 ## Rate limits
 

@@ -31,7 +31,7 @@ oaset() { helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.y
   ${OARL[@]+"${OARL[@]}"} ${OAREG[@]+"${OAREG[@]}"} "$@" >/dev/null; }
 # OAREG: from check 12 on the registration limits are high for every upgrade (the key rotation of check 15 upgrades too), because the checks register many clients
 OAREG=()
-# OARL: the sign-in buckets are far above what the checks send from one address (check 18 sets them back to the chart's values)
+# OARL: the sign-in buckets are far above what the checks send from one address (check 19 sets them back to the chart's values)
 OARL=(--set oauth.rateLimit.discoveryPerMinute=100000 --set oauth.rateLimit.signInPerMinute=100000 --set oauth.rateLimit.tokenPerMinute=100000)
 # oaset_real: the same, with the real console behind ambit-auth (the stand-in is for the sign-in checks of step 12)
 oaset_real() { oaset --set "oauth.auth.consoleURL=" "$@"; }
@@ -703,7 +703,16 @@ for i in 1 3 4; do [[ $(adm ambit-hydra-0 GET "/admin/clients/${IDS[$i]}") == 20
 [[ $(adm ambit-hydra-0 GET /admin/clients/admin-made-e2e) == 200 ]] || fail "17 a client that an admin made was deleted"
 adm ambit-hydra-0 DELETE /admin/clients/admin-made-e2e >/dev/null; for i in 1 3 4; do adm ambit-hydra-0 DELETE "/admin/clients/${IDS[$i]}" >/dev/null; done
 pass "17 ambit-auth deletes a registered client that was not used for 31 days, and one that was never used 25 hours after it registered; it keeps one used 29 days ago, one that registered 2 hours ago, one that a consent used and a client that an admin made (clean-up on start and every 10 minutes)"
-# --- 18 · rate limits of the sign-in host: separate buckets at the Gateway, by the address of the connection (test/oauthtest/limits.py)
+# --- 18 · the emergency block as an object of its own (test/oauthtest/block.py): `ambit oauth block on` survives a Helm upgrade and an Argo CD-style re-apply of the chart
+# (the old kind of block, an edit of the chart's policy, does not: the test shows that first)
+# (--force-conflicts: Helm 4 applies server-side, and the test's Argo CD-style re-apply has taken some fields of the chart's policies; Argo CD users do not run helm upgrade)
+go build -o "$W/ambit" ./cmd/ambit || fail "18 build the CLI"
+helm get values ambit -n "$NS" -a -o yaml > "$W/release-values.yaml" || fail "18 the values of the release"
+GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" NS="$NS" \
+  BLOCKCTL="$W/ambit" HELM_UPGRADE="helm upgrade ambit charts/ambit -n $NS --reuse-values --force-conflicts --wait --timeout 8m" HELM_TEMPLATE="helm template ambit charts/ambit -n $NS -f $W/release-values.yaml" \
+  HTTP_TIMEOUT=90 KEY="$OKEY" ONE_TOOL=time_get_current_time "${PY[@]}" test/oauthtest/block.py || fail "18 the emergency block checks failed (see FAIL lines above)"
+pass "18 the emergency block (ambit oauth block on) survives a Helm upgrade and a re-apply of the chart; the old kind of block does not"
+# --- 19 · rate limits of the sign-in host: separate buckets at the Gateway, by the address of the connection (test/oauthtest/limits.py)
 # The Gateway runs in PROXY protocol mode here, so the test can be any client address (a load balancer tells the Gateway the address in production).
 lim() { env GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
   HTTP_TIMEOUT=60 KEY="$OKEY" ONE_TOOL=time_get_current_time "$@" "${PY[@]}" test/oauthtest/limits.py "$MODE"; }
@@ -713,7 +722,7 @@ rl_phase() { # rl_phase DISCOVERY SIGNIN TOKEN REGISTRATION MCP CREDENTIAL GLOBA
   kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
   reforward
   wait_rl "$NS" "requests_per_unit=$2"
-  wait_for 60 '[[ $("${PY[@]}" test/frontdoor/request.py "$PA" "$W/ca.pem" "$AUTH" /.well-known/jwks.json --proxy 203.0.113.1) == 200 ]]' || fail "18 the Gateway does not answer with a PROXY header"
+  wait_for 60 '[[ $("${PY[@]}" test/frontdoor/request.py "$PA" "$W/ca.pem" "$AUTH" /.well-known/jwks.json --proxy 203.0.113.1) == 200 ]]' || fail "19 the Gateway does not answer with a PROXY header"
 }
 OARL=(--set oauth.rateLimit.discoveryPerMinute=30 --set oauth.rateLimit.signInPerMinute=40 --set oauth.rateLimit.tokenPerMinute=50)
 rl_phase 30 40 50 5 30 60 8
@@ -724,23 +733,23 @@ kubectl -n "$NS" rollout status deploy/ambit-valkey --timeout=180s >/dev/null
 kubectl -n "$NS" rollout restart deploy/ambit-ratelimit >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-ratelimit --timeout=180s >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=180s >/dev/null
-wait_for 120 '[[ $(kubectl -n "$NS" get deploy ambit-auth -o jsonpath="{.status.readyReplicas}") == 2 ]]' || fail "18 ambit-auth is not ready after Valkey was restarted"
+wait_for 120 '[[ $(kubectl -n "$NS" get deploy ambit-auth -o jsonpath="{.status.readyReplicas}") == 2 ]]' || fail "19 ambit-auth is not ready after Valkey was restarted"
 wait_rl "$NS" "requests_per_unit=40"
-wait_for 60 '[[ $("${PY[@]}" test/frontdoor/request.py "$PA" "$W/ca.pem" "$AUTH" /.well-known/jwks.json --proxy 203.0.113.1) == 200 ]]' || fail "18 the Gateway does not answer after the counters were emptied"
-MODE=buckets lim LIM_DISCOVERY=30 LIM_SIGNIN=40 LIM_TOKEN=50 LIM_REGISTRATION=5 LIM_MCP=30 LIM_CRED=60 LIM_GLOBAL=8 || fail "18 the bucket checks failed (see FAIL lines above)"
-pass "18 five buckets (mcp, discovery, sign-in, token, registration): each stops at its own limit and leaves the others open; headers that name an address change nothing; two Gateway pods count together; the 401 for a call without a credential is in the discovery bucket"
+wait_for 60 '[[ $("${PY[@]}" test/frontdoor/request.py "$PA" "$W/ca.pem" "$AUTH" /.well-known/jwks.json --proxy 203.0.113.1) == 200 ]]' || fail "19 the Gateway does not answer after the counters were emptied"
+MODE=buckets lim LIM_DISCOVERY=30 LIM_SIGNIN=40 LIM_TOKEN=50 LIM_REGISTRATION=5 LIM_MCP=30 LIM_CRED=60 LIM_GLOBAL=8 || fail "19 the bucket checks failed (see FAIL lines above)"
+pass "19 five buckets (mcp, discovery, sign-in, token, registration): each stops at its own limit and leaves the others open; headers that name an address change nothing; two Gateway pods count together; the 401 for a call without a credential is in the discovery bucket"
 # the second line: with the ratelimit service stopped (FailOpen) ambit-auth's own counter is what limits the sign-in pages
 kubectl -n "$NS" scale deploy/ambit-ratelimit --replicas=0 >/dev/null
 kubectl -n "$NS" wait --for=delete pod -l app.kubernetes.io/name=ambit-ratelimit --timeout=120s >/dev/null 2>&1 || true
-MODE=second lim LIM_DISCOVERY=30 LIM_SIGNIN=40 LIM_TOKEN=50 LIM_REGISTRATION=5 || { kubectl -n "$NS" scale deploy/ambit-ratelimit --replicas=1 >/dev/null; fail "18 the second line failed (see FAIL lines above)"; }
+MODE=second lim LIM_DISCOVERY=30 LIM_SIGNIN=40 LIM_TOKEN=50 LIM_REGISTRATION=5 || { kubectl -n "$NS" scale deploy/ambit-ratelimit --replicas=1 >/dev/null; fail "19 the second line failed (see FAIL lines above)"; }
 kubectl -n "$NS" scale deploy/ambit-ratelimit --replicas=1 >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-ratelimit --timeout=180s >/dev/null
-pass "18 with the ratelimit service stopped, ambit-auth's own counter stops the sign-in pages at the same limit (the second line)"
+pass "19 with the ratelimit service stopped, ambit-auth's own counter stops the sign-in pages at the same limit (the second line)"
 # the chart's own values: the NAT measurement
 OARL=()
 rl_phase 600 300 600 10 1000 600 1000
-MODE=nat lim LIM_DISCOVERY=600 LIM_SIGNIN=300 LIM_TOKEN=600 LIM_REGISTRATION=10 || { kubectl -n "$NS" logs deploy/ambit-auth --tail=12 2>&1 | cut -c1-300; fail "18 the NAT measurement failed (see FAIL lines above)"; }
-pass "18 many people behind one address: measured with the chart's default limits (the numbers are printed above)"
+MODE=nat lim LIM_DISCOVERY=600 LIM_SIGNIN=300 LIM_TOKEN=600 LIM_REGISTRATION=10 || { kubectl -n "$NS" logs deploy/ambit-auth --tail=12 2>&1 | cut -c1-300; fail "19 the NAT measurement failed (see FAIL lines above)"; }
+pass "19 many people behind one address: measured with the chart's default limits (the numbers are printed above)"
 # back to the other mode and the high limits of the other checks
 OARL=(--set oauth.rateLimit.discoveryPerMinute=100000 --set oauth.rateLimit.signInPerMinute=100000 --set oauth.rateLimit.tokenPerMinute=100000)
 oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000 --wait --timeout 8m
@@ -749,14 +758,15 @@ kubectl -n "$NS" rollout status deploy/ambit-public --timeout=300s >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
 reforward
 
-# --- 19 · the request shapes of the guide "Connect an OAuth MCP client" (docs/guides/oauth-mcp-client.md), each sent as the guide shows it
+# --- 20 · the request shapes of the guide "Connect an OAuth MCP client" (docs/guides/oauth-mcp-client.md), each sent as the guide shows it
 env GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
-  HTTP_TIMEOUT=60 KEY="$OKEY" ONE_TOOL=time_get_current_time GUIDE="$PWD/docs/guides/oauth-mcp-client.md" "${PY[@]}" test/oauthtest/shapes.py || fail "19 the shape checks failed (see FAIL lines above)"
-pass "19 every request shape of the guide works as written"
+  HTTP_TIMEOUT=60 KEY="$OKEY" ONE_TOOL=time_get_current_time GUIDE="$PWD/docs/guides/oauth-mcp-client.md" "${PY[@]}" test/oauthtest/shapes.py || fail "20 the shape checks failed (see FAIL lines above)"
+pass "20 every request shape of the guide works as written"
 
 # --- 13 · off again: everything of OAuth goes, the front door stays
+# (--force-conflicts: check 18's Argo CD-style re-apply shares ownership of fields of the chart's policies; a change of one of them is then a conflict for Helm 4's server-side apply)
 helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/frontdoor/values.yaml \
-  --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 --wait --timeout 5m >/dev/null
+  --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 --force-conflicts --wait --timeout 5m >/dev/null
 wait_for 120 '[[ -z "$(kubectl -n "$NS" get sts ambit-hydra -o name 2>/dev/null)" ]]' || fail "13 Hydra is still there with oauth.enabled=false"
 for o in service/ambit-hydra-public service/ambit-hydra-admin networkpolicy/ambit-hydra configmap/ambit-hydra httproute/ambit-auth-hydra httproute/ambit-auth-app deploy/ambit-auth; do
   [[ -z "$(kubectl -n "$NS" get "$o" -o name 2>/dev/null)" ]] || fail "13 $o is still there"

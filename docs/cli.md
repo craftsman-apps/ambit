@@ -354,6 +354,23 @@ Left in the cluster (by design):
   Dependency CRDs (Gateway API, agentgateway, ToolHive): other products may use them; delete only if none does
 ```
 
+## ambit oauth block
+
+```sh
+ambit oauth block on        # refuse every OAuth token on the public MCP route, at once
+ambit oauth block status    # say whether tokens are blocked, and by what
+ambit oauth block off       # lift the block made by "on"
+```
+
+Experimental, only with OAuth sign-in turned on ([OAuth sign-in](oauth.md)). `on` creates the policy `ambit-oauth-emergency-block` on the public route
+`ambit-mcp-public`: every request with an OAuth token then gets 403 on every public gateway pod within a second; API keys are not touched. It
+needs no Hydra, no key and none of Ambit's own components. Helm and Argo CD do not own the policy, so a `helm upgrade`, Argo CD self-heal and Flux drift
+correction leave it. On a terminal `on` and `off` ask for `y`; without a terminal `--yes` is required (exit 2). `on` when the block exists says so and
+changes nothing. `off` when there is no such policy says so, and names the other ways in which tokens can be blocked (`oauth.emergencyBlock`, or an
+edit of the chart's policy). `status` reports both the policy and a `false` clause in the chart's token policy. The command needs the rights to get,
+create and delete `agentgatewaypolicies` in the namespace; it uses your kubeconfig, not the console. The runbook is in
+[If a signing key may be stolen](oauth.md#if-a-signing-key-may-be-stolen).
+
 ## ambit validate
 
 ```sh

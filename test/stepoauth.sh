@@ -652,7 +652,7 @@ RR1=$(cnt refresh "$JM"); AR1=$(cnt access "$JM")
 ROWS_PER_REFRESH=$(( (RR1 - RR0 + AR1 - AR0) / 5 ))
 echo "   rows of one connection: a sign-in writes $RR0 refresh token, $AR0 access token and $FR0 login and consent rows; each refresh adds $(( (RR1 - RR0) / 5 )) refresh token and $(( (AR1 - AR0) / 5 )) access token rows"
 for t in access refresh; do psq "update hydra_oauth2_$t set requested_at = now() - interval '40 days', expires_at = now() - interval '39 days' where client_id = '$JM'" >/dev/null; done
-oaset_real --set oauth.janitor.limit=3 --wait --timeout 8m
+oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000 --set oauth.janitor.limit=3 --wait --timeout 8m
 jrun() { # jrun: one janitor job by hand
   kubectl -n "$NS" delete job ambit-hydra-janitor-e2e --ignore-not-found >/dev/null
   kubectl -n "$NS" create job ambit-hydra-janitor-e2e --from=cronjob/ambit-hydra-janitor >/dev/null
@@ -662,7 +662,7 @@ jrun; REM1=$(cnt refresh "$JM")
 (( REM1 > 0 && REM1 < RR1 )) || fail "17 a janitor run with the limit 3 must delete some of the $RR1 old refresh tokens and not all (left: $REM1)"
 for _ in 1 2 3 4; do [[ "$(cnt refresh "$JM")" == 0 ]] && break; jrun; done
 [[ "$(cnt refresh "$JM")" == 0 ]] || fail "17 repeated runs with the limit 3 must delete all old refresh tokens (left: $(cnt refresh "$JM"))"
-oaset_real --wait --timeout 8m
+oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000 --wait --timeout 8m
 pass "17 janitor limit: a connection writes about $ROWS_PER_REFRESH rows a refresh ($RR1 refresh token rows after 5 refreshes); with the limit 3 one run deleted $(( RR1 - REM1 )) of them (left $REM1) and the next runs the rest; the default is 100,000 rows a kind every hour"
 
 # Unused clients. ambit-auth deletes a client that was registered dynamically and not used for 30 days, and one that no consent or refresh ever used

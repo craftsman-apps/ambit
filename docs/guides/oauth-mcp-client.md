@@ -1,6 +1,6 @@
 ---
 title: Connect an OAuth MCP client to Ambit
-description: The requests that an MCP client (or a hosted platform) sends to connect to Ambit's public MCP address with OAuth: discovery, registration, sign-in, token, refresh and revocation. Standards only, no named platform. Experimental.
+description: "The requests that an MCP client (or a hosted platform) sends to connect to Ambit's public MCP address with OAuth: discovery, registration, sign-in, token, refresh and revocation. Standards only, no named platform. Experimental."
 ---
 
 # Connect an OAuth MCP client to Ambit

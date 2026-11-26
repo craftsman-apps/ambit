@@ -464,7 +464,7 @@ kubectl -n "$NS" rollout status sts/ambit-pg17r --timeout=300s >/dev/null
 # the dump leaves the database pod as a file on this machine (as the runbook says), then goes into the new one
 kubectl -n "$NS" exec ambit-pg17-0 -c postgres -- cat /tmp/hydra.dump > "$W/hydra.dump"
 [[ "$(wc -c < "$W/hydra.dump" | tr -d ' ')" == "$DUMPB" ]] || fail "16 P5 the dump that came out of the pod has $(wc -c < "$W/hydra.dump") bytes, not $DUMPB"
-kubectl -n "$NS" exec -i ambit-pg17r-0 -c postgres -- sh -c 'cat > /tmp/hydra.dump' < "$W/hydra.dump"
+kubectl -n "$NS" cp -c postgres "$W/hydra.dump" ambit-pg17r-0:/tmp/hydra.dump
 [[ "$(kubectl -n "$NS" exec ambit-pg17r-0 -c postgres -- stat -c %s /tmp/hydra.dump)" == "$DUMPB" ]] || fail "16 P5 the dump did not arrive whole in the new database pod"
 kubectl -n "$NS" exec ambit-pg17r-0 -c postgres -- psql -q -U postgres -v ON_ERROR_STOP=1 -c "CREATE ROLE hydra LOGIN PASSWORD '$HP' NOSUPERUSER CONNECTION LIMIT 40" -c "CREATE DATABASE hydra OWNER hydra" >/dev/null
 t0=$(now)

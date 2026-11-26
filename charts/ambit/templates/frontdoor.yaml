@@ -18,6 +18,12 @@
 {{- range $k := list "perCredentialPerMinute" "perSourcePerMinute" "perPodPerSecond" }}
 {{- if lt (int (index $rl $k)) 1 }}{{ fail (printf "frontDoor.rateLimit.%s must be 1 or more" $k) }}{{ end }}
 {{- end }}
+{{- $orl := ((.Values.oauth | default dict).rateLimit) | default dict }}
+{{- if (.Values.oauth | default dict).enabled }}
+{{- range $k := list "discoveryPerMinute" "signInPerMinute" "tokenPerMinute" }}
+{{- if lt (int (index $orl $k)) 1 }}{{ fail (printf "oauth.rateLimit.%s must be 1 or more" $k) }}{{ end }}
+{{- end }}
+{{- end }}
 {{- if lt (int $fd.replicas) 1 }}{{ fail "frontDoor.replicas must be 1 or more" }}{{ end }}
 {{- $svc := $fd.service | default dict }}
 {{- $port := int ($fd.port | default 8443) }}
@@ -338,7 +344,9 @@ spec:
       failureMode: {{ $rl.failureMode | default "FailOpen" }}
       http:
         path: '"/json"'
-        body: '{"domain": "ambit-public", "descriptors": [{"entries": [{"key": "fd_source", "value": string(source.address)}]}]}'
+        # The bucket says what kind of request it is (see the ConfigMap below); the source is the address of the connection (or the PROXY
+        # protocol header), never a header the caller wrote.
+        body: {{ printf "'{\"domain\": \"ambit-public\", \"descriptors\": [{\"entries\": [{\"key\": \"fd_bucket\", \"value\": %s}, {\"key\": \"fd_source\", \"value\": string(source.address)}]}]}'" (include "ambit.frontdoor.bucket" .) }}
         # Only this header goes to the ratelimit service. Without the list, agentgateway sends Authorization: the caller's key.
         allowedRequestHeaders: [user-agent]
 ---
@@ -384,6 +392,27 @@ data:
     descriptors:
       - key: fd_credential
         rate_limit: { unit: minute, requests_per_unit: {{ $rl.perCredentialPerMinute }} }
-      - key: fd_source
-        rate_limit: { unit: minute, requests_per_unit: {{ $rl.perSourcePerMinute }} }
+      # One counter per source address inside each bucket. Requests of one kind never use up the limit of another.
+      - key: fd_bucket
+        value: mcp
+        descriptors:
+          - { key: fd_source, rate_limit: { unit: minute, requests_per_unit: {{ $rl.perSourcePerMinute }} } }
+      {{- if $oauth }}
+      - key: fd_bucket
+        value: discovery
+        descriptors:
+          - { key: fd_source, rate_limit: { unit: minute, requests_per_unit: {{ $orl.discoveryPerMinute }} } }
+      - key: fd_bucket
+        value: signin
+        descriptors:
+          - { key: fd_source, rate_limit: { unit: minute, requests_per_unit: {{ $orl.signInPerMinute }} } }
+      - key: fd_bucket
+        value: token
+        descriptors:
+          - { key: fd_source, rate_limit: { unit: minute, requests_per_unit: {{ $orl.tokenPerMinute }} } }
+      - key: fd_bucket
+        value: registration
+        descriptors:
+          - { key: fd_source, rate_limit: { unit: hour, requests_per_unit: {{ ((($.Values.oauth).registration).dynamic).perSourcePerHour | default 10 }} } }
+      {{- end }}
 {{- end }}

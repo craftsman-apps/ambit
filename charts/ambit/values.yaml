@@ -300,6 +300,18 @@ oauth:
       # At most this many registered clients; one that nobody used for unusedClientDays is deleted.
       maxClients: 500
       unusedClientDays: 30
+  # Limits per caller address on the sign-in host, in separate buckets (docs/front-door.md, "Rate limits"; docs/oauth.md, "Limits"). The
+  # address is the one the Gateway sees (never a header of the caller). Every request counts, refused ones too. The same numbers
+  # apply in the Gateway (shared by all Gateway pods) and, as a second line, in ambit-auth (shared by its replicas). Registration
+  # uses oauth.registration.dynamic.perSourcePerHour.
+  rateLimit:
+    # The metadata documents, the key list, and a call to the MCP URL without a credential (the 401 that starts a sign-in).
+    discoveryPerMinute: 600
+    # The pages of one sign-in: /oauth2/auth (three times), /login, /callback, /consent (twice). 300 a minute is about 40 sign-ins
+    # a minute from one address (measured, docs/oauth.md).
+    signInPerMinute: 300
+    # /oauth2/token and /oauth2/revoke: a code exchange, and a refresh about every 15 minutes for each connection.
+    tokenPerMinute: 600
   auth:
     # ambit-auth pods (stateless: a pending sign-in is in the browser, counters are in Valkey).
     replicas: 2

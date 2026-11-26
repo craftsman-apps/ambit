@@ -171,17 +171,53 @@ caller looks like one address: see [The public front door](front-door.md#load-ba
 
 ## Limits
 
-Separate buckets per caller address, so that a flood of one kind never uses up another, counted in Valkey and therefore
-shared by every replica. If Valkey does not answer, each replica counts for itself: a limit never disappears.
+Separate buckets per caller address, so that a flood of one kind never uses up another. The **address** is the one the public Gateway sees: the
+connection, or the PROXY protocol header of your load balancer ([supported modes](front-door.md#load-balancers-and-the-client-address)). A header that the
+caller writes (`X-Forwarded-For`, `X-Real-IP`, `Forwarded`, `X-Ambit-Client-Address`) is never read, and the Gateway removes it before a request
+reaches `ambit-auth`. An IPv6 caller counts by its /64 in `ambit-auth`, and by the single address at the Gateway.
 
-| Bucket | Paths | Default |
-|---|---|---|
-| discovery | `/.well-known/oauth-authorization-server` | 600 per minute |
-| sign-in | `/oauth2/auth`, `/login`, `/callback`, `/consent`, `/error` | 300 per minute |
-| registration | `/register` | 10 per hour |
+Two places count, with the same numbers:
 
-These first values are not measured yet (the load test is part of a later change). Many people behind one company address
-share a bucket; the sign-in bucket is large for that reason.
+1. **The Gateway** (policy `ambit-public-source-limit`) counts first, in the ratelimit service and Valkey, **shared by every Gateway pod**. It counts
+   every request, also one that no route serves or that is refused, and it covers Hydra's own endpoints (`/oauth2/token`), which do not pass `ambit-auth`.
+   See [Rate limits](front-door.md#rate-limits) for how it works and what it does not cover.
+2. **`ambit-auth`** counts the pages again (the second line, for when the ratelimit service is down): in Valkey, shared by its replicas. If Valkey does not
+   answer either, each replica counts for itself: a limit never disappears.
+
+| Bucket | Paths | Value | Default |
+|---|---|---|---|
+| discovery | `/.well-known/*`, and `POST /mcp` without a credential | `oauth.rateLimit.discoveryPerMinute` | 600 per minute |
+| sign-in | `/oauth2/auth`, `/login`, `/callback`, `/consent`, `/error` | `oauth.rateLimit.signInPerMinute` | 300 per minute |
+| token | `/oauth2/token`, `/oauth2/revoke` | `oauth.rateLimit.tokenPerMinute` | 600 per minute |
+| registration | `/register` | `oauth.registration.dynamic.perSourcePerHour` | 10 per hour |
+
+Over a limit the Gateway answers **429**. The registration also stops at `maxClients` (500) and a client that nobody used for `unusedClientDays` (30)
+is deleted ([Registering clients](#registering-clients)).
+
+### How many people can sign in from one company address
+
+*Measured on kind, with the default limits, from one made-up address.* @@NATTABLE@@
+
+The numbers follow from how a sign-in is built: **7 requests** in the sign-in bucket (three of `/oauth2/auth`, `/login`, `/callback`, and two of `/consent`: the page
+and the form), one in the token bucket, and, once per platform, one registration. So 300 a minute are 42 sign-ins a minute from one address, 600 token calls a minute are
+enough for 9,000 connections that refresh every 15 minutes, and 10 registrations an hour are enough for a handful of platforms. **Choose the default for your
+largest group:** if 200 people connect within five minutes after an announcement, 40 a minute is enough; if all 1,000 do it in one minute, raise
+`oauth.rateLimit.signInPerMinute` to 8,000 (and read the load on `ambit-auth`). People behind one address who exceed the bucket see **429** and the platform
+asks them to try again; nothing else is affected, and another address is not.
+
+### What is tested
+
+`test/stepoauth.sh`, check 18 (kind, in CI), with the Gateway in PROXY protocol mode so that the test can be any address, and `internal/oauth` (unit tests):
+
+| Review item (MINOR 3) | Test |
+|---|---|
+| Each bucket stops at its own limit and leaves the others open | check 18, `limits.py buckets`: all four buckets, each with a different address |
+| The source is the Gateway's address, never a client header | check 18: `X-Forwarded-For`, `X-Real-IP`, `Forwarded` and `X-Ambit-Client-Address` change nothing, in both directions (a limited address is not freed; an address that names another is not limited for it; a new address on every request gives no extra budget); unit: `TestRegistrationLimitUsesTheGatewayAddress`, `TestIPv6AddressesCountByTheirPrefix` |
+| Limits are shared across replicas | check 18: two Gateway pods alternate and together pass exactly the limit; unit: `TestRegistrationLimitUsesTheGatewayAddress` (two `ambit-auth` replicas, one counter) |
+| Many people behind one NAT | check 18, `limits.py nat`: real sign-ins from one address, counted until the limit; unit: `TestManyUsersBehindOneAddress` |
+| The client cap | unit: `TestRegistrationClientCap`, `TestRegistrationCapHoldsUnderRace` |
+| Client expiry | unit: `TestJanitorDeletesUnusedClients`; check 17 (a client unused for 31 days is deleted, one used 29 days ago and an admin's client stay) |
+| Redirect edge cases | unit: `TestRegistrationRedirectEdgeCases`, `TestRegistrationMetadataRules`; check 12 (ten wrong redirect addresses, other client kinds, a body that is too large) |
 
 ## Tokens at the public MCP route
 

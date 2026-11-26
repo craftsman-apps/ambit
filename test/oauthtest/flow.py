@@ -47,12 +47,19 @@ ctx = ssl.create_default_context(cafile=CA)
 ROUTES = {(AUTH, 443): GW, (IDP, int(os.environ.get("IDP_URL_PORT", "443"))): IDP_PORT, (MCP, 443): GW}
 
 
+# A made-up client address, sent to the Gateway as a PROXY protocol v1 header (frontDoor.clientAddress=proxyProtocol: a load balancer does this
+# in production). None: no header. Test only (test/oauthtest/limits.py); the identity provider's connection never gets one.
+CLIENT_ADDR = None
+
+
 class Conn(http.client.HTTPSConnection):
     def connect(self):
         port = ROUTES.get((self.host, self.port))
         if port is None:
             raise OSError(f"no route to {self.host}:{self.port}")
         sock = socket.create_connection(("127.0.0.1", port), timeout=20)
+        if CLIENT_ADDR and port != IDP_PORT:
+            sock.sendall(f"PROXY TCP4 {CLIENT_ADDR} 10.0.0.1 51000 443\r\n".encode())
         self.sock = ctx.wrap_socket(sock, server_hostname=self.host)
 
 

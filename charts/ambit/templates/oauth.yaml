@@ -187,6 +187,71 @@ spec:
         - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-auth } }
         - podSelector: { matchLabels: { app.kubernetes.io/name: ambit-console } }
       ports: [{ port: 4445 }]
+{{- $j := $o.janitor | default dict }}
+{{- if ne (toString $j.enabled) "false" }}
+---
+# Hydra's own clean-up of the database (`hydra janitor`): expired access and refresh tokens, finished login and consent requests
+# and expired grants pile up in PostgreSQL, because Hydra never deletes them by itself. It reads the lifetimes from Hydra's
+# own configuration (the same ConfigMap), so a token that is still valid is never deleted: a refresh token lives
+# oauth.refreshTokenIdleDays. Runs every hour on its own pod, with the DSN from the same Secret; one run at a time. The
+# clean-up of unused dynamic clients is a different job: it is part of ambit-auth (oauth.registration.dynamic.unusedClientDays).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ambit-hydra-janitor
+  labels: { app.kubernetes.io/name: ambit-hydra-janitor }
+spec:
+  schedule: {{ $j.schedule | default "17 * * * *" | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: {{ int ($j.timeoutMinutes | default 30) | mul 60 }}
+      ttlSecondsAfterFinished: 604800
+      template:
+        metadata:
+          labels: { app.kubernetes.io/name: ambit-hydra-janitor }
+        spec:
+          restartPolicy: Never
+          serviceAccountName: ambit-hydra
+          automountServiceAccountToken: false
+          securityContext: { runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: { type: RuntimeDefault } }
+          # The same database check as Hydra's pods: a bad address is refused with a fixed message, and never reaches Hydra's own error output (which can quote it).
+          initContainers:
+            - name: check-database
+              image: {{ $img | quote }}
+              imagePullPolicy: {{ .Values.console.image.pullPolicy }}
+              command: [/ambit-auth, check-database, --replicas={{ int $h.replicas }}]
+              env:
+                - name: DSN
+                  valueFrom: { secretKeyRef: { name: {{ $db.dsnSecret.name | quote }}, key: {{ $db.dsnSecret.key | quote }} } }
+              volumeMounts: [{ name: ca, mountPath: /ca, readOnly: true }]
+              securityContext: {{ $sc }}
+              resources: { requests: { cpu: 10m, memory: 16Mi }, limits: { memory: 64Mi } }
+          containers:
+            - name: janitor
+              image: {{ $h.image | quote }}
+              # An hour of margin (--keep-if-younger): a request or token that was made a moment ago is never touched.
+              args: [janitor, -e, -c, /etc/hydra/hydra.yml, --tokens, --requests, --grants, --keep-if-younger, 1h, --batch-size, {{ min 1000 (int ($j.limit | default 100000)) | quote }}, --limit, {{ $j.limit | default 100000 | quote }}]
+              env:
+                - name: DSN
+                  valueFrom: { secretKeyRef: { name: {{ $db.dsnSecret.name | quote }}, key: {{ $db.dsnSecret.key | quote }} } }
+              volumeMounts: [{ name: config, mountPath: /etc/hydra, readOnly: true }, { name: ca, mountPath: /ca, readOnly: true }, { name: tmp, mountPath: /tmp }]
+              securityContext: {{ $sc }}
+              resources: {{- toYaml $h.resources | nindent 16 }}
+          volumes:
+            - name: config
+              configMap: { name: ambit-hydra }
+            - name: ca
+              secret:
+                secretName: {{ $db.caSecret.name | quote }}
+                items: [{ key: {{ $db.caSecret.key | quote }}, path: ca.crt }]
+            - name: tmp
+              emptyDir: { medium: Memory, sizeLimit: 16Mi }
+{{- end }}
 ---
 # The sign-in host's routes to Hydra: three exact paths with their methods. Everything else of Hydra (registration,
 # discovery, userinfo, the admin API, health) has no route and answers 404. The sign-in pages are routes of ambit-auth.

@@ -1,4 +1,5 @@
-# PostgreSQL 17 and 15 with TLS only, for test/stepoauth.sh. Test only: no volume (the data is lost with the pod), a
+# PostgreSQL 17 and 15 with TLS only, for test/stepoauth.sh. Test only: no volume (the data is lost with the pod; PostgreSQL 17 has a
+# small one, so that a stopped or deleted pod keeps its data), a
 # superuser password from a Secret the step creates, a certificate the step makes. A real database is yours to run
 # (docs/oauth.md, "PostgreSQL").
 apiVersion: v1
@@ -44,10 +45,48 @@ spec:
           resources: { requests: { memory: 64Mi }, limits: { memory: 256Mi } }
           volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }, { name: tls, mountPath: /pgtls }, { name: hba, mountPath: /etc/pghba }]
       volumes:
-        - { name: data, emptyDir: {} }
         - { name: tls-in, secret: { secretName: ambit-pg-tls } }
         - { name: tls, emptyDir: {} }
         - { name: hba, configMap: { name: ambit-pg-hba } }
+  volumeClaimTemplates:
+    - metadata: { name: data, labels: { ambitproject.dev/oauth-test: "true" } }
+      spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 512Mi } } }
+---
+# A second PostgreSQL 17 for the restore check (no replicas until the check starts it): the check restores a dump into it and then points the
+# Service ambit-pg17 at it, as a managed fail-over moves a name to another instance.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: ambit-pg17r, labels: { ambitproject.dev/oauth-test: "true" } }
+spec:
+  serviceName: ambit-pg17
+  replicas: 0
+  selector: { matchLabels: { app: ambit-pg17r } }
+  template:
+    metadata: { labels: { app: ambit-pg17r } }
+    spec:
+      initContainers:
+        - name: tls-perms
+          image: postgres:17-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
+          command: [sh, -c, "cp /in/tls.crt /in/tls.key /pgtls/ && chown 70:70 /pgtls/* && chmod 600 /pgtls/tls.key"]
+          volumeMounts: [{ name: tls-in, mountPath: /in }, { name: tls, mountPath: /pgtls }]
+      containers:
+        - name: postgres
+          image: postgres:17-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
+          args: [-c, ssl=on, -c, ssl_cert_file=/pgtls/tls.crt, -c, ssl_key_file=/pgtls/tls.key, -c, hba_file=/etc/pghba/pg_hba.conf, -c, max_connections=60]
+          env:
+            - { name: POSTGRES_PASSWORD, valueFrom: { secretKeyRef: { name: ambit-pg-superuser, key: password } } }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports: [{ containerPort: 5432 }]
+          readinessProbe: { exec: { command: [pg_isready, -U, postgres, -h, 127.0.0.1] }, periodSeconds: 2 }
+          resources: { requests: { memory: 64Mi }, limits: { memory: 256Mi } }
+          volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }, { name: tls, mountPath: /pgtls }, { name: hba, mountPath: /etc/pghba }]
+      volumes:
+        - { name: tls-in, secret: { secretName: ambit-pg-tls } }
+        - { name: tls, emptyDir: {} }
+        - { name: hba, configMap: { name: ambit-pg-hba } }
+  volumeClaimTemplates:
+    - metadata: { name: data, labels: { ambitproject.dev/oauth-test: "true" } }
+      spec: { accessModes: [ReadWriteOnce], resources: { requests: { storage: 512Mi } } }
 ---
 apiVersion: v1
 kind: Service

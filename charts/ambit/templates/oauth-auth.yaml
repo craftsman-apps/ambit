@@ -101,6 +101,7 @@ spec:
             - { name: AMBIT_AUTH_MAX_CLIENTS, value: {{ $dcr.maxClients | quote }} }
             - { name: AMBIT_AUTH_REGISTER_PER_HOUR, value: {{ $dcr.perSourcePerHour | quote }} }
             - { name: AMBIT_AUTH_UNUSED_CLIENT_DAYS, value: {{ $dcr.unusedClientDays | quote }} }
+            - { name: AMBIT_AUTH_NEVER_USED_CLIENT_HOURS, value: {{ $dcr.neverUsedClientHours | default 24 | quote }} }
             {{- else }}
             - { name: AMBIT_AUTH_REGISTRATION, value: "off" }
             {{- end }}

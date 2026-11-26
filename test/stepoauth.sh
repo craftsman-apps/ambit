@@ -28,7 +28,7 @@ rnd() { openssl rand -hex "${1:-16}"; }
 oaset() { helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/frontdoor/values.yaml -f test/oauth/values.yaml \
   --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 \
   --set "oauth.signIn.issuer=https://ambit-oauth-idp.$NS.svc" --set "oauth.auth.consoleURL=http://ambit-oauth-console.$NS.svc:8085" \
-  ${OARL[@]+"${OARL[@]}"} ${OAREG[@]+"${OAREG[@]}"} "$@" >/dev/null; }
+  ${OARL[@]+"${OARL[@]}"} ${OAREG[@]+"${OAREG[@]}"} --force-conflicts "$@" >/dev/null; }  # --force-conflicts: check 18's Argo CD-style re-apply owns fields of the chart's policies
 # OAREG: from check 12 on the registration limits are high for every upgrade (the key rotation of check 15 upgrades too), because the checks register many clients
 OAREG=()
 # OARL: the sign-in buckets are far above what the checks send from one address (check 19 sets them back to the chart's values)

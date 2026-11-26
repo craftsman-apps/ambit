@@ -114,9 +114,11 @@ if MODE == "buckets":
     check("18 ... nor are the sign-in pages of that address", send(addr, "signin") != 429)
 
     # an address in a header changes nothing
-    A = "203.0.113.11"  # the sign-in bucket of A is used up above
-    spoofed = [send(A, "signin", extra={**SPOOF, "X-Forwarded-For": f"198.51.100.{i}"}) for i in range(6)]
-    check("18 spoofed X-Forwarded-For, X-Real-IP, Forwarded and X-Ambit-Client-Address do not free a limited address", set(spoofed) == {429}, spoofed)
+    A = "203.0.113.55"  # used up and then written to in one window (the bursts above may have taken longer than a minute)
+    n = LIM["signin"] + 2
+    mixed = burst(lambda i: send(A, "signin") if i < n else send(A, "signin", extra={**SPOOF, "X-Forwarded-For": f"198.51.100.{i}"}), n + 6)
+    spoofed = mixed[n:]
+    check("18 spoofed X-Forwarded-For, X-Real-IP, Forwarded and X-Ambit-Client-Address do not free a limited address", allowed(mixed) == LIM["signin"] and set(spoofed) == {429}, mixed)
     B = "203.0.113.50"
     claims = burst(lambda i: send(B, "signin", extra={"X-Forwarded-For": A, "X-Real-IP": A, "Forwarded": f"for={A}", "X-Ambit-Client-Address": A}), LIM["signin"] + 6)
     check(f"18 another address that writes the limited address into those headers is counted as itself: {allowed(claims)} passed (limit {LIM['signin']}), not 0", allowed(claims) == LIM["signin"], claims)

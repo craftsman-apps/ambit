@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -479,7 +480,12 @@ func NewGrantID(now time.Time) string {
 }
 
 // grantTime reads the time at which a grant was made from its name; ok is false for a name that was not made by NewGrantID.
+var grantForm = regexp.MustCompile(`^g-[0-9a-z]{1,13}-[A-Za-z0-9_-]{6,24}$`)
+
 func grantTime(id string) (time.Time, bool) {
+	if !grantForm.MatchString(id) {
+		return time.Time{}, false
+	}
 	parts := strings.Split(id, "-")
 	if len(parts) < 3 || parts[0] != "g" {
 		return time.Time{}, false

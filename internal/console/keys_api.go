@@ -90,7 +90,7 @@ func (c *Catalog) registerKeys(mux *http.ServeMux, read func(func(http.ResponseW
 		func(w http.ResponseWriter, r *http.Request, s Session) { c.revokeKey(w, r, s, true) }, RoleAdmin))
 	c.registerServiceAccounts(mux, adminRead, allow)
 	c.registerAgents(mux, read, allow)
-	c.registerOAuth(mux, allow)
+	c.registerOAuth(mux, adminRead, allow)
 	mux.HandleFunc("GET /api/admin/key-events", adminRead(func(w http.ResponseWriter, r *http.Request, _ Session) {
 		ev, err := c.Keys.Events(r.Context())
 		if err != nil {

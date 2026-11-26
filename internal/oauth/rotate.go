@@ -2,6 +2,8 @@ package oauth
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,7 +18,8 @@ import (
 // token the key ID of the grant's first token, which no longer exists after a rotation: docs/oauth.md, "Signing keys").
 const RotationConfigMap = "ambit-oauth-rotation"
 
-// tempKeySet is the set in which a new key is made before it replaces the signing key (never published: not in broadcast_keys).
+// tempKeySet is the prefix of the set in which a new key is made before it replaces the signing key (never published: not in broadcast_keys).
+// Every attempt has a set of its own, so that two attempts (a console that restarts while one runs) never share one.
 const tempKeySet = "ambit.next"
 
 // KeySet is the keys of a Hydra key set as Hydra holds them: PRIVATE keys. Never log them or send them anywhere.
@@ -95,6 +98,9 @@ type ProbeClaims struct{ Issuer, Audience string }
 func RotateSigningKeys(ctx context.Context, h *HydraAdmin, pc ProbeClaims, now time.Time) (Rotation, error) {
 	rot := Rotation{At: now.UTC()}
 	var oldAccess, newAccess json.RawMessage
+	var rnd [6]byte
+	_, _ = rand.Read(rnd[:])
+	temp := tempKeySet + "-" + hex.EncodeToString(rnd[:])
 	for _, set := range SigningSets {
 		old, err := h.KeySet(ctx, set)
 		if err != nil {
@@ -103,18 +109,18 @@ func RotateSigningKeys(ctx context.Context, h *HydraAdmin, pc ProbeClaims, now t
 		if len(old) != 1 {
 			return rot, fmt.Errorf("key set %s holds %d keys, it must hold exactly 1 (docs/oauth.md, \"Signing keys\")", set, len(old))
 		}
-		if err := h.DeleteKeySet(ctx, tempKeySet); err != nil { // a leftover of an earlier run
+		if err := h.DeleteKeySet(ctx, temp); err != nil { // a leftover of an earlier run
 			return rot, fmt.Errorf("remove the temporary key set: %w", err)
 		}
-		fresh, err := h.CreateKeySet(ctx, tempKeySet)
+		fresh, err := h.CreateKeySet(ctx, temp)
 		if err != nil {
 			return rot, fmt.Errorf("make the new key for %s: %w", set, err)
 		}
 		if err := h.ReplaceKeySet(ctx, set, []json.RawMessage{fresh}); err != nil {
-			_ = h.DeleteKeySet(ctx, tempKeySet)
+			_ = h.DeleteKeySet(ctx, temp)
 			return rot, fmt.Errorf("replace key set %s: %w", set, err)
 		}
-		if err := h.DeleteKeySet(ctx, tempKeySet); err != nil {
+		if err := h.DeleteKeySet(ctx, temp); err != nil {
 			return rot, fmt.Errorf("remove the temporary key set: %w", err)
 		}
 		now, err := h.KeySet(ctx, set)

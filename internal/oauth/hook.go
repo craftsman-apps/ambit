@@ -80,7 +80,8 @@ func (s *Server) tokenHook(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
-	if gt, ok := GrantTime(grant); !ok || (!rotated.IsZero() && gt.Before(rotated)) {
+	// (A grant made in the second of the rotation, or any second before it, is over: the time is in whole seconds.)
+	if gt, ok := GrantTime(grant); !ok || gt.After(s.now().Add(5*time.Minute)) || (!rotated.IsZero() && gt.Unix() <= rotated.Unix()) {
 		mHook.WithLabelValues("grant_before_rotation").Inc()
 		s.log().Info("token hook: the grant is older than the last key rotation: refused", "grant", grant)
 		w.WriteHeader(http.StatusForbidden)

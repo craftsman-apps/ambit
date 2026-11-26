@@ -92,6 +92,8 @@ code, st0 = ctl_json("keys")
 access = [s for s in st0.get("sets", []) if s["set"] == "hydra.jwt.access-token"]
 check("R0 the signing key is one key, the token carries its key ID, and the published keys are that key", code == "200" and access and access[0]["kids"] == [kidA] and jwks_kids() == [kidA], (code, st0, kidA, jwks_kids()))
 check("R0 the token works on every pod", accepted_everywhere(tokA["access_token"], 120))
+# a second connection, only for R4 (the refresh of a grant made before a rotation), so that R4 does not depend on E2
+cidC, tokC = connect_wait("alice", ("time",), "BeforeRotationToo")
 
 # J1 · a restart of the gateway controller loses no call
 kube("rollout", "restart", controller())
@@ -120,10 +122,14 @@ check("J3 a restart of the controller while the key endpoint is down: the token 
 
 # E2 · the rotation while Hydra is down: it fails, says to run it again, and has already ended every older grant
 block_on()
+check("E1 the block is in force on every pod before anything is rotated: a token that worked is refused", wait(lambda: all_pods(lambda p: tools(p, tokA["access_token"])[0] in (401, 403)), 30, 1))
 code, body = ctl_json("rotate")
 check("E2 a rotation while Hydra is down fails (502) and says to run it again", code == "502" and "run it again" in json.dumps(body), (code, body))
 check("E2 ... the time of the rotation is written first (the token hook refuses every older grant)", "since" in kube("get", "configmap", "ambit-oauth-rotation", "-o", "jsonpath={.data}"))
 hydra_up()
+time.sleep(8)  # ambit-auth reads the time every 3 seconds
+st, j = token(cidA, grant_type="refresh_token", refresh_token=tokA["refresh_token"])
+check("E2 after Hydra is back, and before the rotation is run again, the refresh of an older grant is already refused", st in (400, 401, 403) and "access_token" not in j, st)
 
 # R1 · the rotation (the block is on: every token is refused while the keys change)
 t_rot = time.time()
@@ -145,8 +151,8 @@ cidB, tokB = connect_wait("alice", ("time",), "AfterRotation")
 check("R3 a new connection's token carries the new key ID", header(tokB["access_token"]).get("kid") == newKid, (header(tokB["access_token"]).get("kid"), newKid))
 
 # R4 · the refresh of an old grant is refused
-st, j = token(cidA, grant_type="refresh_token", refresh_token=tokA["refresh_token"])
-check("R4 the refresh of a grant made before the rotation is refused", st in (400, 401, 403) and "access_token" not in j, st)
+st, j = token(cidC, grant_type="refresh_token", refresh_token=tokC["refresh_token"])
+check("R4 the refresh of a grant made before the rotation is refused (a grant that nothing else has ended)", st in (400, 401, 403) and "access_token" not in j, st)
 
 # R5 · the check on every gateway pod (the block is on, so only the signature decides 401 or 403)
 probe_old, probe_new = rot["probe"]["old"], rot["probe"]["new"]

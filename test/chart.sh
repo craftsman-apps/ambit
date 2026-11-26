@@ -91,16 +91,16 @@ for s in ['system:serviceaccount:ambit-system:ambit-console','authentication.kub
   assert s in we, s
 assert [v['expression'] for v in w['validations']]==['variables.console || variables.cleanup'], w['validations']
 assert w['validations'][0]['message']=='only the Ambit console may write personal API key objects', w
-sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event','ambitproject.dev/agent','ambitproject.dev/agent-stops']
+sel=['ambitproject.dev/key','ambitproject.dev/key-owner-record','ambitproject.dev/key-event','ambitproject.dev/agent','ambitproject.dev/agent-stops','ambitproject.dev/oauth-rotation']
 bs={x['metadata']['name']:x['spec'] for x in docs if x['kind']=='ValidatingAdmissionPolicyBinding'}
-assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(5)}|{'ambit-key-lease','ambit-agent-ack-writer','ambit-keys-writer-stops-name'}, list(bs)
+assert set(bs)=={'ambit-keys-writer-%d'%i for i in range(6)}|{'ambit-key-lease','ambit-agent-ack-writer','ambit-keys-writer-stops-name'}, list(bs)
 assert all('paramRef' not in b for b in bs.values()), bs
 bs.pop('ambit-key-lease'); bs.pop('ambit-agent-ack-writer'); bs.pop('ambit-keys-writer-stops-name')
 for n,b in bs.items():
   i=int(n[-1])
   assert b['policyName']=='ambit-keys-writer' and b['validationActions']==['Deny'], b
   assert b['matchResources']['namespaceSelector']=={'matchLabels':{'kubernetes.io/metadata.name':'ambit-system'}}, b
-  assert b['matchResources']['objectSelector']=={'matchExpressions':[{'key':sel[i],'operator':'Exists'}]}, b" "admission: console-only writes to key objects (five label bindings), cleanup exempt, no Lease-holder check"
+  assert b['matchResources']['objectSelector']=={'matchExpressions':[{'key':sel[i],'operator':'Exists'}]}, b" "admission: console-only writes to key objects (six label bindings), cleanup exempt, no Lease-holder check"
 check_qs "p=one('ValidatingAdmissionPolicy','ambit-key-lease')['spec']
 assert p['failurePolicy']=='Fail' and 'paramKind' not in p, p
 r=p['matchConstraints']['resourceRules'][0]

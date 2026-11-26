@@ -82,9 +82,21 @@ func newKeyForServer(set string) json.RawMessage {
 	return b
 }
 
+// tempLeft is a staging set that a rotation left behind ("" for none).
+func tempLeft(f *fakeKeys) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for name := range f.sets {
+		if strings.HasPrefix(name, tempKeySet) {
+			return name
+		}
+	}
+	return ""
+}
+
 func TestRotateSigningKeys(t *testing.T) {
 	f := &fakeKeys{sets: map[string][]json.RawMessage{
-		"hydra.jwt.access-token": {newKey(t, "old-access")}, "hydra.openid.id-token": {newKey(t, "old-id")}, tempKeySet: {newKey(t, "leftover")}}}
+		"hydra.jwt.access-token": {newKey(t, "old-access")}, "hydra.openid.id-token": {newKey(t, "old-id")}}}
 	srv := httptest.NewServer(f)
 	defer srv.Close()
 	h := &HydraAdmin{Base: srv.URL}
@@ -104,8 +116,8 @@ func TestRotateSigningKeys(t *testing.T) {
 			t.Errorf("set %s: %d keys, kid %s, want one: %s", s.Set, len(ks), KeyID(ks[0]), s.NewKID)
 		}
 	}
-	if _, ok := f.sets[tempKeySet]; ok {
-		t.Error("the temporary key set stays")
+	if left := tempLeft(f); left != "" {
+		t.Errorf("the temporary key set %s stays", left)
 	}
 	// the signing set is replaced, never grown: no POST to it
 	for _, c := range f.calls {
@@ -167,8 +179,8 @@ func TestRotateErrorsAreNamedAndKeepTheOldKey(t *testing.T) {
 	if KeyID(f.sets["hydra.jwt.access-token"][0]) != "old-access" {
 		t.Error("the old key is gone although the replacement failed")
 	}
-	if _, ok := f.sets[tempKeySet]; ok {
-		t.Error("the temporary key set stays after a failed replacement")
+	if left := tempLeft(f); left != "" {
+		t.Errorf("the temporary key set %s stays after a failed replacement", left)
 	}
 	if strings.Contains(err.Error(), "BEGIN") || strings.Contains(err.Error(), `"d"`) {
 		t.Error("the error holds key material")

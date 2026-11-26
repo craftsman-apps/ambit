@@ -119,8 +119,11 @@ func TestEmergencyRotation(t *testing.T) {
 		t.Fatalf("the signing set: %d keys", len(ks))
 	}
 	// the time that the hook reads was written
-	if err := c.Client.Get(context.Background(), client.ObjectKey{Namespace: c.Namespace, Name: oauth.RotationConfigMap}, &cm); err != nil || cm.Data["since"] == "" {
-		t.Fatalf("the rotation time: %v %v", err, cm.Data)
+	if err := c.Client.Get(context.Background(), client.ObjectKey{Namespace: c.Namespace, Name: oauth.RotationConfigMap}, &cm); err != nil || cm.Data["since"] == "" || cm.Labels[rotationLabel] != "true" {
+		t.Fatalf("the rotation time: %v %v %v", err, cm.Data, cm.Labels)
+	}
+	if w.Header().Get("Cache-Control") != "no-store" {
+		t.Error("the answer with the probe tokens may be cached")
 	}
 	// a second rotation works (the ConfigMap is updated)
 	w = httptest.NewRecorder()

@@ -260,10 +260,14 @@ encrypted with `oauth.hydra.systemSecret`; a hardware or cloud key service is no
 
 ```
 # 1. Block every token (seconds; no Hydra needed). Keep it until step 4 says the old key is gone.
+#    Do not run helm upgrade until the end: it removes the edit. To make the block survive an upgrade, set oauth.emergencyBlock: true.
 kubectl -n ambit-system patch agentgatewaypolicy ambit-mcp-public-oauth --type json \
   -p '[{"op":"add","path":"/spec/traffic/authorization/policy/matchExpressions/-","value":"false"}]'
+#    Check that the block is in force on EVERY public gateway pod before you rotate: a token that worked (a real one, or a connection of a
+#    test platform) must now get 403 from each pod (the check of step 4 works the same way).
 
 # 2. Rotate. The answer has the old and new key ID of each set and two probe tokens. Run it again if it fails (a failure says so).
+umask 077   # the file holds tokens signed with the real keys
 curl -s -b "$COOKIES" -X POST "$CONSOLE/api/admin/oauth/signing-key/emergency-rotation" -H 'Content-Type: application/json' \
   -d '{"confirm":"every connection must connect again"}' > rotation.json
 

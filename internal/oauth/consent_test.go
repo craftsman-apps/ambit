@@ -11,6 +11,7 @@ import (
 	"os"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1127,6 +1128,17 @@ func TestTokenHookRefusesGrantsBeforeTheRotation(t *testing.T) {
 	// the first token of a code exchange is not a refresh: it is made with the new key
 	if w := hook(e, sess(before), "authorization_code"); w.Code != 204 {
 		t.Errorf("a code exchange: %d", w.Code)
+	}
+	// a grant made in the second of the rotation is over too (the time is in whole seconds); a grant from the future, and a damaged name, are refused
+	e.deny.rotated = e.now.Add(-time.Minute)
+	if w := hook(e, sess(NewGrantID(e.now.Add(-time.Minute)))); w.Code != 403 {
+		t.Errorf("a grant of the second of the rotation: %d, want 403", w.Code)
+	}
+	if w := hook(e, sess(NewGrantID(e.now.Add(time.Hour)))); w.Code != 403 {
+		t.Errorf("a grant from the future: %d, want 403", w.Code)
+	}
+	if w := hook(e, sess("g-"+strconv.FormatInt(e.now.Unix(), 36)+"-x")); w.Code != 403 {
+		t.Errorf("a grant name that is not in the form: %d, want 403", w.Code)
 	}
 	e.deny.rotated = time.Time{}
 	if w := hook(e, sess(before)); w.Code != 204 {

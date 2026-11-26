@@ -21,10 +21,11 @@ type oauthClientView struct {
 	Created       time.Time `json:"created,omitempty"`
 }
 
-func (c *Catalog) registerOAuth(mux *http.ServeMux, allow func(string, func(http.ResponseWriter, *http.Request, Session), ...string) http.HandlerFunc) {
-	mux.HandleFunc("GET /api/admin/oauth/clients", allow("only admins can see OAuth clients", c.listOAuthClients, RoleAdmin))
+func (c *Catalog) registerOAuth(mux *http.ServeMux, adminRead func(func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc,
+	allow func(string, func(http.ResponseWriter, *http.Request, Session), ...string) http.HandlerFunc) {
+	mux.HandleFunc("GET /api/admin/oauth/clients", adminRead(c.listOAuthClients)) // a read: no JSON body, so not the wrapper of writes
 	mux.HandleFunc("DELETE /api/admin/oauth/clients/{id}", allow("only admins can delete OAuth clients", c.deleteOAuthClient, RoleAdmin))
-	c.registerOAuthKeys(mux, allow)
+	c.registerOAuthKeys(mux, adminRead, allow)
 }
 
 func (c *Catalog) listOAuthClients(w http.ResponseWriter, r *http.Request, _ Session) {

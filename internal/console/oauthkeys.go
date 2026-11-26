@@ -19,6 +19,9 @@ import (
 // RotateConfirm is the sentence an admin sends to rotate: the call is not made by a stray request.
 const RotateConfirm = "every connection must connect again"
 
+// rotationLabel fences the ConfigMap in the admission policy ambit-keys-writer (by label, which also covers a delete of many objects, and by name).
+const rotationLabel = "ambitproject.dev/oauth-rotation"
+
 var rotating sync.Mutex // one rotation at a time (one console replica; a second console would read the list that the first wrote)
 
 type signingKeyView struct {
@@ -26,8 +29,9 @@ type signingKeyView struct {
 	KIDs []string `json:"kids"`
 }
 
-func (c *Catalog) registerOAuthKeys(mux *http.ServeMux, allow func(string, func(http.ResponseWriter, *http.Request, Session), ...string) http.HandlerFunc) {
-	mux.HandleFunc("GET /api/admin/oauth/signing-key", allow("only admins can see the signing keys", c.getSigningKey, RoleAdmin))
+func (c *Catalog) registerOAuthKeys(mux *http.ServeMux, adminRead func(func(http.ResponseWriter, *http.Request, Session)) http.HandlerFunc,
+	allow func(string, func(http.ResponseWriter, *http.Request, Session), ...string) http.HandlerFunc) {
+	mux.HandleFunc("GET /api/admin/oauth/signing-key", adminRead(c.getSigningKey))
 	mux.HandleFunc("POST /api/admin/oauth/signing-key/emergency-rotation", allow("only admins can rotate the signing keys", c.rotateSigningKey, RoleAdmin))
 }
 
@@ -48,7 +52,7 @@ func (c *Catalog) readRotation(r *http.Request) (time.Time, error) {
 
 // markRotation writes the time that the token hook reads. It is written BEFORE the keys change: from then on no grant that is older is refreshed.
 func (c *Catalog) markRotation(r *http.Request, at time.Time) error {
-	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: oauth.RotationConfigMap, Namespace: c.Namespace}, Data: map[string]string{"since": at.UTC().Format(time.RFC3339)}}
+	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: oauth.RotationConfigMap, Namespace: c.Namespace, Labels: map[string]string{rotationLabel: "true"}}, Data: map[string]string{"since": at.UTC().Format(time.RFC3339)}}
 	err := c.Client.Create(r.Context(), cm)
 	if apierrors.IsAlreadyExists(err) {
 		var cur corev1.ConfigMap
@@ -56,6 +60,10 @@ func (c *Catalog) markRotation(r *http.Request, at time.Time) error {
 			return err
 		}
 		cur.Data = cm.Data
+		if cur.Labels == nil {
+			cur.Labels = map[string]string{}
+		}
+		cur.Labels[rotationLabel] = "true"
 		return c.Client.Update(r.Context(), &cur)
 	}
 	return err
@@ -131,5 +139,11 @@ func (c *Catalog) rotateSigningKey(w http.ResponseWriter, r *http.Request, s Ses
 		writeErr(w, http.StatusBadGateway, "the rotation did not finish ("+err.Error()+"): run it again; grants made before now are already refused")
 		return
 	}
+	// A second time, after the keys have changed: a grant made between the first time and the replacement has a token of the old key, and is over too.
+	if err := c.markRotation(r, time.Now()); err != nil {
+		writeErr(w, http.StatusInternalServerError, "the keys are replaced, but the time could not be written again: run the rotation again")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store") // the answer holds probe tokens that are signed with the real keys
 	writeJSON(w, http.StatusOK, rot)
 }

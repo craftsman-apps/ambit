@@ -449,4 +449,9 @@ func TestAcceptedOnlyGateIgnoresAttachedButNotInvalid(t *testing.T) {
 	if err := r.gate(t.Context(), g, nil, 10*time.Second); err == nil {
 		t.Error("a policy without any status passed")
 	}
+	// PartiallyValid: translated with errors, not attached: not a pass
+	r, _ = gateReconciler(gatedPolicy(1, ancestor(agentgatewayController, agwCond("Accepted", "True", "PartiallyValid", 1), pending)))
+	if err := r.gate(t.Context(), g, nil, 10*time.Second); err == nil {
+		t.Error("a PartiallyValid policy passed")
+	}
 }

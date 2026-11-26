@@ -332,6 +332,9 @@ func activationOf(o *unstructured.Unstructured, g gated) (waiting string, invali
 				detail = typ + " is missing"
 			case observed(c) < g.generation:
 				detail = fmt.Sprintf("%s is %v (%v: %v) for generation %d", typ, c["status"], c["reason"], c["message"], observed(c))
+			case g.acceptedOnly && typ == "Accepted" && c["status"] == "True" && c["reason"] != "Valid":
+				// PartiallyValid: agentgateway built the policy with translation errors and does not attach it
+				detail = fmt.Sprintf("%s is %v (%v: %v)", typ, c["status"], c["reason"], c["message"])
 			case c["status"] != "True":
 				detail = fmt.Sprintf("%s is %v (%v: %v)", typ, c["status"], c["reason"], c["message"])
 				if c["status"] == "False" && c["reason"] == "Invalid" {

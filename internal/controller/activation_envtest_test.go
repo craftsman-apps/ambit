@@ -751,9 +751,16 @@ func TestFirstImageServerDoesNotStallTheAuthorizationStep(t *testing.T) {
 		Spec: v1.ServerSpec{Image: timeImage, Transport: "stdio"}}); err != nil {
 		t.Fatal(err)
 	}
+	answers, skew := false, time.Duration(0)
 	r := &Reconciler{Client: envClient, Live: envClient, Namespace: ns, Route: RouteRef{Name: "ambit-llm"},
+		Now:        func() time.Time { return time.Now().Add(skew) },
 		Activation: &Activation{Timeout: 10 * time.Second, Poll: 50 * time.Millisecond},
-		ListTools:  func(context.Context, v1.Server) ([]v1.Tool, error) { return nil, errors.New("connection refused") }}
+		ListTools: func(context.Context, v1.Server) ([]v1.Tool, error) {
+			if !answers {
+				return nil, errors.New("connection refused")
+			}
+			return []v1.Tool{{Name: "get_current_time"}}, nil
+		}}
 	done := reconcileAsync(r)
 	eventually(t, "the access policy is written", func() error { _, err := genGet(ctx, ns, "AgentgatewayPolicy", MCPBackendName+"-access"); return err })
 	if _, err := genGet(ctx, ns, "AgentgatewayBackend", MCPBackendName); !apierrors.IsNotFound(err) {
@@ -771,6 +778,13 @@ func TestFirstImageServerDoesNotStallTheAuthorizationStep(t *testing.T) {
 	_ = unstructured.SetNestedSlice(o.Object, []any{map[string]any{"controllerName": agentgatewayController,
 		"ancestorRef": map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "name": "ambit"},
 		"conditions":  []any{cond("Accepted", "True", "Valid"), cond("Attached", "False", "Pending")}}}, "status", "ancestors")
+	// Accepted is still waited for: the access log step does not start before the verdict.
+	stays(t, "the access log step waits for the verdict on the policy", func() error {
+		if _, err := accessLogOf(ctx, ns); !apierrors.IsNotFound(err) {
+			return fmt.Errorf("access log written before the verdict: %v", err)
+		}
+		return nil
+	})
 	if err := envClient.Status().Update(ctx, o); err != nil {
 		t.Fatal(err)
 	}
@@ -782,6 +796,30 @@ func TestFirstImageServerDoesNotStallTheAuthorizationStep(t *testing.T) {
 	playAgentgateway(t, ns, "AgentgatewayPolicy", AccessLogPolicy)
 	wait(t, done)
 	if d, _ := accessMode(ctx, ns); d["mode"] != "enforce" || d["pending"] != "" {
+		t.Errorf("not published: %v", d)
+	}
+
+	// The server answers: its backend appears. The rules version does not change, but the first attachment of the
+	// policy is waited for (a NACK or an unattached policy must not stay unnoticed).
+	setMCPServerReady(t, ns, "time", true)
+	answers = true
+	skew = admissionRetry + time.Second
+	second := reconcileAsync(r)
+	eventually(t, "the backend is written", func() error { _, err := genGet(ctx, ns, "AgentgatewayBackend", MCPBackendName); return err })
+	stays(t, "the change waits for the attachment of the policy", func() error {
+		select {
+		case err := <-second:
+			return fmt.Errorf("the pass ended without the attachment: %v", err)
+		default:
+		}
+		if p := pendingOf(t, ns); p["step"] != "authorization" {
+			return fmt.Errorf("pending %v", p)
+		}
+		return nil
+	})
+	playAgentgateway(t, ns, "AgentgatewayPolicy", MCPBackendName+"-access") // Accepted and Attached
+	wait(t, second)
+	if d, _ := accessMode(ctx, ns); d["pending"] != "" {
 		t.Errorf("not published: %v", d)
 	}
 }

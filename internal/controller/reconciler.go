@@ -326,7 +326,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ reconcile.Request) (reconc
 	if err := r.Live.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: AccessModeConfigMap}, &published); client.IgnoreNotFound(err) != nil {
 		return reconcile.Result{}, err
 	}
-	changing := r.Activation != nil && (published.Data["mode"] != mode || published.Data["rulesVersion"] != version)
+	changing := r.Activation != nil && (published.Data["mode"] != mode || published.Data["rulesVersion"] != version || r.attachPending(ctx, res.Objects))
 	steps := []step{
 		{"authorization", func() (w []gated, err error) {
 			applyFailed, w, err = r.applyAll(ctx, res.Objects, conds)
@@ -737,7 +737,8 @@ func (r *Reconciler) applyAll(ctx context.Context, objs []*unstructured.Unstruct
 			continue
 		}
 		if kind == "AgentgatewayModel" || kind == "AgentgatewayPolicy" {
-			written = append(written, gated{kind: kind, name: name, generation: desired.GetGeneration(), changed: desired.GetGeneration() != current.GetGeneration(),
+			written = append(written, gated{kind: kind, name: name, generation: desired.GetGeneration(),
+				changed:      desired.GetGeneration() != current.GetGeneration() || awaitsAttachment(current, desired, objs),
 				acceptedOnly: kind == "AgentgatewayPolicy" && attachesToAbsentTarget(desired, objs)})
 		}
 		switch kind {
@@ -788,6 +789,47 @@ func attachesToAbsentTarget(p *unstructured.Unstructured, objs []*unstructured.U
 			}
 		}
 		if !found {
+			return true
+		}
+	}
+	return false
+}
+
+// attachPending: a policy of this pass waits for its attachment (see awaitsAttachment), so the change is gated.
+func (r *Reconciler) attachPending(ctx context.Context, objs []*unstructured.Unstructured) bool {
+	for _, o := range objs {
+		if o.GetKind() != "AgentgatewayPolicy" {
+			continue
+		}
+		current := &unstructured.Unstructured{}
+		current.SetGroupVersionKind(o.GroupVersionKind())
+		if err := r.Get(ctx, client.ObjectKey{Namespace: r.Namespace, Name: o.GetName()}, current); err == nil && awaitsAttachment(current, o, objs) {
+			return true
+		}
+	}
+	return false
+}
+
+// awaitsAttachment is true for a policy of a backend (or target) that this pass generates, which agentgateway has
+// reported as not attached: it was accepted while its backend was absent (attachesToAbsentTarget). The rules version
+// does not change when the backend appears, so without this the first attachment would not be waited for (#431).
+func awaitsAttachment(current, desired *unstructured.Unstructured, objs []*unstructured.Unstructured) bool {
+	if desired.GetKind() != "AgentgatewayPolicy" || attachesToAbsentTarget(desired, objs) {
+		return false
+	}
+	if refs, _, _ := unstructured.NestedSlice(desired.Object, "spec", "targetRefs"); len(refs) == 0 {
+		return false
+	} else if ref, _ := refs[0].(map[string]any); ref["kind"] != "AgentgatewayBackend" {
+		return false
+	}
+	entries, _, _ := unstructured.NestedSlice(current.Object, "status", "ancestors")
+	for _, e := range entries {
+		em, _ := e.(map[string]any)
+		if em["controllerName"] != agentgatewayController {
+			continue
+		}
+		conds, _ := em["conditions"].([]any)
+		if c := findCond(conds, "Attached"); c != nil && c["status"] == "False" {
 			return true
 		}
 	}

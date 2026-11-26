@@ -116,10 +116,10 @@ shape("invalid-token", st == 401 and f'resource_metadata="{PRM}"' in hd.get("www
 
 # 9 · refresh: a new pair; the old refresh token is spent
 RT1 = tok["refresh_token"]
-st, h, body = raw("POST", ISS + "/oauth2/token", urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": RT1, "client_id": CID, "resource": MCP_URL}).encode(),
+st, h, body = raw("POST", ISS + "/oauth2/token", urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": RT1, "client_id": CID}).encode(),
                   {"Content-Type": "application/x-www-form-urlencoded"})
 t2 = js(body)
-shape("refresh", st == 200 and t2.get("refresh_token") and t2["refresh_token"] != RT1 and t2.get("access_token") and t2["access_token"] != AT and 800 < t2.get("expires_in", 0) <= 900, (st, sorted(t2)))
+shape("refresh", st == 200 and t2.get("refresh_token") and t2["refresh_token"] != RT1 and t2.get("access_token") and t2["access_token"] != AT and 800 < t2.get("expires_in", 0) <= 900, (st, {k: v for k, v in t2.items() if k in ("error", "error_description", "expires_in")}))
 RT2 = t2.get("refresh_token")
 st, h, body = raw("POST", ISS + "/oauth2/token", urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": RT1, "client_id": CID}).encode(), {"Content-Type": "application/x-www-form-urlencoded"})
 e = js(body)

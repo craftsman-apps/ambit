@@ -246,9 +246,10 @@ Refresh when the access token has a minute left, or after a 401.
 curl -X POST https://auth.example.com/oauth2/token \
   -d grant_type=refresh_token \
   -d refresh_token=REFRESH_TOKEN \
-  -d client_id=CLIENT_ID \
-  -d resource=https://mcp.example.com/mcp
+  -d client_id=CLIENT_ID
 ```
+
+Do not send `resource` on a refresh: the audience of the new token stays the MCP address of the connection.
 
 The answer has the shape of step 7, with a **new access token and a new refresh token**. The refresh token **rotates**: store the new
 one before you do anything else, and never send the old one again. **Refresh one connection from one place at a time** (a lock per connection): two refreshes at once, or a retry after an answer

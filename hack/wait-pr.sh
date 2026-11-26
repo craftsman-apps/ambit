@@ -16,7 +16,7 @@ set -uo pipefail
 usage() { echo "usage: $0 NUMBER [--timeout 3h] [--interval 60] [--checks]" >&2; exit 1; }
 secs() { # 3h, 90m, 45s or plain seconds -> seconds
   case $1 in
-    *h) echo $((${1%h} * 3600)) ;; *m) echo $((${1%m} * 60)) ;; *s) echo "${1%s}" ;; *) echo "$1" ;;
+    *h) echo $((10#${1%h} * 3600)) ;; *m) echo $((10#${1%m} * 60)) ;; *s) echo $((10#${1%s})) ;; *) echo $((10#$1)) ;;
   esac
 }
 
@@ -32,8 +32,9 @@ while [ $# -gt 0 ]; do
   esac
 done
 [[ $number =~ ^[0-9]+$ ]] || usage
+num='^[0-9]+[hms]?$'
+[[ $timeout =~ $num && $interval =~ $num ]] || usage
 timeout_s=$(secs "$timeout"); interval_s=$(secs "$interval")
-[[ $timeout_s =~ ^[0-9]+$ && $interval_s =~ ^[0-9]+$ ]] || usage
 
 # Why the queue dropped the pull request: the last timeline event that says so (best effort).
 removal_reason() {
@@ -42,14 +43,28 @@ removal_reason() {
             | last // empty | "\(.event)" + (if .reason then ": \(.reason)" else "" end)' 2>/dev/null
 }
 
-fields=state,mergedAt,mergeable,mergeStateStatus,autoMergeRequest,isInMergeQueue,statusCheckRollup,url
+fields=state,mergedAt,mergeable,mergeStateStatus,autoMergeRequest,statusCheckRollup,url
+# `gh pr view --json` has no merge queue field; GraphQL has.
+in_queue() {
+  gh api graphql -F owner='{owner}' -F repo='{repo}' -F number="$number" -f query='
+    query($owner: String!, $repo: String!, $number: Int!) {
+      repository(owner: $owner, name: $repo) { pullRequest(number: $number) { isInMergeQueue } } }' \
+    --jq '.data.repository.pullRequest.isInMergeQueue' 2>/dev/null
+}
 start=$SECONDS; errors=0
 while :; do
-  if ! pr=$(gh pr view "$number" --json "$fields" 2>&1) || ! jq -e . >/dev/null 2>&1 <<<"$pr"; then
+  if ! pr=$(gh pr view "$number" --json "$fields" 2>&1) || ! queued=$(in_queue) || ! jq -e . >/dev/null 2>&1 <<<"$pr"; then
     errors=$((errors + 1))
     [ "$errors" -lt 5 ] || { echo "ERROR #$number: gh failed 5 times in a row: $pr"; exit 1; }
   else
     errors=0
+    # The rollup keeps the jobs of old runs (a run cancelled by a newer push, or by "ready for review"): of each
+    # workflow only the newest run counts (the run id is in the job link).
+    pr=$(jq --argjson q "${queued:-false}" '. + {isInMergeQueue: $q}
+      | def run: ((.detailsUrl // "") | capture("/runs/(?<id>[0-9]+)").id | tonumber? ) // 0;
+        .statusCheckRollup |= ((map({w: (.workflowName // ""), r: run}) | group_by(.w)
+          | map({key: .[0].w, value: (map(.r) | max)}) | from_entries) as $newest
+          | map(select(run == $newest[.workflowName // ""])))' <<<"$pr")
     state=$(jq -r .state <<<"$pr")
     if [ "$state" = MERGED ] || [ "$(jq -r '.mergedAt // ""' <<<"$pr")" != "" ]; then
       [ "$checks_only" = true ] || { echo "MERGED #$number"; exit 0; }
@@ -58,13 +73,13 @@ while :; do
 
     # A failed check: ended with failure, timeout, cancel or startup failure (check run), or failure or error (status).
     failed=$(jq -r '[.statusCheckRollup[]? | select((.conclusion // "") as $c | (.state // "") as $s
-        | ($c | IN("FAILURE","TIMED_OUT","CANCELLED","STARTUP_FAILURE")) or ($s | IN("FAILURE","ERROR")))]
+        | ($c | IN("FAILURE","TIMED_OUT","CANCELLED","STARTUP_FAILURE","ACTION_REQUIRED","STALE")) or ($s | IN("FAILURE","ERROR")))]
         | first // empty | "\(.name // .context)" + (if .workflowName then " (\(.workflowName))" else "" end)
         + " " + (.detailsUrl // .targetUrl // "no link")' <<<"$pr")
     if [ -n "$failed" ]; then echo "CHECK FAILED #$number: $failed"; exit 5; fi
 
     if [ "$checks_only" = true ]; then
-      pending=$(jq '[.statusCheckRollup[]? | select((.status // "COMPLETED") != "COMPLETED" or (.state // "") == "PENDING")] | length' <<<"$pr")
+      pending=$(jq '[.statusCheckRollup[]? | select((.status // "COMPLETED") != "COMPLETED" or ((.state // "") | IN("PENDING","EXPECTED")))] | length' <<<"$pr")
       total=$(jq '.statusCheckRollup | length' <<<"$pr")
       if [ "$pending" = 0 ] && [ "$total" -gt 0 ]; then echo "CHECKS GREEN #$number ($total checks)"; exit 0; fi
     else
@@ -77,6 +92,7 @@ while :; do
       fi
     fi
   fi
-  [ $((SECONDS - start + interval_s)) -le "$timeout_s" ] || { echo "TIMEOUT #$number after $timeout"; exit 6; }
-  sleep "$interval_s"
+  left=$((timeout_s - (SECONDS - start)))
+  [ "$left" -gt 0 ] || { echo "TIMEOUT #$number after $timeout"; exit 6; }
+  sleep $((interval_s < left ? interval_s : left))
 done

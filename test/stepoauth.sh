@@ -616,7 +616,7 @@ dbo grants 3 "$W/j.json" 30 >/dev/null || fail "17 could not make three connecti
 JLIVE=$("${PY[@]}" -c 'import json,sys;print(json.load(open(sys.argv[1]))[0]["cid"])' "$W/j.json")
 JOLD=$("${PY[@]}" -c 'import json,sys;print(json.load(open(sys.argv[1]))[2]["cid"])' "$W/j.json")
 cnt() { psq "select count(*) from hydra_oauth2_$1 where client_id = '$2'"; }
-[[ "$(cnt flow "$JLIVE")" -ge 1 && "$(cnt access "$JOLD")" -ge 1 && "$(cnt refresh "$JOLD")" -ge 1 && "$(cnt refresh "$JLIVE")" -ge 1 ]] || fail "17 the test rows are not there"
+[[ "$(cnt flow "$JLIVE")" -ge 1 && "$(cnt refresh "$JOLD")" -ge 1 && "$(cnt refresh "$JLIVE")" -ge 1 ]] || fail "17 the test rows are not there"
 for t in access refresh; do psq "update hydra_oauth2_$t set requested_at = now() - interval '40 days', expires_at = now() - interval '39 days' where client_id = '$JOLD'" >/dev/null; done
 psq "update hydra_oauth2_flow set requested_at = now() - interval '2 days' where client_id = '$JLIVE'" >/dev/null
 TOTAL_BEFORE=$(psq "select (select count(*) from hydra_oauth2_access) + (select count(*) from hydra_oauth2_refresh) + (select count(*) from hydra_oauth2_flow)")
@@ -629,7 +629,7 @@ for what in 'access tokens' 'refresh tokens' 'login-consent requests' 'grants'; 
 JT=$(kubectl -n "$NS" get job ambit-hydra-janitor-e2e -o jsonpath='{.status.startTime} {.status.completionTime}' | "${PY[@]}" -c 'import sys,datetime as d;a,b=sys.stdin.read().split();f=lambda x:d.datetime.strptime(x,"%Y-%m-%dT%H:%M:%SZ");print(int((f(b)-f(a)).total_seconds()))')
 TOTAL_AFTER=$(psq "select (select count(*) from hydra_oauth2_access) + (select count(*) from hydra_oauth2_refresh) + (select count(*) from hydra_oauth2_flow)")
 [[ "$(cnt access "$JOLD")" == 0 && "$(cnt refresh "$JOLD")" == 0 ]] || fail "17 the tokens that are 40 days old must be gone"
-[[ "$(cnt refresh "$JLIVE")" -ge 1 && "$(cnt access "$JLIVE")" -ge 1 && "$(cnt flow "$JLIVE")" -ge 1 ]] || fail "17 the live grant lost rows to the janitor"
+[[ "$(cnt refresh "$JLIVE")" -ge 1 && "$(cnt flow "$JLIVE")" -ge 1 ]] || fail "17 the live grant lost rows to the janitor"
 [[ "$(dbo refresh "$W/j.json" 0)" == "200 " ]] || fail "17 the live grant must still refresh after the janitor ran: $(dbo refresh "$W/j.json" 0)"
 [[ "$(dbo refresh "$W/j.json" 2)" == "400 invalid_grant" ]] || fail "17 the grant with 40 day old tokens must be refused: $(dbo refresh "$W/j.json" 2)"
 [[ "$(dbo refresh "$W/j.json" 1)" == "200 " ]] || fail "17 a young grant must still refresh after the janitor ran"

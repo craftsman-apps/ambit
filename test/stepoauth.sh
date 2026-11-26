@@ -429,7 +429,7 @@ pass "18 with the ratelimit service stopped, ambit-auth's own counter stops the 
 # the chart's own values: the NAT measurement
 OARL=()
 rl_phase 600 300 600 10 1000 600 1000
-MODE=nat lim LIM_DISCOVERY=600 LIM_SIGNIN=300 LIM_TOKEN=600 LIM_REGISTRATION=10 || fail "18 the NAT measurement failed (see FAIL lines above)"
+MODE=nat lim LIM_DISCOVERY=600 LIM_SIGNIN=300 LIM_TOKEN=600 LIM_REGISTRATION=10 || { kubectl -n "$NS" logs deploy/ambit-auth --tail=12 2>&1 | cut -c1-300; fail "18 the NAT measurement failed (see FAIL lines above)"; }
 pass "18 many people behind one address: measured with the chart's default limits (the numbers are printed above)"
 # back to the other mode and the high limits of the other checks
 OARL=(--set oauth.rateLimit.discoveryPerMinute=100000 --set oauth.rateLimit.signInPerMinute=100000 --set oauth.rateLimit.tokenPerMinute=100000)

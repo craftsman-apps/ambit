@@ -233,7 +233,7 @@ elif MODE == "nat":
     def one_signin(cid, who):
         kind, res = sign_in(Browser(), cid, f"person{who}", tick=("time",))
         if kind != "code":
-            return ("page", res[0]) if kind == "page" else (kind, res)
+            return ("page", res[0], res[2], res[1][:160]) if kind == "page" else (kind, res)
         st, tok = exchange(cid, res)
         return None if st == 200 else ("token", st)
 
@@ -266,7 +266,7 @@ elif MODE == "nat":
         ts = [threading.Thread(target=worker) for _ in range(WORKERS)]
         [t.start() for t in ts]; [t.join() for t in ts]
         elapsed = time.time() - t0
-        if minute_now() == w0 and state["fail"] == ("page", 429):
+        if minute_now() == w0 and state["fail"] and state["fail"][:2] == ("page", 429):
             result = (state["ok"], elapsed, addr); break
         print(f"   attempt {attempt + 1} not valid (window crossed or no 429: {state['fail']}, {state['ok']} sign-ins in {elapsed:.0f} s)", flush=True)
     check("18 NAT: one address reaches the sign-in limit within one minute and is then answered 429", result is not None)

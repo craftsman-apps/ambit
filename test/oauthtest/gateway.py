@@ -155,7 +155,9 @@ if MINT and JWK:
         h, pl, sg = good.split(".")
         c = json.loads(base64.urlsafe_b64decode(pl + "=" * (-len(pl) % 4)))
         c.update(over)
-        r = subprocess.run([MINT], input=json.dumps(c), capture_output=True, text=True, env={**os.environ, "SIGNING_JWK": JWK}, timeout=60)
+        r = subprocess.run([MINT, "mint"], input=json.dumps(c), capture_output=True, text=True, env={**os.environ, "SIGNING_JWK": JWK}, timeout=60)
+        if r.returncode != 0 or r.stdout.count(".") != 2:
+            raise RuntimeError("the test signer failed: " + r.stderr[-200:])
         return r.stdout.strip()
     ctl_ok = mint()
     check("3 audience: a token made by the test with Hydra's key and the MCP URL alone is accepted on every pod (the test's own tokens work)", all(tools(p, ctl_ok)[0] == 200 for p in PORTS))

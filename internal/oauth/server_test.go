@@ -212,10 +212,12 @@ func (b *fakeBackend) Active(_ context.Context, agent, grant string, scope []str
 type fakeDeny struct {
 	off, stopA, stopG map[string]bool
 	err               error
+	rotated           time.Time
 }
 
 func (d *fakeDeny) Offboarded(e string) (bool, error) { return d.off[e], d.err }
 func (d *fakeDeny) Stopped(a, g string) (bool, error) { return d.stopA[a] || d.stopG[g], d.err }
+func (d *fakeDeny) RotatedAt() (time.Time, error)     { return d.rotated, d.err }
 
 type env struct {
 	hydra   *fakeHydra

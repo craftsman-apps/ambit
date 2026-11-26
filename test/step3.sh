@@ -75,7 +75,22 @@ pass "6 user09 removed from ml-research in Keycloak -> 403 at next token (restor
 # 7 · deny by default: a model with no rule is closed to everyone
 kubectl -n "$NS" delete "accessrules.$G" ml-research-nemotron >/dev/null
 wait_expr nemotron-3-super false
-[[ $(llm "$M" "$NEMO") == 403 ]] || fail "7 user09 reached a model with no access rule"
+# The object says false, and agentgateway pushes it to the gateway pod a moment later (#423: a call 180 ms after the
+# object changed was still allowed). Measured on kind: 13 to 194 ms; docs/concepts.md, "When a rule change takes
+# effect". Call with a fresh token (user09 is in ml-research again) until the gateway refuses with the denial code,
+# for at most 15 s, and say what it answered if it never does.
+M=$(token user09)
+uv run --no-project python -c 'import base64,json,sys
+p=sys.argv[1].split(".")[1]; p+="="*(-len(p)%4)
+sys.exit(0 if "ml-research" in json.loads(base64.urlsafe_b64decode(p)).get("groups", []) else 1)' "$M" ||
+  fail "7 user09's new token has no ml-research group (check 6 did not restore it): a 403 would prove nothing"
+end=$((SECONDS + 15)); code=""
+while :; do
+  code=$(llm "$M" "$NEMO")
+  [[ "$code" == 403 ]] && grep -q '"code":"model_authorization_denied"' "$W/llm" && break
+  (( SECONDS < end )) || fail "7 user09 still got HTTP $code 15 s after the access rule was deleted (the model's expression is '$(expr_of nemotron-3-super)'): $(head -c 300 "$W/llm")"
+  sleep 0.2
+done
 kubectl -n "$NS" apply -f test/llm/objects.yaml >/dev/null
 wait_expr nemotron-3-super '(has(apiKey.keyId) ? apiKey.groups : (has(jwt.groups) ? jwt.groups : [])).exists(g, g in ["ml-research"])'
 pass "7 no rule -> expression false -> 403; rule restored"

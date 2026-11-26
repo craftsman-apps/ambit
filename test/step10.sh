@@ -13,9 +13,13 @@ source test/lib.sh
 G=ambitproject.dev
 LLM=http://llm.localtest.me:8080/v1/chat/completions
 SOAK_SECONDS=${SOAK_SECONDS:-300}
-# First memory sample after this many seconds. The soak's MCP sessions are never closed, like a careless
-# client; the gateway drops them after 30 idle minutes, so a 24-hour soak samples from 3600 s on:
+# First memory sample after this many seconds. The soak closes each MCP session, but with several gateway
+# replicas a closed session stays in the replicas that did not get the DELETE until they have not used it for 30
+# minutes, so a 24-hour soak samples from 3600 s on:
 #   SOAK_SECONDS=86400 SOAK_WARMUP=3600 test/step10.sh
+# With 3 gateway replicas the soak itself raises each gateway pod's memory for the first 30 minutes (a closed session stays
+# in the replicas that did not receive the DELETE until the 30 minutes pass; 15 to 41 MiB in a 45 minute run, level
+# from minute 30, issue #383): a soak under 30 minutes shows that rise, and the growth check ignores 16 MiB or less.
 # The otel collector alone needs 45 to 60 s of traffic to reach its steady memory (34 to about 50 MiB, #362): a
 # warm-up under 60 s can make the growth check fail without a leak.
 SOAK_WARMUP=${SOAK_WARMUP:-45}

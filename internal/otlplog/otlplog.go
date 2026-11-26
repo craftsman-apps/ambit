@@ -15,7 +15,9 @@ import (
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -23,7 +25,12 @@ const (
 	Batch   = 100             // records in one export call
 	Flush   = time.Second     // longest wait before a partly filled batch is sent
 	Timeout = 5 * time.Second // one export call
+	Retries = 2               // a periodic or full-batch export that fails is tried again this many times
 )
+
+// RetryWait is the wait before the first retry; each retry waits twice as long as the one before. A variable so that
+// tests can shorten it.
+var RetryWait = time.Second
 
 // Drop reasons. The caller's counter has a "reason" label.
 const (
@@ -33,7 +40,8 @@ const (
 )
 
 // Exporter queues records and sends them in batches. Send never blocks and never fails: a record that cannot be
-// kept is dropped and counted in Dropped.
+// kept is dropped and counted in Dropped. A batch whose export fails is sent again up to Retries times (#415: the first
+// connection of a new pod, or a collector that restarts, must not lose a record); Flush and Close do not retry.
 type Exporter struct {
 	conn    *grpc.ClientConn
 	logs    collogs.LogsServiceClient
@@ -113,62 +121,101 @@ func (e *Exporter) Close() {
 	_ = e.conn.Close()
 }
 
-func (e *Exporter) run() {
-	defer close(e.done)
-	tick := time.NewTicker(Flush)
-	defer tick.Stop()
-	var batch []*logspb.LogRecord
-	flush := func() {
-		if len(batch) > 0 {
-			e.export(batch)
-			batch = batch[:0]
-		}
+// batcher collects the queued records into batches of Batch and exports each full one.
+type batcher struct {
+	e     *Exporter
+	batch []*logspb.LogRecord
+}
+
+// send exports what is collected, with retries when retry is true.
+func (b *batcher) send(retry bool) {
+	if len(b.batch) > 0 {
+		b.e.export(b.batch, retry)
+		b.batch = b.batch[:0]
 	}
-	drain := func() { // everything queued now
-		for {
-			select {
-			case rec := <-e.queue:
-				if batch = append(batch, rec); len(batch) >= Batch {
-					flush()
-				}
-			default:
-				return
-			}
-		}
+}
+
+// add collects rec and exports the batch when it is full.
+func (b *batcher) add(rec *logspb.LogRecord, retry bool) {
+	if b.batch = append(b.batch, rec); len(b.batch) >= Batch {
+		b.send(retry)
 	}
+}
+
+// drain collects everything queued now; Flush and Close drain without retries.
+func (b *batcher) drain(retry bool) {
 	for {
 		select {
-		case rec := <-e.queue:
-			if batch = append(batch, rec); len(batch) >= Batch {
-				flush()
-			}
-		case <-tick.C:
-			flush()
-		case ack := <-e.flush:
-			drain()
-			flush()
-			close(ack)
-		case <-e.stop:
-			drain()
-			flush()
+		case rec := <-b.e.queue:
+			b.add(rec, retry)
+		default:
 			return
 		}
 	}
 }
 
-func (e *Exporter) export(batch []*logspb.LogRecord) {
-	ctx, cancel := context.WithTimeout(context.Background(), Timeout)
-	defer cancel()
+func (e *Exporter) run() {
+	defer close(e.done)
+	tick := time.NewTicker(Flush)
+	defer tick.Stop()
+	b := &batcher{e: e}
+	for {
+		select {
+		case rec := <-e.queue:
+			b.add(rec, true)
+		case <-tick.C:
+			b.send(true)
+		case ack := <-e.flush:
+			b.drain(false)
+			b.send(false)
+			close(ack)
+		case <-e.stop:
+			b.drain(false)
+			b.send(false)
+			return
+		}
+	}
+}
+
+// retryable says whether a failed export can succeed when sent again: the collector is not reachable or not ready (the
+// OTLP specification's list). A rejected batch (InvalidArgument and the like) would fail the same way again.
+func retryable(err error) bool {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Aborted, codes.Canceled, codes.ResourceExhausted, codes.DataLoss:
+		return true
+	}
+	return false
+}
+
+// export sends batch. With retry, a failed export is tried again after RetryWait, then twice as long, up to Retries
+// times; a stop during the wait ends the retries. The batch is dropped, and counted once, when the last try failed.
+func (e *Exporter) export(batch []*logspb.LogRecord, retry bool) {
 	req := &collogs.ExportLogsServiceRequest{ResourceLogs: []*logspb.ResourceLogs{{
 		Resource:  &resourcepb.Resource{Attributes: []*commonpb.KeyValue{Str("service.name", e.service)}},
 		ScopeLogs: []*logspb.ScopeLogs{{LogRecords: batch}},
 	}}}
-	if _, err := e.logs.Export(ctx, req); err != nil {
-		e.dropped.WithLabelValues(DropSendFailed).Add(float64(len(batch)))
-		if time.Since(e.warn) > time.Minute { // one line a minute, not one per batch
-			e.warn = time.Now()
-			slog.Warn("records not delivered to the collector", "service", e.service, "dropped", len(batch), "err", err)
+	var err error
+	for try, wait := 0, RetryWait; ; try, wait = try+1, wait*2 {
+		ctx, cancel := context.WithTimeout(context.Background(), Timeout)
+		_, err = e.logs.Export(ctx, req)
+		cancel()
+		if err == nil {
+			return
 		}
+		if !retry || try >= Retries || !retryable(err) {
+			break
+		}
+		select {
+		case <-time.After(wait):
+			continue
+		case <-e.stop: // Close must end within Timeout: no more tries
+		}
+		break
+	}
+	e.dropped.WithLabelValues(DropSendFailed).Add(float64(len(batch)))
+	if time.Since(e.warn) > time.Minute { // one line a minute, not one per batch
+		e.warn = time.Now()
+		slog.Warn("records not delivered to the collector", "service", e.service, "dropped", len(batch), "err", err)
 	}
 }
 

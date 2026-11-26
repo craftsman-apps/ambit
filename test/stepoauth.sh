@@ -394,6 +394,12 @@ GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$
   STOPCTL="$PWD/test/oauthtest/stopctl.sh" ADMIN_PW="$PW" HTTP_TIMEOUT=90 KEY="$OKEY" ONE_TOOL=time_get_current_time "${PY[@]}" test/oauthtest/gateway.py || fail "14 the gateway checks failed (see FAIL lines above)"
 pass "14 tokens at the public Gateway"
 
+# --- 15 · the emergency rotation of the signing keys (test/oauthtest/rotate.py): the JWKS failures J1 to J3, a rotation that fails while Hydra is down (E2),
+# the rotation itself with the check on every proxy (R0 to R7), and the time that it takes (a gateway fetches the keys every 5 minutes)
+GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
+  STOPCTL="$PWD/test/oauthtest/stopctl.sh" ADMIN_PW="$PW" HTTP_TIMEOUT=90 KEY="$OKEY" ONE_TOOL=time_get_current_time "${PY[@]}" test/oauthtest/rotate.py || fail "15 the signing key checks failed (see FAIL lines above)"
+pass "15 emergency rotation of the signing keys"
+
 # --- 16 · PostgreSQL operations (docs/oauth.md, "Operations"): TLS only, the pool, a dump, a restore into another instance and a name moved
 #         to it, a crash, a 30 second outage, and what a rollback by `hydra migrate sql down` does. Names P1 to P6 are those of the design.
 #         What the people see is checked with real grants (test/oauthtest/dbops.py). Needs the real console (check 14).

@@ -130,8 +130,8 @@ kind: Budget
 metadata: { name: contract-eng }
 spec: { group: eng, userRequestsPerDay: 100000 }
 YAML
-day=$(( $(date -u +%s) / 86400 * 86400 )); key="ambit-llm_group_eng_user_user01@example.com_$day"
-vget() { kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "$key" 2>/dev/null || true; }
+key() { echo "ambit-llm_group_eng_user_user01@example.com_$(( $(date -u +%s) / 86400 * 86400 ))"; }   # the day is read at each use (#427)
+vget() { kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "$(key)" 2>/dev/null || true; }
 # The counter must grow with a new request (a counter left from earlier proves nothing).
 before=""; after=""
 for _ in $(seq 1 60); do
@@ -142,8 +142,8 @@ for _ in $(seq 1 60); do
   [[ -n "$after" && "$after" -gt "${before:-0}" ]] && break; sleep 3
 done
 kubectl -n "$NS" delete "budgets.$G" contract-eng --ignore-not-found >/dev/null
-[[ -n "$after" && "$after" -gt "${before:-0}" ]] || fail "C10 a new request did not increase $key in Valkey (key format changed? keys: $(kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli --scan --pattern 'ambit-llm*' 2>/dev/null | head -3 | tr '\n' ' '))"
-pass "C10 ratelimit counter key format unchanged; one request raised $key from ${before:-0} to $after"
+[[ -n "$after" && "$after" -gt "${before:-0}" ]] || fail "C10 a new request did not increase $(key) in Valkey (key format changed? keys: $(kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli --scan --pattern 'ambit-llm*' 2>/dev/null | head -3 | tr '\n' ' '))"
+pass "C10 ratelimit counter key format unchanged; one request raised $(key) from ${before:-0} to $after"
 
 # C11 · ClickHouse loaded Ambit's config (an unknown setting would stop it starting) and otel_logs has the
 #       columns Ambit reads.
@@ -194,10 +194,10 @@ kind: Budget
 metadata: { name: contract-ml }
 spec: { group: ml-research, groupDollarsPerDay: "100", userDollarsPerDay: "100" }
 YAML
-day=$(( $(date -u +%s) / 86400 * 86400 ))
+wait_rl "$NS" "ambit-llm.spend_group_ml-research.spend_user: unit=DAY requests_per_unit=10000000,"
+hold_for_midnight 60; day=$(( $(date -u +%s) / 86400 * 86400 ))   # after the wait above, which can take minutes
 gk="ambit-llm_spend_group_ml-research_$day"; uk="ambit-llm_spend_group_ml-research_spend_user_user09@example.com_$day"
 vget() { kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "$1" 2>/dev/null | tr -d '\r'; }
-wait_rl "$NS" "ambit-llm.spend_group_ml-research.spend_user: unit=DAY requests_per_unit=10000000,"
 g0=$(vget "$gk"); u0=$(vget "$uk")
 command curl -s -o /dev/null -H "Authorization: Bearer $(token user09)" -H 'Content-Type: application/json' \
   -d '{"model":"mock/echo","messages":[{"role":"user","content":"contract"}]}' http://llm.localtest.me:8080/v1/chat/completions

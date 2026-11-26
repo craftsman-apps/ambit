@@ -25,7 +25,10 @@ trap 'rc=$?; cleanup; on_exit "$rc"' EXIT
 rnd() { openssl rand -hex "${1:-16}"; }
 oaset() { helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/frontdoor/values.yaml -f test/oauth/values.yaml \
   --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 \
-  --set "oauth.signIn.issuer=https://ambit-oauth-idp.$NS.svc" --set "oauth.auth.consoleURL=http://ambit-oauth-console.$NS.svc:8085" "$@" >/dev/null; }
+  --set "oauth.signIn.issuer=https://ambit-oauth-idp.$NS.svc" --set "oauth.auth.consoleURL=http://ambit-oauth-console.$NS.svc:8085" \
+  ${OARL[@]+"${OARL[@]}"} "$@" >/dev/null; }
+# OARL: the sign-in buckets are far above what the checks send from one address (check 18 sets them back to the chart's values)
+OARL=(--set oauth.rateLimit.discoveryPerMinute=100000 --set oauth.rateLimit.signInPerMinute=100000 --set oauth.rateLimit.tokenPerMinute=100000)
 # oaset_real: the same, with the real console behind ambit-auth (the stand-in is for the sign-in checks of step 12)
 oaset_real() { oaset --set "oauth.auth.consoleURL=" "$@"; }
 freeport() { "${PY[@]}" -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'; }
@@ -391,6 +394,39 @@ wait_for 60 '(exec 3<>"/dev/tcp/127.0.0.1/$IDPP") 2>/dev/null && (exec 3<>"/dev/
 GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
   STOPCTL="$PWD/test/oauthtest/stopctl.sh" ADMIN_PW="$PW" HTTP_TIMEOUT=90 KEY="$OKEY" ONE_TOOL=time_get_current_time "${PY[@]}" test/oauthtest/gateway.py || fail "14 the gateway checks failed (see FAIL lines above)"
 pass "14 tokens at the public Gateway"
+
+# --- 18 · rate limits of the sign-in host: separate buckets at the Gateway, by the address of the connection (test/oauthtest/limits.py)
+# The Gateway runs in PROXY protocol mode here, so the test can be any client address (a load balancer tells the Gateway the address in production).
+lim() { env GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
+  HTTP_TIMEOUT=60 KEY="$OKEY" ONE_TOOL=time_get_current_time "$@" "${PY[@]}" test/oauthtest/limits.py "$MODE"; }
+rl_phase() { # rl_phase DISCOVERY SIGNIN TOKEN REGISTRATION: the buckets, the Gateway in PROXY protocol mode, the loaded limits
+  oaset_real --set frontDoor.clientAddress=proxyProtocol --set agents.maxPerPerson=100 --set oauth.registration.dynamic.perSourcePerHour="$4" --wait --timeout 8m
+  kubectl -n "$NS" rollout status deploy/ambit-public --timeout=300s >/dev/null
+  kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
+  reforward
+  wait_rl "$NS" "requests_per_unit=$2"
+  wait_for 60 '[[ $("${PY[@]}" test/frontdoor/request.py "$PA" "$W/ca.pem" "$AUTH" /.well-known/jwks.json --proxy 203.0.113.1) == 200 ]]' || fail "18 the Gateway does not answer with a PROXY header"
+}
+OARL=(--set oauth.rateLimit.discoveryPerMinute=30 --set oauth.rateLimit.signInPerMinute=40 --set oauth.rateLimit.tokenPerMinute=50)
+rl_phase 30 40 50 5
+MODE=buckets lim LIM_DISCOVERY=30 LIM_SIGNIN=40 LIM_TOKEN=50 LIM_REGISTRATION=5 || fail "18 the bucket checks failed (see FAIL lines above)"
+pass "18 five buckets (mcp, discovery, sign-in, token, registration): each stops at its own limit and leaves the others open; headers that name an address change nothing; two Gateway pods count together; the 401 for a call without a credential is in the discovery bucket"
+# the chart's own values: the NAT measurement
+OARL=()
+rl_phase 600 300 600 10
+MODE=nat lim LIM_DISCOVERY=600 LIM_SIGNIN=300 LIM_TOKEN=600 LIM_REGISTRATION=10 || fail "18 the NAT measurement failed (see FAIL lines above)"
+pass "18 many people behind one address: measured with the chart's default limits (the numbers are printed above)"
+# back to the other mode and the high limits of the other checks
+OARL=(--set oauth.rateLimit.discoveryPerMinute=100000 --set oauth.rateLimit.signInPerMinute=100000 --set oauth.rateLimit.tokenPerMinute=100000)
+oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --set agents.maxPerPerson=100 --wait --timeout 8m
+kubectl -n "$NS" rollout status deploy/ambit-public --timeout=300s >/dev/null
+kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
+reforward
+
+# --- 19 · the request shapes of the guide "Connect an OAuth MCP client" (docs/guides/oauth-mcp-client.md), each sent as the guide shows it
+env GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
+  HTTP_TIMEOUT=60 KEY="$OKEY" ONE_TOOL=time_get_current_time GUIDE="$PWD/docs/guides/oauth-mcp-client.md" "${PY[@]}" test/oauthtest/shapes.py || fail "19 the shape checks failed (see FAIL lines above)"
+pass "19 every request shape of the guide works as written"
 
 # --- 13 · off again: everything of OAuth goes, the front door stays
 helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/frontdoor/values.yaml \

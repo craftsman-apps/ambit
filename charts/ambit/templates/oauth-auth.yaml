@@ -96,6 +96,9 @@ spec:
               valueFrom: { secretKeyRef: { name: {{ $valkey.passwordSecret | quote }}, key: password } }
             {{- end }}
             - { name: AMBIT_AUTH_MAX_GRANT_DAYS, value: {{ $o.maxGrantDays | default 0 | quote }} }
+            # The second line of the limits (the Gateway counts the same buckets first): the same numbers.
+            - { name: AMBIT_AUTH_DISCOVERY_PER_MINUTE, value: {{ (($o.rateLimit).discoveryPerMinute) | default 600 | quote }} }
+            - { name: AMBIT_AUTH_SIGNIN_PER_MINUTE, value: {{ (($o.rateLimit).signInPerMinute) | default 300 | quote }} }
             {{- if $dcr.enabled }}
             - { name: AMBIT_AUTH_REGISTRATION_HOSTS, value: {{ join "," $dcr.redirectHosts | quote }} }
             - { name: AMBIT_AUTH_MAX_CLIENTS, value: {{ $dcr.maxClients | quote }} }

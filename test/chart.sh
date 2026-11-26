@@ -319,7 +319,8 @@ svc=[p["port"] for p in one("Service","ambit-ratelimit")["spec"]["ports"]]
 assert svc==[8081,8080], svc  # port 8080 (/json) is published only with the front door
 assert p["traffic"]["rateLimit"]["local"]==[{"requests":200,"unit":"Seconds"}], p
 c=yaml.safe_load(one("ConfigMap","ambit-ratelimit-front-door")["data"]["front-door.yaml"])
-assert c=={"domain":"ambit-public","descriptors":[{"key":"fd_credential","rate_limit":{"unit":"minute","requests_per_unit":600}},{"key":"fd_source","rate_limit":{"unit":"minute","requests_per_unit":120}}]}, c
+assert c=={"domain":"ambit-public","descriptors":[{"key":"fd_credential","rate_limit":{"unit":"minute","requests_per_unit":600}},{"key":"fd_bucket","value":"mcp","descriptors":[{"key":"fd_source","rate_limit":{"unit":"minute","requests_per_unit":120}}]}]}, c
+assert e["http"]["body"].count("\"fd_bucket\", \"value\": \"mcp\"}")==1 and "request." not in e["http"]["body"], e  # without OAuth every request is in the mcp bucket
 v=one("Deployment","ambit-ratelimit")["spec"]["template"]["spec"]["volumes"][0]
 assert [s["configMap"]["name"] for s in v["projected"]["sources"]]==["ambit-ratelimit-config","ambit-ratelimit-front-door"], v
 n=one("NetworkPolicy","ambit-ratelimit")["spec"]["ingress"][0]["from"]
@@ -530,6 +531,24 @@ k=one("AgentgatewayPolicy","ambit-mcp-public-auth")["spec"]["traffic"]["authoriz
 assert "false" not in k, "the keys rule must not be touched"' "oauth.emergencyBlock adds a false clause to the token rule only, never to the key rule" )
 none=$(helm template ambit charts/ambit -n ambit-system "${fdv[@]}")
 ! grep -q 'ambit-mcp-public-oauth\|sectionName: keys\|ambit-console-oauth\|ambit-console-tokenreview' <<<"$none" || { echo "FAIL chart: nothing of OAuth in the front door's objects without OAuth"; exit 1; }
+# Rate limits of the sign-in host: separate buckets, counted at the Gateway before the route and the credential, by the address of the connection.
+check_oa 'e=one("AgentgatewayPolicy","ambit-public-source-limit")["spec"]["traffic"]["extAuth"]["http"]["body"]
+b=e.split("\"fd_bucket\", \"value\": ",1)[1].split("}, {\"key\": \"fd_source\"",1)[0]
+for want in ("\"/oauth2/token\"","\"/oauth2/revoke\"","\"/register\"","\"/oauth2/auth\"","\"/login\"","\"/callback\"","\"/consent\"","\"/error\"","\"/.well-known/\"","\"/mcp\"","\"x-api-key\"","\"authorization\""):
+    assert want in b, (want, b)
+for bucket in ("token","registration","signin","discovery","mcp"):
+    assert "? \"%s\"" % bucket in b or b.endswith(": \"%s\"" % bucket), (bucket, b)
+assert "string(source.address)" in e and "x-forwarded" not in e.lower() and "x-ambit-client-address" not in e.lower() and "forwarded" not in b.lower(), e
+c=yaml.safe_load(one("ConfigMap","ambit-ratelimit-front-door")["data"]["front-door.yaml"])
+got={d["value"]:(d["descriptors"][0]["key"],d["descriptors"][0]["rate_limit"]["unit"],d["descriptors"][0]["rate_limit"]["requests_per_unit"]) for d in c["descriptors"] if d["key"]=="fd_bucket"}
+assert got=={"mcp":("fd_source","minute",120),"discovery":("fd_source","minute",600),"signin":("fd_source","minute",300),"token":("fd_source","minute",600),"registration":("fd_source","hour",10)}, got
+env={e["name"]:e["value"] for e in one("Deployment","ambit-auth")["spec"]["template"]["spec"]["containers"][0]["env"] if "value" in e}
+assert env["AMBIT_AUTH_DISCOVERY_PER_MINUTE"]=="600" and env["AMBIT_AUTH_SIGNIN_PER_MINUTE"]=="300" and env["AMBIT_AUTH_REGISTER_PER_HOUR"]=="10", env' "the source limit has five buckets (mcp, discovery, sign-in, token, registration): the Gateway reads the path and two header names, never a client address header; ambit-auth gets the same numbers"
+set_rl=$(oat --set oauth.rateLimit.signInPerMinute=77 --set oauth.registration.dynamic.perSourcePerHour=3)
+grep -q 'requests_per_unit: 77' <<<"$set_rl" && grep -q 'requests_per_unit: 3 }' <<<"$set_rl" && grep -q 'AMBIT_AUTH_SIGNIN_PER_MINUTE, value: "77"' <<<"$set_rl" || { echo "FAIL chart: the bucket values must reach the ratelimit config and ambit-auth"; exit 1; }
+MSG='oauth.rateLimit.signInPerMinute' refuse "a sign-in limit of 0" --set oauth.rateLimit.signInPerMinute=0
+MSG='oauth.rateLimit.tokenPerMinute' refuse "a token limit of 0" --set oauth.rateLimit.tokenPerMinute=0
+MSG='oauth.rateLimit.discoveryPerMinute' refuse "a discovery limit of 0" --set oauth.rateLimit.discoveryPerMinute=0
 MSG='maxGrantDays' refuse "a grant life of 400 days" --set oauth.maxGrantDays=400
 one_r=$(oat --set oauth.hydra.replicas=1)
 ! grep -q 'name: ambit-hydra$' <(sed -n '/kind: PodDisruptionBudget/,/^---/p' <<<"$one_r") || { echo "FAIL chart: one Hydra pod needs no PodDisruptionBudget"; exit 1; }

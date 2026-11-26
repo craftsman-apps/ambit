@@ -113,7 +113,13 @@ q="SELECT count(), countIf(LogAttributes['ambit.injection.rule'] = 'ignore-previ
   countIf(LogAttributes['ambit.injection.action'] = 'found' AND LogAttributes['ambit.injection.mode'] = 'audit' AND LogAttributes['gen_ai.tool.name'] = 'get_injected' AND LogAttributes['ambit.call_id'] != '' AND LogAttributes['jwt.email'] = 'user01@example.com'),
   countIf(arrayExists(v -> position(v, 'evil.example') > 0 OR position(v, 'minsu') > 0 OR position(v, 'Ignore previous') > 0, mapValues(LogAttributes)) OR position(Body, 'evil.example') > 0)
   FROM otel.otel_logs WHERE Timestamp >= '$since' AND LogAttributes['ambit.kind'] = 'injection' FORMAT TSV"
-wait_for 120 '[[ $(ch "$q" | cut -f1) -ge 2 ]]' || fail "1g no injection records within 120 s: $(ch "$q")"
+# On failure say whether the guard found and sent the records (#415: a merge queue run had only "0 0 0 0 0"): its counters
+# for findings and for dropped records, and its last log lines.
+guard_diag() {
+  local p; p=$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=ambit-guard --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}' 2>&1)
+  echo "guard pod $p: $(kubectl get --raw "/api/v1/namespaces/$NS/pods/$p:8081/proxy/metrics" 2>&1 | grep -E '^ambit_guard_(injection|record_dropped)_total' | tr '\n' ' ') log: $(kubectl -n "$NS" logs "$p" --tail=20 2>&1 | tr '\n' ' ')"
+}
+wait_for 120 '[[ $(ch "$q" | cut -f1) -ge 2 ]]' || fail "1g no injection records within 120 s: $(ch "$q"); $(guard_diag)"
 [[ $(ch "$q") == $'2\t1\t1\t2\t0' ]] || fail "1g injection records (all, ignore-previous-instructions, chatml-marker, complete, holding text): $(ch "$q")"
 [[ $(metric found) -ge 2 ]] || fail "1g ambit_guard_injection_total{action=found} is $(metric found), want at least 2"
 pass "1g audit mode: result unchanged (email masked); 2 records (ignore-previous-instructions, chatml-marker) with the call, the person and no text; counter found $(metric found)"

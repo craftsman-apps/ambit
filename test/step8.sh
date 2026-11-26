@@ -47,6 +47,7 @@ kubectl -n "$NS" wait "budgets.$G" eng --for=condition=Ready --timeout=60s >/dev
 # The ConfigMap reaches the ratelimit pod on the kubelet's next sync (up to about two minutes). The loaded number
 # is the Budget's minus one: the check before a request refuses only above it, and the answer adds 1 afterwards.
 wait_rl "$NS" "ambit-llm.group_eng.user: unit=DAY requests_per_unit=1,"
+hold_for_midnight 120   # the checks below read counters by the UTC day (#427)
 A=$(token user01); M=$(token user09)
 day=$(( $(date -u +%s) / 86400 * 86400 ))
 # wait_used N: user01's request counter reaches N (an answer is counted a moment after it arrives)
@@ -137,6 +138,7 @@ ask() { # ask TOKEN MODEL [CONTENT] [STREAM] [PATH]: prints the HTTP status; the
   command curl -s -o "$W/llm" -w '%{http_code}' --max-time 60 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
     -d "{\"model\":\"$2\",\"stream\":${4:-false},\"input\":\"x\",\"messages\":[{\"role\":\"user\",\"content\":\"${3:-hi}\"}]}" "$MOCK${5:-/chat/completions}"
 }
+hold_for_midnight 120
 day=$(( $(date -u +%s) / 86400 * 86400 ))
 vget() { kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "$1" 2>/dev/null | tr -d '\r'; }
 spent() { vget "ambit-llm_spend_group_ml-research_$day"; }
@@ -156,8 +158,9 @@ YAML
   flush
   fresh
 }
-# fresh: new tokens for user01 and user09; the waits in these checks outlast a Keycloak access token
-fresh() { A=$(token user01); M=$(token user09); }
+# fresh: new tokens for user01 and user09 (the waits in these checks outlast a Keycloak access token), and the UTC day
+# of the counters: a check must not run across midnight, or its charge lands under the next day's key (#427)
+fresh() { hold_for_midnight 150; day=$(( $(date -u +%s) / 86400 * 86400 )); A=$(token user01); M=$(token user09); }
 # wait_policy [TEXT]: the budget policy is accepted by agentgateway at its current generation (and its cost
 # expression contains TEXT)
 wait_policy() {
@@ -245,10 +248,11 @@ pass "11 not charged: no token counts, a stream cut off before them, embeddings 
 
 fresh
 # 12 · a price change applies to new answers only (10 / 40 per million: 12 + 12 = 24 units an answer)
+s0=$(spent)   # 3 from check 11, or none when fresh moved to a new UTC day (#427)
 set_price 10 40; wait_policy '"mock/echo": 10000000u'
-ask "$M" mock/echo >/dev/null; wait_spent 27 "12 answer at the new price (3 + 24)"
+ask "$M" mock/echo >/dev/null; wait_spent $(( ${s0:-0} + 24 )) "12 answer at the new price (earlier spend ${s0:-0} + 24)"
 set_price 1.00 4.00; wait_policy '"mock/echo": 1000000u'
-pass "12 price change: earlier spend kept (3), the next answer charged at the new price (24)"
+pass "12 price change: earlier spend kept (${s0:-0}), the next answer charged at the new price (24)"
 
 fresh
 # 14 · the price changes while a streamed answer is still running (its usage arrives 25 s after it starts):
@@ -384,6 +388,7 @@ pass "20e the group's 4 a minute are shared by two people: $codes"
 budget_ml "userRequestsPerDay: 1, userRequestsPerMinute: 1"
 wait_rl "$NS" "ambit-llm.rpm_group_ml-research.rpm_user: unit=MINUTE requests_per_unit=1,"
 wait_rl "$NS" "ambit-llm.group_ml-research.user: unit=DAY requests_per_unit=0,"
+hold_for_midnight 200   # two waits for a new minute below (up to 125 s); f3 must run more than 60 s before midnight, or its Retry-After is the day's end (#427)
 new_minute; M=$(token user09); f1=$(ask_m "$M" mock/echo f1); sleep 3; f2=$(ask_m "$M" mock/echo f2); ra=$(retry_after f2)
 new_minute; f3=$(ask_m "$M" mock/echo f3); rb=$(retry_after f3)
 [[ "$f1/$f2/$f3" == "200/429/429" ]] && (( ra <= 60 && rb > 60 )) ||

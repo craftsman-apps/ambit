@@ -465,6 +465,9 @@ func (s *KeyService) StartAgent(ctx context.Context, by Session, name string) (A
 	}
 	a, err = s.changeAgent(ctx, name, func(cur *Agent) (bool, error) {
 		cur.State, cur.StoppedAt, cur.StopRequestedAt, cur.StopNotConfirmedAt, cur.StopUnlisted, cur.StopAcks = StateActive, nil, nil, nil, false, nil
+		if s.RevokeGrants != nil {
+			cur.Grants = nil // also grants of an agent that was stopped before OAuth sign-in was turned on: a start never brings an old grant back
+		}
 		return true, nil
 	})
 	if err == nil {
@@ -703,6 +706,23 @@ func (s *KeyService) TestFillStopList(ctx context.Context, n int) error {
 			l.Entries = append(l.Entries, controller.StopEntry{Kind: "agent", Name: fmt.Sprintf("filler-%04d", i), Gen: l.Gen + 1, Slot: freeSlot(*l), RequestedAt: now})
 		}
 		return true, false
+	})
+	return err
+}
+
+// RevokeAgentGrants is step S3 of a stop with OAuth sign-in (set as KeyService.RevokeGrants). Hydra cannot revoke one grant, so the
+// grants are taken off the agent's record: a refresh needs the grant to be on an active agent (the token hook asks the console), and
+// it never is again, also after the agent is started. A platform that was stopped connects again, with a new consent. Call it holding s.mu.
+func (s *KeyService) RevokeAgentGrants(ctx context.Context, a Agent) error {
+	if len(a.Grants) == 0 {
+		return nil
+	}
+	_, err := s.changeAgent(ctx, a.Name, func(cur *Agent) (bool, error) {
+		if len(cur.Grants) == 0 {
+			return false, nil
+		}
+		cur.Grants = nil
+		return true, nil
 	})
 	return err
 }

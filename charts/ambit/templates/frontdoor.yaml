@@ -21,6 +21,118 @@
 {{- if lt (int $fd.replicas) 1 }}{{ fail "frontDoor.replicas must be 1 or more" }}{{ end }}
 {{- $svc := $fd.service | default dict }}
 {{- $port := int ($fd.port | default 8443) }}
+{{- $oauth := (.Values.oauth | default dict).enabled }}
+# This policy does not change when OAuth is turned on or off (it always admits the routes of both): Helm applies it after the routes, so a policy that
+# changed with the routes would refuse them in the same upgrade.
+# Only the public route may be attached to ambit-public, and only as this chart writes it: the name, the host, one rule with
+# the exact path /mcp, one backend (the public backend), and no other Gateway. A route of another name that names the
+# Gateway, or a change of the right route (another path, host or backend), is refused. A route that already names
+# ambit-public before the front door is turned on is not checked: see docs/front-door.md ("Before you turn it on").
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: ambit-public-routes
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [gateway.networking.k8s.io]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [httproutes, grpcroutes, tlsroutes, tcproutes, udproutes]
+  variables:
+    - name: onPublic
+      expression: >-
+        has(object.spec.parentRefs) && object.spec.parentRefs.exists(p, p.name == "ambit-public")
+  validations:
+    - expression: >-
+        !variables.onPublic || (object.kind == "HTTPRoute" && object.metadata.name == "ambit-mcp-public" &&
+        size(object.spec.parentRefs) == 1 &&
+        has(object.spec.parentRefs[0].sectionName) && object.spec.parentRefs[0].sectionName == "https" && !has(object.spec.parentRefs[0].namespace) &&
+        has(object.spec.hostnames) && object.spec.hostnames == [{{ $fd.host | quote }}] &&
+        has(object.spec.rules) && (
+        (size(object.spec.rules) == 1 &&
+        has(object.spec.rules[0].name) && object.spec.rules[0].name == "keys" &&
+        has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) == 1 &&
+        has(object.spec.rules[0].matches[0].path) && object.spec.rules[0].matches[0].path.type == "Exact" &&
+        object.spec.rules[0].matches[0].path.value == "/mcp" &&
+        !has(object.spec.rules[0].matches[0].method) && !has(object.spec.rules[0].matches[0].headers) && !has(object.spec.rules[0].matches[0].queryParams))
+        ||
+        (size(object.spec.rules) == 2 &&
+        has(object.spec.rules[0].name) && object.spec.rules[0].name == "keys" && has(object.spec.rules[1].name) && object.spec.rules[1].name == "oauth" &&
+        has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) == 2 &&
+        object.spec.rules[0].matches.all(m, has(m.path) && m.path.type == "Exact" && m.path.value == "/mcp" && !has(m.method) && !has(m.queryParams) &&
+        has(m.headers) && size(m.headers) == 1 && m.headers[0].type == "RegularExpression") &&
+        object.spec.rules[0].matches.exists(m, m.headers[0].name == "x-api-key" && m.headers[0].value == ".*") &&
+        object.spec.rules[0].matches.exists(m, m.headers[0].name == "Authorization" && m.headers[0].value == "^Bearer ambit_.*") &&
+        has(object.spec.rules[1].matches) && size(object.spec.rules[1].matches) == 2 &&
+        object.spec.rules[1].matches.all(m, has(m.path) && m.path.type == "Exact" && !has(m.headers) && !has(m.queryParams)) &&
+        object.spec.rules[1].matches.exists(m, m.path.value == "/mcp" && !has(m.method)) &&
+        object.spec.rules[1].matches.exists(m, m.path.value == "/.well-known/oauth-protected-resource/mcp" && has(m.method) && m.method == "GET")))
+        && object.spec.rules.all(r,
+        has(r.backendRefs) && size(r.backendRefs) == 1 && r.backendRefs[0].name == "ambit-mcp-public" &&
+        has(r.backendRefs[0].kind) && r.backendRefs[0].kind == "AgentgatewayBackend" &&
+        has(r.backendRefs[0].group) && r.backendRefs[0].group == "agentgateway.dev" &&
+        !has(r.backendRefs[0].namespace) && (!has(r.backendRefs[0].filters) || size(r.backendRefs[0].filters) == 0) &&
+        !has(r.timeouts) && !has(r.sessionPersistence) &&
+        has(r.filters) && size(r.filters) == 1 && r.filters[0].type == "RequestHeaderModifier" && has(r.filters[0].requestHeaderModifier) &&
+        !has(r.filters[0].requestHeaderModifier.set) && !has(r.filters[0].requestHeaderModifier.add) &&
+        has(r.filters[0].requestHeaderModifier.remove) && size(r.filters[0].requestHeaderModifier.remove) == 3 &&
+        ["X-Ambit-User", "x-api-key", "authorization"].all(h, h in r.filters[0].requestHeaderModifier.remove)))
+        || (object.kind == "HTTPRoute" && object.metadata.name == "ambit-auth-hydra" &&
+        size(object.spec.parentRefs) == 1 &&
+        has(object.spec.hostnames) && size(object.spec.hostnames) == 1 && !object.spec.hostnames[0].startsWith("*") &&
+        !has(object.spec.parentRefs[0].namespace) &&
+        has(object.spec.rules) && size(object.spec.rules) == 1 &&
+        has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) == 3 &&
+        object.spec.rules[0].matches.all(m, has(m.path) && m.path.type == "Exact" && has(m.method) &&
+        ((m.method == "POST" && m.path.value in ["/oauth2/token", "/oauth2/revoke"]) || (m.method == "GET" && m.path.value == "/.well-known/jwks.json"))) &&
+        object.spec.rules[0].matches.exists(m, m.method == "POST" && m.path.value == "/oauth2/token") &&
+        object.spec.rules[0].matches.exists(m, m.method == "POST" && m.path.value == "/oauth2/revoke") &&
+        object.spec.rules[0].matches.exists(m, m.method == "GET" && m.path.value == "/.well-known/jwks.json") &&
+        has(object.spec.parentRefs[0].sectionName) && object.spec.parentRefs[0].sectionName == "https-auth" &&
+        has(object.spec.rules[0].filters) && size(object.spec.rules[0].filters) == 1 &&
+        object.spec.rules[0].filters[0].type == "RequestHeaderModifier" && has(object.spec.rules[0].filters[0].requestHeaderModifier) &&
+        !has(object.spec.rules[0].filters[0].requestHeaderModifier.add) && !has(object.spec.rules[0].filters[0].requestHeaderModifier.remove) &&
+        has(object.spec.rules[0].filters[0].requestHeaderModifier.set) && size(object.spec.rules[0].filters[0].requestHeaderModifier.set) == 1 &&
+        object.spec.rules[0].filters[0].requestHeaderModifier.set[0].name == "X-Forwarded-Proto" &&
+        object.spec.rules[0].filters[0].requestHeaderModifier.set[0].value == "https" &&
+        !has(object.spec.rules[0].timeouts) && !has(object.spec.rules[0].sessionPersistence) &&
+        has(object.spec.rules[0].backendRefs) && size(object.spec.rules[0].backendRefs) == 1 &&
+        object.spec.rules[0].backendRefs[0].name == "ambit-hydra-public" &&
+        (!has(object.spec.rules[0].backendRefs[0].kind) || object.spec.rules[0].backendRefs[0].kind == "Service") &&
+        (!has(object.spec.rules[0].backendRefs[0].group) || object.spec.rules[0].backendRefs[0].group == "") &&
+        !has(object.spec.rules[0].backendRefs[0].namespace) && object.spec.rules[0].backendRefs[0].port == 4444 &&
+        (!has(object.spec.rules[0].backendRefs[0].filters) || size(object.spec.rules[0].backendRefs[0].filters) == 0))
+        || (object.kind == "HTTPRoute" && object.metadata.name == "ambit-auth-app" &&
+        size(object.spec.parentRefs) == 1 &&
+        has(object.spec.parentRefs[0].sectionName) && object.spec.parentRefs[0].sectionName == "https-auth" &&
+        has(object.spec.hostnames) && size(object.spec.hostnames) == 1 &&
+        has(object.spec.rules) && size(object.spec.rules) == 1 &&
+        has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) >= 7 && size(object.spec.rules[0].matches) <= 8 &&
+        object.spec.rules[0].matches.all(m, has(m.path) && m.path.type == "Exact" && has(m.method) &&
+        (m.method + " " + m.path.value) in ["GET /.well-known/oauth-authorization-server", "GET /oauth2/auth", "GET /login", "GET /callback", "GET /consent", "POST /consent", "GET /error", "POST /register"]) &&
+        has(object.spec.rules[0].backendRefs) && size(object.spec.rules[0].backendRefs) == 1 &&
+        object.spec.rules[0].backendRefs[0].name == "ambit-auth" &&
+        (!has(object.spec.rules[0].backendRefs[0].kind) || object.spec.rules[0].backendRefs[0].kind == "Service") &&
+        (!has(object.spec.rules[0].backendRefs[0].group) || object.spec.rules[0].backendRefs[0].group == "") &&
+        !has(object.spec.rules[0].backendRefs[0].namespace) && object.spec.rules[0].backendRefs[0].port == 8080 &&
+        (!has(object.spec.rules[0].backendRefs[0].filters) || size(object.spec.rules[0].backendRefs[0].filters) == 0) &&
+        !object.spec.hostnames[0].startsWith("*") && !has(object.spec.parentRefs[0].namespace) &&
+        (!has(object.spec.rules[0].filters) || size(object.spec.rules[0].filters) == 0) &&
+        !has(object.spec.rules[0].timeouts) && !has(object.spec.rules[0].sessionPersistence))
+      message: "only the route ambit-mcp-public (and, with OAuth sign-in, ambit-auth-hydra and ambit-auth-app) may be attached to the public Gateway ambit-public, with the host, the exact paths and the backends that the chart sets"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: ambit-public-routes
+spec:
+  policyName: ambit-public-routes
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Release.Namespace }} } }
+---
 # The public Gateway: its own pods, Service and load balancer, so the console, Dex and the LLM host are never reachable
 # on it. HTTPS only (there is no HTTP listener), one listener bound to one host name, and only the routes named below.
 apiVersion: agentgateway.dev/v1alpha1
@@ -112,20 +224,41 @@ spec:
   hostnames: [{{ $fd.host | quote }}]
   rules:
     - name: keys
+      {{- if $oauth }}
+      # With OAuth: a request that carries an Ambit key takes this rule (a key is in x-api-key, or in Authorization after "Bearer ambit_"; an empty x-api-key counts: the key rule refuses it, as the identity rule treats any x-api-key header as a presented key);
+      # every other request to /mcp takes the oauth rule below. The more specific match wins.
+      matches:
+        - { path: { type: Exact, value: /mcp }, headers: [{ name: x-api-key, type: RegularExpression, value: ".*" }] }
+        - { path: { type: Exact, value: /mcp }, headers: [{ name: Authorization, type: RegularExpression, value: "^Bearer ambit_.*" }] }
+      {{- else }}
       matches: [{ path: { type: Exact, value: /mcp } }]
+      {{- end }}
       # The key must never reach an MCP server, and the token broker trusts X-Ambit-User from gateway pods only.
       filters:
         - type: RequestHeaderModifier
           requestHeaderModifier: { remove: [X-Ambit-User, x-api-key, authorization] }
       backendRefs: [{ group: agentgateway.dev, kind: AgentgatewayBackend, name: ambit-mcp-public }]
+    {{- if $oauth }}
+    # OAuth: a hosted platform's token (a JWT of Ambit's sign-in host, docs/oauth.md). Without a token the answer is 401 with
+    # the address of the protected resource metadata, so that the platform can start a sign-in. The metadata document itself
+    # is served by the gateway for the second path.
+    - name: oauth
+      matches:
+        - { path: { type: Exact, value: /mcp } }
+        - { method: GET, path: { type: Exact, value: /.well-known/oauth-protected-resource/mcp } }
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier: { remove: [X-Ambit-User, x-api-key, authorization] }
+      backendRefs: [{ group: agentgateway.dev, kind: AgentgatewayBackend, name: ambit-mcp-public }]
+    {{- end }}
 ---
-# Keys only: a request without a valid MCP key gets 403. No JWT is accepted on this Gateway.
+# Keys only: a request without a valid MCP key gets 403. A token is accepted on the oauth rule only (below, with OAuth).
 apiVersion: agentgateway.dev/v1alpha1
 kind: AgentgatewayPolicy
 metadata:
   name: ambit-mcp-public-auth
 spec:
-  targetRefs: [{ group: gateway.networking.k8s.io, kind: HTTPRoute, name: ambit-mcp-public }]
+  targetRefs: [{ group: gateway.networking.k8s.io, kind: HTTPRoute, name: ambit-mcp-public{{ if $oauth }}, sectionName: keys{{ end }} }]
   traffic:
     authorization:
       action: Require
@@ -140,6 +273,46 @@ spec:
         matchLabels: { ambitproject.dev/key: "true", ambitproject.dev/key-mcp: "true" }
       location:
         expression: '"x-api-key" in request.headers ? request.headers["x-api-key"] : request.headers["authorization"].replace("Bearer ", "")'
+{{- if $oauth }}
+---
+# The token rule: a JWT of Ambit's sign-in host (Hydra), for this MCP URL, and nothing else. The gateway reads Hydra's
+# public keys inside the cluster and keeps them 5 minutes. Without a valid token: 401 with the resource_metadata challenge.
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: ambit-mcp-public-oauth
+spec:
+  targetRefs: [{ group: gateway.networking.k8s.io, kind: HTTPRoute, name: ambit-mcp-public, sectionName: oauth }]
+  traffic:
+    jwtAuthentication:
+      mode: Strict
+      providers:
+        - issuer: {{ printf "https://%s" $fd.authHost | quote }}
+          audiences: [{{ printf "https://%s/mcp" $fd.host | quote }}]
+          jwks:
+            remote:
+              url: {{ printf "http://ambit-hydra-public.%s.svc:4444/.well-known/jwks.json" .Release.Namespace | quote }}
+              cacheDuration: 5m
+          validation:
+            requiredClaims: [aud, exp, sub]
+      mcp:
+        resourceMetadata:
+          resource: {{ printf "https://%s/mcp" $fd.host | quote }}
+          authorization_servers: [{{ printf "https://%s" $fd.authHost | quote }}]
+          bearer_methods_supported: [header]
+          scopes_supported: [mcp, offline_access]
+    authorization:
+      action: Require
+      policy:
+        matchExpressions:
+          # A person (an email, not a service account) and an agent and a grant: what the consent page writes into every token.
+          - {{ include "ambit.identity.jwtGate" (dict "requireEmail" true "services" (ne (toString (.Values.serviceAccounts | default dict).enabled) "false")) | quote }}
+          - 'has(jwt.ambit_agent) && has(jwt.ambit_grant) && type(jwt.ambit_scope) == list'
+          {{- if .Values.oauth.emergencyBlock }}
+          # oauth.emergencyBlock: no token of this issuer passes, whatever else is true.
+          - 'false'
+          {{- end }}
+{{- end }}
 ---
 # Three limits on the public Gateway (docs/front-door.md, "Rate limits"). All of them count in the ratelimit service and
 # Valkey, so they are shared by all gateway pods, except the per-pod limit, which is a second line if that service is down.
@@ -213,103 +386,4 @@ data:
         rate_limit: { unit: minute, requests_per_unit: {{ $rl.perCredentialPerMinute }} }
       - key: fd_source
         rate_limit: { unit: minute, requests_per_unit: {{ $rl.perSourcePerMinute }} }
----
-# This policy does not change when OAuth is turned on or off (it always admits the routes of both): Helm applies it after the routes, so a policy that
-# changed with the routes would refuse them in the same upgrade.
-# Only the public route may be attached to ambit-public, and only as this chart writes it: the name, the host, one rule with
-# the exact path /mcp, one backend (the public backend), and no other Gateway. A route of another name that names the
-# Gateway, or a change of the right route (another path, host or backend), is refused. A route that already names
-# ambit-public before the front door is turned on is not checked: see docs/front-door.md ("Before you turn it on").
-apiVersion: admissionregistration.k8s.io/v1
-kind: ValidatingAdmissionPolicy
-metadata:
-  name: ambit-public-routes
-spec:
-  failurePolicy: Fail
-  matchConstraints:
-    resourceRules:
-      - apiGroups: [gateway.networking.k8s.io]
-        apiVersions: ["*"]
-        operations: [CREATE, UPDATE]
-        resources: [httproutes, grpcroutes, tlsroutes, tcproutes, udproutes]
-  variables:
-    - name: onPublic
-      expression: >-
-        has(object.spec.parentRefs) && object.spec.parentRefs.exists(p, p.name == "ambit-public")
-  validations:
-    - expression: >-
-        !variables.onPublic || (object.kind == "HTTPRoute" && object.metadata.name == "ambit-mcp-public" &&
-        size(object.spec.parentRefs) == 1 &&
-        has(object.spec.hostnames) && object.spec.hostnames == [{{ $fd.host | quote }}] &&
-        has(object.spec.rules) && size(object.spec.rules) == 1 &&
-        has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) == 1 &&
-        has(object.spec.rules[0].matches[0].path) && object.spec.rules[0].matches[0].path.type == "Exact" &&
-        object.spec.rules[0].matches[0].path.value == "/mcp" &&
-        has(object.spec.rules[0].backendRefs) && size(object.spec.rules[0].backendRefs) == 1 &&
-        object.spec.rules[0].backendRefs[0].name == "ambit-mcp-public" &&
-        has(object.spec.rules[0].backendRefs[0].kind) && object.spec.rules[0].backendRefs[0].kind == "AgentgatewayBackend" &&
-        has(object.spec.rules[0].backendRefs[0].group) && object.spec.rules[0].backendRefs[0].group == "agentgateway.dev" &&
-        !has(object.spec.rules[0].backendRefs[0].namespace) &&
-        (!has(object.spec.rules[0].backendRefs[0].filters) || size(object.spec.rules[0].backendRefs[0].filters) == 0) &&
-        has(object.spec.parentRefs[0].sectionName) && object.spec.parentRefs[0].sectionName == "https" && !has(object.spec.parentRefs[0].namespace) &&
-        !has(object.spec.rules[0].timeouts) && !has(object.spec.rules[0].sessionPersistence) &&
-        has(object.spec.rules[0].filters) && size(object.spec.rules[0].filters) == 1 &&
-        object.spec.rules[0].filters[0].type == "RequestHeaderModifier" && has(object.spec.rules[0].filters[0].requestHeaderModifier) &&
-        !has(object.spec.rules[0].filters[0].requestHeaderModifier.set) && !has(object.spec.rules[0].filters[0].requestHeaderModifier.add) &&
-        has(object.spec.rules[0].filters[0].requestHeaderModifier.remove) &&
-        object.spec.rules[0].filters[0].requestHeaderModifier.remove.size() == 3 &&
-        ["X-Ambit-User", "x-api-key", "authorization"].all(h, h in object.spec.rules[0].filters[0].requestHeaderModifier.remove))
-        || (object.kind == "HTTPRoute" && object.metadata.name == "ambit-auth-hydra" &&
-        size(object.spec.parentRefs) == 1 &&
-        has(object.spec.hostnames) && size(object.spec.hostnames) == 1 && !object.spec.hostnames[0].startsWith("*") &&
-        !has(object.spec.parentRefs[0].namespace) &&
-        has(object.spec.rules) && size(object.spec.rules) == 1 &&
-        has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) == 3 &&
-        object.spec.rules[0].matches.all(m, has(m.path) && m.path.type == "Exact" && has(m.method) &&
-        ((m.method == "POST" && m.path.value in ["/oauth2/token", "/oauth2/revoke"]) || (m.method == "GET" && m.path.value == "/.well-known/jwks.json"))) &&
-        object.spec.rules[0].matches.exists(m, m.method == "POST" && m.path.value == "/oauth2/token") &&
-        object.spec.rules[0].matches.exists(m, m.method == "POST" && m.path.value == "/oauth2/revoke") &&
-        object.spec.rules[0].matches.exists(m, m.method == "GET" && m.path.value == "/.well-known/jwks.json") &&
-        has(object.spec.parentRefs[0].sectionName) && object.spec.parentRefs[0].sectionName == "https-auth" &&
-        has(object.spec.rules[0].filters) && size(object.spec.rules[0].filters) == 1 &&
-        object.spec.rules[0].filters[0].type == "RequestHeaderModifier" && has(object.spec.rules[0].filters[0].requestHeaderModifier) &&
-        !has(object.spec.rules[0].filters[0].requestHeaderModifier.add) && !has(object.spec.rules[0].filters[0].requestHeaderModifier.remove) &&
-        has(object.spec.rules[0].filters[0].requestHeaderModifier.set) && size(object.spec.rules[0].filters[0].requestHeaderModifier.set) == 1 &&
-        object.spec.rules[0].filters[0].requestHeaderModifier.set[0].name == "X-Forwarded-Proto" &&
-        object.spec.rules[0].filters[0].requestHeaderModifier.set[0].value == "https" &&
-        !has(object.spec.rules[0].timeouts) && !has(object.spec.rules[0].sessionPersistence) &&
-        has(object.spec.rules[0].backendRefs) && size(object.spec.rules[0].backendRefs) == 1 &&
-        object.spec.rules[0].backendRefs[0].name == "ambit-hydra-public" &&
-        (!has(object.spec.rules[0].backendRefs[0].kind) || object.spec.rules[0].backendRefs[0].kind == "Service") &&
-        (!has(object.spec.rules[0].backendRefs[0].group) || object.spec.rules[0].backendRefs[0].group == "") &&
-        !has(object.spec.rules[0].backendRefs[0].namespace) && object.spec.rules[0].backendRefs[0].port == 4444 &&
-        (!has(object.spec.rules[0].backendRefs[0].filters) || size(object.spec.rules[0].backendRefs[0].filters) == 0))
-        || (object.kind == "HTTPRoute" && object.metadata.name == "ambit-auth-app" &&
-        size(object.spec.parentRefs) == 1 &&
-        has(object.spec.parentRefs[0].sectionName) && object.spec.parentRefs[0].sectionName == "https-auth" &&
-        has(object.spec.hostnames) && size(object.spec.hostnames) == 1 &&
-        has(object.spec.rules) && size(object.spec.rules) == 1 &&
-        has(object.spec.rules[0].matches) && size(object.spec.rules[0].matches) >= 7 && size(object.spec.rules[0].matches) <= 8 &&
-        object.spec.rules[0].matches.all(m, has(m.path) && m.path.type == "Exact" && has(m.method) &&
-        (m.method + " " + m.path.value) in ["GET /.well-known/oauth-authorization-server", "GET /oauth2/auth", "GET /login", "GET /callback", "GET /consent", "POST /consent", "GET /error", "POST /register"]) &&
-        has(object.spec.rules[0].backendRefs) && size(object.spec.rules[0].backendRefs) == 1 &&
-        object.spec.rules[0].backendRefs[0].name == "ambit-auth" &&
-        (!has(object.spec.rules[0].backendRefs[0].kind) || object.spec.rules[0].backendRefs[0].kind == "Service") &&
-        (!has(object.spec.rules[0].backendRefs[0].group) || object.spec.rules[0].backendRefs[0].group == "") &&
-        !has(object.spec.rules[0].backendRefs[0].namespace) && object.spec.rules[0].backendRefs[0].port == 8080 &&
-        (!has(object.spec.rules[0].backendRefs[0].filters) || size(object.spec.rules[0].backendRefs[0].filters) == 0) &&
-        !object.spec.hostnames[0].startsWith("*") && !has(object.spec.parentRefs[0].namespace) &&
-        (!has(object.spec.rules[0].filters) || size(object.spec.rules[0].filters) == 0) &&
-        !has(object.spec.rules[0].timeouts) && !has(object.spec.rules[0].sessionPersistence))
-      message: "only the route ambit-mcp-public (and, with OAuth sign-in, ambit-auth-hydra and ambit-auth-app) may be attached to the public Gateway ambit-public, with the host, the exact paths and the backends that the chart sets"
----
-apiVersion: admissionregistration.k8s.io/v1
-kind: ValidatingAdmissionPolicyBinding
-metadata:
-  name: ambit-public-routes
-spec:
-  policyName: ambit-public-routes
-  validationActions: [Deny]
-  matchResources:
-    namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: {{ .Release.Namespace }} } }
 {{- end }}

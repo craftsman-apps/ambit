@@ -12,6 +12,7 @@ Hydra's token hook. Stateless: a pending sign-in is in the person's browser, cou
 {{- range $v := list (dict "k" "oauth.signIn.clientSecret" "v" $si.clientSecret) (dict "k" "oauth.cookieSecret" "v" $o.cookieSecret) }}
 {{- if not (and $v.v $v.v.name $v.v.key) }}{{ fail (printf "oauth.enabled=true needs %s.name and %s.key: a Secret you create (docs/oauth.md, \"Before you turn it on\")" $v.k $v.k) }}{{ end }}
 {{- end }}
+{{- if or (lt (int $o.maxGrantDays) 0) (gt (int $o.maxGrantDays) 365) }}{{ fail "oauth.maxGrantDays must be 0 to 365" }}{{ end }}
 {{- if lt (int $au.replicas) 1 }}{{ fail "oauth.auth.replicas must be 1 or more" }}{{ end }}
 {{- if not .Values.limits.enabled }}{{ fail "oauth.enabled=true needs limits.enabled=true: sign-in and registration limits are counted in Valkey, shared by all replicas" }}{{ end }}
 {{- if $dcr.enabled }}
@@ -94,6 +95,7 @@ spec:
             - name: AMBIT_AUTH_VALKEY_PASSWORD
               valueFrom: { secretKeyRef: { name: {{ $valkey.passwordSecret | quote }}, key: password } }
             {{- end }}
+            - { name: AMBIT_AUTH_MAX_GRANT_DAYS, value: {{ $o.maxGrantDays | default 0 | quote }} }
             {{- if $dcr.enabled }}
             - { name: AMBIT_AUTH_REGISTRATION_HOSTS, value: {{ join "," $dcr.redirectHosts | quote }} }
             - { name: AMBIT_AUTH_MAX_CLIENTS, value: {{ $dcr.maxClients | quote }} }
@@ -136,6 +138,35 @@ spec:
         {{- if $si.caSecret }}
         - { name: idp-ca, secret: { secretName: {{ $si.caSecret | quote }}, items: [{ key: ca.crt, path: ca.crt }] } }
         {{- end }}
+---
+# The console may check ambit-auth's token (TokenReview) and nothing more of the cluster's authentication API.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: {{ .Release.Namespace }}-ambit-console-tokenreview }
+rules:
+  - apiGroups: [authentication.k8s.io]
+    resources: [tokenreviews]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: {{ .Release.Namespace }}-ambit-console-tokenreview }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: {{ .Release.Namespace }}-ambit-console-tokenreview }
+subjects: [{ kind: ServiceAccount, name: ambit-console, namespace: {{ .Release.Namespace }} }]
+---
+# The console's internal API (port 8085) is for ambit-auth only. This policy also lists the console's other open ports, because a
+# pod that a policy selects refuses every port it does not list (the policy of the token broker adds its own).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: ambit-console-oauth }
+spec:
+  podSelector:
+    matchLabels: { app.kubernetes.io/name: ambit-console }
+  policyTypes: [Ingress]
+  ingress:
+    - ports: [{ port: 8080 }, { port: 8084 }]
+    - from: [{ podSelector: { matchLabels: { app.kubernetes.io/name: ambit-auth } } }]
+      ports: [{ port: 8085 }]
 ---
 apiVersion: v1
 kind: Service

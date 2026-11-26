@@ -19,6 +19,7 @@ import (
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/controller"
 	"github.com/craftsman-apps/ambit/internal/identity"
+	"github.com/craftsman-apps/ambit/internal/oauth"
 	"github.com/craftsman-apps/ambit/internal/presets"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -48,7 +49,9 @@ type Catalog struct {
 	HTTP       *http.Client // for reaching identity providers; nil uses a 10-second client
 	// Keys serves personal API keys; nil leaves the key routes out. LLMURL and MCPURL are the gateway URLs shown in
 	// the setup text for each tool, which the web UI builds from them. LastUsed overrides the audit lookup of each key's last use (tests).
-	Keys     *KeyService
+	Keys *KeyService
+	// Hydra is the admin API of OAuth sign-in (docs/oauth.md); nil without it.
+	Hydra    *oauth.HydraAdmin
 	LLMURL   string
 	MCPURL   string
 	LastUsed func(ctx context.Context, ids []string, from time.Time) (map[string]time.Time, error)

@@ -431,3 +431,38 @@ func ServerAccess(servers []v1.Server, conns []v1.Connection, rules []v1.AccessR
 	sort.Strings(out.Users)
 	return out
 }
+
+// OnFrontDoor reports whether a Server is served through the public front door.
+func OnFrontDoor(s v1.Server) bool { return onFrontDoor(s) }
+
+// PersonMayUse says whether the rules give a person (by email and groups) at least one tool of a server: the same merge the
+// gateway policy is made from, read for one person. A service account (<name>@svc.ambit.internal) is never granted by allSignedIn.
+func PersonMayUse(servers []v1.Server, conns []v1.Connection, rules []v1.AccessRule, name, email string, groups []string) bool {
+	kept, _ := BindServers(servers, conns)
+	i := slices.IndexFunc(kept, func(s v1.Server) bool { return s.Name == name })
+	if i < 0 {
+		return false
+	}
+	if _, ok := target(kept[i]); !ok {
+		return false
+	}
+	a := accessByServer(kept, rules)[name]
+	if a == nil {
+		return false
+	}
+	covers := func(x Access) bool {
+		if x.AllSignedIn && !strings.HasSuffix(email, "@svc.ambit.internal") {
+			return true
+		}
+		return slices.Contains(x.Users, email) || slices.ContainsFunc(groups, func(g string) bool { return slices.Contains(x.Groups, g) })
+	}
+	if covers(a.all) {
+		return true
+	}
+	for _, x := range a.tools {
+		if covers(x) {
+			return true
+		}
+	}
+	return false
+}

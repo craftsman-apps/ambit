@@ -2,7 +2,7 @@
 //
 //	oauthtest idp      the company's OpenID Connect provider: a login form (pick a user), the code flow with PKCE,
 //	                   signed ID tokens, and users that misbehave on purpose (another issuer, a wrong nonce, ...)
-//	oauthtest console  the console's internal OAuth API that ambit-auth calls (servers, agents, groups), with a /_state
+//	oauthtest console  the console's internal OAuth API that ambit-auth calls (servers, agents, active), with a /_state
 //	                   page that tells the test what ambit-auth asked for
 package main
 
@@ -204,7 +204,7 @@ func console() {
 			log.Fatal(err)
 		}
 	}
-	groups := map[string][]string{}
+	inactive := map[string]bool{}
 	var created []map[string]any
 	var auds []string
 	refuse := ""
@@ -229,21 +229,34 @@ func console() {
 		}
 		return true
 	}
-	mux.HandleFunc("GET /internal/oauth/v1/servers", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /internal/oauth/v1/servers", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
 		}
+		var in struct {
+			Email string `json:"email"`
+		}
+		b, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		_ = json.Unmarshal(b, &in)
 		mu.Lock()
 		defer mu.Unlock()
-		_ = json.NewEncoder(w).Encode(map[string]any{"servers": servers[r.URL.Query().Get("email")]})
+		_ = json.NewEncoder(w).Encode(map[string]any{"servers": servers[in.Email]})
 	})
-	mux.HandleFunc("GET /internal/oauth/v1/groups", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /internal/oauth/v1/active", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
 			return
 		}
+		var in struct{ Agent, Grant string }
+		b, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		_ = json.Unmarshal(b, &in)
 		mu.Lock()
 		defer mu.Unlock()
-		_ = json.NewEncoder(w).Encode(map[string]any{"groups": groups[r.URL.Query().Get("email")]})
+		_ = json.NewEncoder(w).Encode(map[string]bool{"active": !inactive[in.Agent]})
+	})
+	mux.HandleFunc("POST /_inactive", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		inactive[r.URL.Query().Get("agent")] = r.URL.Query().Get("on") == "true"
 	})
 	mux.HandleFunc("POST /internal/oauth/v1/agents", func(w http.ResponseWriter, r *http.Request) {
 		if !auth(w, r) {
@@ -267,11 +280,6 @@ func console() {
 		mu.Lock()
 		defer mu.Unlock()
 		_ = json.NewEncoder(w).Encode(map[string]any{"created": created, "tokenAudience": auds})
-	})
-	mux.HandleFunc("POST /_groups", func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		defer mu.Unlock()
-		groups[r.URL.Query().Get("email")] = strings.Split(r.URL.Query().Get("groups"), ",")
 	})
 	mux.HandleFunc("POST /_servers", func(w http.ResponseWriter, r *http.Request) {
 		var v map[string][]map[string]string

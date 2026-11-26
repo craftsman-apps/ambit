@@ -26,6 +26,8 @@ rnd() { openssl rand -hex "${1:-16}"; }
 oaset() { helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/frontdoor/values.yaml -f test/oauth/values.yaml \
   --set frontDoor.rateLimit.perCredentialPerMinute=600 --set frontDoor.rateLimit.perSourcePerMinute=1000 --set frontDoor.rateLimit.perPodPerSecond=200 \
   --set "oauth.signIn.issuer=https://ambit-oauth-idp.$NS.svc" --set "oauth.auth.consoleURL=http://ambit-oauth-console.$NS.svc:8085" "$@" >/dev/null; }
+# oaset_real: the same, with the real console behind ambit-auth (the stand-in is for the sign-in checks of step 12)
+oaset_real() { oaset --set "oauth.auth.consoleURL=" "$@"; }
 freeport() { "${PY[@]}" -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'; }
 # adm POD METHOD PATH [json]: Hydra's admin API in one pod, through a port-forward. Prints the HTTP status; the body is in $W/adm.
 adm() {
@@ -353,6 +355,42 @@ oaset --set oauth.registration.dynamic.perSourcePerHour=1000 --wait --timeout 8m
 kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
 flow
 pass "12 the sign-in flow and its refusals"
+
+# --- 14 · tokens at the public Gateway, with the real console behind ambit-auth (test/oauthtest/gateway.py)
+# The 401 challenge, the metadata, the consented scope and nothing else, changed and forged tokens, offboarding, the emergency block (also with
+# Hydra down), API keys on the same route, a restart of the console. A server on the front door, an AccessRule for everyone, and a key.
+G=ambitproject.dev
+oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --wait --timeout 8m
+kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
+kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
+kubectl -n "$NS" apply -f - >/dev/null <<EOF
+apiVersion: $G/v1alpha1
+kind: AccessRule
+metadata: { name: oauth-time, labels: { ambitproject.dev/oauth-test: "true" } }
+spec: { allSignedIn: true, servers: [{ name: time }, { name: everything }] }
+EOF
+kubectl -n "$NS" rollout status deploy/ambit-guard --timeout=300s >/dev/null || fail "14 ambit-guard is not running"
+kubectl -n "$NS" wait "servers.$G" time everything --for=condition=Ready --timeout=300s >/dev/null || fail "14 servers not Ready"
+kubectl -n "$NS" wait "servers.$G" time everything --for=condition=ToolsPinned --timeout=300s >/dev/null || fail "14 tools not pinned"
+kubectl -n "$NS" patch "servers.$G" time --type merge -p '{"spec":{"frontDoor":{"enabled":true,"acceptUnmaskedServerMessages":true}}}' >/dev/null
+wait_for 120 "kubectl -n '$NS' get agentgatewaybackend ambit-mcp-public >/dev/null && kubectl -n '$NS' get agentgatewaypolicy ambit-mcp-public-access >/dev/null" || fail "14 no public backend"
+kubectl -n "$NS" wait agentgatewaybackend/ambit-mcp-public --for=condition=Accepted --timeout=120s >/dev/null || fail "14 public backend not accepted"
+accepted() { kubectl -n "$NS" get agentgatewaypolicy "$1" -o jsonpath='{.status.ancestors[*].conditions[?(@.type=="Accepted")].status}' 2>/dev/null; }
+wait_for 120 '[[ "$(accepted ambit-mcp-public-oauth)" == *True* && "$(accepted ambit-mcp-public-auth)" == *True* ]]' || fail "14 the token or key policy is not accepted: oauth '$(accepted ambit-mcp-public-oauth)' keys '$(accepted ambit-mcp-public-auth)': $(kubectl -n "$NS" get agentgatewaypolicy ambit-mcp-public-oauth ambit-mcp-public-auth -o jsonpath='{range .items[*]}{.metadata.name}: {.status.ancestors[*].conditions[*].message}{"\n"}{end}')"
+PW=$(kubectl -n "$NS" get secret ambit-initial-admin -o jsonpath='{.data.password}' | base64 -d)
+sign_in local admin@ambit.local "$PW"
+mkkey oauth-key mcp; OKEY=$KEY; OKID=$KID
+cleanup_keys() { api DELETE "/api/keys/$OKID" >/dev/null 2>&1 || true; kubectl -n "$NS" delete "accessrules.$G" oauth-time --ignore-not-found >/dev/null 2>&1 || true
+  kubectl -n "$NS" patch "servers.$G" time --type json -p '[{"op":"remove","path":"/spec/frontDoor"}]' >/dev/null 2>&1 || true; }
+trap 'rc=$?; cleanup_keys; cleanup; on_exit "$rc"' EXIT
+PODS=($(pubpods)); [[ ${#PODS[@]} -eq 2 ]] || fail "14 want 2 public gateway pods, have: ${PODS[*]}"
+PA=$(forward "${PODS[0]}"); PB=$(forward "${PODS[1]}")
+IDPP=$(freeport); kubectl -n "$NS" port-forward svc/ambit-oauth-idp "$IDPP:443" >/dev/null 2>&1 & echo $! >> "$W/pids"
+CONP=$(freeport); kubectl -n "$NS" port-forward svc/ambit-oauth-console "$CONP:8085" >/dev/null 2>&1 & echo $! >> "$W/pids"
+wait_for 60 '(exec 3<>"/dev/tcp/127.0.0.1/$IDPP") 2>/dev/null && (exec 3<>"/dev/tcp/127.0.0.1/$CONP") 2>/dev/null' || fail "14 port-forwards"
+GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
+  STOPCTL="$PWD/test/oauthtest/stopctl.sh" ADMIN_PW="$PW" HTTP_TIMEOUT=90 KEY="$OKEY" ONE_TOOL=time_get_current_time "${PY[@]}" test/oauthtest/gateway.py || fail "14 the gateway checks failed (see FAIL lines above)"
+pass "14 tokens at the public Gateway"
 
 # --- 13 · off again: everything of OAuth goes, the front door stays
 helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/frontdoor/values.yaml \

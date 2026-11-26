@@ -11,3 +11,6 @@ spec:
     - { name: broker, port: 8082, targetPort: broker }
     - { name: tools, port: 8083, targetPort: tools }
     {{- end }}
+    {{- if (.Values.oauth | default dict).enabled }}
+    - { name: oauth, port: 8085, targetPort: oauth }
+    {{- end }}

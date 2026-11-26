@@ -45,11 +45,17 @@ has(mcpGuardrails.callId) ? mcpGuardrails.callId : ""
 {{- if .requireEmail -}}(has(apiKey.keyId) ? apiKey.email : jwt.email.trim().lowerAscii()){{- else -}}(has(apiKey.keyId) ? apiKey.email : (({{ include "ambit.identity.hasEmail" . }}) ? jwt.email.trim().lowerAscii() : jwt.sub)){{- end -}}
 {{- end -}}
 
+{{/* The issuer whose tokens may carry agent claims: agents.tokenIssuer, or, with OAuth sign-in, Ambit's own sign-in host. "" before OAuth. */}}
+{{- define "ambit.agents.tokenIssuer" -}}
+{{- $a := .Values.agents | default dict -}}
+{{- if $a.tokenIssuer -}}{{ $a.tokenIssuer }}{{- else if (.Values.oauth | default dict).enabled -}}https://{{ .Values.frontDoor.authHost }}{{- end -}}
+{{- end -}}
+
 {{/* Agents (identity.AgentAttr, identity.TokenIssuer, identity.SourceRanges): one audit attribute of an agent call, read only from
 a verified credential. Takes (dict "key" <metadata field or ""> "claim" <token claim or ""> "root" $); .root.Values.agents.tokenIssuer is the issuer
 whose tokens may carry agent claims ("" in 0.6.0 before OAuth). */}}
 {{- define "ambit.identity.agentAttr" -}}
-{{- $iss := ((.root.Values.agents | default dict).tokenIssuer | default "") -}}
+{{- $iss := include "ambit.agents.tokenIssuer" .root -}}
 {{- $jwt := `""` -}}
 {{- if and .claim $iss -}}{{- $jwt = printf `((has(jwt.iss) && jwt.iss == %s && has(jwt.%s)) ? jwt.%s : "")` ($iss | toJson) .claim .claim -}}{{- end -}}
 {{- if .key -}}(({{ include "ambit.identity.validKey" . }}) && has(apiKey.{{ .key }})) ? apiKey.{{ .key }} : {{ $jwt }}{{- else -}}{{ $jwt }}{{- end -}}

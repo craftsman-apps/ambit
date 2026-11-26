@@ -649,3 +649,30 @@ func TestDeletedAgentsEntryWaitsForItsAcknowledgment(t *testing.T) {
 		t.Error("the entry stays after the retention")
 	}
 }
+
+// A stop takes the OAuth grants off the agent for good: a refresh of the old grant is never allowed again, also after the agent is started.
+func TestStopRevokesOAuthGrantsForGood(t *testing.T) {
+	s, clk := newAgentSvc(t)
+	s.RevokeGrants = s.RevokeAgentGrants
+	ctx := context.Background()
+	a := mustAgent(t, s, user01("eng"), AgentInput{DisplayName: "chatgpt", Grant: "g-abc123-AbCdEfGhIj"})
+	if len(a.Grants) != 1 {
+		t.Fatalf("grants %v", a.Grants)
+	}
+	_, _ = s.StopAgent(ctx, user01(), a.Name)
+	playController(t, s, map[string]int64{"ambit": 1}, "")
+	_, _ = s.AdvanceStops(ctx)
+	if g := s.mustAgent(t, a.Name); len(g.Grants) != 0 {
+		t.Fatalf("the grants stay on a stopped agent: %v", g.Grants)
+	}
+	// with OAuth the start waits the whole retention, not one minute
+	clk.Set(clk.Now().Add(2 * time.Minute))
+	if _, err := s.StartAgent(ctx, user01(), a.Name); !errors.Is(err, ErrStartTooSoon) {
+		t.Fatalf("start after 2 minutes: %v", err)
+	}
+	clk.Set(clk.Now().Add(26 * time.Minute))
+	b, err := s.StartAgent(ctx, user01(), a.Name)
+	if err != nil || b.State != StateActive || len(b.Grants) != 0 {
+		t.Fatalf("after the retention: %+v %v", b, err)
+	}
+}

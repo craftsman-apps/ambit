@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -573,50 +574,70 @@ func hook(e *env, session map[string]any, grants ...string) *httptest.ResponseRe
 
 func TestTokenHook(t *testing.T) {
 	e := newEnv(t)
+	g := func(age time.Duration) string { return NewGrantID(e.now.Add(-age)) }
 	sess := func(agent, grant, email string) map[string]any {
 		return map[string]any{"subject": email, "extra": map[string]any{"ambit_agent": agent, "ambit_grant": grant, "email": email, "groups": []string{"eng"}}}
 	}
-	// an active grant: refreshed groups come back
-	w := hook(e, sess("a1", "g1", "alice@acme.test"))
-	var out struct {
-		Session struct {
-			AccessToken map[string]any `json:"access_token"`
-		} `json:"session"`
-	}
-	_ = json.Unmarshal(w.Body.Bytes(), &out)
-	if w.Code != 200 || fmt.Sprint(out.Session.AccessToken["groups"]) != "[eng new-group]" || out.Session.AccessToken["ambit_agent"] != "a1" || out.Session.AccessToken["ambit_grant"] != "g1" {
+	// an active grant: the refresh goes on (204: nothing changes in the token)
+	if w := hook(e, sess("a1", g(time.Hour), "alice@acme.test")); w.Code != 204 {
 		t.Fatalf("refresh: %d %s", w.Code, w.Body.String())
 	}
-	// the first grant of a code exchange is not refreshed: 204
-	if w := hook(e, sess("a1", "g1", "alice@acme.test"), "authorization_code"); w.Code != 204 {
+	// the first grant of a code exchange is not checked against the agent list: 204
+	if w := hook(e, sess("a1", g(0), "alice@acme.test"), "authorization_code"); w.Code != 204 {
 		t.Fatalf("code grant: %d", w.Code)
 	}
-	// stopped agent, stopped grant, offboarded person: 403
+	// stopped agent, stopped grant, offboarded person, an agent that is gone or stopped in the console: 403
 	e.deny.stopA["a2"], e.deny.stopG["g3"] = true, true
-	for name, s := range map[string]map[string]any{"agent": sess("a2", "g2", "alice@acme.test"), "grant": sess("a3", "g3", "alice@acme.test"), "offboarded": sess("a4", "g4", "bob@acme.test")} {
+	e.be.inactive["a6"] = true
+	e.deny.stopG[g(time.Hour)] = false
+	for name, s := range map[string]map[string]any{"agent": sess("a2", g(time.Hour), "alice@acme.test"), "grant": sess("a3", "g3", "alice@acme.test"),
+		"offboarded": sess("a4", g(time.Hour), "bob@acme.test"), "agent deleted or stopped": sess("a6", g(time.Hour), "alice@acme.test")} {
 		if w := hook(e, s); w.Code != 403 {
 			t.Errorf("%s: %d, want 403", name, w.Code)
 		}
 	}
 	// an unrelated grant keeps working
-	if w := hook(e, sess("a5", "g5", "alice@acme.test")); w.Code != 200 {
+	if w := hook(e, sess("a5", g(time.Hour), "alice@acme.test")); w.Code != 204 {
 		t.Errorf("unrelated grant: %d", w.Code)
+	}
+	// a grant older than the longest life (30 days in the test) is not refreshed; one just inside is
+	if w := hook(e, sess("a1", g(31*24*time.Hour), "alice@acme.test")); w.Code != 403 {
+		t.Errorf("a 31 day old grant: %d, want 403", w.Code)
+	}
+	if w := hook(e, sess("a1", g(29*24*time.Hour), "alice@acme.test")); w.Code != 204 {
+		t.Errorf("a 29 day old grant: %d", w.Code)
+	}
+	if w := hook(e, sess("a1", "g-not-a-time-stamp", "alice@acme.test")); w.Code != 403 {
+		t.Errorf("a grant name that carries no time: %d, want 403", w.Code)
 	}
 	// the lists cannot be read: refused (fail closed), also for a code grant
 	e.deny.err = fmt.Errorf("stale")
-	if w := hook(e, sess("a1", "g1", "alice@acme.test")); w.Code != 503 {
+	if w := hook(e, sess("a1", g(time.Hour), "alice@acme.test")); w.Code != 503 {
 		t.Errorf("unreadable lists: %d, want 503", w.Code)
 	}
 	e.deny.err = nil
-	// the console is down: no refresh, never a refresh with old groups
+	// the console is down: no refresh
 	e.be.down = true
-	if w := hook(e, sess("a1", "g1", "alice@acme.test")); w.Code != 503 {
+	if w := hook(e, sess("a1", g(time.Hour), "alice@acme.test")); w.Code != 503 {
 		t.Errorf("console down: %d, want 503", w.Code)
 	}
 	if w := httptest.NewRecorder(); true {
 		e.srv.Internal().ServeHTTP(w, httptest.NewRequest("POST", "/hooks/token", strings.NewReader("not json")))
 		if w.Code != 400 {
 			t.Errorf("garbage: %d", w.Code)
+		}
+	}
+}
+
+func TestGrantAge(t *testing.T) {
+	now := time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)
+	id := NewGrantID(now.Add(-48 * time.Hour))
+	if a, ok := GrantAge(id, now); !ok || a != 48*time.Hour {
+		t.Fatalf("%v %v", a, ok)
+	}
+	for _, bad := range []string{"", "g-", "g-abc", "x-1-2", "g--5-6", "g-zzzzzzzzzzzzzzzz-1"} {
+		if _, ok := GrantAge(bad, now); ok && bad != "g-zzzzzzzzzzzzzzzz-1" {
+			t.Errorf("%q must not parse", bad)
 		}
 	}
 }
@@ -1007,7 +1028,7 @@ func TestErrorsNeverCarryTheRequestAddress(t *testing.T) {
 	if err := os.WriteFile(c.TokenFile, []byte("t"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err = c.Servers(context.Background(), "person@example.com")
+	_, err = c.Servers(context.Background(), "person@example.com", nil)
 	if err == nil || strings.Contains(err.Error(), "person@example.com") {
 		t.Fatalf("error: %v", err)
 	}
@@ -1056,5 +1077,33 @@ func TestAsciiEmailDoesNotFoldUnicode(t *testing.T) {
 	}
 	if got := asciiEmail("  Alice@Acme.TEST "); got != "alice@acme.test" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+// The refresh asks the console with the scope of the token: the console refuses it when the scope was narrowed since.
+func TestTokenHookSendsTheTokensScope(t *testing.T) {
+	e := newEnv(t)
+	sess := map[string]any{"subject": "alice@acme.test", "extra": map[string]any{"ambit_agent": "a1", "ambit_grant": NewGrantID(e.now.Add(-time.Hour)),
+		"email": "alice@acme.test", "ambit_scope": []string{"time", "mail/send"}}}
+	if w := hook(e, sess); w.Code != 204 {
+		t.Fatalf("refresh: %d", w.Code)
+	}
+	if len(e.be.scopes) != 1 || !slices.Equal(e.be.scopes[0], []string{"time", "mail/send"}) {
+		t.Fatalf("the console was asked with %v", e.be.scopes)
+	}
+	// an empty consent is an empty list, not a missing one (the console refuses a missing list)
+	sess["extra"].(map[string]any)["ambit_scope"] = []string{}
+	if w := hook(e, sess); w.Code != 204 {
+		t.Fatalf("refresh of an empty consent: %d", w.Code)
+	}
+	if got := e.be.scopes[len(e.be.scopes)-1]; got == nil || len(got) != 0 {
+		t.Fatalf("an empty consent was sent as %#v", got)
+	}
+}
+
+// The consent writes the verified email into the token, as AccessRules by email need it, and the groups to the console.
+func TestConsentTokenCarriesVerifiedEmail(t *testing.T) {
+	if g := groupNames([]any{"eng", 3, "ml"}); !slices.Equal(g, []string{"eng", "ml"}) {
+		t.Fatalf("groups %v", g)
 	}
 }

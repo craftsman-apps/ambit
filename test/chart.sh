@@ -490,6 +490,47 @@ MSG='lower-case host name' refuse "a wildcard registration host" --set 'oauth.re
 MSG='lower-case host name' refuse "a registration host with a scheme" --set 'oauth.registration.dynamic.redirectHosts={https://chatgpt.com}'
 MSG='perSourcePerHour' refuse "a registration limit of 0" --set oauth.registration.dynamic.perSourcePerHour=0
 MSG='maxClients' refuse "a client cap of 0" --set oauth.registration.dynamic.maxClients=0
+check_oa 'r=one("HTTPRoute","ambit-mcp-public")["spec"]
+assert [x["name"] for x in r["rules"]]==["keys","oauth"], r["rules"]
+k,o=r["rules"]
+assert k["matches"]==[{"path":{"type":"Exact","value":"/mcp"},"headers":[{"name":"x-api-key","type":"RegularExpression","value":".*"}]},{"path":{"type":"Exact","value":"/mcp"},"headers":[{"name":"Authorization","type":"RegularExpression","value":"^Bearer ambit_.*"}]}], k["matches"]
+assert o["matches"]==[{"path":{"type":"Exact","value":"/mcp"}},{"method":"GET","path":{"type":"Exact","value":"/.well-known/oauth-protected-resource/mcp"}}], o["matches"]
+for x in (k,o):
+  assert x["backendRefs"]==[{"group":"agentgateway.dev","kind":"AgentgatewayBackend","name":"ambit-mcp-public"}], x
+  assert set(x["filters"][0]["requestHeaderModifier"]["remove"])=={"X-Ambit-User","x-api-key","authorization"}, x
+ka=one("AgentgatewayPolicy","ambit-mcp-public-auth")["spec"]["targetRefs"]
+assert ka==[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute","name":"ambit-mcp-public","sectionName":"keys"}], ka
+p=one("AgentgatewayPolicy","ambit-mcp-public-oauth")["spec"]
+assert p["targetRefs"]==[{"group":"gateway.networking.k8s.io","kind":"HTTPRoute","name":"ambit-mcp-public","sectionName":"oauth"}], p["targetRefs"]
+j=p["traffic"]["jwtAuthentication"]
+assert j["mode"]=="Strict" and len(j["providers"])==1, j
+pr=j["providers"][0]
+assert pr["issuer"]=="https://auth.localtest.me" and pr["audiences"]==["https://mcp-public.localtest.me/mcp"], pr
+assert pr["jwks"]["remote"]=={"url":"http://ambit-hydra-public.ambit-system.svc:4444/.well-known/jwks.json","cacheDuration":"5m"}, pr["jwks"]
+assert pr["validation"]["requiredClaims"]==["aud","exp","sub"], pr
+assert j["mcp"]["resourceMetadata"]["resource"]=="https://mcp-public.localtest.me/mcp" and j["mcp"]["resourceMetadata"]["authorization_servers"]==["https://auth.localtest.me"], j["mcp"]
+ex=p["traffic"]["authorization"]["policy"]["matchExpressions"]
+assert p["traffic"]["authorization"]["action"]=="Require" and "false" not in ex and any("ambit_grant" in e for e in ex) and any("svc.ambit.internal" in e for e in ex), ex
+v=one("ValidatingAdmissionPolicy","ambit-public-routes")["spec"]["validations"][0]["expression"]
+assert "\"oauth\"" in v and "oauth-protected-resource/mcp" in v, v
+c=[x for x in one("Deployment","ambit-controller")["spec"]["template"]["spec"]["containers"][0]["command"]]
+assert "--agent-token-issuer=https://auth.localtest.me" in c, c' "the public MCP route: a keys rule and a token rule (more specific match first), each with its own policy; tokens of the sign-in host only, for this MCP URL, a person and an agent and a grant; the controller reads agent claims from that issuer"
+check_oa 'e=[x for x in one("Deployment","ambit-console")["spec"]["template"]["spec"]["containers"][0]["env"]]
+assert {"name":"AMBIT_OAUTH_ADDR","value":":8085"} in e and {"name":"AMBIT_HYDRA_ADMIN","value":"http://ambit-hydra-admin:4445"} in e, e
+assert {"name":"oauth","port":8085,"targetPort":"oauth"} in one("Service","ambit-console")["spec"]["ports"]
+n=one("NetworkPolicy","ambit-console-oauth")["spec"]["ingress"]
+assert n[1]=={"from":[{"podSelector":{"matchLabels":{"app.kubernetes.io/name":"ambit-auth"}}}],"ports":[{"port":8085}]}, n
+r=one("ClusterRole","ambit-system-ambit-console-tokenreview")["rules"]
+assert r==[{"apiGroups":["authentication.k8s.io"],"resources":["tokenreviews"],"verbs":["create"]}], r' "the console: an internal API on its own port for ambit-auth only (network policy and a token check), and the right to check tokens and nothing else of the authentication API"
+blk=$(oat --set oauth.emergencyBlock=true)
+# (not "oa=$blk check_oa": a variable set for one call is exported, and the rendered chart is more than the 128 KB that Linux allows in one)
+( oa=$blk; check_oa 'ex=one("AgentgatewayPolicy","ambit-mcp-public-oauth")["spec"]["traffic"]["authorization"]["policy"]["matchExpressions"]
+assert "false" in ex, ex
+k=one("AgentgatewayPolicy","ambit-mcp-public-auth")["spec"]["traffic"]["authorization"]["policy"]["matchExpressions"]
+assert "false" not in k, "the keys rule must not be touched"' "oauth.emergencyBlock adds a false clause to the token rule only, never to the key rule" )
+none=$(helm template ambit charts/ambit -n ambit-system "${fdv[@]}")
+! grep -q 'ambit-mcp-public-oauth\|sectionName: keys\|ambit-console-oauth\|ambit-console-tokenreview' <<<"$none" || { echo "FAIL chart: nothing of OAuth in the front door's objects without OAuth"; exit 1; }
+MSG='maxGrantDays' refuse "a grant life of 400 days" --set oauth.maxGrantDays=400
 one_r=$(oat --set oauth.hydra.replicas=1)
 ! grep -q 'name: ambit-hydra$' <(sed -n '/kind: PodDisruptionBudget/,/^---/p' <<<"$one_r") || { echo "FAIL chart: one Hydra pod needs no PodDisruptionBudget"; exit 1; }
 MSG='frontDoor.enabled' refuse "OAuth without the front door" --set frontDoor.enabled=false
@@ -502,5 +543,7 @@ MSG='oauth.hydra.systemSecret' refuse "no system Secret" --set oauth.hydra.syste
 MSG='accessTokenMinutes' refuse "a token that lives two hours" --set oauth.accessTokenMinutes=120
 MSG='refreshTokenIdleDays' refuse "no refresh life" --set oauth.refreshTokenIdleDays=0
 MSG='oauth.hydra.replicas' refuse "no Hydra pod" --set oauth.hydra.replicas=0
+MSG='agents.stopRetentionMinutes' refuse "a stop entry that does not outlive the access tokens" --set oauth.accessTokenMinutes=30 --set agents.stopRetentionMinutes=30
+MSG='agents.tokenIssuer' refuse "another agent token issuer than the sign-in host" --set agents.tokenIssuer=https://other.example.com
 rm -f "$W2"
 echo "PASS chart"

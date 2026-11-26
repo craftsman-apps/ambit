@@ -23,9 +23,14 @@ spec:
         - name: console
           image: "{{ .Values.console.image.repository }}:{{ .Values.console.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.console.image.pullPolicy }}
-          ports: [{ name: http, containerPort: 8080 }, { name: broker, containerPort: 8082 }, { name: tools, containerPort: 8083 }{{ if .Values.evidence.enabled }}, { name: metrics, containerPort: 8084 }{{ end }}]
+          ports: [{ name: http, containerPort: 8080 }, { name: broker, containerPort: 8082 }, { name: tools, containerPort: 8083 }{{ if .Values.evidence.enabled }}, { name: metrics, containerPort: 8084 }{{ end }}{{ if (.Values.oauth | default dict).enabled }}, { name: oauth, containerPort: 8085 }{{ end }}]
           env:
             - { name: AMBIT_PUBLIC_URL, value: {{ .Values.console.url | quote }} }
+            {{- if (.Values.oauth | default dict).enabled }}
+            # The internal API for ambit-auth (docs/oauth.md); only ambit-auth's service account token is accepted.
+            - { name: AMBIT_OAUTH_ADDR, value: ":8085" }
+            - { name: AMBIT_HYDRA_ADMIN, value: "http://ambit-hydra-admin:4445" }
+            {{- end }}
             - { name: AMBIT_DEX_GRPC, value: "ambit-dex:5557" }
             # Dex inside the cluster: console.url may not resolve from a pod (on kind it is 127.0.0.1).
             - { name: AMBIT_DEX_URL, value: "http://ambit-dex:5556/dex" }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"time"
 )
 
 // tokenHook is Hydra's oauth2.token_hook, called for every grant. It is the only thing that stops a *refresh*: the
@@ -70,20 +71,39 @@ func (s *Server) tokenHook(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	// A refresh: the groups are read again, so a change at the identity provider reaches the token within one refresh.
-	groups, err := s.Backend.Groups(r.Context(), email)
+	// A refresh. A grant lives at most MaxGrantDays: the groups in the token are those of the sign-in, so this is how a group
+	// that the person lost at the identity provider stops counting.
+	if age, ok := GrantAge(grant, s.now()); !ok || (s.Cfg.MaxGrantDays > 0 && age > time.Duration(s.Cfg.MaxGrantDays)*24*time.Hour) {
+		mHook.WithLabelValues("grant_too_old").Inc()
+		s.log().Info("token hook: the grant is too old to be refreshed", "grant", grant)
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	// The agent must exist, be active and own this grant: deleting an agent (or ending its connection) ends its refresh for
+	// good, without Hydra's help and after the stop list entry is gone.
+	var scope []string // nil (no list in the token) is refused by the console; an empty consent is []
+	if l, ok := in.Session.Extra["ambit_scope"].([]any); ok {
+		scope = []string{}
+		for _, x := range l {
+			if v, ok := x.(string); ok {
+				scope = append(scope, v)
+			}
+		}
+	}
+	active, err := s.Backend.Active(r.Context(), agent, grant, scope)
 	if err != nil {
-		mHook.WithLabelValues("groups_unavailable").Inc()
-		s.log().Error("token hook: groups not available", "err", err)
+		mHook.WithLabelValues("agent_unreadable").Inc()
+		s.log().Error("token hook: the agent could not be checked: the request is refused", "err", err)
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
-	extra := map[string]any{}
-	for k, v := range in.Session.Extra {
-		extra[k] = v
+	if !active {
+		mHook.WithLabelValues("agent_inactive").Inc()
+		s.log().Info("token hook: the agent is not active", "agent", agent, "grant", grant)
+		w.WriteHeader(http.StatusForbidden)
+		return
 	}
-	extra["groups"] = groups
 	s.touchClient(r, in.Request.ClientID)
 	mHook.WithLabelValues("refreshed").Inc()
-	writeJSON(w, http.StatusOK, map[string]any{"session": map[string]any{"access_token": extra}})
+	w.WriteHeader(http.StatusNoContent)
 }

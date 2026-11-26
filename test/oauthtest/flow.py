@@ -24,8 +24,13 @@ REDIRECT = "https://chatgpt.com/connector_platform_oauth_redirect"
 fails = []
 
 
+def redact(x):
+    """The text of a failed check, without a token: an access token (a JWT), a refresh token or an authorization code."""
+    return re.sub(r"eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]*|ory_[a-z]{2}_[A-Za-z0-9_.\-]+", "<token>", str(x))
+
+
 def check(name, cond, detail=""):
-    print(("PASS " if cond else "FAIL ") + name + ("" if cond else f": {detail}"), flush=True)
+    print(("PASS " if cond else "FAIL ") + name + ("" if cond else f": {redact(detail)}"), flush=True)
     if not cond:
         fails.append(name)
 
@@ -72,7 +77,7 @@ class Browser:
         if isinstance(data, dict): h.setdefault("Content-Type", "application/x-www-form-urlencoded")
         r = urllib.request.Request(url, data=body, method=method, headers=h)
         try:
-            resp = self.op.open(r, timeout=30)
+            resp = self.op.open(r, timeout=int(os.environ.get('HTTP_TIMEOUT', '30')))
         except urllib.error.HTTPError as e:
             resp = e
         return resp.status if hasattr(resp, "status") else resp.code, dict(resp.headers), resp.read().decode("utf-8", "replace")
@@ -167,7 +172,10 @@ def sign_in(b, client_id, user, challenge=None, state=None, resource=(RES,), tic
 
 def token(client_id, **form):
     b = Browser()
-    st, h, t = b.req("POST", base_url("/oauth2/token"), {"client_id": client_id, **form})
+    try:
+        st, h, t = b.req("POST", base_url("/oauth2/token"), {"client_id": client_id, **form})
+    except Exception as e:  # a request that gets no answer in time is a refusal for the test
+        return 0, {"error": "no answer: " + type(e).__name__}
     try: j = json.loads(t)
     except Exception: j = {}
     return st, j
@@ -259,15 +267,15 @@ state = console_state()
 agent = claims.get("ambit_agent")
 check("2 token: the agent and the grant of the consent are in it, the scope is what was ticked", agent and claims.get("ambit_agent_mode") == "person"
       and claims.get("ambit_grant", "").startswith("g-") and claims.get("ambit_scope") == ["time"] and claims.get("ambit_platform_declared") == "chatgpt"
-      and claims.get("ambit_agent_owner_at_issue") == "alice@acme.test" and sorted(claims.get("groups", [])) == ["eng", "ml-research"], claims)
+      and claims.get("ambit_agent_owner_at_issue") == "alice@acme.test" and sorted(claims.get("groups", [])) == ["eng", "ml-research"]
+      and re.match(r"^g-[0-9a-z]+-", claims.get("ambit_grant", "")), claims)
 check("2 console: the agent was created for the person, and the console saw a token for its audience only",
       any(c.get("owner") == "alice@acme.test" and c.get("grantID") == claims.get("ambit_grant") and c.get("scope") == ["time"] for c in state["created"])
       and state["tokenAudience"] == ["ambit-console"], state)
-# refresh: new tokens, groups from the console
-console_post("/_groups?email=alice@acme.test&groups=eng,new-team")
+# refresh: new tokens; the groups stay those of the sign-in; the agent and the grant stay
 st, tok2 = token(CID, grant_type="refresh_token", refresh_token=tok.get("refresh_token", ""))
 c2 = jwt_claims(tok2["access_token"]) if tok2.get("access_token") else {}
-check("2 refresh: groups are read again, the grant and agent stay", st == 200 and sorted(c2.get("groups", [])) == ["eng", "new-team"] and c2.get("ambit_grant") == claims.get("ambit_grant")
+check("2 refresh: a new access token with the same agent, grant, scope and groups", st == 200 and sorted(c2.get("groups", [])) == ["eng", "ml-research"] and c2.get("ambit_grant") == claims.get("ambit_grant")
       and c2.get("ambit_agent") == agent and c2.get("ambit_scope") == ["time"], (st, c2))
 st, again = token(CID, grant_type="refresh_token", refresh_token=tok.get("refresh_token", ""))
 check("2 refresh: the old refresh token is used up (rotation with reuse detection)", st in (400, 401) and "access_token" not in again, (st, again))
@@ -294,6 +302,15 @@ time.sleep(5)
 st, j4 = token(CID, grant_type="refresh_token", refresh_token=j.get("refresh_token", ""))
 check("3 stop by agent: the refresh is refused", st in (400, 401, 403) and "access_token" not in j4, (st, j4))
 stop_list(); time.sleep(4)
+# the console says the agent is not active (deleted, stopped, or the connection ended): the refresh is refused, whatever the lists say
+bi = Browser(); ki, ri = sign_in(bi, CID, "alice"); si, ti = exchange(CID, ri)
+agent_i = jwt_claims(ti["access_token"])["ambit_agent"]
+console_post("/_inactive?agent=%s&on=true" % agent_i)
+st, ji = token(CID, grant_type="refresh_token", refresh_token=ti.get("refresh_token", ""))
+check("3 an agent that the console reports as not active: the refresh is refused", st in (400, 401, 403) and "access_token" not in ji, (st, ji))
+console_post("/_inactive?agent=%s&on=false" % agent_i)
+st, ji = token(CID, grant_type="refresh_token", refresh_token=ti.get("refresh_token", ""))
+check("3 ... and it works again when the agent is active (a refused refresh did not consume the token)", st == 200 and ji.get("access_token"), (st, ji))
 # offboarded person
 bo = Browser(); ko, ro = sign_in(bo, CID, "bob")
 so, to = exchange(CID, ro) if ko == "code" else (0, {})

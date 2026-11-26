@@ -173,15 +173,16 @@ func (f *fakeIdP) Exchange(_ context.Context, code, _ string) (IDClaims, error) 
 }
 
 type fakeBackend struct {
-	mu      sync.Mutex
-	servers map[string][]ServerChoice
-	created []AgentInput
-	refuse  string
-	groups  []string
-	down    bool
+	mu       sync.Mutex
+	servers  map[string][]ServerChoice
+	created  []AgentInput
+	refuse   string
+	inactive map[string]bool
+	down     bool
+	scopes   [][]string // the scope of every Active call
 }
 
-func (b *fakeBackend) Servers(_ context.Context, email string) ([]ServerChoice, error) {
+func (b *fakeBackend) Servers(_ context.Context, email string, _ []string) ([]ServerChoice, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.down {
@@ -198,11 +199,14 @@ func (b *fakeBackend) CreateAgent(_ context.Context, in AgentInput) (string, err
 	b.created = append(b.created, in)
 	return "chatgpt-" + fmt.Sprint(len(b.created)), nil
 }
-func (b *fakeBackend) Groups(context.Context, string) ([]string, error) {
+func (b *fakeBackend) Active(_ context.Context, agent, grant string, scope []string) (bool, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.scopes = append(b.scopes, scope)
 	if b.down {
-		return nil, errors.New("down")
+		return false, errors.New("down")
 	}
-	return b.groups, nil
+	return !b.inactive[agent] && agent != "", nil
 }
 
 type fakeDeny struct {
@@ -238,7 +242,7 @@ func newEnv(t *testing.T) *env {
 		"badnon": {Issuer: idpIss, Subject: "s7", Email: "alice@acme.test", EmailVerified: true, Nonce: "forged"},
 	}}, be: &fakeBackend{servers: map[string][]ServerChoice{
 		"alice@acme.test": {{Name: "crm", Display: "CRM"}, {Name: "wiki", Display: "Wiki", Connection: "wiki-login"}},
-	}, groups: []string{"eng", "new-group"}}, deny: &fakeDeny{off: map[string]bool{"bob@acme.test": true}, stopA: map[string]bool{}, stopG: map[string]bool{}},
+	}, inactive: map[string]bool{}}, deny: &fakeDeny{off: map[string]bool{"bob@acme.test": true}, stopA: map[string]bool{}, stopG: map[string]bool{}},
 		reg: &MemRegistry{}, now: time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)}
 	e.hsrv = httptest.NewServer(e.hydra)
 	t.Cleanup(e.hsrv.Close)
@@ -248,7 +252,7 @@ func newEnv(t *testing.T) *env {
 	}
 	e.lim = &Limits{Local: &MemLimiter{Now: func() time.Time { return e.now }}, Rates: DefaultRates()}
 	e.srv = &Server{Cfg: Config{PublicURL: pubURL, Resource: resource, IdPIssuer: idpIss, IdPClientID: "ambit", IdPClientSecret: "s",
-		RegistrationHosts: []string{"chatgpt.com", "claude.ai"}, MaxClients: 3, UnusedClientDays: 30},
+		RegistrationHosts: []string{"chatgpt.com", "claude.ai"}, MaxClients: 3, UnusedClientDays: 30, MaxGrantDays: 30},
 		Sealer: sealer, Hydra: &HydraAdmin{Base: e.hsrv.URL}, HydraPub: e.hsrv.URL, Backend: e.be, Deny: e.deny, IdP: e.idp,
 		Limits: e.lim, Clients: e.reg, Now: func() time.Time { return e.now }}
 	if err := e.srv.Cfg.Validate(); err != nil {

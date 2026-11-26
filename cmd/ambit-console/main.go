@@ -17,6 +17,7 @@ import (
 	v1 "github.com/craftsman-apps/ambit/api/v1alpha1"
 	"github.com/craftsman-apps/ambit/internal/console"
 	"github.com/craftsman-apps/ambit/internal/controller"
+	"github.com/craftsman-apps/ambit/internal/oauth"
 	"github.com/craftsman-apps/ambit/internal/presets"
 	"github.com/craftsman-apps/ambit/internal/pricing"
 	"github.com/craftsman-apps/ambit/web"
@@ -207,8 +208,28 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	var hydra *oauth.HydraAdmin // set with OAuth sign-in
 	keySvc := &console.KeyService{Client: objects, Namespace: ns, Now: time.Now, Settings: keySettings, Services: services, Agents: agents}
 	keySvc.RecordKey = console.AgentRecordKey(keys.SessionKey)
+	if addr := os.Getenv("AMBIT_OAUTH_ADDR"); addr != "" {
+		// The internal API of OAuth sign-in (docs/oauth.md): only ambit-auth's own service account token is accepted.
+		api := &console.OAuthAPI{Keys: keySvc, Client: objects, Review: objects, Namespace: ns, Audience: "ambit-console", Subject: console.OAuthSubject(ns)}
+		osrv := &http.Server{Addr: addr, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second}
+		go func() {
+			if err := osrv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("oauth internal API stopped", "err", err)
+			}
+		}()
+		go func() { <-ctx.Done(); osrv.Close() }()
+		slog.Info("OAuth internal API ready", "addr", addr)
+		// Step S3 of a stop: the grants leave the agent's record (Hydra cannot revoke one grant). Setting it also tells the stop machine that
+		// grants exist: it keeps the stop entry, and refuses to start the agent again, for the whole retention (25 minutes by default), longer
+		// than a token lives (15 minutes).
+		keySvc.RevokeGrants = keySvc.RevokeAgentGrants
+		if h := os.Getenv("AMBIT_HYDRA_ADMIN"); h != "" {
+			hydra = &oauth.HydraAdmin{Base: h}
+		}
+	}
 	go console.RunLeader(ctx, kube, ns, podName, keySvc.StartTerm, keySvc.EndTerm)
 	go func() { // stops: S2, S3 and the confirmation (S6) of every stopping agent, the orphan clock, pruning of stop entries
 		t := time.NewTicker(2 * time.Second)
@@ -426,7 +447,7 @@ func run(ctx context.Context) error {
 		evidence = &console.EvidenceExports{MaxRows: maxRows, MaxDays: maxDays, Retention: env("AMBIT_EVIDENCE_RETENTION", "8760h"), Version: os.Getenv("AMBIT_VERSION")}
 	}
 	srv := &http.Server{Addr: ":8080", Handler: console.NewServer(auth, web.FS(), loginOpts,
-		&console.Catalog{Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, AppAudit: appAudit, Evidence: evidence, Budgets: budgets, Dependencies: deps, AccessMode: os.Getenv("AMBIT_ACCESS_MODE"), Prices: prices, Tools: reader, Presets: catalogPresets,
+		&console.Catalog{Hydra: hydra, Client: objects, Namespace: ns, GitOps: gitops, ArgoApplication: os.Getenv("AMBIT_ARGOCD_APPLICATION"), PublicURL: publicURL, Connectors: sso, Conns: conns, SCIM: scim, Audit: audit, AppAudit: appAudit, Evidence: evidence, Budgets: budgets, Dependencies: deps, AccessMode: os.Getenv("AMBIT_ACCESS_MODE"), Prices: prices, Tools: reader, Presets: catalogPresets,
 			Groups: groupStore, Keys: keySvc, LLMURL: os.Getenv("AMBIT_LLM_URL"), MCPURL: os.Getenv("AMBIT_MCP_URL")}), ReadHeaderTimeout: 10 * time.Second}
 	shutDone := make(chan struct{})
 	go func() {

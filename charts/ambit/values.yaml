@@ -246,6 +246,13 @@ oauth:
   accessTokenMinutes: 15
   # A refresh token not used for this many days stops working.
   refreshTokenIdleDays: 30
+  # A grant is refreshed for at most this many days; then the person connects again. The groups in a token are those of the
+  # sign-in: this is how a group that the person lost at the identity provider stops counting. 0: no limit (not advised).
+  maxGrantDays: 30
+  # EMERGENCY SWITCH: true refuses every token of Ambit's sign-in host at once, whatever its signature, key or expiry, and does
+  # not touch API keys or service account keys. It does not depend on Hydra, its keys or the gateway's copy of them. For a
+  # faster way that needs no Helm run, see docs/oauth.md ("If a signing key may be stolen").
+  emergencyBlock: false
   database:
     # A Secret with the PostgreSQL address of Hydra's database, as a URL under the key:
     #   postgres://hydra:PASSWORD@db.example.com:5432/hydra?sslmode=verify-full&sslrootcert=/ca/ca.crt&max_conns=8&max_idle_conns=4

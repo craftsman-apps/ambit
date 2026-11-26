@@ -55,7 +55,9 @@ jobs:
         id: parts
         env:
           PARTS: "${{ github.event_name == 'workflow_dispatch' && inputs.parts || 'all' }}"
-        run: echo "matrix=$(.github/scripts/e2e-parts.sh "$PARTS")" >> "$GITHUB_OUTPUT"
+        run: |
+          matrix=$(.github/scripts/e2e-parts.sh "$PARTS")
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   # Its own job: a failure here must not skip the jobs that need `changes` (a skipped required job reports success).
   changes-test:

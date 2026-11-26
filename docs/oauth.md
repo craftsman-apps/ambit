@@ -290,6 +290,9 @@ step 2 as secret and delete `rotation.json` after the check.
 `GET /api/admin/oauth/signing-key` shows the key IDs of both sets (never the keys) and the time of the last rotation. Every rotation is in the
 key events of the console (`oauth-signing-key-rotation`).
 
+A connection that a person makes in the same second as the end of the call is over too (the time is kept in whole seconds); the platform shows an error at its
+first refresh, and the person connects again.
+
 **What happens in the order of the call.** The console first writes the time into the ConfigMap `ambit-oauth-rotation` (only the console may write it): from then on
 the token hook refuses the refresh of every grant that is older, whatever Hydra does. Then, for each set, it makes the new key in a temporary
 set, replaces the signing set in **one** call (it never holds two keys), removes the temporary set and reads the result back. A set that does not hold

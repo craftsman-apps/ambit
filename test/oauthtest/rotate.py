@@ -148,7 +148,9 @@ def hydra_ready():
     return len(r) >= 4 and all(x == "true" for x in r)
 check("R2 Hydra's pods stay ready (each signing set holds exactly one key)", wait(hydra_ready, 120, 3))
 
-# R3 · a new connection gets a token with the new key ID
+# R3 · a new connection gets a token with the new key ID. (A grant made in the second of the rotation is over too: the time is in whole
+# seconds. A person who connects within that second connects again; the test waits it out.)
+time.sleep(3)
 cidB, tokB = connect_wait("alice", ("time",), "AfterRotation")
 check("R3 a new connection's token carries the new key ID", header(tokB["access_token"]).get("kid") == newKid, (header(tokB["access_token"]).get("kid"), newKid))
 

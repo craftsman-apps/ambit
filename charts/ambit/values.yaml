@@ -312,8 +312,8 @@ oauth:
       # Registrations allowed per caller address and hour (counted in Valkey, shared by all replicas).
       perSourcePerHour: 10
       # Registrations that ambit-auth accepts in an hour, all callers together (security review N2): a flood from many networks cannot fill the cap faster than this.
-      # 20 an hour is 480 a day, below maxClients. IPv6 callers count by their /48 for perSourcePerHour in ambit-auth.
-      globalPerHour: 20
+      # 15 an hour: the counter uses fixed clock hours, so 25 of them can overlap the 24 hours that a client that was never used stays: 375, below maxClients. IPv6 callers count by their /48 for perSourcePerHour in ambit-auth.
+      globalPerHour: 15
       # At most this many registered clients; one that nobody used for unusedClientDays is deleted.
       maxClients: 500
       unusedClientDays: 30

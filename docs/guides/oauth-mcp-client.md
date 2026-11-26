@@ -264,8 +264,8 @@ did not see, do not send the same token again at once: read whether the connecti
 HTTP 400: this is what an old (already used) refresh token gets. A connection that Ambit ended on purpose (the person or an admin stopped it, the person left the company, the grant is older than the
 limit) answers **`access_denied`** instead. When a refresh answers `invalid_grant` or `access_denied`, the connection is over
 (the person disconnected it, an admin stopped it, the person left the company, the token was spent, or the grant is older than the
-limit that the admin set, 30 days by default): **send the person through step 5 again.** A refresh that answers 5xx or
-`temporarily_unavailable` is a failure of the service: try again later with the same token.
+limit that the admin set, 30 days by default): **send the person through step 5 again.** A refresh that answers **503 `temporarily_unavailable`** did not reach the database: try again later with the same token. A refresh that ends in any other way that you did not see whole (a timeout, a 502 from a proxy) may
+have rotated the token already: try once more with the same token, and if that answers `invalid_grant`, the new token was lost: send the person through step 5 again.
 
 ## 10. Revoke (RFC 7009)
 

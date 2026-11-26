@@ -151,10 +151,10 @@ if MODE == "buckets":
         CLIENT_ADDR = "203.0.115.1"  # a fresh address for the registrations and sign-ins
         ROUTES[(AUTH, 443)] = PORTS[0]
         _, tA = connect("person150", ("time",)); _, tB = connect("person151", ("time",))
-        res = []
-        for tok in (tA, tB):
-            codes = burst(lambda i: mcp_status(f"203.0.114.{(i + 1) % 250 + 1}", token=tok["access_token"]), LIM_CRED + 8)  # a new source address for every call: only the credential count can stop it
-            res.append(codes)
+        toks = [tA["access_token"], tB["access_token"]]
+        # both agents in ONE window of the clock, interleaved: a counter that they shared would stop each at half
+        calls = burst(lambda i: mcp_status(f"203.0.114.{(i % 250) + 1}", token=toks[i % 2]), 2 * (LIM_CRED + 8))  # a new source address for (nearly) every call: only the credential count can stop it
+        res = [calls[0::2], calls[1::2]]
         check(f"19 per credential: a token's calls stop at the limit of {LIM_CRED} a minute for its agent, and another agent's token has its own count ({allowed(res[0])} and {allowed(res[1])} passed)",
               all(allowed(c) == LIM_CRED for c in res), [sorted(set(c)) for c in res])
     # N8: the bucket is chosen by the host too. Sign-in paths on the MCP host (a 404 there) stay in the mcp bucket: a flood there neither spreads over the

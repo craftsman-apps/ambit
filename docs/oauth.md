@@ -204,11 +204,11 @@ Two places count, with the same numbers:
 | sign-in | `/oauth2/auth`, `/login`, `/callback`, `/consent`, `/error` | `oauth.rateLimit.signInPerMinute` | 300 per minute |
 | token | `/oauth2/token`, `/oauth2/revoke` | `oauth.rateLimit.tokenPerMinute` | 600 per minute |
 | registration | `/register` | `oauth.registration.dynamic.perSourcePerHour` | 10 per hour per address (per **/48** for an IPv6 caller, in `ambit-auth`) |
-| registrations, all callers | `/register`, only a request that passed the checks | `oauth.registration.dynamic.globalPerHour` | 20 per hour in all (480 a day, below the cap of 500), counted in `ambit-auth` |
+| registrations, all callers | `/register`, only a request that passed the checks | `oauth.registration.dynamic.globalPerHour` | 15 per hour in all (at most 375 in any 24 hours, below the cap of 500), counted in `ambit-auth` |
 
 Over a limit the Gateway answers **429**. The registration also stops at `maxClients` (500); a client that nobody used for `unusedClientDays` (30), and a client that no
 consent and no refresh ever used 24 hours after it registered, is deleted ([Registering clients](#registering-clients)). So a flood of registrations from many networks (security review N2) is held by the
-global limit (it cannot fill the cap faster than 480 a day) and by the clean-up (a client that is never used goes after a day). **The price:** while a flood uses the global limit, a real platform
+global limit (it cannot fill the cap: at most 375 in any 24 hours) and by the clean-up (a client that is never used goes after a day). **The price:** while a flood uses the global limit, a real platform
 that registers in the same hour can get 429 (`Retry-After: 3600`); pre-registered clients and existing connections are not affected. Raise `globalPerHour` if your platforms register often.
 
 ### How many people can sign in from one company address

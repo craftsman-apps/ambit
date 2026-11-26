@@ -513,6 +513,29 @@ func accessExpr(t *testing.T, r Result, policy string) string {
 	return e[0]
 }
 
+// A controller that runs without the token issuer fails closed on the public backend only: a token there is always an OAuth token, so it may use
+// nothing; the private backend does not limit tokens without an issuer.
+func TestPublicBackendRefusesTokensWithoutTheIssuer(t *testing.T) {
+	was := AgentTokenIssuer
+	defer func() { AgentTokenIssuer = was }()
+	both := []v1.AccessRule{toolRule("all", nil, true, v1.ServerAccess{Name: "crm"})}
+	for _, issuer := range []string{"", "https://auth.example.com"} {
+		AgentTokenIssuer = issuer
+		r := Compile(nil, []v1.Server{onDoor(server("crm", "stdio"))}, both, route)
+		pub, priv := accessExpr(t, r, PublicMCPBackendName+"-access"), accessExpr(t, r, MCPBackendName+"-access")
+		if issuer == "" {
+			if !strings.Contains(pub, "!has(jwt.iss)") {
+				t.Errorf("public access without the issuer must refuse a token: %q", pub)
+			}
+			if strings.Contains(priv, "!has(jwt.iss)") || !strings.HasSuffix(priv, ": true)") {
+				t.Errorf("private access without the issuer is not limited: %q", priv)
+			}
+		} else if !strings.Contains(pub, `jwt.ambit_scope`) || !strings.Contains(priv, `jwt.ambit_scope`) {
+			t.Errorf("with the issuer both backends check the token's scope: %q / %q", pub, priv)
+		}
+	}
+}
+
 // Public/private separation (design v2, "Public and private separation"): the public backend has only the servers an
 // admin put on the front door, and its access policy has only their clauses, although a rule grants both servers.
 func TestPublicBackendHasOnlyFrontDoorServers(t *testing.T) {

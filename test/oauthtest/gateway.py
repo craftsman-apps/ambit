@@ -8,7 +8,7 @@ route, and a restart of the console.
 
 Environment: as flow.py, plus GW_PORTS (comma separated local ports of the public Gateway pods), KEY (a valid MCP API key),
 ONE_TOOL (the tool name that the front-door server has) and KUBECTL."""
-import base64, json, os, sys, time, urllib.parse
+import base64, json, os, subprocess, sys, time, urllib.parse
 src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "flow.py")).read().split("# 1 · discovery and registration")[0]
 sys.argv = sys.argv[:1]
 exec(src)
@@ -146,6 +146,29 @@ for p in PORTS:
     check(f"3 pod {p}: a valid API key still works on the same route", st == 200 and TOOL in (names or []), (st, names))
 st, hd, data, t = mcp_post(PORTS[0], {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}, token=good, key="ambit_" + "x" * 40)
 check("3 a token and a wrong key together: the key rule decides (403)", st == 403, st)
+
+# the audience is exactly this MCP URL: a token with a VALID signature (made with Hydra's own key by the test) that lists the MCP URL and another audience is
+# refused by the rule (403), while the same claims with the MCP URL alone are accepted (200): so the refusal is the audience rule and not the signature
+MINT, JWK = os.environ.get("MINT"), os.environ.get("SIGNING_JWK")
+check("3 audience: the signer (MINT) and the signing key (SIGNING_JWK) are given: the audience checks are not skipped", bool(MINT and JWK))
+if MINT and JWK:
+    def mint(**over):
+        h, pl, sg = good.split(".")
+        c = json.loads(base64.urlsafe_b64decode(pl + "=" * (-len(pl) % 4)))
+        c.update(over)
+        r = subprocess.run([MINT, "mint"], input=json.dumps(c), capture_output=True, text=True, env={**os.environ, "SIGNING_JWK": JWK}, timeout=60)
+        if r.returncode != 0 or r.stdout.count(".") != 2:
+            raise RuntimeError("the test signer failed: " + r.stderr[-200:])
+        return r.stdout.strip()
+    def listed(tok): return all((lambda r: r[0] == 200 and TOOL in (r[1] or []))(tools(p, tok)) for p in PORTS)
+    ctl_ok = mint(aud=[MCP_URL])
+    check("3 audience: a token made by the test with Hydra's key and the MCP URL alone, as a list of one, is accepted on every pod and lists the consented tool (the test's own tokens work)", listed(ctl_ok))
+    two = mint(aud=[MCP_URL, "https://other.example.com/mcp"])
+    check("3 audience: the same token that lists another audience as well is refused (403) on every pod", all(tools(p, two)[0] == 403 for p in PORTS), [tools(p, two)[0] for p in PORTS])
+    bare = mint(aud=MCP_URL)
+    check("3 audience: the MCP URL as a single string is accepted (RFC 7519 allows it) and lists the consented tool", listed(bare))
+    other = mint(aud=["https://other.example.com/mcp"])
+    check("3 audience: another audience alone is refused (401) on every pod", all(tools(p, other)[0] == 401 for p in PORTS), [tools(p, other)[0] for p in PORTS])
 
 # ---------------------------------------------------------------------------------------------------------------------
 # 4 · offboarding: the gateway refuses the person's token at once, on every pod

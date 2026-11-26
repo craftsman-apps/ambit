@@ -74,7 +74,7 @@ oauth:
     clientSecret: { name: ambit-oauth-idp, key: client-secret }
     groupsClaim: groups
   registration:
-    dynamic: { enabled: true, redirectHosts: [chatgpt.com, claude.ai] }
+    dynamic: { enabled: true, redirectHosts: [chatgpt.com/connector_platform_oauth_redirect, chatgpt.com/connector/oauth, claude.ai/api/mcp/auth_callback] }
 ```
 
 ### Register Ambit at your identity provider
@@ -148,12 +148,24 @@ cookies of that sign-in.
 Platforms register themselves (`POST /register`, RFC 7591) when `oauth.registration.dynamic.enabled` is true. Only these
 are accepted:
 
-- redirect addresses of 1 to 5 entries: `https` on a host in `redirectHosts` (exact name, port 443, no user name, no
-  fragment), or for a native client `http` on `localhost`, `127.0.0.1` or `[::1]` with any port;
+- redirect addresses of 1 to 5 entries: `https` on an entry of `redirectHosts` (exact host name, port 443, no user name, no
+  fragment, and the path the entry names), or for a native client `http` on `localhost`, `127.0.0.1` or `[::1]` with any port;
 - public clients only (`token_endpoint_auth_method: none`, PKCE), grants `authorization_code` and `refresh_token`,
   response type `code`, scopes `mcp` and `offline_access`;
 - `client_name` of at most 100 characters (control characters and angle brackets are removed);
 - no `iss`, `code`, `state`, `error` or `error_description` in the query of a redirect address (Ambit adds them).
+
+**An entry of `redirectHosts` is a host and the path of the platform's callback** (`chatgpt.com/connector/oauth`: that path and the paths below it;
+no dot segment, empty segment, query or trailing slash). The default list names the callbacks of ChatGPT and Claude only: a person who is
+sent a sign-in link by an attacker gives the code to the redirect address that the attacker registered, so the address must be one that no
+third party can use to read the code (an open redirect, a page with user content, a leaked address in a `Referer` header) on any path of
+the host. **A client that registered earlier keeps the addresses it registered**: removing an entry stops new registrations only. After you narrow the list, delete the
+clients that registered the removed paths (`GET /api/admin/oauth/clients` shows each client's `redirectUris` with the path, `DELETE /api/admin/oauth/clients/{id}`)
+and stop their agents. Take out **every** entry that matches the address (the defaults have two for ChatGPT), and remember that a native client may always register a
+loopback address. The list decides which callback addresses may register; to exclude a platform as such, turn dynamic registration off and register the clients you
+accept yourself. Path entries accept no percent escape, no semicolon and no `$`. **A bare host (`chatgpt.com`) allows every path of the host: add one only when nobody but the platform can publish a page or a
+redirect there.** If a platform's callback differs from the default (the platform's documentation names it), add its exact path; a registration with
+another path is refused with `invalid_client_metadata`.
 
 A native client that needs a changing port registers `http://127.0.0.1` or `http://[::1]` (Hydra matches the port of
 loopback IP addresses only; for `http://localhost` the port must be exactly the registered one).
@@ -191,11 +203,13 @@ rule**: without a valid token it gets **401** with the `resource_metadata` chall
 
 The token rule accepts a JWT only if: the issuer is Ambit's sign-in host (`https://<authHost>`), the signature fits a key that Hydra
 publishes (the gateway reads them inside the cluster and keeps them for 5 minutes; after an install the first token was accepted on every
-pod within 31 seconds in the test, and Ambit does not wait for the key set before it serves), the audience is exactly this MCP URL, `exp`, `aud`
+pod within 31 seconds in the test, and Ambit does not wait for the key set before it serves), the audience is exactly this MCP URL (the token rule requires it to be the only audience), `exp`, `aud`
 and `sub` are there, the person has an email that is not a service account, and the token carries an agent, a grant and a scope list
 (the consent page writes all three into every token). The same checks of every call as for a key then follow: the offboarding list, the
 stop list, the person's AccessRules **and** the scope of the token (`ambit_scope`): a tool outside the scope is not listed and not callable,
-on every call. Only servers that are on the front door are there at all.
+on every call. Only servers that are on the front door are there at all. When you turn OAuth on, wait until `kubectl -n ambit-system rollout status deploy/ambit-controller` has finished before you tell anyone: while the old controller is still the only one, its
+policies know no token issuer. A controller that runs without the token issuer fails closed once it is the new one: on the public backend the
+scope clause is `false` for every token, so no token can use a tool until the controller knows the issuer.
 
 Tokens do not work on the private route (it takes tokens of your company's provider), and keys do not work on the sign-in host.
 
@@ -215,8 +229,13 @@ Tokens do not work on the private route (it takes tokens of your company's provi
   started, and the platform connects again (a new consent). The test
   `test/stepoauth.sh` (check 14) stops an agent through the console's API with the real controller and prints the measured times
   (the token refused on every pod, the refresh refused, the console saying "stopped").
-- **Keeping a platform out**: an admin deletes the platform's OAuth client (`GET /api/admin/oauth/clients`, `DELETE
-  /api/admin/oauth/clients/{id}`): its codes and refresh tokens go with it and no new sign-in works.
+- **Keeping a platform out**: **deleting the platform's OAuth client does not keep the platform out.** An admin can list the clients
+  (`GET /api/admin/oauth/clients`) and delete one (`DELETE /api/admin/oauth/clients/{id}`): its codes and refresh tokens go with it, and
+  the platform's connections end at their next refresh. But with dynamic registration on, the platform registers a new client at its next
+  attempt, and an access token that was already issued works until it expires (15 minutes), unless the agent is stopped. To keep a platform
+  out: (1) take its entry out of `oauth.registration.dynamic.redirectHosts` and upgrade (it can then register no new client), (2) stop the
+  agents of its connections (the Agents page, or `POST /api/agents/{name}/stop`: the gateway refuses their tokens within seconds), and
+  (3) delete its client. Pre-registered clients (if you made any) are deleted the same way.
 
 The token hook of `ambit-auth` (Hydra calls it for every token request) refuses a **refresh** when the person is on the offboarding list
 (`ambit-offboarded`), the agent or grant is on the stop list (`ambit-agent-stops`), the console says the agent is not active, does not own
@@ -287,7 +306,8 @@ still answers 403 for the old probe, keep the block on and check that pod again;
 carry no agent, grant or scope: no route accepts them, and they expire after an hour. They are signed with the real keys, so treat the answer of
 step 2 as secret and delete `rotation.json` after the check.
 
-`GET /api/admin/oauth/signing-key` shows the key IDs of both sets (never the keys) and the time of the last rotation. Every rotation is in the
+`GET /api/admin/oauth/signing-key` shows the key IDs that Hydra publishes (it reads the public key list; the console reads a private key for the
+rotation only) and the time of the last rotation. Every rotation is in the
 key events of the console (`oauth-signing-key-rotation`).
 
 A connection that a person makes in the same second as the end of the call is over too (the time is kept in whole seconds); the platform shows an error at its
@@ -367,7 +387,7 @@ Run this once on your own database before you rely on OAuth. It does not depend 
 |---|---|
 | `StatefulSet ambit-hydra` (2 pods) | Hydra v26.2.0 (image pinned by digest). Init containers: `check-database`, `migrate` (`hydra migrate sql up`). Containers: `hydra`, `hydra-keys` (below). |
 | `Service ambit-hydra-public` (4444), `Service ambit-hydra-admin` (4445) | ClusterIP only. |
-| `NetworkPolicy ambit-hydra` | Port 4444: the public Gateway's pods, agentgateway's controller (it fetches the keys) and `ambit-auth` (its authorize front). Port 4445: `ambit-auth` and the console only. Every other pod is refused. |
+| `NetworkPolicy ambit-hydra` | Port 4444: the public Gateway's pods, agentgateway's controller (it fetches the keys), `ambit-auth` (its authorize front) and the console (the public key list, for the status of the signing keys). Port 4445: `ambit-auth` and the console only. Every other pod is refused. |
 | `Deployment ambit-auth` (2 pods), `Service ambit-auth`, `NetworkPolicy ambit-auth` | The sign-in pages, registration and the token hook. Stateless. Port 8080 (pages) is open to the public Gateway's pods only, 8081 (token hook) to Hydra's pods only, 8082 (health, metrics) to the cluster. It reads two ConfigMaps by name (`ambit-offboarded`, `ambit-agent-stops`) and writes nothing in Kubernetes. |
 | `HTTPRoute ambit-auth-app` | The pages: `GET /.well-known/oauth-authorization-server`, `/oauth2/auth`, `/login`, `/callback`, `/consent`, `/error`, `POST /consent`, `POST /register`. |
 | `HTTPRoute ambit-auth-hydra` | On the sign-in host, three exact paths: `POST /oauth2/token`, `POST /oauth2/revoke`, `GET /.well-known/jwks.json`. Everything else of Hydra (registration, discovery, user info, device flow, sessions, health, the admin API) has no route and answers 404. |

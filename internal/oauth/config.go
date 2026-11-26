@@ -37,6 +37,40 @@ var Platforms = map[string]string{
 // Scopes are the OAuth scopes of Ambit: mcp (use the MCP route) and offline_access (a refresh token).
 var Scopes = []string{"mcp", "offline_access"}
 
+// redirectPathRE is the path of a registration entry: segments of ordinary characters (no percent escape, no "$", "(", ")" or ";": a path must mean the same to every reader), no "." or ".." segment, no empty segment, no query.
+var redirectPathRE = regexp.MustCompile(`^(/[A-Za-z0-9_~!&'*+=:@-][A-Za-z0-9._~!&'*+=:@-]*)+$`)
+
+// splitRedirectEntry splits an entry of RegistrationHosts: "chatgpt.com" (any path on the host) or "chatgpt.com/connector/oauth" (that path, and
+// the paths below it).
+func splitRedirectEntry(e string) (host, path string) {
+	if i := strings.Index(e, "/"); i >= 0 {
+		return e[:i], e[i:]
+	}
+	return e, ""
+}
+
+// RedirectAllowed reports whether a registered redirect address is on an entry of RegistrationHosts: the host is the entry's host, and the path is
+// whatever the entry names, or below it. An entry without a path allows every path of the host. A path with a dot segment, an empty segment, a percent
+// escape or a backslash is never allowed under an entry that names a path (a browser or the platform may read it as another path).
+func (c Config) RedirectAllowed(u *url.URL) bool {
+	for _, e := range c.RegistrationHosts {
+		h, p := splitRedirectEntry(e)
+		if h != u.Hostname() {
+			continue
+		}
+		if p == "" {
+			return true
+		}
+		if strings.Contains(u.EscapedPath(), "%") || strings.Contains(u.Path, "\\") { // an escaped spelling may be routed as another path by the platform
+			continue
+		}
+		if u.Path == p || (strings.HasPrefix(u.Path, p+"/") && redirectPathRE.MatchString(u.Path)) {
+			return true
+		}
+	}
+	return false
+}
+
 var hostRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`)
 
 func httpsURL(name, raw string, wantPath bool) (*url.URL, error) {
@@ -74,9 +108,12 @@ func (c *Config) Validate() error {
 	if len(c.RegistrationHosts) == 0 && !c.NoRegistration {
 		errs = append(errs, errors.New("registration hosts: name at least one, or turn dynamic registration off"))
 	}
-	for _, h := range c.RegistrationHosts {
+	for _, e := range c.RegistrationHosts {
+		h, p := splitRedirectEntry(e)
 		if !hostRE.MatchString(h) {
-			errs = append(errs, fmt.Errorf("registration host %q must be a lower-case host name (no scheme, port, path or wildcard)", h))
+			errs = append(errs, fmt.Errorf("registration host %q must be a lower-case host name, with an optional path (no scheme, port or wildcard)", e))
+		} else if p != "" && !redirectPathRE.MatchString(p) {
+			errs = append(errs, fmt.Errorf("registration entry %q: the path must start with / and have no query, fragment, dot segments or empty segments", e))
 		}
 	}
 	if !c.NoRegistration && (c.MaxClients < 1 || c.MaxClients > 5000) {

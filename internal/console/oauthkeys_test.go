@@ -18,6 +18,11 @@ import (
 )
 
 // fakeKeyAPI is the key-set part of Hydra's admin API (GET, POST, PUT, DELETE of /admin/keys/{set}).
+var keyAPICalls struct {
+	sync.Mutex
+	paths []string
+}
+
 func fakeKeyAPI(t *testing.T, fail string) (*httptest.Server, map[string][]json.RawMessage) {
 	t.Helper()
 	var mu sync.Mutex
@@ -33,8 +38,24 @@ func fakeKeyAPI(t *testing.T, fail string) (*httptest.Server, map[string][]json.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
+		keyAPICalls.Lock()
+		keyAPICalls.paths = append(keyAPICalls.paths, r.Method+" "+r.URL.Path)
+		keyAPICalls.Unlock()
 		if fail != "" && fail == r.Method+" "+r.URL.Path {
 			w.WriteHeader(500)
+			return
+		}
+		if r.URL.Path == "/.well-known/jwks.json" { // Hydra's public key list: public keys only
+			pub := []json.RawMessage{}
+			for _, ks := range sets {
+				for _, k := range ks {
+					var jwk jose.JSONWebKey
+					_ = jwk.UnmarshalJSON(k)
+					b, _ := jwk.Public().MarshalJSON()
+					pub = append(pub, b)
+				}
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"keys": pub})
 			return
 		}
 		set := strings.TrimPrefix(r.URL.Path, "/admin/keys/")
@@ -85,6 +106,7 @@ func TestEmergencyRotation(t *testing.T) {
 		t.Fatalf("OAuth off: %d", w.Code)
 	}
 	c.Hydra = &oauth.HydraAdmin{Base: srv.URL}
+	c.HydraPublic = srv.URL
 	// no confirmation: nothing changes
 	w = httptest.NewRecorder()
 	c.rotateSigningKey(w, rotateReq("yes"), admin)
@@ -95,12 +117,22 @@ func TestEmergencyRotation(t *testing.T) {
 	if err := c.Client.Get(context.Background(), client.ObjectKey{Namespace: c.Namespace, Name: oauth.RotationConfigMap}, &cm); err == nil {
 		t.Fatal("the time was written without a confirmation")
 	}
-	// the status shows key IDs and no key material
+	// the status shows the published key IDs and no key material, and it reads only the PUBLIC key list (never an admin key call: those return private keys)
+	keyAPICalls.Lock()
+	keyAPICalls.paths = nil
+	keyAPICalls.Unlock()
 	w = httptest.NewRecorder()
 	c.getSigningKey(w, httptest.NewRequest("GET", "/api/admin/oauth/signing-key", nil), admin)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "old-access") || strings.Contains(w.Body.String(), `"d"`) || strings.Contains(w.Body.String(), `"n"`) {
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "old-access") || !strings.Contains(w.Body.String(), "old-id") || strings.Contains(w.Body.String(), `"d"`) || strings.Contains(w.Body.String(), `"n"`) {
 		t.Fatalf("status: %d %s", w.Code, w.Body.String())
 	}
+	keyAPICalls.Lock()
+	for _, p := range keyAPICalls.paths {
+		if strings.Contains(p, "/admin/keys") {
+			t.Errorf("the status call used the admin key API: %s", p)
+		}
+	}
+	keyAPICalls.Unlock()
 	// the rotation
 	w = httptest.NewRecorder()
 	c.rotateSigningKey(w, rotateReq(RotateConfirm), admin)

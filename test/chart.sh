@@ -267,6 +267,10 @@ grep -q 'AMBIT_INJECTION_GUARD' <<<"$igold" && grep -q 'mode.*audit' <<<"$igold"
 fdv=(-f deploy/quickstart.yaml -f test/frontdoor/values.yaml)
 fdt() { helm template ambit charts/ambit -n ambit-system "${fdv[@]}" "$@"; }
 dflt=$(helm template ambit charts/ambit -n ambit-system -f deploy/quickstart.yaml --set limits.enabled=true)
+uv run --no-project --with pyyaml python -c "import sys,yaml
+d=[x for x in yaml.safe_load_all(sys.stdin) if x and x['kind']=='NetworkPolicy' and x['metadata']['name']=='ambit-ratelimit'][0]
+r=d['spec']['ingress']
+assert len(r)==1 and r[0]['ports']==[{'port':8081}] and 'from' in r[0], r  # no port 8080 rule without the front door, none open to all pods" <<<"$dflt" || { echo "FAIL chart: the ratelimit network policy opens only port 8081, to the gateway pods, without the front door"; exit 1; }
 ! grep -q '/json: the public front door' <<<"$dflt" || { echo "FAIL chart: the ratelimit Service publishes port 8080 only with the front door"; exit 1; }
 ! grep -q 'ambit-public' <<<"$dflt" || { echo "FAIL chart: nothing of the front door is rendered by default"; exit 1; }
 ! grep -q 'ambit.ingress' <<<"$dflt" || { echo "FAIL chart: no ambit.ingress attribute without the front door"; exit 1; }
@@ -322,8 +326,12 @@ c=yaml.safe_load(one("ConfigMap","ambit-ratelimit-front-door")["data"]["front-do
 assert c=={"domain":"ambit-public","descriptors":[{"key":"fd_credential","rate_limit":{"unit":"minute","requests_per_unit":600}},{"key":"fd_source","rate_limit":{"unit":"minute","requests_per_unit":120}}]}, c
 v=one("Deployment","ambit-ratelimit")["spec"]["template"]["spec"]["volumes"][0]
 assert [s["configMap"]["name"] for s in v["projected"]["sources"]]==["ambit-ratelimit-config","ambit-ratelimit-front-door"], v
-n=one("NetworkPolicy","ambit-ratelimit")["spec"]["ingress"][0]["from"]
-assert {"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"ambit-public"}}} in n, n' "limits: per key (after authentication) and per source address (before authentication, every request) shared through the ratelimit service, plus a per-pod limit; the ratelimit service admits the public gateway pods"
+ing=one("NetworkPolicy","ambit-ratelimit")["spec"]["ingress"]
+n=ing[0]["from"]
+assert {"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"ambit-public"}}} in n, n
+# port 8080 (/json, no authentication) is for the public gateway pods only, never for every pod (#417)
+assert ing[0]["ports"]==[{"port":8081}] and ing[1]=={"from":[{"podSelector":{"matchLabels":{"gateway.networking.k8s.io/gateway-name":"ambit-public"}}}],"ports":[{"port":8080}]} and len(ing)==2, ing
+assert all("from" in r for r in ing), ing' "limits: per key (after authentication) and per source address (before authentication, every request) shared through the ratelimit service, plus a per-pod limit; the ratelimit service admits the public gateway pods"
 check_fd 'v=one("ValidatingAdmissionPolicy","ambit-public-routes")["spec"]
 assert v["failurePolicy"]=="Fail" and set(v["matchConstraints"]["resourceRules"][0]["resources"])=={"httproutes","grpcroutes","tlsroutes","tcproutes","udproutes"}, v
 e=v["validations"][0]["expression"]

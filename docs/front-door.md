@@ -151,9 +151,12 @@ an MCP request that way). The first two limits are per minute (a fixed window th
 - **A flood is still read by the limiter.** Every request, also one that is already over its limit, costs one call to the
   ratelimit service and one operation in Valkey. The limit makes a flood cheap for the gateway pods and for the MCP servers,
   not free for the ratelimit service. The edge limits above are the place to stop the volume itself.
-- **The ratelimit port.** The check uses port 8080 of the ratelimit service (`/json`), which is also its health port. Like
-  before, every pod in the cluster can reach that port (the health checks need it); `/json` can change any counter. If you
-  run untrusted pods in the namespace, use a network policy of your own, or see [issue #417](https://github.com/craftsman-apps/ambit/issues/417).
+- **The ratelimit port.** The check uses port 8080 of the ratelimit service (`/json`). That endpoint counts a hit for any
+  domain and descriptor and has no password, so the network policy `ambit-ratelimit` admits **only the public gateway pods**
+  to it (and the gateway pods to port 8081, as before). No other pod in the namespace, such as an MCP server, can raise or
+  fill a counter. The kubelet's readiness probe comes from the node, which a network policy does not limit. The rule holds on
+  a cluster network that enforces network policies, and only while nobody who can create pods in the namespace is untrusted
+  (the policy admits pods by label).
 - **Cheap and expensive calls.** In this release there is only one kind of public call (`/mcp`), so there is one source
   limit. When sign-in endpoints are added later, they get their own, lower limit, so that a flood of sign-in attempts
   cannot use up the limit of MCP calls from the same address.

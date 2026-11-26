@@ -24,6 +24,33 @@ alerts:
 | AmbitControllerRecordsDropped | warning | the controller dropped access snapshot records in the last 30 minutes (only with `evidence.enabled`). The rules were applied; an access review export for this time has a gap until the next change or the daily record at 00:05 UTC | `send_failed`: the collector was not reachable, read `kubectl -n <ns> logs deploy/ambit-otel-collector`. `queue_full`: more records than the controller can send. `too_large`: the AccessRules together are larger than 1 MiB, read `kubectl -n <ns> logs deploy/ambit-controller` |
 | AmbitAgentStopNotConfirmed | critical | an agent stop was requested more than 60 seconds ago and the named Gateway has not accepted the stop policy. The agent's keys are deleted, but the Gateway may still serve a token or a key it already knows | `kubectl -n <ns> get agentgatewaypolicy \| grep ambit-agent-stops`; `kubectl -n <ns> logs deploy/ambit-controller`; check the agentgateway controller. The agent stays in state `stopping` until the Gateway confirms |
 | AmbitStopPolicyDegraded | critical | the stop list could not be turned into gateway policies (more than 1,000 entries, or an unreadable list). The last stop policies stay in force; new stops are not applied | `kubectl -n <ns> get configmap ambit-agent-stops-ack -o yaml` (field `degraded`) |
+| AmbitHydraNotReady | critical | no Hydra pod was ready for 2 minutes (only with `oauth.enabled`). Nobody can connect a platform or refresh a connection; calls with an access token that was already issued work for up to 15 minutes | the database first (Hydra is not ready when it cannot reach it): `kubectl -n <ns> logs ambit-hydra-0 -c hydra`, `-c check-database`; then [Outage](oauth.md#outage) |
+| AmbitOAuthTokenErrors | critical | more than 5% of the requests to Hydra's public endpoints (`/oauth2/token`, `/oauth2/revoke`, the key list) answered 5xx for 5 minutes, with at least one request every 50 seconds (only with `oauth.enabled`). Read from the Gateway's own request counter (`agentgateway_requests_total`, route `ambit-auth-hydra`), through the PodMonitor `ambit-public-gateway` | Hydra and its database, as above |
+| AmbitHydraJanitorFailed | warning | a run of the clean-up job `ambit-hydra-janitor` failed (only with `oauth.enabled`). Expired tokens stay until the next run | `kubectl -n <ns> logs job/<job name>`: the usual cause is the database address or password |
+| AmbitHydraJanitorStale | warning | the clean-up has not succeeded for two days (only with `oauth.enabled`) | `kubectl -n <ns> get cronjob ambit-hydra-janitor` |
+| AmbitOAuthDatabaseBackupOld | warning | **your** expression says that the newest backup of Hydra's database is older than `alerts.oauth.backupMaxAgeHours` (26) (only when `alerts.oauth.backupAgeSecondsExpr` is set) | your backup system; [Backup](oauth.md#backup) |
+| AmbitOAuthDatabaseConnectionsHigh | warning | **your** expression says that more than `alerts.oauth.connectionsMaxRatio` (0.8) of the database's connections are in use (only when `alerts.oauth.connectionsUsedRatioExpr` is set) | [Pool sizing](oauth.md#pool-sizing) |
+
+## The database alerts (OAuth)
+
+Ambit cannot see inside your database, so the last two alerts above read **your** metrics. Put a PromQL expression in the values, and the alert
+exists; leave it empty and there is none. The names depend on your database and its exporter. These are examples, **not tested by Ambit**:
+
+```yaml
+alerts:
+  enabled: true
+  oauth:
+    # seconds since the newest backup
+    backupAgeSecondsExpr: 'time() - max(cnpg_collector_last_available_backup_timestamp)'     # CloudNativePG
+    backupMaxAgeHours: 26
+    # the share of the database's connections in use, from 0 to 1
+    connectionsUsedRatioExpr: 'sum(pg_stat_activity_count) / max(pg_settings_max_connections)'  # postgres_exporter
+    connectionsMaxRatio: 0.8
+```
+
+For a managed service, use the metric that the service publishes: the age of its newest automatic snapshot or backup, and its
+connection count against its limit (Amazon CloudWatch, Google Cloud Monitoring and Azure Monitor each have both). The rule fires when the
+expression stays above its limit for 10 minutes. Test it once: set the limit low and see the alert fire.
 
 ## Finding what grew
 

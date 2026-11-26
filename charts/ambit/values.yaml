@@ -381,6 +381,15 @@ alerts:
   enabled: false
   # Labels your Prometheus selects rules and monitors by, e.g. { release: kube-prometheus-stack }.
   labels: {}
+  # OAuth (oauth.enabled): the database is yours, so its metrics are yours. Put a PromQL expression here to get the alert; leave it empty for none.
+  # The names depend on your database and its exporter, so Ambit does not guess them (docs/alerts.md has examples).
+  oauth:
+    # Seconds since the newest backup, e.g. for CloudNativePG: time() - max(cnpg_collector_last_available_backup_timestamp)
+    backupAgeSecondsExpr: ""
+    backupMaxAgeHours: 26
+    # A ratio from 0 to 1, e.g. with postgres_exporter: sum(pg_stat_activity_count) / max(pg_settings_max_connections)
+    connectionsUsedRatioExpr: ""
+    connectionsMaxRatio: 0.8
 
 protection:
   # MCP guardrails (ambit-guard): tool pinning and masking of personal data in tool results.

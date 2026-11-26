@@ -99,6 +99,58 @@ spec:
           annotations:
             summary: "The stop list was not turned into gateway policies"
             description: "The last stop policies stay in force, but new stops are not applied. Read why: kubectl -n {{ $ns }} get configmap ambit-agent-stops-ack -o yaml (field degraded). A list over 1,000 entries or an unreadable list is the usual cause."
+        {{- if (.Values.oauth | default dict).enabled }}
+        # OAuth sign-in (docs/oauth.md, "Operations"). The database is yours: its metrics are named by alerts.oauth below.
+        - alert: AmbitHydraNotReady
+          expr: kube_statefulset_status_replicas_ready{namespace="{{ $ns }}", statefulset="ambit-hydra"} == 0
+          for: 2m
+          labels: { severity: critical }
+          annotations:
+            summary: "No Hydra pod is ready: nobody can connect a platform or refresh a connection"
+            description: "Calls with an access token that was already issued work for up to 15 minutes. Hydra is not ready when its database does not answer: check the database first, then kubectl -n {{ $ns }} logs ambit-hydra-0 -c hydra and -c check-database (docs/oauth.md, Operations: Outage)."
+        - alert: AmbitOAuthTokenErrors
+          expr: |
+            (sum(rate(agentgateway_requests_total{namespace="{{ $ns }}", route="{{ $ns }}/ambit-auth-hydra", status=~"5.."}[5m]))
+              / sum(rate(agentgateway_requests_total{namespace="{{ $ns }}", route="{{ $ns }}/ambit-auth-hydra"}[5m])) > 0.05)
+              and sum(rate(agentgateway_requests_total{namespace="{{ $ns }}", route="{{ $ns }}/ambit-auth-hydra"}[5m])) > 0.02
+          for: 5m
+          labels: { severity: critical }
+          annotations:
+            summary: "More than 5% of the requests to Hydra's public endpoints (/oauth2/token, /oauth2/revoke, the key list) answer 5xx"
+            description: "People cannot connect a platform, and connections cannot refresh. Look at Hydra and its database: kubectl -n {{ $ns }} get pods -l app.kubernetes.io/name=ambit-hydra; kubectl -n {{ $ns }} logs ambit-hydra-0 -c hydra."
+        - alert: AmbitHydraJanitorFailed
+          expr: kube_job_status_failed{namespace="{{ $ns }}", job_name=~"ambit-hydra-janitor.*"} > 0
+          labels: { severity: warning }
+          annotations:
+            summary: "The clean-up of Hydra's database failed ({{`{{ $labels.job_name }}`}})"
+            description: "Expired tokens stay in the database until it runs again. Read why: kubectl -n {{ $ns }} logs job/{{`{{ $labels.job_name }}`}}. The usual cause is the database address or password."
+        - alert: AmbitHydraJanitorStale
+          expr: time() - kube_cronjob_status_last_successful_time{namespace="{{ $ns }}", cronjob="ambit-hydra-janitor"} > 2 * 86400
+          for: 1h
+          labels: { severity: warning }
+          annotations:
+            summary: "The clean-up of Hydra's database has not succeeded for two days"
+            description: "kubectl -n {{ $ns }} get cronjob ambit-hydra-janitor; kubectl -n {{ $ns }} get jobs. The database grows until it runs again."
+        {{- $dba := ((.Values.alerts | default dict).oauth) | default dict }}
+        {{- if $dba.backupAgeSecondsExpr }}
+        - alert: AmbitOAuthDatabaseBackupOld
+          expr: ({{ $dba.backupAgeSecondsExpr }}) > {{ mul (int ($dba.backupMaxAgeHours | default 26)) 3600 }}
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "The newest backup of Hydra's database is older than {{ $dba.backupMaxAgeHours | default 26 }} hours"
+            description: "Without a recent backup a restore loses the connections made since (they connect again). docs/oauth.md, Operations: Backup. The expression comes from alerts.oauth.backupAgeSecondsExpr."
+        {{- end }}
+        {{- if $dba.connectionsUsedRatioExpr }}
+        - alert: AmbitOAuthDatabaseConnectionsHigh
+          expr: ({{ $dba.connectionsUsedRatioExpr }}) > {{ $dba.connectionsMaxRatio | default 0.8 }}
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "Hydra and other clients use more than {{ mulf (float64 ($dba.connectionsMaxRatio | default 0.8)) 100 }}% of the database's connections"
+            description: "Hydra takes at most (pods x max_conns) connections, and the janitor or a migration one more run (docs/oauth.md, Operations: Pool sizing). The expression comes from alerts.oauth.connectionsUsedRatioExpr."
+        {{- end }}
+        {{- end }}
         {{- if and .Values.mcp.enabled .Values.protection.enabled }}
         - alert: AmbitGuardCompressionFailing
           expr: sum by (namespace, server) (increase(ambit_guard_compress_results_total{namespace="{{ $ns }}", outcome=~"error|timeout"}[30m])) > 0
@@ -115,6 +167,20 @@ spec:
             description: "No call failed. The Savings page counts fewer compressed results than there were. send_failed: the collector was not reachable (kubectl -n {{ $ns }} logs deploy/ambit-otel-collector). queue_full: more records than the guard can send. no_groups: the gateway sent no groups."
         {{- end }}
         {{- end }}
+{{- if (.Values.oauth | default dict).enabled }}
+---
+# The public Gateway's pods (agentgateway): requests by route and status on port 15020 (agentgateway_requests_total).
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: ambit-public-gateway
+  {{- with .Values.alerts.labels }}
+  labels: {{ toJson . }}
+  {{- end }}
+spec:
+  selector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit-public } }
+  podMetricsEndpoints: [{ portNumber: 15020, path: /metrics }]
+{{- end }}
 {{- if and .Values.mcp.enabled .Values.protection.enabled }}
 ---
 # The guard's /metrics (ambit_guard_compress_*), on its health port.

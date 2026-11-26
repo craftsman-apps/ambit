@@ -524,6 +524,12 @@ OUT=$("${PY[@]}" -c "print(f'first error {$FIRST-$T_DOWN:.1f} s after the stop, 
 RECOV=$("${PY[@]}" -c "print($LAST-$T_DBREADY)")
 "${PY[@]}" -c "import sys;sys.exit(0 if $RECOV < 60 else 1)" || fail "16 outage: sign-in and refresh took more than 60 s to recover after the database was Ready: $OUT"
 wait_for 60 'hydra_both_ready && jwks_ok' || fail "16 outage: Hydra pods are not Ready after the database came back"
+# The alert AmbitOAuthTokenErrors reads the Gateway's request counter of the route to Hydra: the 5xx of the outage must be in it.
+GM=$(freeport); kubectl -n "$NS" port-forward "pod/${PODS[0]}" "$GM:15020" >/dev/null 2>&1 & echo $! >> "$W/pids"
+wait_for 30 '(exec 3<>"/dev/tcp/127.0.0.1/$GM") 2>/dev/null' || fail "16 outage: no port-forward to the Gateway's metrics"
+command curl -s --max-time 10 "http://127.0.0.1:$GM/metrics" > "$W/gwmetrics"
+grep '^agentgateway_requests_total{' "$W/gwmetrics" | grep "route=\"$NS/ambit-auth-hydra\"" | grep -qE 'status="5[0-9][0-9]"' \
+  || fail "16 outage: the Gateway's request counter has no 5xx for the route ambit-auth-hydra (the alert AmbitOAuthTokenErrors reads it): $(grep '^agentgateway_requests_total{' "$W/gwmetrics" | grep -o 'route="[^"]*"[^}]*status="[0-9]*"' | sort -u | head -8)"
 [[ "$(dbo refresh "$W/g.json" 0)" == "200 " ]] || fail "16 outage: a refresh must work after the outage"
 pass "16 30 second outage of the database: $OUT; the access token kept working at both gateway pods during it ($MCP_DURING); refresh works again"
 

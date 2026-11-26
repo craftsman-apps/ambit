@@ -180,3 +180,107 @@ tests:
             exp_annotations:
               summary: "The stop list was not turned into gateway policies"
               description: "The last stop policies stay in force, but new stops are not applied. Read why: kubectl -n ambit-system get configmap ambit-agent-stops-ack -o yaml (field degraded). A list over 1,000 entries or an unreadable list is the usual cause."
+  # OAuth: no ready Hydra pod for 2 minutes fires; one ready pod does not.
+  - interval: 1m
+    input_series:
+      - series: 'kube_statefulset_status_replicas_ready{namespace="ambit-system",statefulset="ambit-hydra"}'
+        values: '2x3 0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AmbitHydraNotReady
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: AmbitHydraNotReady
+        exp_alerts:
+          - exp_labels: { severity: critical, namespace: ambit-system, statefulset: ambit-hydra }
+            exp_annotations:
+              summary: "No Hydra pod is ready: nobody can connect a platform or refresh a connection"
+              description: "Calls with an access token that was already issued work for up to 15 minutes. Hydra is not ready when its database does not answer: check the database first, then kubectl -n ambit-system logs ambit-hydra-0 -c hydra and -c check-database (docs/oauth.md, Operations: Outage)."
+  # OAuth: 5xx on Hydra's public endpoints. 20% for more than 5 minutes fires; 1% does not; 100% of a trickle (0.01 a second) does not.
+  - interval: 1m
+    input_series:
+      - series: 'agentgateway_requests_total{namespace="ambit-system",pod="gw-1",route="ambit-system/ambit-auth-hydra",status="200"}'
+        values: '0+48x30'
+      - series: 'agentgateway_requests_total{namespace="ambit-system",pod="gw-1",route="ambit-system/ambit-auth-hydra",status="503"}'
+        values: '0+12x30'
+      - series: 'agentgateway_requests_total{namespace="ambit-system",pod="gw-2",route="ambit-system/ambit-auth-hydra",status="200"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AmbitOAuthTokenErrors
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: AmbitOAuthTokenErrors
+        exp_alerts:
+          - exp_labels: { severity: critical }
+            exp_annotations:
+              summary: "More than 5% of the requests to Hydra's public endpoints (/oauth2/token, /oauth2/revoke, the key list) answer 5xx"
+              description: "People cannot connect a platform, and connections cannot refresh. Look at Hydra and its database: kubectl -n ambit-system get pods -l app.kubernetes.io/name=ambit-hydra; kubectl -n ambit-system logs ambit-hydra-0 -c hydra."
+  - interval: 1m
+    input_series:
+      - series: 'agentgateway_requests_total{namespace="ambit-system",pod="gw-1",route="ambit-system/ambit-auth-hydra",status="200"}'
+        values: '0+99x30'
+      - series: 'agentgateway_requests_total{namespace="ambit-system",pod="gw-1",route="ambit-system/ambit-auth-hydra",status="500"}'
+        values: '0+1x30'
+      - series: 'agentgateway_requests_total{namespace="ambit-system",pod="gw-2",route="ambit-system/ambit-auth-hydra",status="503"}'
+        values: '0+0.6x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: AmbitOAuthTokenErrors
+        exp_alerts: []
+  # OAuth: a failed janitor job fires at once; a successful run less than two days ago does not fire, one from three days ago does (after an hour).
+  - interval: 1m
+    input_series:
+      - series: 'kube_job_status_failed{namespace="ambit-system",job_name="ambit-hydra-janitor-29000"}'
+        values: '0x120 1x120'
+      - series: 'kube_cronjob_status_last_successful_time{namespace="ambit-system",cronjob="ambit-hydra-janitor"}'
+        values: '0x3700'
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: AmbitHydraJanitorFailed
+        exp_alerts: []
+      - eval_time: 3h
+        alertname: AmbitHydraJanitorFailed
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: ambit-system, job_name: ambit-hydra-janitor-29000 }
+            exp_annotations:
+              summary: "The clean-up of Hydra's database failed (ambit-hydra-janitor-29000)"
+              description: "Expired tokens stay in the database until it runs again. Read why: kubectl -n ambit-system logs job/ambit-hydra-janitor-29000. The usual cause is the database address or password."
+      - eval_time: 40h
+        alertname: AmbitHydraJanitorStale
+        exp_alerts: []
+      - eval_time: 60h
+        alertname: AmbitHydraJanitorStale
+        exp_alerts:
+          - exp_labels: { severity: warning, namespace: ambit-system, cronjob: ambit-hydra-janitor }
+            exp_annotations:
+              summary: "The clean-up of Hydra's database has not succeeded for two days"
+              description: "kubectl -n ambit-system get cronjob ambit-hydra-janitor; kubectl -n ambit-system get jobs. The database grows until it runs again."
+  # OAuth: the database's own metrics, named by alerts.oauth: a backup older than 26 hours, and more than 80% of the connections.
+  - interval: 1m
+    input_series:
+      - series: 'backup_age_seconds{instance="db"}'
+        values: '90000x5 94000x30'
+      - series: 'connections_used_ratio{instance="db"}'
+        values: '0.5x5 0.9x30'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: AmbitOAuthDatabaseBackupOld
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: AmbitOAuthDatabaseBackupOld
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "The newest backup of Hydra's database is older than 26 hours"
+              description: "Without a recent backup a restore loses the connections made since (they connect again). docs/oauth.md, Operations: Backup. The expression comes from alerts.oauth.backupAgeSecondsExpr."
+      - eval_time: 3m
+        alertname: AmbitOAuthDatabaseConnectionsHigh
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: AmbitOAuthDatabaseConnectionsHigh
+        exp_alerts:
+          - exp_labels: { severity: warning }
+            exp_annotations:
+              summary: "Hydra and other clients use more than 80% of the database's connections"
+              description: "Hydra takes at most (pods x max_conns) connections, and the janitor or a migration one more run (docs/oauth.md, Operations: Pool sizing). The expression comes from alerts.oauth.connectionsUsedRatioExpr."

@@ -128,7 +128,14 @@ spec:
         - podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit-public } }
         {{- end }}
       ports: [{ port: 8081 }]
-    - ports: [{ port: 8080 }]  # health checks
+    {{- if (.Values.frontDoor | default dict).enabled }}
+    # Port 8080 serves /json, which counts a hit for any domain and descriptor with no authentication: only the public
+    # gateway pods (the front door's source limit) may reach it, so no other pod can raise or fill a counter (#417). Nothing
+    # else needs it: the kubelet's readiness probe comes from the node, which a NetworkPolicy does not limit.
+    - from:
+        - podSelector: { matchLabels: { gateway.networking.k8s.io/gateway-name: ambit-public } }
+      ports: [{ port: 8080 }]
+    {{- end }}
 {{- if not .Values.limits.valkey.external.address }}
 ---
 apiVersion: networking.k8s.io/v1

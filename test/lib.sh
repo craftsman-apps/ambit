@@ -172,6 +172,15 @@ r=d.get("result",{}); t=r.get("content",[{}])[0].get("text","").replace("\n"," "
 print("error "+d["error"]["message"] if "error" in d else ("error " if r.get("isError") else "ok ")+t)'
 }
 
+# hold_for_midnight SECS: daily counters (budgets) are keyed by the UTC day, and a charge goes to the day in which the
+# answer's token counts arrive. A check that reads a counter by `day=` must not run across 00:00 UTC (#427: a stream that
+# started at 23:59:52 was charged to the next day's key, and the check read the old one). When fewer than SECS seconds
+# remain in the UTC day, wait until just after midnight. `now` is for testing the function.
+hold_for_midnight() {
+  local now=${2:-$(date -u +%s)} left
+  left=$(( 86400 - now % 86400 ))
+  if (( left <= $1 )); then echo "waiting $((left + 1)) s for 00:00 UTC (daily counters change their key)"; sleep $((left + 1)); fi
+}
 # wait_for SECS CMD: run CMD (eval) every 2 s until it succeeds; non-zero when SECS pass first.
 wait_for() {
   local end=$((SECONDS + $1))

@@ -225,7 +225,7 @@ EOF
 kubectl -n "$NS" wait "budgets.$G" keys-user09 --for=condition=Ready --timeout=60s >/dev/null || fail "9 budget not Ready"
 wait_rl "$NS" "group_ml-research.user: unit=DAY requests_per_unit=0,"   # the Budget's 1, minus one (budgets.go)
 flush
-day=$(( $(date -u +%s) / 86400 * 86400 ))
+hold_for_midnight 60; day=$(( $(date -u +%s) / 86400 * 86400 ))
 b1=$(code -H "x-api-key: $ML")
 # the answer is counted a moment after it arrives
 for _ in $(seq 1 30); do [[ $(kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "ambit-llm_group_ml-research_user_user09@example.com_$day" 2>/dev/null | tr -d '\r') == 1 ]] && break; sleep 1; done

@@ -71,7 +71,23 @@ func (s *Server) tokenHook(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	// A refresh. A grant lives at most MaxGrantDays: the groups in the token are those of the sign-in, so this is how a group
+	// A refresh. A grant made before the last emergency rotation of the signing keys is over: Hydra would sign a refreshed access token
+	// with the key ID of the grant's first token, a key that no longer exists, and the person must connect the platform again anyway.
+	rotated, err := s.Deny.RotatedAt()
+	if err != nil {
+		mHook.WithLabelValues("unreadable").Inc()
+		s.log().Error("token hook: cannot read the time of the last key rotation: the request is refused", "err", err)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		return
+	}
+	// (A grant made in the second of the rotation, or any second before it, is over: the time is in whole seconds.)
+	if gt, ok := GrantTime(grant); !ok || gt.After(s.now().Add(5*time.Minute)) || (!rotated.IsZero() && gt.Unix() <= rotated.Unix()) {
+		mHook.WithLabelValues("grant_before_rotation").Inc()
+		s.log().Info("token hook: the grant is older than the last key rotation: refused", "grant", grant)
+		w.WriteHeader(http.StatusForbidden)
+		return
+	}
+	// A grant lives at most MaxGrantDays: the groups in the token are those of the sign-in, so this is how a group
 	// that the person lost at the identity provider stops counting.
 	if age, ok := GrantAge(grant, s.now()); !ok || (s.Cfg.MaxGrantDays > 0 && age > time.Duration(s.Cfg.MaxGrantDays)*24*time.Hour) {
 		mHook.WithLabelValues("grant_too_old").Inc()

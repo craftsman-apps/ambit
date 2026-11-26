@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -478,17 +479,34 @@ func NewGrantID(now time.Time) string {
 	return "g-" + strconv.FormatInt(now.Unix(), 36) + "-" + random(9)
 }
 
-// GrantAge reads the age of a grant from its name; ok is false for a name that was not made by NewGrantID.
-func GrantAge(id string, now time.Time) (time.Duration, bool) {
+// grantTime reads the time at which a grant was made from its name; ok is false for a name that was not made by NewGrantID.
+var grantForm = regexp.MustCompile(`^g-[0-9a-z]{1,13}-[A-Za-z0-9_-]{6,24}$`)
+
+func grantTime(id string) (time.Time, bool) {
+	if !grantForm.MatchString(id) {
+		return time.Time{}, false
+	}
 	parts := strings.Split(id, "-")
 	if len(parts) < 3 || parts[0] != "g" {
-		return 0, false
+		return time.Time{}, false
 	}
 	secs, err := strconv.ParseInt(parts[1], 36, 64)
 	if err != nil || secs <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(secs, 0), true
+}
+
+// GrantTime is the time at which a grant was made (see NewGrantID).
+func GrantTime(id string) (time.Time, bool) { return grantTime(id) }
+
+// GrantAge reads the age of a grant from its name; ok is false for a name that was not made by NewGrantID.
+func GrantAge(id string, now time.Time) (time.Duration, bool) {
+	t, ok := grantTime(id)
+	if !ok {
 		return 0, false
 	}
-	return now.Sub(time.Unix(secs, 0)), true
+	return now.Sub(t), true
 }
 
 // groupNames reads the groups that the sign-in put into the consent request's context.

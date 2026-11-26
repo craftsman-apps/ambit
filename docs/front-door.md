@@ -175,14 +175,18 @@ an MCP request that way). The first two limits are per minute (a fixed window th
 - **A failed check on the way in.** `frontDoor.rateLimit.failureMode` also applies to the source check: with `FailOpen`
   (default) requests pass when the ratelimit service cannot be reached, and the per-pod limit still applies; with `FailClosed`
   they are refused with 403. If the ratelimit service answers but **Valkey is down**, the service reports its error as HTTP
-  400, and the front door refuses every request with 400 until Valkey is back, whatever `failureMode` says. If Valkey is slow
+  400, and the front door refuses every request with 400 until Valkey is back (and for a few seconds after, while the service reconnects), whatever `failureMode` says. If Valkey is slow
   instead of failed, the check waits 2 seconds and then follows `failureMode`.
 - **A flood is still read by the limiter.** Every request, also one that is already over its limit, costs one call to the
   ratelimit service and one operation in Valkey. The limit makes a flood cheap for the gateway pods and for the MCP servers,
   not free for the ratelimit service. The edge limits above are the place to stop the volume itself.
-- **The ratelimit port.** The check uses port 8080 of the ratelimit service (`/json`), which is also its health port. Like
-  before, every pod in the cluster can reach that port (the health checks need it); `/json` can change any counter. If you
-  run untrusted pods in the namespace, use a network policy of your own, or see [issue #417](https://github.com/craftsman-apps/ambit/issues/417).
+- **The ratelimit port.** The check uses port 8080 of the ratelimit service (`/json`). That endpoint counts a hit for any
+  domain and descriptor and has no password, so the network policy `ambit-ratelimit` admits **only the public gateway pods**
+  to it (and the gateway pods to port 8081, as before). No other pod in the namespace, such as an MCP server, can raise or
+  fill a counter through `/json`. The kubelet's readiness probe comes from the node, which a network policy does not limit. The rule holds on
+  a cluster network that enforces network policies, and only while nobody who can create pods in the namespace is untrusted
+  (the policy admits pods by label). A pod of the private gateway can still use port 8081, which the budgets need, and another network policy in the
+  namespace that admits more pods widens the access.
 - **Many people behind one company address.** Callers behind one NAT address share the buckets of that address. One sign-in costs 7
   requests in the sign-in bucket (`/oauth2/auth` three times, `/login`, `/callback`, `/consent` twice), and one request in the token bucket.
   Measured on kind with the default limits: one shared address made @@NAT@@ whole sign-ins in one minute before the sign-in bucket answered 429, and

@@ -736,8 +736,9 @@ func (r *Reconciler) applyAll(ctx context.Context, objs []*unstructured.Unstruct
 			applyFailed = true
 			continue
 		}
-		if kind == "AgentgatewayModel" || (kind == "AgentgatewayPolicy" && !attachesToAbsentTarget(desired, objs)) {
-			written = append(written, gated{kind: kind, name: name, generation: desired.GetGeneration(), changed: desired.GetGeneration() != current.GetGeneration()})
+		if kind == "AgentgatewayModel" || kind == "AgentgatewayPolicy" {
+			written = append(written, gated{kind: kind, name: name, generation: desired.GetGeneration(), changed: desired.GetGeneration() != current.GetGeneration(),
+				acceptedOnly: kind == "AgentgatewayPolicy" && attachesToAbsentTarget(desired, objs)})
 		}
 		switch kind {
 		case "AgentgatewayModel":
@@ -754,7 +755,8 @@ func (r *Reconciler) applyAll(ctx context.Context, objs []*unstructured.Unstruct
 
 // attachesToAbsentTarget is true for a policy that targets an AgentgatewayBackend (or one of its targets, by
 // sectionName) that this pass does not generate. agentgateway cannot attach such a policy ("Attached is False: the
-// backend is not found"), so a step must not wait for it (#431). The shared MCP backend is left out while no image
+// backend is not found"), so the step waits only until agentgateway has accepted it (an Invalid verdict or a NACK
+// still stops the change), not for the attachment (#431). The shared MCP backend is left out while no image
 // server answers (compileServers), and a server joins it only when the reconciler has set Serving, after the step: a
 // wait here ran into activationTimeout on the first MCP Server of a new cluster. The policy is still written, so the
 // backend never comes back before its authorization.

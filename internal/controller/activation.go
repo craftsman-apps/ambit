@@ -58,6 +58,9 @@ type gated struct {
 	kind, name string
 	generation int64
 	changed    bool // the write created it or changed its spec
+	// acceptedOnly: the policy's target is not generated yet, so it cannot be attached; waiting for Attached would last
+	// until the timeout (#431). Accepted (and so an Invalid verdict) still counts.
+	acceptedOnly bool
 }
 
 // stalledError is a step that agentgateway did not apply: the change stops there. objects are the objects that
@@ -308,6 +311,9 @@ func activationOf(o *unstructured.Unstructured, g gated) (waiting string, invali
 	field, types := "ancestors", []string{"Accepted", "Attached"}
 	if g.kind == "AgentgatewayModel" {
 		field, types = "parents", []string{"Accepted"}
+	}
+	if g.acceptedOnly {
+		types = []string{"Accepted"}
 	}
 	entries, _, _ := unstructured.NestedSlice(o.Object, "status", field)
 	seen := false

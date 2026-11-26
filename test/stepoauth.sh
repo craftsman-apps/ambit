@@ -417,6 +417,16 @@ rl_phase() { # rl_phase DISCOVERY SIGNIN TOKEN REGISTRATION MCP CREDENTIAL GLOBA
 }
 OARL=(--set oauth.rateLimit.discoveryPerMinute=30 --set oauth.rateLimit.signInPerMinute=40 --set oauth.rateLimit.tokenPerMinute=50)
 rl_phase 30 40 50 5 30 60 8
+# The counters of the hour hold every registration of the checks before (the global limit is per hour): start the bucket checks with empty counters.
+# Valkey has no volume in this test install; the ratelimit service and ambit-auth reconnect by themselves (their readiness follows Valkey).
+kubectl -n "$NS" rollout restart deploy/ambit-valkey >/dev/null
+kubectl -n "$NS" rollout status deploy/ambit-valkey --timeout=180s >/dev/null
+kubectl -n "$NS" rollout restart deploy/ambit-ratelimit >/dev/null
+kubectl -n "$NS" rollout status deploy/ambit-ratelimit --timeout=180s >/dev/null
+kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=180s >/dev/null
+wait_for 120 '[[ $(kubectl -n "$NS" get deploy ambit-auth -o jsonpath="{.status.readyReplicas}") == 2 ]]' || fail "18 ambit-auth is not ready after Valkey was restarted"
+wait_rl "$NS" "requests_per_unit=40"
+wait_for 60 '[[ $("${PY[@]}" test/frontdoor/request.py "$PA" "$W/ca.pem" "$AUTH" /.well-known/jwks.json --proxy 203.0.113.1) == 200 ]]' || fail "18 the Gateway does not answer after the counters were emptied"
 MODE=buckets lim LIM_DISCOVERY=30 LIM_SIGNIN=40 LIM_TOKEN=50 LIM_REGISTRATION=5 LIM_MCP=30 LIM_CRED=60 LIM_GLOBAL=8 || fail "18 the bucket checks failed (see FAIL lines above)"
 pass "18 five buckets (mcp, discovery, sign-in, token, registration): each stops at its own limit and leaves the others open; headers that name an address change nothing; two Gateway pods count together; the 401 for a call without a credential is in the discovery bucket"
 # the second line: with the ratelimit service stopped (FailOpen) ambit-auth's own counter is what limits the sign-in pages

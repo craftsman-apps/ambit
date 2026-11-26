@@ -211,7 +211,7 @@ that registers in the same hour can get 429 (`Retry-After: 3600`); pre-registere
 
 ### How many people can sign in from one company address
 
-*Measured on kind, with the default limits, from one made-up address.* @@NATTABLE@@
+*Measured on kind, with the default limits, from one made-up address.* One address made **40 sign-ins in 9 seconds** (four at a time, each ended by the person with Deny so that the test cluster's console, which makes about one agent a second, is not the limit) before the sign-in bucket answered 429 (the limit of 300 is 42 sign-ins; the four that were under way did not finish). A sign-in that is completed costs the same: 7 requests in the sign-in bucket and 1 in the token bucket (measured alone). Another address signed in while the first was limited. (CI, one run.)
 
 The numbers follow from how a sign-in is built: **7 requests** in the sign-in bucket (three of `/oauth2/auth`, `/login`, `/callback`, and two of `/consent`: the page
 and the form), one in the token bucket, and, once per platform, one registration. So 300 a minute are 42 sign-ins a minute from one address, 600 token calls a minute are

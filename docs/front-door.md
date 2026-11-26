@@ -189,7 +189,7 @@ an MCP request that way). The first two limits are per minute (a fixed window th
   namespace that admits more pods widens the access.
 - **Many people behind one company address.** Callers behind one NAT address share the buckets of that address. One sign-in costs 7
   requests in the sign-in bucket (`/oauth2/auth` three times, `/login`, `/callback`, `/consent` twice), and one request in the token bucket.
-  Measured on kind with the default limits: one shared address made @@NAT@@ whole sign-ins in one minute before the sign-in bucket answered 429, and
+  Measured on kind with the default limits: one shared address made 40 whole sign-ins in one minute before the sign-in bucket answered 429, and
   another address was not affected (docs/oauth.md, "Limits"). That is the number to compare with your largest group that connects at the same time
   (an announcement, a training); raise `oauth.rateLimit.signInPerMinute` for it. 120 MCP calls a minute (bucket **mcp**) are a starting value for a small number of hosted agents, not for
   a company office or a platform that serves many people from a few addresses: raise `perSourcePerMinute`, or put your own limit at the edge, where you know the traffic.

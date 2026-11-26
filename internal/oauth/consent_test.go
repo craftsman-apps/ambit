@@ -519,9 +519,10 @@ func TestJanitorDeletesUnusedClients(t *testing.T) {
 	set := func(id string, ago time.Duration) {
 		e.hydra.clients[id]["metadata"].(map[string]any)["last_used"] = e.now.Add(-ago).Format(time.RFC3339)
 	}
-	set(ids[0], 31*24*time.Hour) // unused for 31 days: goes
-	set(ids[1], 29*24*time.Hour) // 29 days: stays
-	set(ids[2], 40*24*time.Hour) // goes
+	e.hydra.clients[ids[1]]["metadata"].(map[string]any)["used"] = true // a consent or a refresh used it: only the 30 days count
+	set(ids[0], 31*24*time.Hour)                                        // unused for 31 days: goes
+	set(ids[1], 29*24*time.Hour)                                        // used, 29 days: stays
+	set(ids[2], 40*24*time.Hour)                                        // goes
 	n, err := e.srv.Janitor(context.Background())
 	if err != nil || n != 2 {
 		t.Fatalf("deleted %d, %v", n, err)
@@ -544,6 +545,70 @@ func TestJanitorDeletesUnusedClients(t *testing.T) {
 	}
 }
 
+// Security review N2: a client that registered and was never used by a consent or a refresh goes after 24 hours, not after 30 days.
+func TestJanitorDeletesNeverUsedClientsAfterADay(t *testing.T) {
+	e := newEnv(t)
+	e.srv.Cfg.MaxClients = 100
+	e.lim.Rates[BucketRegister] = Rate{Limit: 1000, Window: time.Hour}
+	b := e.browser()
+	var ids []string
+	for i := 0; i < 4; i++ {
+		_, out := post(b, reg("https://chatgpt.com/cb"), nil)
+		ids = append(ids, out["client_id"].(string))
+	}
+	age := func(id string, ago time.Duration) {
+		e.hydra.clients[id]["metadata"].(map[string]any)["last_used"] = e.now.Add(-ago).Format(time.RFC3339)
+	}
+	age(ids[0], 25*time.Hour) // never used, 25 hours: goes
+	age(ids[1], 23*time.Hour) // never used, 23 hours: stays
+	age(ids[2], 25*time.Hour) // 25 hours old, but a consent used it: stays
+	e.hydra.clients[ids[2]]["metadata"].(map[string]any)["used"] = true
+	e.hydra.clients["admin-made"] = map[string]any{"client_id": "admin-made", "metadata": map[string]any{"registered_via": "admin", "last_used": "2020-01-01T00:00:00Z"}}
+	n, err := e.srv.Janitor(context.Background())
+	if err != nil || n != 1 {
+		t.Fatalf("deleted %d, %v", n, err)
+	}
+	for id, want := range map[string]bool{ids[0]: false, ids[1]: true, ids[2]: true, ids[3]: true, "admin-made": true} {
+		if _, ok := e.hydra.clients[id]; ok != want {
+			t.Fatalf("client %s present=%v, want %v", id, ok, want)
+		}
+	}
+	// the use is what the consent writes: a client that a consent touched is not deleted after a day
+	e.now = e.now.Add(3 * 24 * time.Hour)
+	if n, err := e.srv.Janitor(context.Background()); err != nil || n != 2 { // ids[1] and ids[3] were never used: gone; ids[2] was used: stays
+		t.Fatalf("three days later: deleted %d, %v", n, err)
+	}
+	if _, ok := e.hydra.clients[ids[2]]; !ok {
+		t.Fatal("a client that was used was deleted after a day")
+	}
+}
+
+// Security review N2: the flood that fills the cap of clients (from many networks) frees itself after a day, and a real platform can register again.
+func TestFloodOfRegistrationsFreesTheCapAfterADay(t *testing.T) {
+	e := newEnv(t)
+	e.srv.Cfg.MaxClients = 20
+	e.lim.Rates[BucketRegister] = Rate{Limit: 1000, Window: time.Hour}
+	for i := 0; i < 20; i++ { // 20 different networks, one registration each
+		b := e.browser()
+		b.addr = fmt.Sprintf("203.0.113.%d", i+1)
+		if w, out := post(b, reg("https://chatgpt.com/cb"), nil); w.Code != 201 {
+			t.Fatalf("flood %d: %d %v", i, w.Code, out)
+		}
+	}
+	real := e.browser()
+	real.addr = "198.51.100.7"
+	if w, out := post(real, reg("https://claude.ai/cb"), nil); w.Code != 400 || out["error"] != "invalid_client_metadata" {
+		t.Fatalf("a real platform while the cap is full: %d %v", w.Code, out)
+	}
+	e.now = e.now.Add(25 * time.Hour)
+	if n, err := e.srv.Janitor(context.Background()); err != nil || n != 20 {
+		t.Fatalf("clean-up after 25 hours: deleted %d, %v", n, err)
+	}
+	if w, out := post(real, reg("https://claude.ai/cb"), nil); w.Code != 201 {
+		t.Fatalf("a real platform after the clean-up: %d %v", w.Code, out)
+	}
+}
+
 func TestConsentTouchesTheClientOncePerDay(t *testing.T) {
 	e := newEnv(t)
 	e.lim.Rates[BucketRegister] = Rate{Limit: 1000, Window: time.Hour}
@@ -558,6 +623,9 @@ func TestConsentTouchesTheClientOncePerDay(t *testing.T) {
 	b.do("POST", "/consent", f, origin)
 	if got := e.hydra.clients[id]["metadata"].(map[string]any)["last_used"]; got != e.now.Format(time.RFC3339) {
 		t.Fatalf("last_used %v, want %v", got, e.now.Format(time.RFC3339))
+	}
+	if used, _ := e.hydra.clients[id]["metadata"].(map[string]any)["used"].(bool); !used {
+		t.Fatal("a consent must mark the client as used (otherwise the clean-up of never-used clients deletes it after a day)")
 	}
 }
 

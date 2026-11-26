@@ -161,7 +161,9 @@ loopback IP addresses only; for `http://localhost` the port must be exactly the 
 The cap of `maxClients` is counted in Valkey and is approximate for up to ten minutes (the clean-up compares it with Hydra every
 ten minutes). Each registration is limited per caller address (`perSourcePerHour`, 10 by default), and at most `maxClients` clients exist (500). A client
 that nobody used for `unusedClientDays` (30) is deleted; every consent and every refresh counts as use, written at most
-once a day. Clients that an admin creates in Hydra by hand are never touched.
+once a day. A client that **no consent and no refresh ever used** is deleted `neverUsedClientHours` (24) after it registered, so that a flood of
+registrations (many networks, a few registrations each) cannot fill the cap of `maxClients` for a month; a platform whose client went that way gets
+`invalid_client` and registers again. Clients that an admin creates in Hydra by hand are never touched.
 
 **Which address is "the caller".** The public Gateway writes the caller's address from the connection (or the PROXY
 protocol header, `frontDoor.clientAddress`) into the header `X-Ambit-Client-Address`, replacing anything the caller sent,
@@ -448,11 +450,13 @@ a pod that uses the same address**: the janitor (a Job) and a migration use `max
 counts `pods × max_conns + 1`, so set the role's `CONNECTION LIMIT` to `(pods + 1) × max_conns` or more, and the server's `max_connections` above the sum of all clients.
 *Measured (P3):* 12,633 requests (made-up refresh tokens: every answer a 4xx), p50 59 ms, p95 152 ms; the database saw at most 16 connections of the role (2 pods × `max_conns` 8), no 5xx. Raise `max_conns` only when Hydra's answers are slow while connections are all in use; more connections do not make a small database faster.
 
-### Daily clean-up (the janitor)
+### Clean-up of the tokens (the janitor)
 
-Hydra never deletes finished rows. The CronJob **`ambit-hydra-janitor`** (`oauth.janitor.*`, 03:17 every day) runs `hydra janitor` with Hydra's own lifetimes
+Hydra never deletes finished rows. The CronJob **`ambit-hydra-janitor`** (`oauth.janitor.*`, at minute 17 of every hour) runs `hydra janitor` with Hydra's own lifetimes
 (the same ConfigMap), so **a token that is still valid is never deleted**. It deletes **expired access and refresh tokens**, and keeps everything younger than an
-hour. One run at a time (`concurrencyPolicy: Forbid`), stopped after 30 minutes, at most 10,000 rows of each kind per run (the next day goes on). It does not touch clients.
+hour. One run at a time (`concurrencyPolicy: Forbid`), stopped after 30 minutes, at most 100,000 rows of each kind per run (`oauth.janitor.limit`; a run that finds more goes on at the next hour). It does not touch clients.
+
+**How much it must delete** (security review N4). Measured on kind: @@ROWS@@ A connection in steady use refreshes about every 15 minutes, 96 times a day, so it leaves about 96 × @@RPR@@ = @@RPD@@ rows a day, and every one of them is deleted when it is older than the token's life. At 100,000 rows of each kind an hour the janitor can take 2.4 million of each kind a day, which is about @@CONN@@ connections in steady use. Above that, raise `oauth.janitor.limit` (and watch the run time: it is stopped after `oauth.janitor.timeoutMinutes`). A janitor that cannot keep up shows as a table size that only grows: look at the size of `hydra_oauth2_refresh` and `hydra_oauth2_access` once a month. *Tested:* a run with a limit of 3 deletes part of the old rows, and the next runs the rest.
 
 **If you shorten `oauth.refreshTokenIdleDays`**, the janitor uses the new, shorter lifetime: a refresh token that is older than it is deleted at the next run, although the token itself still said
 that it was valid for longer. Lower the value only when you mean to end those connections.
@@ -477,7 +481,7 @@ and `AmbitHydraJanitorStale` ([Alerts](alerts.md)). *Measured (kind):* 12 rows o
 
 ### Unused clients (registered dynamically)
 
-`ambit-auth` deletes a client that registered itself and was not used for `oauth.registration.dynamic.unusedClientDays` (30). It runs when `ambit-auth` starts and every 10
+`ambit-auth` deletes a client that registered itself and was not used for `oauth.registration.dynamic.unusedClientDays` (30), and one that no consent and no refresh ever used `oauth.registration.dynamic.neverUsedClientHours` (24) hours after it registered (security review N2: otherwise a flood of registrations from many networks fills the cap of 500 for a month). It runs when `ambit-auth` starts and every 10
 minutes; a consent and a refresh count as use. A client that an admin created in Hydra is never deleted. A platform whose client was deleted gets `invalid_client` and registers
 again (`POST /register`). Tested in CI (check 17 and the unit tests).
 

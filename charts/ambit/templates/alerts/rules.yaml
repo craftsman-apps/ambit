@@ -128,14 +128,14 @@ spec:
         - alert: AmbitHydraJanitorStale
           # Too old a last success, or a CronJob that is older than the limit and never succeeded (then there is no last-success series).
           expr: |
-            (time() - kube_cronjob_status_last_successful_time{namespace="{{ $ns }}", cronjob="ambit-hydra-janitor"} > {{ mul (int (((.Values.alerts | default dict).oauth | default dict).janitorMaxAgeHours | default 48)) 3600 }})
+            (time() - kube_cronjob_status_last_successful_time{namespace="{{ $ns }}", cronjob="ambit-hydra-janitor"} > {{ mul (int (((.Values.alerts | default dict).oauth | default dict).janitorMaxAgeHours | default 6)) 3600 }})
               or
-            (time() - kube_cronjob_created{namespace="{{ $ns }}", cronjob="ambit-hydra-janitor"} > {{ mul (int (((.Values.alerts | default dict).oauth | default dict).janitorMaxAgeHours | default 48)) 3600 }}
+            (time() - kube_cronjob_created{namespace="{{ $ns }}", cronjob="ambit-hydra-janitor"} > {{ mul (int (((.Values.alerts | default dict).oauth | default dict).janitorMaxAgeHours | default 6)) 3600 }}
               unless on (namespace, cronjob) kube_cronjob_status_last_successful_time{namespace="{{ $ns }}", cronjob="ambit-hydra-janitor"})
           for: 1h
           labels: { severity: warning }
           annotations:
-            summary: "The clean-up of Hydra's database has not succeeded for {{ ((.Values.alerts | default dict).oauth | default dict).janitorMaxAgeHours | default 48 }} hours"
+            summary: "The clean-up of Hydra's database has not succeeded for {{ ((.Values.alerts | default dict).oauth | default dict).janitorMaxAgeHours | default 6 }} hours"
             description: "kubectl -n {{ $ns }} get cronjob ambit-hydra-janitor; kubectl -n {{ $ns }} get jobs. The database grows until it runs again."
         {{- $dba := ((.Values.alerts | default dict).oauth) | default dict }}
         {{- if $dba.backupAgeSecondsExpr }}

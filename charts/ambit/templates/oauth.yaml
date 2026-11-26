@@ -191,7 +191,7 @@ spec:
 # Hydra's own clean-up of the database (`hydra janitor`): expired access and refresh tokens, finished login and consent requests
 # and expired grants pile up in PostgreSQL, because Hydra never deletes them by itself. It reads the lifetimes from Hydra's
 # own configuration (the same ConfigMap), so a token that is still valid is never deleted: a refresh token lives
-# oauth.refreshTokenIdleDays. Runs once a day on its own pod, with the DSN from the same Secret; one run at a time. The
+# oauth.refreshTokenIdleDays. Runs every hour on its own pod, with the DSN from the same Secret; one run at a time. The
 # clean-up of unused dynamic clients is a different job: it is part of ambit-auth (oauth.registration.dynamic.unusedClientDays).
 apiVersion: batch/v1
 kind: CronJob
@@ -199,7 +199,7 @@ metadata:
   name: ambit-hydra-janitor
   labels: { app.kubernetes.io/name: ambit-hydra-janitor }
 spec:
-  schedule: {{ $j.schedule | default "17 3 * * *" | quote }}
+  schedule: {{ $j.schedule | default "17 * * * *" | quote }}
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 3600
   successfulJobsHistoryLimit: 3
@@ -233,7 +233,7 @@ spec:
             - name: janitor
               image: {{ $h.image | quote }}
               # An hour of margin (--keep-if-younger): a request or token that was made a moment ago is never touched.
-              args: [janitor, -e, -c, /etc/hydra/hydra.yml, --tokens, --requests, --grants, --keep-if-younger, 1h, --batch-size, "100", --limit, {{ $j.limit | default 10000 | quote }}]
+              args: [janitor, -e, -c, /etc/hydra/hydra.yml, --tokens, --requests, --grants, --keep-if-younger, 1h, --batch-size, "1000", --limit, {{ $j.limit | default 100000 | quote }}]
               env:
                 - name: DSN
                   valueFrom: { secretKeyRef: { name: {{ $db.dsnSecret.name | quote }}, key: {{ $db.dsnSecret.key | quote }} } }

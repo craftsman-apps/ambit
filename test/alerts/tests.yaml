@@ -253,15 +253,15 @@ tests:
             exp_annotations:
               summary: "The clean-up of Hydra's database failed (ambit-hydra-janitor-29000)"
               description: "Expired tokens stay in the database until it runs again. Read why: kubectl -n ambit-system logs job/ambit-hydra-janitor-29000. The usual cause is the database address or password."
-      - eval_time: 40h
+      - eval_time: 5h
         alertname: AmbitHydraJanitorStale
         exp_alerts: []
-      - eval_time: 60h
+      - eval_time: 10h
         alertname: AmbitHydraJanitorStale
         exp_alerts:
           - exp_labels: { severity: warning, namespace: ambit-system, cronjob: ambit-hydra-janitor }
             exp_annotations:
-              summary: "The clean-up of Hydra's database has not succeeded for 48 hours"
+              summary: "The clean-up of Hydra's database has not succeeded for 6 hours"
               description: "kubectl -n ambit-system get cronjob ambit-hydra-janitor; kubectl -n ambit-system get jobs. The database grows until it runs again."
   # OAuth: the database's own metrics, named by alerts.oauth: a backup older than 26 hours, and more than 80% of the connections.
   - interval: 1m
@@ -297,13 +297,13 @@ tests:
       - series: 'kube_cronjob_created{namespace="ambit-system",cronjob="ambit-hydra-janitor"}'
         values: '0x3700'
     alert_rule_test:
-      - eval_time: 40h
+      - eval_time: 5h
         alertname: AmbitHydraJanitorStale
         exp_alerts: []
-      - eval_time: 60h
+      - eval_time: 10h
         alertname: AmbitHydraJanitorStale
         exp_alerts:
           - exp_labels: { severity: warning, namespace: ambit-system, cronjob: ambit-hydra-janitor }
             exp_annotations:
-              summary: "The clean-up of Hydra's database has not succeeded for 48 hours"
+              summary: "The clean-up of Hydra's database has not succeeded for 6 hours"
               description: "kubectl -n ambit-system get cronjob ambit-hydra-janitor; kubectl -n ambit-system get jobs. The database grows until it runs again."

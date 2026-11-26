@@ -641,23 +641,54 @@ TOTAL_AFTER=$(psq "select (select count(*) from hydra_oauth2_access) + (select c
 [[ "$(dbo refresh "$W/j.json" 1)" == "200 " ]] || fail "17 a young grant must still refresh after the janitor ran"
 pass "17 the Hydra janitor (CronJob ambit-hydra-janitor, run once by hand): $TOTAL_BEFORE rows of tokens and records before, $TOTAL_AFTER after, in ${JT} s; the tokens that are 40 days old are gone; a live grant (with a two day old login and consent record) and a young grant still refresh; the log holds no password"
 
-# Unused clients. ambit-auth deletes a client that was registered dynamically and not used for 30 days, when it starts and every 10 minutes: one that was
-# used 31 days ago goes, one used 29 days ago stays, and a client that an admin made stays however old it is.
-IDS=($(dbo dcr 2)); [[ ${#IDS[@]} -eq 2 ]] || fail "17 two registrations"
-setused() { # setused ID DAYS: the last use of a client in Hydra, DAYS days ago
+# Security review N4: how many rows a connection writes, and a janitor run that has more to delete than its limit. One connection refreshes 5 times: the
+# new refresh token is a new row, and the old row stays (it is spent, not deleted) until the janitor takes it.
+dbo grants 1 "$W/jm.json" 40 >/dev/null || fail "17 a connection for the row count"
+JM=$("${PY[@]}" -c 'import json,sys;print(json.load(open(sys.argv[1]))[0]["cid"])' "$W/jm.json")
+RR0=$(cnt refresh "$JM"); AR0=$(cnt access "$JM"); FR0=$(cnt flow "$JM")
+for i in 1 2 3 4 5; do [[ "$(dbo refresh "$W/jm.json" 0)" == "200 " ]] || fail "17 refresh $i of the row count"; done
+RR1=$(cnt refresh "$JM"); AR1=$(cnt access "$JM")
+(( RR1 - RR0 == 5 )) || fail "17 each refresh must add one refresh token row (before $RR0, after 5 refreshes $RR1)"
+ROWS_PER_REFRESH=$(( (RR1 - RR0 + AR1 - AR0) / 5 ))
+echo "   rows of one connection: a sign-in writes $RR0 refresh token, $AR0 access token and $FR0 login and consent rows; each refresh adds $(( (RR1 - RR0) / 5 )) refresh token and $(( (AR1 - AR0) / 5 )) access token rows"
+for t in access refresh; do psq "update hydra_oauth2_$t set requested_at = now() - interval '40 days', expires_at = now() - interval '39 days' where client_id = '$JM'" >/dev/null; done
+oaset_real --set oauth.janitor.limit=3 --wait --timeout 8m
+jrun() { # jrun: one janitor job by hand
+  kubectl -n "$NS" delete job ambit-hydra-janitor-e2e --ignore-not-found >/dev/null
+  kubectl -n "$NS" create job ambit-hydra-janitor-e2e --from=cronjob/ambit-hydra-janitor >/dev/null
+  kubectl -n "$NS" wait --for=condition=complete job/ambit-hydra-janitor-e2e --timeout=300s >/dev/null 2>&1 || fail "17 the janitor job did not complete"
+}
+jrun; REM1=$(cnt refresh "$JM")
+(( REM1 > 0 && REM1 < RR1 )) || fail "17 a janitor run with the limit 3 must delete some of the $RR1 old refresh tokens and not all (left: $REM1)"
+for _ in 1 2 3 4; do [[ "$(cnt refresh "$JM")" == 0 ]] && break; jrun; done
+[[ "$(cnt refresh "$JM")" == 0 ]] || fail "17 repeated runs with the limit 3 must delete all old refresh tokens (left: $(cnt refresh "$JM"))"
+oaset_real --wait --timeout 8m
+pass "17 janitor limit: a connection writes about $ROWS_PER_REFRESH rows a refresh ($RR1 refresh token rows after 5 refreshes); with the limit 3 one run deleted $(( RR1 - REM1 )) of them (left $REM1) and the next runs the rest; the default is 100,000 rows a kind every hour"
+
+# Unused clients. ambit-auth deletes a client that was registered dynamically and not used for 30 days, and one that no consent or refresh ever used
+# 24 hours after it registered (a flood of registrations must not fill the cap for a month: security review N2), when it starts and every 10 minutes.
+# A used client of 29 days stays, and a client that an admin made stays however old it is.
+IDS=($(dbo dcr 5)); [[ ${#IDS[@]} -eq 5 ]] || fail "17 five registrations"
+setused() { # setused ID HOURS [used]: the last use (for a client that never was used: the registration) in Hydra, HOURS hours ago; "used" marks a client that a consent or a refresh used
   [[ $(adm ambit-hydra-0 GET "/admin/clients/$1") == 200 ]] || fail "17 client $1 is not in Hydra"
-  local body; body=$("${PY[@]}" -c 'import json,sys,datetime as d;c=json.load(open(sys.argv[1]));c.setdefault("metadata",{})["last_used"]=(d.datetime.now(d.timezone.utc)-d.timedelta(days=int(sys.argv[2]))).strftime("%Y-%m-%dT%H:%M:%SZ");print(json.dumps(c))' "$W/adm" "$2")
+  local body; body=$("${PY[@]}" -c 'import json,sys,datetime as d;c=json.load(open(sys.argv[1]));m=c.setdefault("metadata",{});m["last_used"]=(d.datetime.now(d.timezone.utc)-d.timedelta(hours=int(sys.argv[2]))).strftime("%Y-%m-%dT%H:%M:%SZ")
+if len(sys.argv)>3: m["used"]=True
+print(json.dumps(c))' "$W/adm" "$2" ${3:+used})
   [[ $(adm ambit-hydra-0 PUT "/admin/clients/$1" "$body") == 200 ]] || fail "17 could not change client $1: $(head -c 200 "$W/adm")"
 }
-setused "${IDS[0]}" 31; setused "${IDS[1]}" 29
+setused "${IDS[0]}" 744 used   # used, last 31 days ago: goes
+setused "${IDS[1]}" 696 used   # used 29 days ago: stays
+setused "${IDS[2]}" 25         # never used, registered 25 hours ago: goes
+setused "${IDS[3]}" 2          # never used, registered 2 hours ago: stays
+setused "${IDS[4]}" 25 used    # 25 hours old but used by a consent: stays
 [[ $(adm ambit-hydra-0 POST /admin/clients '{"client_id":"admin-made-e2e","redirect_uris":["https://chatgpt.com/cb"],"grant_types":["authorization_code"],"response_types":["code"],"token_endpoint_auth_method":"none","metadata":{"registered_via":"admin","last_used":"2020-01-01T00:00:00Z"}}') == 201 ]] || fail "17 could not make the admin client: $(head -c 200 "$W/adm")"
 kubectl -n "$NS" rollout restart deploy/ambit-auth >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
-wait_for 120 '[[ $(adm ambit-hydra-0 GET "/admin/clients/${IDS[0]}") == 404 ]]' || fail "17 a client that was not used for 31 days is still there after ambit-auth started"
-[[ $(adm ambit-hydra-0 GET "/admin/clients/${IDS[1]}") == 200 ]] || fail "17 a client used 29 days ago was deleted"
+wait_for 120 '[[ $(adm ambit-hydra-0 GET "/admin/clients/${IDS[0]}") == 404 && $(adm ambit-hydra-0 GET "/admin/clients/${IDS[2]}") == 404 ]]' || fail "17 a client that was not used for 31 days, or one that never was used and registered 25 hours ago, is still there after ambit-auth started"
+for i in 1 3 4; do [[ $(adm ambit-hydra-0 GET "/admin/clients/${IDS[$i]}") == 200 ]] || fail "17 client $i (used 29 days ago, never used 2 hours old, or used and 25 hours old) was deleted"; done
 [[ $(adm ambit-hydra-0 GET /admin/clients/admin-made-e2e) == 200 ]] || fail "17 a client that an admin made was deleted"
-adm ambit-hydra-0 DELETE /admin/clients/admin-made-e2e >/dev/null; adm ambit-hydra-0 DELETE "/admin/clients/${IDS[1]}" >/dev/null
-pass "17 ambit-auth deletes a dynamically registered client that was not used for 31 days, keeps one used 29 days ago and a client that an admin made (clean-up on start and every 10 minutes)"
+adm ambit-hydra-0 DELETE /admin/clients/admin-made-e2e >/dev/null; for i in 1 3 4; do adm ambit-hydra-0 DELETE "/admin/clients/${IDS[$i]}" >/dev/null; done
+pass "17 ambit-auth deletes a registered client that was not used for 31 days, and one that was never used 25 hours after it registered; it keeps one used 29 days ago, one that registered 2 hours ago, one that a consent used and a client that an admin made (clean-up on start and every 10 minutes)"
 
 # --- 13 · off again: everything of OAuth goes, the front door stays
 helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.yaml -f test/frontdoor/values.yaml \

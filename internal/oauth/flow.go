@@ -440,7 +440,7 @@ func (s *Server) consentSubmit(w http.ResponseWriter, r *http.Request) {
 }
 
 // touchClient writes "last used" into a dynamic client's metadata, at most once a day: the janitor deletes clients that
-// nobody used for Config.UnusedClientDays.
+// nobody used for Config.UnusedClientDays. The first call also marks the client as used: one that never was is deleted much sooner.
 func (s *Server) touchClient(r *http.Request, id string) {
 	if id == "" || s.Clients == nil {
 		return
@@ -454,6 +454,7 @@ func (s *Server) touchClient(r *http.Request, id string) {
 		return
 	}
 	c.Metadata["last_used"] = s.now().UTC().Format(time.RFC3339)
+	c.Metadata["used"] = true // a consent or a refresh: the client is not one that only registered (security review N2)
 	if err := s.Hydra.SetClientMetadata(r.Context(), id, c.Metadata); err != nil {
 		s.log().Warn("could not write the client's last use", "err", err)
 	}

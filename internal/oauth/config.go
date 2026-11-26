@@ -23,6 +23,7 @@ type Config struct {
 	RegistrationHosts []string // redirect hosts that dynamic registration accepts
 	MaxClients        int      // dynamic clients (the cap)
 	UnusedClientDays  int      // a dynamic client not used for this many days is deleted
+	NeverUsedHours    int      // a dynamic client that no consent or refresh ever used is deleted this many hours after it registered (0: 24)
 	MaxGrantDays      int      // a grant is refreshed for at most this many days; then the person connects again (0: no limit)
 }
 
@@ -84,6 +85,12 @@ func (c *Config) Validate() error {
 	}
 	if !c.NoRegistration && c.UnusedClientDays < 1 {
 		errs = append(errs, errors.New("unused client days must be 1 or more"))
+	}
+	if c.NeverUsedHours == 0 {
+		c.NeverUsedHours = 24
+	}
+	if c.NeverUsedHours < 0 || c.NeverUsedHours > 24*30 {
+		errs = append(errs, errors.New("never-used client hours must be 1 to 720"))
 	}
 	if c.MaxGrantDays < 0 || c.MaxGrantDays > 365 {
 		errs = append(errs, errors.New("the longest grant must be 0 to 365 days"))

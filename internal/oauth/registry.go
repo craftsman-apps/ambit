@@ -157,6 +157,11 @@ func (s *Server) Janitor(ctx context.Context) (int, error) {
 			}
 		}
 		used, _ := c.Metadata["used"].(bool)
+		// A client that a consent or a refresh used before the "used" mark existed (an upgrade) has a last use that is later than its registration:
+		// it is not a client that only registered.
+		if !used && !c.CreatedAt.IsZero() && last.Sub(c.CreatedAt) >= 5*time.Minute {
+			used = true
+		}
 		if !last.IsZero() && (last.Before(cutoff) || (!used && last.Before(neverCutoff))) {
 			if err := s.Hydra.DeleteClient(ctx, c.ID); err != nil {
 				return err

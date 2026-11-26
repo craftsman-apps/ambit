@@ -655,6 +655,26 @@ func TestJanitorDeletesNeverUsedClientsAfterADay(t *testing.T) {
 	}
 }
 
+// A client that was used before the "used" mark existed (an upgrade): its last use is later than its registration, so the clean-up of never-used clients leaves it.
+func TestJanitorKeepsAClientThatWasUsedBeforeTheUsedMark(t *testing.T) {
+	e := newEnv(t)
+	e.srv.Cfg.MaxClients = 100
+	e.lim.Rates[BucketRegister] = Rate{Limit: 1000, Window: time.Hour}
+	b := e.browser()
+	_, out := post(b, reg("https://chatgpt.com/cb"), nil)
+	id := out["client_id"].(string)
+	md := e.hydra.clients[id]["metadata"].(map[string]any)
+	e.hydra.clients[id]["created_at"] = e.now.Add(-10 * 24 * time.Hour).Format(time.RFC3339) // registered 10 days ago
+	md["last_used"] = e.now.Add(-3 * 24 * time.Hour).Format(time.RFC3339)                   // a consent three days ago wrote the last use; no "used" mark
+	if n, err := e.srv.Janitor(context.Background()); err != nil || n != 0 {
+		t.Fatalf("a client that a consent used was deleted: %d %v", n, err)
+	}
+	md["last_used"] = e.now.Add(-10 * 24 * time.Hour).Format(time.RFC3339) // never touched since the registration
+	if n, err := e.srv.Janitor(context.Background()); err != nil || n != 1 {
+		t.Fatalf("a client that never was used stayed: %d %v", n, err)
+	}
+}
+
 // Security review N2: the flood that fills the cap of clients (from many networks) frees itself after a day, and a real platform can register again.
 func TestFloodOfRegistrationsFreesTheCapAfterADay(t *testing.T) {
 	e := newEnv(t)

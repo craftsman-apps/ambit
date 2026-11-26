@@ -47,6 +47,7 @@ kubectl -n "$NS" wait "budgets.$G" eng --for=condition=Ready --timeout=60s >/dev
 # The ConfigMap reaches the ratelimit pod on the kubelet's next sync (up to about two minutes). The loaded number
 # is the Budget's minus one: the check before a request refuses only above it, and the answer adds 1 afterwards.
 wait_rl "$NS" "ambit-llm.group_eng.user: unit=DAY requests_per_unit=1,"
+hold_for_midnight 120   # the checks below read counters by the UTC day (#427)
 A=$(token user01); M=$(token user09)
 day=$(( $(date -u +%s) / 86400 * 86400 ))
 # wait_used N: user01's request counter reaches N (an answer is counted a moment after it arrives)
@@ -137,6 +138,7 @@ ask() { # ask TOKEN MODEL [CONTENT] [STREAM] [PATH]: prints the HTTP status; the
   command curl -s -o "$W/llm" -w '%{http_code}' --max-time 60 -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
     -d "{\"model\":\"$2\",\"stream\":${4:-false},\"input\":\"x\",\"messages\":[{\"role\":\"user\",\"content\":\"${3:-hi}\"}]}" "$MOCK${5:-/chat/completions}"
 }
+hold_for_midnight 120
 day=$(( $(date -u +%s) / 86400 * 86400 ))
 vget() { kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "$1" 2>/dev/null | tr -d '\r'; }
 spent() { vget "ambit-llm_spend_group_ml-research_$day"; }
@@ -156,8 +158,9 @@ YAML
   flush
   fresh
 }
-# fresh: new tokens for user01 and user09; the waits in these checks outlast a Keycloak access token
-fresh() { A=$(token user01); M=$(token user09); }
+# fresh: new tokens for user01 and user09 (the waits in these checks outlast a Keycloak access token), and the UTC day
+# of the counters: a check must not run across midnight, or its charge lands under the next day's key (#427)
+fresh() { hold_for_midnight 120; day=$(( $(date -u +%s) / 86400 * 86400 )); A=$(token user01); M=$(token user09); }
 # wait_policy [TEXT]: the budget policy is accepted by agentgateway at its current generation (and its cost
 # expression contains TEXT)
 wait_policy() {

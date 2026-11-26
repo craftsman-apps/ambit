@@ -130,7 +130,7 @@ kind: Budget
 metadata: { name: contract-eng }
 spec: { group: eng, userRequestsPerDay: 100000 }
 YAML
-day=$(( $(date -u +%s) / 86400 * 86400 )); key="ambit-llm_group_eng_user_user01@example.com_$day"
+hold_for_midnight 60; day=$(( $(date -u +%s) / 86400 * 86400 )); key="ambit-llm_group_eng_user_user01@example.com_$day"
 vget() { kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "$key" 2>/dev/null || true; }
 # The counter must grow with a new request (a counter left from earlier proves nothing).
 before=""; after=""
@@ -194,7 +194,7 @@ kind: Budget
 metadata: { name: contract-ml }
 spec: { group: ml-research, groupDollarsPerDay: "100", userDollarsPerDay: "100" }
 YAML
-day=$(( $(date -u +%s) / 86400 * 86400 ))
+hold_for_midnight 60; day=$(( $(date -u +%s) / 86400 * 86400 ))
 gk="ambit-llm_spend_group_ml-research_$day"; uk="ambit-llm_spend_group_ml-research_spend_user_user09@example.com_$day"
 vget() { kubectl -n "$NS" exec deploy/ambit-valkey -- valkey-cli GET "$1" 2>/dev/null | tr -d '\r'; }
 wait_rl "$NS" "ambit-llm.spend_group_ml-research.spend_user: unit=DAY requests_per_unit=10000000,"

@@ -198,7 +198,7 @@ wait_rl "$NS" "rpm_user: unit=MINUTE requests_per_unit=1000"
 wait_rl "$NS" "spend_group_ml-research: unit=DAY"
 wait_for 60 "accepted agentgatewaypolicy ambit-llm-budgets" || fail "3 budget policy not accepted"
 sleep 3; flush
-day=$(( $(date -u +%s) / 86400 * 86400 ))
+hold_for_midnight 60; day=$(( $(date -u +%s) / 86400 * 86400 ))
 user_day="ambit-llm_group_ml-research_user_user09@example.com_$day"; spend="ambit-llm_spend_group_ml-research_$day"
 c=$(chat "$M" "GUARD-TEST-6"); [[ "$c" == 403 ]] || fail "3 refused prompt: $c"
 sleep 3

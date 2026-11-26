@@ -41,6 +41,7 @@ so a cap can be at most **$42,949.67** a day. Amounts are **estimates from list 
 prices and contract prices are not applied, so spend is usually a little higher than the invoice.
 A price change applies to requests that start after it; an answer still running when the price changes is
 charged at the price from when it started.
+A charge is added to the day (UTC) in which the answer's token counts arrive: a streamed answer that starts before midnight UTC and ends after it is counted for the new day, and the old day does not get it.
 
 | Request | Charged? |
 |---|---|

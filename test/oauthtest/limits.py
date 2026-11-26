@@ -230,8 +230,24 @@ elif MODE == "nat":
         return orig(self, method, url, data, headers)
     Browser.req = counted
 
-    def one_signin(cid, who):
-        kind, res = sign_in(Browser(), cid, f"person{who}", tick=("time",))
+    def one_signin(cid, who, deny=False):
+        """A whole sign-in as a person. deny: the person ends it with Deny at the consent page (the same requests, 7 in the sign-in bucket, but no agent is
+        made: the console of a small test cluster makes about one agent a second, and that would be the limit of this test, not the Gateway's)."""
+        b = Browser()
+        if deny:
+            kind, det = sign_in(b, cid, f"person{who}", consent=False)
+            if kind != "consent":
+                return ("page", det[0], det[2], det[1][:160]) if kind == "page" else (kind, det)
+            st, body, url, v, state = det
+            form = dict(re.findall(r'name="(challenge|csrf)" value="([^"]*)"', body)); form["action"] = "deny"
+            st, h, t = b.req("POST", base_url("/consent"), urllib.parse.urlencode(list(form.items())).encode(), {"Origin": ISS, "Content-Type": "application/x-www-form-urlencoded"})
+            if st != 302:
+                return ("page", st, "/consent", t[:160])
+            st, h, t, url = b.follow(urllib.parse.urljoin(base_url("/consent"), h["Location"]))
+            if not url.startswith(REDIRECT + "?") or "error=access_denied" not in url:
+                return ("page", st, url, t[:160])
+            return None
+        kind, res = sign_in(b, cid, f"person{who}", tick=("time",))
         if kind != "code":
             return ("page", res[0], res[2], res[1][:160]) if kind == "page" else (kind, res)
         st, tok = exchange(cid, res)
@@ -241,7 +257,7 @@ elif MODE == "nat":
     CLIENT_ADDR = "203.0.113.99"
     cid0 = register(REDIRECT, "NAT cost")[2].get("client_id")
     for k in COUNT: COUNT[k] = 0
-    bad = one_signin(cid0, 190)
+    bad = one_signin(cid0, 190)  # a completed sign-in (an agent is made)
     cost = dict(COUNT)
     check(f"18 NAT: one whole sign-in alone costs {cost['signin']} requests in the sign-in bucket and {cost['token']} in the token bucket", bad is None and cost["signin"] >= 6, (bad, cost))
     typical = max(cost["signin"], 1)
@@ -259,7 +275,7 @@ elif MODE == "nat":
             while state["fail"] is None and time.time() - t0 < 58:
                 with lock:
                     who = 100 + state["next"]; state["next"] += 1
-                bad = one_signin(cid, who % 190)
+                bad = one_signin(cid, who % 190, deny=True)
                 with lock:
                     if bad is None: state["ok"] += 1
                     elif state["fail"] is None: state["fail"] = bad
@@ -272,7 +288,7 @@ elif MODE == "nat":
     check("18 NAT: one address reaches the sign-in limit within one minute and is then answered 429", result is not None)
     ok, elapsed, addr = result
     expect = LIM["signin"] // typical
-    print(f"   NAT: one shared address made {ok} whole sign-ins in {elapsed:.0f} s ({WORKERS} at a time) before the sign-in limit ({LIM['signin']} a minute) answered 429; "
+    print(f"   NAT: one shared address made {ok} sign-ins (each ended by the person with Deny: the same 7 requests as a completed one) in {elapsed:.0f} s ({WORKERS} at a time) before the sign-in limit ({LIM['signin']} a minute) answered 429; "
           f"a sign-in costs {typical} requests in the sign-in bucket and {cost['token']} in the token bucket, so the limit is {expect} sign-ins", flush=True)
     check(f"18 NAT: {ok} sign-ins from one address in a minute fit the default sign-in limit of {LIM['signin']} ({typical} requests each; the {WORKERS} that were under way when it answered 429 did not finish)",
           expect - WORKERS <= ok <= expect, (ok, expect))

@@ -6,6 +6,8 @@ export type AgentView = {
   name: string; displayName: string; owner: string; mode: AgentMode; group?: string; identity?: string;
   platform: string; scope: string[]; connectionConsent: string[]; state: AgentState; rev: number;
   created: string; createdBy: string; manageable: boolean;
+  // The stop (docs/agents.md): measured by the console. Stopped only when every Gateway confirmed it.
+  stopRequestedAt?: string; stoppedAt?: string; stopUnlisted?: boolean; stopNotConfirmedAt?: string; orphanedAt?: string;
 };
 export type AgentSettings = { enabled: boolean; maxTotal: number; maxPerPerson: number; keyMaxDays: number };
 
@@ -60,3 +62,27 @@ export function toolsUsed(calls: { method: string; server: string; tool: string 
 
 // The header the platform sends. Both forms are accepted by the gateway; the key is shown once.
 export const headerLines = (key: string) => [`Authorization: Bearer ${key}`, `x-api-key: ${key}`];
+
+// "2026-11-26 09:15:02 UTC"
+export const utcTime = (iso: string) => `${new Date(iso).toISOString().replace("T", " ").slice(0, 19)} UTC`;
+export const secondsBetween = (from: string, to: string) => Math.max(0, Math.round((Date.parse(to) - Date.parse(from)) / 1000));
+
+// What the page says about a stop, from the console's own record. It never says "no calls": the console measures them
+// (the evidence export), and a stop is complete only when every Gateway confirmed it.
+export type StopNote = { tone: "info" | "warn" | "ok"; text: string };
+export function stopNotes(a: AgentView): StopNote[] {
+  const out: StopNote[] = [];
+  if (a.state === "stopping") {
+    out.push({ tone: "info", text: `Stopping since ${a.stopRequestedAt ? utcTime(a.stopRequestedAt) : "a moment ago"}. The keys are being deleted. The agent is shown as Stopped only after every gateway has confirmed the stop. Until then a call can still be accepted.` });
+    if (a.stopNotConfirmedAt) out.push({ tone: "warn", text: `Not confirmed on every gateway after 60 seconds (since ${utcTime(a.stopNotConfirmedAt)}). The steps are repeated until every gateway confirms. Ask your administrator to check the alert “stop not confirmed” and the controllers.` });
+    if (a.stopUnlisted) out.push({ tone: "warn", text: "The stop list is full (1,000 agents). The keys are deleted, but the stop is not complete until there is room on the list." });
+  }
+  if (a.state === "stopped") {
+    const took = a.stopRequestedAt && a.stoppedAt ? ` It was confirmed on every gateway ${secondsBetween(a.stopRequestedAt, a.stoppedAt)} seconds after the request (measured).` : "";
+    out.push({ tone: "ok", text: `Stopped${a.stoppedAt ? ` at ${utcTime(a.stoppedAt)}` : ""}.${took} Its keys were deleted and stay deleted. Start lets the agent get new keys.` });
+  }
+  return out;
+}
+
+// The connections an agent may use are names; the person's own connections are the choices.
+export const toggleName = (list: string[], name: string) => (list.includes(name) ? list.filter((n) => n !== name) : [...list, name]);

@@ -63,6 +63,40 @@ date and, if you want, source address ranges. The key is shown **once**, togethe
 
 **Revoke** deletes one key. **Delete agent** deletes the agent, its keys and (itself mode) its service account.
 
+### Stop and start
+
+**Stop agent** is on the detail page, for the owner (person mode) and for admins. The page asks first, and says what a stop
+is: the console starts to delete the keys at once, and the page shows **Stopped** only after every gateway has confirmed the stop. While it
+waits, the agent is **Stopping**, the page asks again every 2 seconds, and it says that a call that is already on its way can
+still be accepted. It never says that no call is accepted: the console measures the calls that were accepted after the request
+(see [Stopping an agent](#stopping-an-agent)).
+
+![An agent that is stopping: the keys are deleted, and the page waits for every gateway to confirm.](assets/console/agents-stopping.png)
+
+When the stop is confirmed, the page shows the time and how many seconds after the request it was confirmed, as the console
+measured it. If a gateway has not confirmed after 60 seconds, the page says so, and says that the steps are repeated until it
+does. If the stop list is full, it says that too. Admins get a link to the **stop evidence** (`agent-stop.zip`): the time of
+each step, each gateway's confirmation and the calls accepted after the request, counted.
+
+![A stopped agent: the time, the seconds until every gateway confirmed (measured), and the Start button.](assets/console/agents-stopped.png)
+
+**Start agent** lets a stopped agent get new keys. The old keys stay deleted. The console refuses a start for one minute after
+the keys were deleted, and the page shows its reason.
+
+### Apps with the owner's own sign-in
+
+For a person-mode agent, the owner sees one box for each of their connections: **May use my Slack connection**. Nothing is
+ticked by default. Save writes `connectionConsent`. A box gives nothing alone: the app must be connected under **My
+connections**, the agent needs the app's server in its tools, and AccessRules must allow it. Only the owner changes the boxes;
+an admin sees the list. An itself-mode agent gets no app connections in 0.6.0.
+
+![The connection boxes of an agent: Slack is ticked, Jira is not connected yet.](assets/console/agents-consent.png)
+
+### When the owner leaves
+
+An agent whose owner left shows a banner with the date. It keeps working for the time set in `agents.orphanDays` (7 days by
+default), then it is stopped. An admin moves an itself-mode agent to a new owner in the banner.
+
 ## Create an agent and a key in the API
 
 The same, with the API:

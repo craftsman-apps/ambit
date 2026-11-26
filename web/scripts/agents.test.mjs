@@ -49,3 +49,32 @@ test("platform and name checks follow the console's patterns", () => {
   assert.ok(PLATFORM_RE.test("grok") && PLATFORM_RE.test("a.b_c-1") && !PLATFORM_RE.test("Grok") && !PLATFORM_RE.test("-x") && !PLATFORM_RE.test("a".repeat(41)));
   assert.ok(NAME_RE.test("nightly-report") && !NAME_RE.test("Nightly") && !NAME_RE.test("-a") && !NAME_RE.test("a-"));
 });
+
+import { secondsBetween, stopNotes, toggleName, utcTime } from "../src/lib/agents.ts";
+const agent = (o) => ({ name: "a", displayName: "A", owner: "u@example.com", mode: "person", platform: "grok", scope: [], connectionConsent: [], state: "active", rev: 1, created: "", createdBy: "", manageable: true, ...o });
+
+test("utcTime and secondsBetween", () => {
+  assert.equal(utcTime("2026-11-26T09:15:02.500Z"), "2026-11-26 09:15:02 UTC");
+  assert.equal(secondsBetween("2026-11-26T09:00:00Z", "2026-11-26T09:00:08.4Z"), 8);
+  assert.equal(secondsBetween("2026-11-26T09:00:10Z", "2026-11-26T09:00:00Z"), 0);
+});
+
+test("stopNotes: an active agent has none; stopping says calls may still be accepted; stopped says measured and never zero", () => {
+  assert.deepEqual(stopNotes(agent({})), []);
+  const s = stopNotes(agent({ state: "stopping", stopRequestedAt: "2026-11-26T09:00:00Z" }));
+  assert.equal(s.length, 1);
+  assert.match(s[0].text, /Stopping since 2026-11-26 09:00:00 UTC/);
+  assert.match(s[0].text, /keys are being deleted/);
+  assert.match(s[0].text, /only after every gateway has confirmed/);
+  assert.match(s[0].text, /a call can still be accepted/);
+  const w = stopNotes(agent({ state: "stopping", stopRequestedAt: "2026-11-26T09:00:00Z", stopNotConfirmedAt: "2026-11-26T09:01:00Z", stopUnlisted: true }));
+  assert.deepEqual(w.map((n) => n.tone), ["info", "warn", "warn"]);
+  const d = stopNotes(agent({ state: "stopped", stopRequestedAt: "2026-11-26T09:00:00Z", stoppedAt: "2026-11-26T09:00:08Z" }));
+  assert.match(d[0].text, /8 seconds after the request \(measured\)/);
+  assert.doesNotMatch(JSON.stringify([s, w, d]), /zero|no call|0 calls/i);
+});
+
+test("toggleName adds and removes a connection name", () => {
+  assert.deepEqual(toggleName([], "slack"), ["slack"]);
+  assert.deepEqual(toggleName(["slack", "jira"], "slack"), ["jira"]);
+});

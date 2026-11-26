@@ -22,7 +22,7 @@ need to update your branch from `main` any more, and you do not need to wait for
    then mark it ready: `gh pr ready <number>`. This runs quickstart on the pull request (when the change needs it).
    The full e2e does not run on the pull request once the queue is on; it runs in the queue (see
    [What runs where](#what-runs-where)). To try a risky change against the full e2e earlier, see
-   [Run the full e2e before the queue](#run-the-full-e2e-before-the-queue).
+   [Run the e2e before the queue](#run-the-e2e-before-the-queue).
 3. Run the Codex review and fix what it finds.
 4. When every check of the pull request is green, join the queue. Name the commit you reviewed, so a late push cannot slip in:
 
@@ -58,7 +58,7 @@ The kind cluster lock (`/tmp/ambit-kind.lock`) is for local clusters and does no
 | Draft pull request | The quick checks: `changes`, `build`, `image`, `cli-unit` on three systems, the `cli-*` jobs the path filter asks for. No quickstart, no e2e. | about 10 minutes: the slowest job is `cli-snapshot` (9 minutes), then `build` (5) and `image` (4) |
 | Pull request that is ready | The same, plus `quickstart` when the path filter asks for it. **No e2e** once the queue is on. | about 10 minutes, the same jobs plus `quickstart` (2 minutes) |
 | Merge queue (event `merge_group`) | Everything the path filter asks for: the quick checks, `quickstart`, and the full e2e (`e2e (a)` to `e2e (e)`, every part of the matrix in `ci.yml`). | about 21 minutes: `image` (4) and then the slowest e2e part (17) |
-| A manual run (event `workflow_dispatch`) | Everything, for any branch, whatever files changed. | about 21 minutes, as in the queue |
+| A manual run (event `workflow_dispatch`) | Everything, for any branch, whatever files changed; with `-f parts=...` only the e2e parts you name. | about 21 minutes, as in the queue |
 
 The rule that keeps `main` safe: the one required check is `merge-gate`. On a queue branch it fails when e2e was skipped
 although the path filter says the change needs it. On a pull request it accepts "e2e not run here" only when the
@@ -85,17 +85,37 @@ required check; (3) nobody can bypass the rules, administrators included; (4) a 
 `.github/` (for example with a CODEOWNERS entry), because the queue runs the workflow and `merge-gate.sh` from the
 candidate commit itself, so a change to them is judged by the version it brings.
 
-## Run the full e2e before the queue
+## Run the e2e before the queue
 
-Use it for a risky change (the gateway, the charts, the controller), so you do not learn from the queue that it fails:
+Do not start a full e2e by hand before the queue. The queue runs the full e2e on every change anyway, so a hand-made full
+run only repeats that work and uses Actions minutes and runners (one full run is about 50 minutes of Actions time).
+
+When you need e2e evidence early (the gateway, the charts, the controller), run only the part your change touches.
+The parts and their steps are listed in `.github/scripts/e2e-parts.sh`:
 
 ```
-gh workflow run ci.yml --ref <your branch>
+gh workflow run ci.yml --ref <your branch> -f parts=f
+gh workflow run ci.yml --ref <your branch> -f parts="a e"
 ```
 
-It runs every job, e2e included, on your branch (the trigger must exist on `main`, which it does once this change is
-merged). The results appear under the Actions tab and, as checks of the same commit, on the pull request. They do not
-count as the required check for merging: they are for you to learn early. It costs the same Actions minutes as one queue run, so use it when the risk is real.
+`parts` is `all` (the default) or a space-separated list of part names. An unknown name stops the run at once. It
+limits only a manual run: a pull request and the merge queue always run every part. The other jobs (build, image,
+cli-*) run as usual. A manual run is not the required check for merging; it is for you to learn early.
+
+## Wait with one script
+
+Use `hack/wait-pr.sh` for every wait on a pull request. Do not write your own loop that checks `state != OPEN`: it
+misses a pull request that leaves the queue or becomes unmergeable, and then it waits for ever.
+
+```
+hack/wait-pr.sh <number>                 # after `gh pr merge --auto`: wait for the merge
+hack/wait-pr.sh <number> --checks        # wait only until the pull request's own checks are finished
+hack/wait-pr.sh <number> --timeout 3h --interval 60
+```
+
+It ends with one line that says why, and an exit code: 0 merged (with `--checks`: all checks green), 2 closed without a
+merge, 3 removed from the merge queue (the reason from the timeline is printed), 4 merge conflict, 5 a check failed
+(the check name and the run link are printed), 6 timeout, 1 wrong usage. Its test is `hack/wait-pr_test.sh`.
 
 ## Which checks must pass
 

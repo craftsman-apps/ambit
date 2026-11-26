@@ -408,4 +408,24 @@ wait_for 60 '[[ $(pub "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: 
 for a in "${AGENTS[@]}"; do api DELETE "/api/agents/$a" >/dev/null || true; done
 pass "11 an agent key with source ranges for other addresses is refused (403) on the public and the private Gateway; one that allows every address works"
 
+# --- 12 · the ratelimit service's port 8080 (/json counts a hit for any descriptor, with no authentication) is for the public
+#         Gateway's pods only (#417): another pod, even one labelled as the private Gateway, cannot change a counter
+RLJ="http://ambit-ratelimit.$NS.svc:8080/json"
+RLBODY='{"domain":"ambit-public","descriptors":[{"entries":[{"key":"fd_source","value":"198.51.100.77"}]}]}'
+a=$(pod_curl "ambitproject.dev/test=other" "$RLJ" -X POST -d "$RLBODY")
+b=$(pod_curl "ambitproject.dev/test=other" "http://ambit-ratelimit.$NS.svc:8080/healthcheck")
+c=$(pod_curl "gateway.networking.k8s.io/gateway-name=ambit" "$RLJ" -X POST -d "$RLBODY")
+d=$(pod_curl "$PUBPOD" "$RLJ" -X POST -d "$RLBODY")
+GUARDIP=$(kubectl -n "$NS" get pod -l app.kubernetes.io/name=ambit-guard -o jsonpath='{.items[0].status.podIP}')
+e=$(pod_curl "ambitproject.dev/test=other" "http://$GUARDIP:8081/")   # a control: the guard's health port (8081, no Service) is open to every pod
+[[ "$e" != 000 ]] || fail "12 the pod with no label cannot reach any port (the check pod does not work), so a refusal below proves nothing"
+[[ "$a" == 000 ]] || fail "12 a pod with no label reached /json of the ratelimit service (HTTP $a): it could change any counter"
+[[ "$b" == 000 ]] || fail "12 a pod with no label reached port 8080 of the ratelimit service (HTTP $b)"
+[[ "$c" == 000 ]] || fail "12 a pod of the private Gateway reached /json of the ratelimit service (HTTP $c)"
+[[ "$d" == 200 ]] || fail "12 a pod of the public Gateway cannot use /json of the ratelimit service (HTTP $d)"
+kubectl -n "$NS" rollout status deploy/ambit-ratelimit --timeout=60s >/dev/null || fail "12 the ratelimit service is not Ready under its network policy (the kubelet's probe is refused?)"
+# the public Gateway still passes a valid key through the policy (check 7 shows that the source limit counts and limits)
+[[ $(pubk "$PA" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K3") == ok && $(pubk "$PB" /mcp -X POST "${MCPH[@]}" -d "$INIT" -H "x-api-key: $K3") == ok ]] || fail "12 the front door does not pass a valid key (the source check cannot reach the ratelimit service?)"
+pass "12 ratelimit port 8080: a pod with no label and a pod of the private Gateway are refused (no connection); a pod of the public Gateway gets 200; the service stays Ready (the kubelet's probe passes); the public Gateway still passes a valid key"
+
 done_step fd

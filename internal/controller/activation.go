@@ -176,10 +176,11 @@ func (r *Reconciler) lastLook(ctx context.Context, err error, objs []gated, seen
 	if !errors.Is(err, errRulesRevoked) {
 		return err
 	}
-	if _, aerr := r.activated(ctx, objs, seen); aerr != nil {
+	var st *stalledError
+	if _, aerr := r.activated(ctx, objs, seen); errors.As(aerr, &st) {
 		return aerr
 	}
-	return err
+	return err // also when the look itself failed to read: the carried objects must still be saved
 }
 
 // activated returns "" when every object is active, or what it waits for. A NACK or an Invalid verdict on the

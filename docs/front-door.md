@@ -174,6 +174,9 @@ an MCP request that way). The first two limits are per minute (a fixed window th
      The per-pod limit (200 a second) counts after authentication, so it does not cover the 401 path; the per-address limit of 1,200 a minute (20 a second) does. An attacker with one
      address could send 120 junk requests a minute before; now 1,200. To reach the same load on a gateway pod needs ten times fewer addresses. If that matters to you, lower
      `oauth.rateLimit.bearerPerMinute`, and use the edge limits below (they see the connection before the Gateway does).
+  4. **An upgrade has a short gap.** The Gateway policy changes at once, but the ratelimit service reads the new ConfigMap when the kubelet has updated its file (usually under a minute, at most a few). In that gap
+     a call that now belongs to the **bearer** bucket meets a bucket the service does not know yet, and the service applies no per-address limit to it (the per-credential and per-pod limits still apply, and
+     so does authentication). The same holds for every bucket that a release adds. If that matters, upgrade at a quiet time.
 - **Why 1,200 a minute (the default of the bearer bucket).** *Measured on kind:* one interaction of a person with a platform's MCP client (`initialize`, `notifications/initialized`, `tools/list`, three
   tool calls, the end of the session) is **7 requests**; a client that also opens the event stream sends one more. With the default limit one address sent 1,205 requests (173 interactions, four at a time, in 16 seconds): 1,200 passed, every one with a success status, and the rest got 429, which is 171 whole interactions a minute
   (`limits.py` mode `nat`, check 19; the kind cluster is not the limit: the bucket is). The number comes from this: 1,200 a minute is 20 a second, 171 interactions a minute. A person who works with a platform starts an interaction about every 20 seconds at

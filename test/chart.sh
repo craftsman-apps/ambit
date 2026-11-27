@@ -496,6 +496,8 @@ MSG='oauth.signIn.clientSecret' refuse "no client secret" --set oauth.signIn.cli
 MSG='oauth.cookieSecret' refuse "no cookie secret" --set oauth.cookieSecret.name=
 MSG='limits.enabled' refuse "OAuth without shared limits" --set limits.enabled=false
 MSG='redirectHosts' refuse "dynamic registration without hosts" --set 'oauth.registration.dynamic.redirectHosts={}'
+bearer_old=$(oat --set oauth.rateLimit.bearerPerMinute=null)
+grep -q 'requests_per_unit: 1200' <<<"$bearer_old" || { echo "FAIL chart: a release from before bearerPerMinute (--reuse-values has no such value) must get 1200"; exit 1; }
 MSG='oauth.rateLimit.bearerPerMinute must be a whole number' refuse "no bearer limit" --set oauth.rateLimit.bearerPerMinute=0
 MSG='oauth.rateLimit.bearerPerMinute must be a whole number' refuse "a bearer limit that the ratelimit service cannot hold" --set oauth.rateLimit.bearerPerMinute=4294967296
 MSG='oauth.rateLimit.bearerPerMinute must be a whole number' refuse "a fractional bearer limit" --set oauth.rateLimit.bearerPerMinute=1200.5

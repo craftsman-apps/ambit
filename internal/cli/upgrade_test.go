@@ -173,6 +173,20 @@ func TestUpgradeNotesMatchTheDocs(t *testing.T) {
 	}
 }
 
+func TestUpgradeLinksFrom050To060NameTheThreeSections(t *testing.T) {
+	got := upgradeLinks("0.5.0", "0.6.0")
+	want := []string{"#to-the-release-with-agents-060", "#to-the-release-with-the-public-front-door-060",
+		"#to-the-release-with-oauth-sign-in-and-the-injection-guard-060"}
+	if len(got) != 4 {
+		t.Fatalf("links = %q", got)
+	}
+	for i, w := range want {
+		if !strings.HasSuffix(got[i+1], w) {
+			t.Errorf("line %d = %q, want suffix %q", i+1, got[i+1], w)
+		}
+	}
+}
+
 func TestUpgradeLinksNameEachVersionOnce(t *testing.T) {
 	got := upgradeLinks("0.4.0", "0.5.0")
 	if len(got) != 2 || !strings.HasSuffix(got[1], "service accounts (0.5.0): https://ambitproject.dev/docs/upgrading#to-the-release-with-service-accounts-050") {

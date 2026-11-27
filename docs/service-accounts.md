@@ -24,7 +24,7 @@ console for 30 days.
 
 A service account is not a Kubernetes ServiceAccount and has nothing to do with one.
 
-## Agents that are service accounts
+## Agents that are service accounts (experimental)
 
 An [itself-mode agent](agents.md#two-kinds-of-agent) is a service account with an accountable owner (a person or a group),
 a declared platform and a scope. Admins create it with `POST /api/agents` (`"mode":"itself"`); the page here keeps listing

@@ -8,6 +8,191 @@ For upgrade steps in detail, read [docs/upgrading.md](docs/upgrading.md).
 
 Each pull request adds a file in changelog/unreleased/ (see its README); the release assembles them here.
 
+## 0.6.0 (2026-11-27)
+
+**Everything new in 0.6.0 is experimental.** The agent API, the agent fields of keys and audit records, the public
+front door, OAuth sign-in, the injection guard, `Server.spec.frontDoor`, and every new Helm value, endpoint, alert
+and audit field of this release may change in 0.7.0. A change comes with an upgrade note; nothing changes silently
+inside 0.6.x. What may be relied on: the `ambit_` key format, the seven agent audit attributes and the eight columns
+appended to `calls.csv` (exports only ever append columns). The new features that open Ambit to the internet (the
+front door and OAuth) are **off by default**: an upgrade changes nothing there until you turn them on.
+
+### What is new
+
+- **Agents (experimental).** A person can make an agent for their own work, and an admin can make an agent that is a
+  service account with an owner (an "itself-mode" agent). An agent key carries its own scope: the MCP servers and tools
+  it may use, and optionally the source addresses it may come from. The gateway allows a call only when the owner's
+  AccessRules **and** the key's scope allow it (in audit-only mode the AccessRules only record, but the key's scope is
+  still enforced). A person-mode agent uses one of its owner's app connections only when the owner allowed it. Stopping
+  an agent is confirmed on every gateway before the console says "Stopped". Offboarding a person stops their
+  person-mode agents; their itself-mode agents keep working for 7 days (`agents.orphanDays`) so that an admin can give
+  them a new owner, and are then stopped. Audit records name the agent, its mode, the platform it declared (never
+  checked by Ambit) and its owner. New page **You → Agents**, new Audit filters, and a stop evidence export. See
+  [Agents](docs/agents.md).
+- **The public front door for hosted agents (experimental, off by default).** With `frontDoor.enabled: true` the chart
+  adds a second gateway, `ambit-public`, with its own pods and Service (a load balancer by default). With keys it serves
+  HTTPS only, one host name and one path (`/mcp`); OAuth sign-in adds a second host name for sign-in and the discovery
+  documents. It serves only the MCP servers that an admin put on it (`Server.spec.frontDoor`, with a written
+  acknowledgment that the server's error messages and notifications are not masked). The console, Dex and the LLM
+  host are not reachable there. Requests are limited per key and per source address; the limit per source address
+  also counts refused requests. Guides describe what to enter in several hosted agent platforms that can send a key in a
+  header; each says that example requests passed against a test installation and that **no live account was
+  tested**. See [The public front door](docs/front-door.md).
+- **OAuth sign-in for MCP clients (experimental, off by default).** Standards-based OAuth for MCP clients that cannot
+  send a fixed key: the client sends the person to Ambit's sign-in host, the person signs in with the company account
+  and ticks the servers the client may use, and the client gets a short-lived token (15 minutes) that opens exactly
+  those tools, checked on every call together with the person's AccessRules, offboarding and the stop list. It uses
+  Ory Hydra v26.2.0 and needs the front door, `oauth.enabled: true`, your OIDC identity provider and **a PostgreSQL 15,
+  16 or 17 database that you run, with verified TLS**, and backups of it that you make. A check at every start refuses a
+  database without verified TLS, another version, a superuser role or too few connections (it cannot check backups).
+  Emergency controls: `ambit oauth block on` refuses every OAuth token on the public route about a second after a
+  gateway accepts the policy (keys keep working; try a token on each public gateway pod), and one admin call rotates
+  the signing keys and ends the refresh of every connection (a gateway pod can accept tokens of the old key for up to 5
+  minutes, so keep the block on until each pod refuses them). Ambit names no hosted platform as supported: no platform has
+  been tested with a live account. The default list of callback addresses that may register
+  (`oauth.registration.dynamic.redirectHosts`) is a starting point to review, not a statement that a platform works.
+  See [OAuth sign-in](docs/oauth.md) and the guide [Connect an OAuth MCP client](docs/guides/oauth-mcp-client.md).
+- **Guard changes.** New injection guard for MCP results (off by default, `protection.injectionGuard`): it looks for
+  prompt-injection text with 13 built-in rules, your own patterns and an optional webhook, and records, withholds or
+  masks it. It finds only the wording its rules describe; it does not detect every injection. The MCP guard now also
+  masks the values of `_meta`, reads long numbers (16 or more digits) from the digits it receives instead of a rounded
+  value (a number with a decimal point or an exponent can already be rounded by the gateway, #385), and withholds a tool
+  list that is not a list of tools.
+  The documentation now lists exactly which server messages are masked and which are not. See
+  [Masking](docs/concepts.md#masking) and [Injection guard](docs/concepts.md#injection-guard).
+- **Audit changes.** Removing an MCP app is an audit record. The access review export can be made as of an earlier time
+  of the same day. The console sends its audit records from a queue, so a slow collector no longer delays app
+  approvals. When the collector cannot be reached or is not ready, the guard and the controller send their records
+  again, up to two more times.
+- **Faster access changes.** Removing access no longer waits for a rules change that is still in progress, and the
+  first image server of a new cluster is ready much sooner (measured on kind: 10 s instead of 129 s).
+- **Command-line tool:** `ambit oauth block`, clearer `ambit local up` messages when Docker is busy, safer quoting in
+  `ambit connect` on Windows, and `install.sh` installs the Apple silicon build under Rosetta.
+
+### Upgrade notes
+
+Read [Upgrading](docs/upgrading.md), the three sections for 0.6.0. `ambit upgrade` lists them for you. In short:
+
+- **No Helm dependency changes:** agentgateway stays at v1.7.0, and `crds.yaml` is the same as in 0.5.0 (OAuth adds Ory
+  Hydra, only when you turn it on). **The Ambit CRDs change:** `Server` gains `spec.frontDoor`, and `ServerRequest`
+  gains `spec.server.frontDoor` (an approval ignores it). Upgrade `ambit-crds`, then `ambit` (`ambit upgrade`
+  does both).
+- **Agents are on by default** (`agents.enabled: true`): after the upgrade, people can make agents and agent keys for
+  themselves. Set `agents.enabled: false` to refuse new agents and agent keys.
+- **App connections can fail for a short time during the upgrade.** The 0.6.0 token broker gives a person's app
+  connection token only when the gateway names the calling agent (header `x-ambit-agent`, from a policy that the
+  upgraded controller writes). Until the controller has written it, MCP calls that need a person's connection fail.
+  After the rollout, try one existing connection.
+- **The front door, OAuth sign-in and the injection guard are off by default** and change nothing until you turn them on.
+- **The rules version shown in Audit changes once** after the upgrade (the MCP access policy has one more clause). The
+  access of people does not change.
+- **The MCP guard masks more:** `_meta` values, and long numbers from the digits it receives (a result with a run of 16
+  or more digits needs about 5.4 times its size in memory while it is checked, 3 times for other results). With
+  `protection.enabled`, a `tools/list` answer that is not a list of tools is withheld. Test tools whose results contain
+  long numbers first.
+- **With `evidence.enabled`:** the access log gets the agent attributes, and `calls.csv` gets eight columns at the end,
+  also with the front door off. **With `limits.enabled`:** pods other than the public gateway no longer reach port 8080
+  of the ratelimit service.
+- **The metric `ambit_console_audit_send_failures_total` has a new `reason` label.** A query of your own now sees one
+  series per reason; sum over `reason` to get the old number.
+- **New Helm values, all optional:**
+
+  | Value | Default | What it does |
+  |---|---|---|
+  | `agents.*` | `enabled: true` | Agents and agent keys; limits `maxTotal` (2000), `maxPerPerson` (10), `keyMaxDays` (90), `orphanDays` (7) |
+  | `frontDoor.*` | `enabled: false` | The public front door: host, TLS Secret, replicas, Service, client address mode, rate limits |
+  | `oauth.*` | `enabled: false` | OAuth sign-in: Hydra, database Secrets, your identity provider, registration rules, rate limits, token lifetimes |
+  | `protection.injectionGuard.*` | `enabled: false` | The injection guard: mode, built-in rules, your patterns, webhook |
+  | `alerts.oauth.*` | empty expressions | Database backup and connection alerts from your own metrics (only with OAuth) |
+
+- **A downgrade below 0.6.0 has not been tested.** Before one, turn off `oauth.enabled` and `frontDoor.enabled`, and
+  delete agents and their keys.
+
+### Verify the image signature
+
+With cosign 2.0 or newer:
+
+```sh
+cosign verify ghcr.io/craftsman-apps/ambit-console:0.6.0 \
+  --certificate-identity-regexp '^https://github.com/craftsman-apps/ambit/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+### Known limits and open issues
+
+- **The MCP guard does not see JSON-RPC errors, log and progress notifications, and sampling or elicitation requests
+  from an MCP server**; they reach the client unmasked, because agentgateway sends only successful results to the guard
+  ([agentgateway issue 4245](https://github.com/agentgateway/agentgateway/issues/4245), Ambit #333). This is why a
+  server on the front door needs the written acknowledgment.
+- **No hosted platform has been tested with a live account**, neither with a key nor with OAuth.
+- OAuth: the person is identified by the email address, so an identity provider that gives an old address to a new
+  person gives that person the old person's grants (#405).
+- OAuth: two sign-ins of the **same** client in one browser disturb each other; the first one fails and the person
+  connects again (#404).
+- OAuth: Hydra's clean-up leaves authorization codes and finished sign-in records, so two tables grow by a few MB a
+  day at 1,000 sign-ins a day (#435).
+- OAuth: to roll back Hydra, restore the database backup; `hydra migrate sql down` deletes every sign-in record and
+  token (#437).
+- OAuth: Hydra's admin API trusts pod labels only (#402); after a restart of the bundled Valkey, the same browser may
+  be able to send again an approval or denial that it made less than 20 minutes before (#403, #421); the authorization
+  request is not compared with the first request after sign-in (#420). There is no scheduled rotation of the signing
+  keys.
+- Access mode: when a switch from enforce to audit-only waits for the access log and a rule edit at that moment makes
+  the audit fields too large, authorization may be relaxed for a short time before Ambit falls back to enforcing. Found
+  by review, not reproduced (#446).
+- Front door: an MCP session that is already open keeps a server that was taken off the front door until the session
+  ends; its tool calls are still refused (#401). The stop of an agent with a key has not been measured on the public
+  gateway yet (the stop of an OAuth agent has), and a route attached to two gateways counts for both (#410).
+- The guard: a card number written as a JSON number with a decimal point or an exponent and above 2^53 can reach the
+  guard already rounded by the gateway (#385). Injection records of `resources/read` and `prompts/get` have no call ID
+  (#386), and the evidence export does not include injection records yet (#384).
+- A removed MCP app is not recorded when the controller was not running at the moment of the deletion (#376).
+- winget and Scoop are still not available until the maintainers set them up; the release then skips them with a
+  notice. On Windows, use `install.ps1` or npm.
+- The Databricks and PagerDuty presets passed live checks before, but their test accounts stopped working; they are
+  not verified again and not offered in the console (#244).
+
+### All changes
+
+- The access review export can be made as of an earlier time of the same day. When the rules changed during the date, Settings → Evidence lists the day's snapshots and lets you choose one. API: `GET /api/evidence/access.zip?date=D&at=T` (T is an RFC 3339 time inside the UTC day D; the whole ZIP is as of T) and the new `GET /api/evidence/access/snapshots?date=D`. Without `at`, the export is as before.
+- A collector that is down or slow no longer delays MCP app requests, approvals and denials in the console. Before, each decision could wait up to 5 seconds. The console now sends its audit records from a queue; a record that cannot be delivered is still counted (`ambit_console_audit_send_failures_total`, now with a `reason` label) and still raises the alert `AmbitConsoleAuditSendFailed`.
+- Removing an MCP app is now an audit record. When a `Server` is deleted, the controller writes a `removed` record (`ambit.kind = app-approval`) with the server, its request, who asked for it, and its image or URL; the Audit page shows it under MCP app requests and approvals. The record names the person when the console removed the app. A deletion by `kubectl`, or by Argo CD in GitOps mode, is recorded without a person (the Git history or the Kubernetes audit log names them). `docs/compliance.md` describes the limits.
+- Fixed a rare race in a rules change: if someone deleted the access-log policy at the same moment the controller checked that step, the next step (authorization) could be written before the access log was active again. The step now waits until the policy is written again and agentgateway has accepted it.
+- Docs: the prompt guard webhook can run in another namespace (`llm.promptGuard.webhook.namespace`); the gateway and `ambit-router` both call it. This is now tested on every release candidate, and the docs say which connections the webhook must accept.
+- **An agent uses a person's app connection only when the person allowed it (experimental).** The gateway tells the token broker which agent is calling, from the verified key (a header sent by the client has no effect), and the broker gives the owner's token only for the apps listed in the agent's `connectionConsent`. It checks the agent's record on every request. If the record cannot be read, or the agent is stopped or in itself mode, no token is given. A gateway that does not send the agent header gives no connection token to anyone. See [Agents](docs/agents.md#apps-with-a-persons-own-sign-in).
+- **Stopping an agent is confirmed on every Gateway, and offboarding stops a person's agents (experimental).** `POST /api/agents/{name}/stop` writes the agent to a stop list, deletes its keys, and the controller turns the list into policies on every MCP and LLM route (150 agents per policy, 1,000 in all). The agent is reported `stopped` only after each Gateway accepted the policy; if one does not within 60 seconds, an event and the alerts `AmbitAgentStopNotConfirmed` and `AmbitStopPolicyDegraded` say so. The new export `agent-stop-<agent>.zip` shows the measured times and the number of calls accepted after the request, never a promise of zero. Offboarding a person stops their person-mode agents and gives the itself-mode agents they own 7 days to get a new owner. See [Agents](docs/agents.md#stopping-an-agent).
+- `install.sh` now installs the Apple silicon build when it runs in a terminal under Rosetta, and prints a PATH line that stays correct when the install folder has a quote, a space or a `$`.
+- `ambit connect hermes` and `ambit connect pi` on Windows now write the path of `ambit` in double quotes, which `cmd.exe` and Git Bash both read (a path with a typographic quote, which got PowerShell single quotes before, failed in `cmd.exe`). A path or address with `$`, a backtick or a double quote is refused with a clear message, because no quoting is right for it.
+- `ambit connect` no longer writes a backup of the old content for a file that changed since it was read; it stops and asks you to run the command again.
+- The guard and the controller send a log record again, up to two more times (after 1 s and after 2 more s), when its send to the collector fails because the collector cannot be reached or is not ready. Before, one failed send lost the records of that batch, for example the first send of a new pod or a send while the collector restarts. A batch that still fails is dropped and counted as before (`ambit_guard_record_dropped_total` for the guard, `ambit_controller_record_dropped_total` for the controller).
+- Docs: how long an access rule change takes to reach the gateway, with measured times (a deleted rule: under 0.5 s; a deletion that arrives during another change waits for it, about 5 s), and that a streamed answer is charged to the UTC day in which it ends.
+- `ambit local up` now asks Docker a second time when `docker info` does not answer in 15 seconds, and then says "Docker did not answer (it may be busy)" with `docker info` as the next step, instead of "Docker is not running".
+- While a pod waits for its container to start, the progress line of `ambit local up` names the image and how long ago the pod was created.
+- `ambit local up --chart-dir` and `ambit install --chart-dir` now ask for `helm dependency build` when the chart has no packed dependencies (`*.tgz`), not only when the folder is missing. `docs/cli.md` describes the steps for running from a checkout.
+- **Agents (experimental): a key that carries its own scope.** A person can make an agent for themselves, and an admin can make an agent that is a service account with an owner, a declared platform and a scope. The agent's key lists the MCP servers and tools it may use and can be limited to source address ranges. The gateway allows a call only when the owner's AccessRules **and** the key's scope allow it. Audit records the agent, its mode, the platform it declared and its owner at the time the key was issued; the Audit API takes `agent=`, `platform_declared=` and `ingress=`, and `calls.csv` has eight new columns after `call_id`. The API and these fields are experimental in 0.6.x and may change in 0.7.0 with a note. See [Agents](docs/agents.md). The rules version in Audit changes once after the upgrade, because the MCP access policy has one more clause.
+- **A public front door for hosted agents (experimental, off by default).** With `frontDoor.enabled: true` the chart adds a second Gateway, `ambit-public`, with its own pods and load balancer. It serves HTTPS only, one host name (`frontDoor.host`) and one route, the exact path `/mcp`, and accepts API keys only; the console, Dex and the LLM host answer 404 there, and Kubernetes refuses any other route on that Gateway. Requests are limited per key and per source address by the shared ratelimit service, and per pod as a second line. Audit records of both Gateways carry `ambit.ingress` (`public` or `private`), and offboarded people are refused on the public route too. In this change the route has no servers yet: they are chosen in the next change of this release series. The values, objects and audit field are experimental in 0.6.x and may change in 0.7.0. See [The public front door](docs/front-door.md).
+- **Guides for hosted agents that connect with a key (experimental).** New pages for Grok Bot, Copilot Studio (API key), AWS AgentCore Gateway and Cloudflare Agents, and a separate, clearly marked lower-assurance page for one shared Claude.ai key for a whole team. Each says what to enter in the platform, which agent to make (a person's own, or one in itself mode), and what is not verified: **request shape tested; not yet tested with a live account**. The test `test/stepplatforms.sh` sends each platform's request shape to the public front door of a test cluster. See [The public front door](docs/front-door.md#connect-a-platform).
+- **Choose which MCP servers the public front door serves (experimental).** A `Server` gets the field `spec.frontDoor` (`enabled` and `acceptUnmaskedServerMessages`). The controller writes a separate backend, `ambit-mcp-public`, with only the servers that are on the front door and acknowledged, and its own access policy; the public route uses only that backend, so a hosted agent cannot reach any other server and no header decides it. A server that is marked without the acknowledgment (the admin's written note that its error messages and notifications are not masked, issue #333) is not served at all (`Ready` `False`, reason `FrontDoorNotAcknowledged`); a server with a connection cannot be on the front door yet. Only the pods of front-door servers accept the public gateway (network policy `ambit-mcp-servers-front-door`). The guard now also withholds a tool list that is not an object with a list of tools. An approved server request never puts its server on the front door. See [The public front door](docs/front-door.md#choose-the-servers).
+- **Agents page: stop, start and app connections (experimental).** The owner or an admin can stop an agent on its page. The page shows Stopping until every gateway has confirmed the stop, then Stopped with the time it took, as the console measured it; it never says that no call is accepted. Admins get a link to the stop evidence. A stopped agent can be started again. For a person-mode agent, the owner chooses which of their own app connections the agent may use (nothing is allowed by default). An agent whose owner left shows a banner, and an admin can move an itself-mode agent to a new owner. See [Agents](docs/agents.md).
+- **Agents page and Audit filters (experimental).** **You → Agents** lists agents with their owner, declared platform, kind, last use, scope and state. A person makes an agent for themselves, picks the servers and tools it may use, and makes a key that is shown once. Admins also make itself-mode agents. The platform is always shown as "declared": Ambit does not check it. **Evidence → Audit** can search by agent, by declared platform and by entrance (private or public), marks calls made by an agent with a badge, and its CSV export has the eight new agent columns at the end. Without an audit trail the page says "unknown" instead of an empty answer. See [Agents](docs/agents.md).
+- **OAuth sign-in, part 2: `ambit-auth`, the sign-in host (experimental, off by default).** With `oauth.enabled: true` and `oauth.signIn.*` (your OIDC identity provider: Okta, Entra ID, Google, Keycloak), a hosted platform can send a person to `https://<frontDoor.authHost>` to sign in with the company account. Ambit checks the sign-in (state, nonce, the provider's issuer, a verified email, not a service account, not offboarded), shows a consent page that names the platform as it declared itself and lists only the servers the person may use, none ticked, and sends the platform back with `code`, `state` and the authorization server's `iss`. Only the code flow with PKCE S256, one `resource` that is the MCP URL, and the query response mode are accepted. Platforms may register themselves for redirect addresses on named hosts (`chatgpt.com` and `claude.ai` by default) and loopback addresses, with limits per caller address that all replicas share, a cap of 500 clients and a clean-up of unused ones. Two sign-ins in one browser work. A refresh is refused for an offboarded person and for a stopped agent or grant. Tokens do not open the public MCP route yet: that follows in the next change. See [OAuth sign-in](docs/oauth.md).
+- **OAuth sign-in: the emergency block no longer disappears under GitOps (experimental, off by default).** `ambit oauth block on` creates a policy of its own, `ambit-oauth-emergency-block`, that refuses every OAuth token on the public MCP route within a second; no chart and no Git repository contains it, so a Helm upgrade, Argo CD self-heal and Flux drift correction leave it alone until `ambit oauth block off`. The old runbook edit of the chart's token policy is undone by Argo CD self-heal and is no longer the way; `oauth.emergencyBlock` stays for plain Helm installs. `ambit oauth block status` names every way in which tokens are blocked. See [OAuth sign-in](docs/oauth.md) and [the CLI](docs/cli.md).
+- **OAuth sign-in, part 3: tokens open the public MCP route (experimental, off by default).** With `oauth.enabled: true` the public route has a second rule for tokens: a request without a key and without a valid token gets `401` with the resource metadata challenge (so a platform can start a sign-in), and a token of Ambit's sign-in host opens exactly the tools its person ticked, checked on every call, together with the person's AccessRules, offboarding and the stop list. Keys keep working on the same route. The console gets an internal API for `ambit-auth` (the servers a person may offer, the agent that a consent creates, whether an agent is still active) that only `ambit-auth`'s own service account token can call, and admins can list and delete the OAuth clients of platforms. A refresh now asks the console whether the agent is still active, and a grant ends after `oauth.maxGrantDays` (30), because the groups in a token are those of the sign-in. `oauth.emergencyBlock`, or one `kubectl patch` of a policy, refuses every token of the sign-in host at once, also while Hydra is down, and leaves keys alone. See [OAuth sign-in](docs/oauth.md).
+- **OAuth sign-in, part 1: Ory Hydra and its PostgreSQL database (experimental, off by default).** With `oauth.enabled: true` (and the front door, `frontDoor.authHost` and three Secrets that you create) the chart runs Ory Hydra v26.2.0 on a PostgreSQL 15, 16 or 17 database that you run, with TLS and backups. A check at every start refuses a database without verified TLS, a version outside 15 to 17, a superuser role and too few connections, and names the fix. Hydra's pods start one at a time, and a pod is Ready only while each signing key set holds exactly one key, so refreshed tokens never name the wrong key. The sign-in host gets three exact routes (`POST /oauth2/token`, `POST /oauth2/revoke`, `GET /.well-known/jwks.json`); everything else of Hydra answers 404, and a network policy keeps every other pod away from Hydra, whose admin port can read its private keys. Nobody can sign in yet: the sign-in pages follow in the next changes of this release series. The values, objects and endpoints are experimental in 0.6.x and may change in 0.7.0. See [OAuth sign-in](docs/oauth.md).
+- **OAuth sign-in, part 4: emergency rotation of the signing keys (experimental, off by default).** One admin call (`POST /api/admin/oauth/signing-key/emergency-rotation`, with a confirmation text) replaces the keys of both of Hydra's signing sets and ends every OAuth connection of every platform: the token hook refuses the refresh of every grant made before the rotation, and each person connects the platform again. The answer holds two probe tokens (one signed by the old key, one by the new key) for a check on every public gateway pod; the runbook in [OAuth sign-in](docs/oauth.md) gives the steps, the check and the measured times. `GET /api/admin/oauth/signing-key` shows the key IDs. There is no scheduled rotation in 0.6.0.
+- **OAuth sign-in: a bucket for the calls of hosted platforms, and two safer registration defaults (experimental, off by default).** Calls to the MCP URL with an OAuth token in the shape of a JWT now have a rate limit of their own, `oauth.rateLimit.bearerPerMinute` (1,200 a minute per address), because a platform sends the calls of many people from a few addresses and the 120 of the key bucket gave them 429 in normal use. Keys, wrong keys and every header that is not a plain JWT keep the 120, so key guessing is limited as before; junk tokens count in the new bucket only and are answered with a cheap 401. A client that registered and was never used is deleted after 1 hour (was 24), and the global registration limit is 200 an hour (was 15), so that a flood of registrations needs about 20 addresses all the time instead of 2; the chart refuses values where `globalPerHour` x (`neverUsedClientHours` + 1) is more than `maxClients`. See [Rate limits](docs/front-door.md#rate-limits) and [OAuth sign-in](docs/oauth.md).
+- **OAuth sign-in, part 6: rate limits in separate buckets, and a guide for OAuth MCP clients (experimental, off by default).** With `oauth.enabled: true` the public Gateway counts requests per caller address in five buckets that never use each other up: calls to the MCP address, discovery (the metadata documents and the 401 that starts a sign-in), sign-in pages, tokens (Hydra's `/oauth2/token`, which did not pass `ambit-auth`) and registration. The address is the one the Gateway sees; a header that the caller writes (`X-Forwarded-For` and similar) is never read. New values `oauth.rateLimit.discoveryPerMinute` (600), `signInPerMinute` (300, about 40 sign-ins a minute from one shared address) and `tokenPerMinute` (600). The page "The public front door" lists the supported load-balancer modes, and the new guide "Connect an OAuth MCP client" shows every request of the flow, each one tested on kind. See [OAuth sign-in](docs/oauth.md) and [the guide](docs/guides/oauth-mcp-client.md).
+- **OAuth sign-in: fixes from the security review (experimental, off by default).** Dynamic registration now accepts only the callback paths on the allowed hosts (`oauth.registration.dynamic.redirectHosts` takes `host/path` entries; the default names the callbacks of ChatGPT and Claude; a bare host still allows every path and the guide says when that is safe). The token rule of the public route requires the audience to be exactly the MCP URL. A controller that runs without the token issuer lets no token use a tool on the public backend. The console's status call of the signing keys reads Hydra's public key list instead of its private keys (the console may now reach Hydra's public port). The guide says that deleting a platform's client does not keep the platform out, and how to.
+- **The documentation says exactly what the MCP guard masks.** A table in [Masking](docs/concepts.md#masking) lists each message a server can send during a tool call. A tool failure reported as a result (`isError: true`) is masked. A JSON-RPC error, log and progress notifications, and sampling and elicitation requests still reach the client unmasked, because the gateway does not send them to the guard (agentgateway issue 4245). The new e2e check 1f covers the error result.
+- **New: an injection guard for MCP tool results (off by default).** With `protection.injectionGuard.enabled`, `ambit-guard` looks for prompt-injection text ("ignore previous instructions", chat template tokens, hidden Unicode characters and similar) in the results of tool calls, resource reads and prompts, after masking. Mode `audit` records each finding, `reject` withholds the result, `mask` replaces the text with `<PROMPT_INJECTION>`. 13 built-in rules with stable names (switch one off with `disabledBuiltins`), your own regular expressions in `patterns`, and an optional webhook in your cluster. The Audit page tags the calls and has a filter, and the metric `ambit_guard_injection_total{server,action}` counts findings. It is a tripwire, not a detector: it finds only the wording its rules describe. New Helm values: `protection.injectionGuard.{enabled,mode,builtins,disabledBuiltins,patterns,webhook}`. See [Injection guard](docs/concepts.md#injection-guard).
+- The guard now masks personal data in the values of the `_meta` object of a tool result (and of `resources/read` and `prompts/get` results), not only in the content. The keys of `_meta` stay as they are.
+- **The MCP guard masks large numbers from their exact digits.** A card number written as a JSON number with more than 15 digits (for example 19 digits), or with a decimal point or an exponent (`4.111111111111111e15`), was checked from a rounded value and could pass unmasked. The guard now reads the digits the server wrote. A result that has such a number keeps all its numbers as written (`12.50` stays `12.50`) and needs about 5.4 times its size in memory while it is checked (3 times for other results). See [Masking](docs/concepts.md#masking).
+- **The public front door's source limit now counts refused requests too (#390).** Before, a request with a wrong or missing key (403) or for an unknown path (404) was counted by no limit, because agentgateway runs rate limits after authentication and route matching, so a flood of such requests was not slowed. The new policy `ambit-public-source-limit` makes the Gateway ask the ratelimit service to count every request of a source address before it checks the key; over `frontDoor.rateLimit.perSourcePerMinute` the answer is 429. The Service `ambit-ratelimit` now also exposes port 8080. If Valkey is down while the ratelimit service runs, the front door answers 400 to every request. See [The public front door](docs/front-door.md#rate-limits).
+- **Gateway memory under steady MCP traffic is explained (#383).** With several gateway pods, a session that a client closes stays in the other pods for the 30 idle minutes that agentgateway uses, so the memory of each pod rises for the first 30 minutes of steady traffic and then stays level; it is not a leak (a 110 minute test on three pods: 12 MiB at the start, about 19 MiB at the level). The sizing advice for `gateway.resources.limits.memory` is in [Alerts](docs/alerts.md).
+- Fixed a 2-minute wait when the first MCP Server (an image server) is added to a cluster. The controller waited for agentgateway to attach the access policy `ambit-mcp-access` to the MCP backend, but that backend is created only after the server answers, which the controller does after that wait. The first rules change ran into `access.activationTimeout` (120 s) and no Server showed a status until then. For a policy whose backend (or target) it did not create in the same step, the controller now waits only until agentgateway has accepted it (an invalid policy still stops the change), not until it is attached. Measured on kind: servers Ready after 129 s before, after 10 s now. When the server has answered and its backend appears, the controller waits once for the first attachment of the policy (a NACK stops the change).
+- **The ratelimit service's port 8080 is closed to every pod except the public gateway's (#417).** Before, the network policy `ambit-ratelimit` opened port 8080 (`/json` and the health check) to every pod in the namespace, and `/json` can change any counter, so an MCP server pod could fill or reset the limits of the public front door. Now only the public gateway pods reach port 8080, and only when `frontDoor.enabled` is true; the private gateway pods keep port 8081. The kubelet's health check is not affected. See [The public front door](docs/front-door.md#rate-limits).
+- Removing access no longer waits for a rules change that is already in progress. When you delete an `AccessRule`, or take a group, a person, a model, a server or a tool out of one, while the controller is still waiting for agentgateway to apply an earlier change, the controller stops that wait and writes the removal at once (a new change that has the same effect on grants as before). Before, the removal waited for the earlier change, about 5 s with the default settings and up to 2 times `access.activationTimeout` when agentgateway did not accept a step. A new or wider rule keeps its order and its waits. In audit-only mode the order of the steps stays.
+
 ## 0.5.0 (2026-11-24)
 
 ### What is new

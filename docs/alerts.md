@@ -10,6 +10,8 @@ alerts:
   labels: { release: kube-prometheus-stack }
 ```
 
+The alerts of agents (`AmbitAgentStopNotConfirmed`, `AmbitStopPolicyDegraded`) and of OAuth sign-in (`AmbitHydra*`, `AmbitOAuth*`, and the values `alerts.oauth.*`) are new in 0.6.0 and experimental: their names and values may change in 0.7.0, with an upgrade note.
+
 | Alert | Severity | Fires when | First step |
 |---|---|---|---|
 | AmbitContainerRestarting | warning | a container restarted 2 or more times in 30 minutes | `kubectl -n <ns> describe pod <pod>`: read Last State |
@@ -31,7 +33,7 @@ alerts:
 | AmbitOAuthDatabaseBackupOld | warning | **your** expression says that the newest backup of Hydra's database is older than `alerts.oauth.backupMaxAgeHours` (26) (only when `alerts.oauth.backupAgeSecondsExpr` is set) | your backup system; [Backup](oauth.md#backup) |
 | AmbitOAuthDatabaseConnectionsHigh | warning | **your** expression says that more than `alerts.oauth.connectionsMaxRatio` (0.8) of the database's connections are in use (only when `alerts.oauth.connectionsUsedRatioExpr` is set) | [Pool sizing](oauth.md#pool-sizing) |
 
-## The database alerts (OAuth)
+## The database alerts (OAuth, experimental)
 
 Ambit cannot see inside your database, so the last two alerts above read **your** metrics. Put a PromQL expression in the values, and the alert
 exists; leave it empty and there is none. The names depend on your database and its exporter. These are examples, **not tested by Ambit**:

@@ -30,6 +30,9 @@ var upgradeNotes = []struct{ version, heading string }{
 	{"0.2.3", "To the release with access rules that name people"},
 	{"0.4.0", "To the release with agentgateway v1.7.0"},
 	{"0.5.0", "To the release with service accounts (0.5.0)"},
+	{"0.6.0", "To the release with agents (0.6.0)"},
+	{"0.6.0", "To the release with the public front door (0.6.0)"},
+	{"0.6.0", "To the release with OAuth sign-in and the injection guard (0.6.0)"},
 }
 
 type upgradeFlags struct {

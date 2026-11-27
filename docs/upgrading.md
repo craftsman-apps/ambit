@@ -20,13 +20,17 @@ attributes (`ambit.agent`, `ambit.agent_mode`, `ambit.agent_owner_at_issue`, `am
 - The MCP access policy `ambit-mcp-access` gets one more constant clause, so **the rules version shown in Audit changes once** after the upgrade. The access of people does not change.
 - The access log gets seven more attributes. A custom access-log policy of your own is not changed.
 - With `--reuse-values` from an earlier release the new values are missing and the defaults apply.
+- **App connections can fail for a short time during the upgrade.** The token broker now gives a person's app
+  connection token only when the gateway names the calling agent (header `x-ambit-agent`, from a policy that the
+  upgraded controller writes; see [Agents](agents.md#apps-with-a-persons-own-sign-in)). Until the controller has
+  written it, MCP calls that need a person's connection fail. After the rollout, try one existing connection.
 
 ## To the release with the public front door (0.6.0)
 
 - **New and off by default (experimental).** `frontDoor.enabled: false` renders nothing new and changes nothing. With it
   on, the chart adds a second Gateway `ambit-public` (its own pods, Service and load balancer), a route, three policies,
   a ConfigMap `ambit-ratelimit-front-door` and an admission policy. Read [The public front door](front-door.md) first:
-  it needs a certificate Secret, `limits.enabled` and `evidence.enabled`.
+  it needs `frontDoor.host`, a certificate Secret, `mcp.enabled`, `apiKeys.enabled`, `limits.enabled`, `protection.enabled` and `evidence.enabled`.
 - **With the front door on**, the ratelimit service reads two ConfigMaps (the budgets' and the front door's), its network
   policy admits the public gateway pods, the controller starts with `--public-gateway=ambit-public`, and the audit
   records of both gateways carry `ambit.ingress` (`private` or `public`). Records written before the upgrade have none.
@@ -36,6 +40,34 @@ attributes (`ambit.agent`, `ambit.agent_mode`, `ambit.agent_owner_at_issue`, `am
   served at all (`Ready` `False`, reason `FrontDoorNotAcknowledged`).
 - **The guard withholds a tool list that is not an object with a list of tools** (it passed such a list before). A
   correct MCP server never sends one.
+
+## To the release with OAuth sign-in and the injection guard (0.6.0)
+
+- **OAuth sign-in is new, experimental and off by default** (`oauth.enabled: false`). With it off, the chart renders no
+  Hydra, no `ambit-auth` and no sign-in host. Turning it on needs the public front door and a PostgreSQL 15, 16 or 17
+  database that you run, with verified TLS and backups; read [OAuth sign-in](oauth.md) first. Its values (`oauth.*`,
+  `frontDoor.authHost`, `alerts.oauth.*`), endpoints and token claims may change in 0.7.0, with a note on this page.
+  To roll back Hydra, restore the database backup; never run `hydra migrate sql down` (it deletes every sign-in record
+  and token, issue #437).
+- **The injection guard is new and off by default** (`protection.injectionGuard.enabled: false`). Nothing changes
+  until you turn it on. Its values and the rule names are experimental in 0.6.x. See [Injection guard](concepts.md#injection-guard).
+- **The MCP guard masks more.** It now also masks the values of `_meta` in tool, `resources/read` and `prompts/get`
+  results, and reads large numbers from the digits the server wrote. A result with a number of more than 15 digits, a
+  decimal point or an exponent keeps all its numbers as written (`12.50` stays `12.50`) and needs about 5.4 times its
+  size in memory while it is checked (3 times for other results). Test a tool whose results contain long numbers
+  before you upgrade production.
+- **Removing access no longer waits.** When you delete an `AccessRule`, or take a group, a person, a model, a server or
+  a tool out of one, the controller writes the removal at once, also while a rules change is still in progress; the
+  gateway pods refuse the access as soon as they receive it (median about 0.13 s, see [Concepts](concepts.md)).
+- **The ratelimit service's port 8080** is now on the Service `ambit-ratelimit`, and its network policy admits only
+  the public gateway pods to it (only with `frontDoor.enabled`).
+- **The metric `ambit_console_audit_send_failures_total` has a `reason` label.** A query of your own now sees one series
+  per reason; sum over `reason` to get the old number.
+- **No Helm dependency changes:** agentgateway stays at v1.7.0, and `crds.yaml` is the same as in 0.5.0 (OAuth adds Ory
+  Hydra, only when you turn it on). The Ambit CRDs change (`Server` gains `spec.frontDoor`, `ServerRequest` gains
+  `spec.server.frontDoor`): upgrade `ambit-crds`, then `ambit` (`ambit upgrade` does both).
+- **A downgrade below 0.6.0 has not been tested.** Before one, turn off `oauth.enabled` and `frontDoor.enabled`, and
+  delete agents and their keys: an older release does not know the scope of an agent key.
 
 ## To the release with service accounts (0.5.0)
 

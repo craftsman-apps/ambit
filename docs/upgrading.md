@@ -37,6 +37,32 @@ attributes (`ambit.agent`, `ambit.agent_mode`, `ambit.agent_owner_at_issue`, `am
 - **The guard withholds a tool list that is not an object with a list of tools** (it passed such a list before). A
   correct MCP server never sends one.
 
+## To the release with OAuth sign-in and the injection guard (0.6.0)
+
+- **OAuth sign-in is new, experimental and off by default** (`oauth.enabled: false`). With it off, the chart renders no
+  Hydra, no `ambit-auth` and no sign-in host. Turning it on needs the public front door and a PostgreSQL 15, 16 or 17
+  database that you run, with verified TLS and backups; read [OAuth sign-in](oauth.md) first. Its values (`oauth.*`,
+  `frontDoor.authHost`, `alerts.oauth.*`), endpoints and token claims may change in 0.7.0, with a note on this page.
+  To roll back Hydra, restore the database backup; never run `hydra migrate sql down` (it deletes every sign-in record
+  and token, issue #437).
+- **The injection guard is new and off by default** (`protection.injectionGuard.enabled: false`). Nothing changes
+  until you turn it on. Its values and the rule names are experimental in 0.6.x. See [Injection guard](concepts.md#injection-guard).
+- **The MCP guard masks more.** It now also masks the values of `_meta` in tool, `resources/read` and `prompts/get`
+  results, and reads large numbers from the digits the server wrote. A result with a number of more than 15 digits, a
+  decimal point or an exponent keeps all its numbers as written (`12.50` stays `12.50`) and needs about 5.4 times its
+  size in memory while it is checked (3 times for other results). Test a tool whose results contain long numbers
+  before you upgrade production.
+- **Removing access is applied at once.** Deleting an `AccessRule`, or taking a group, a person, a model, a server or a
+  tool out of one, no longer waits for a rules change that is still in progress.
+- **The ratelimit service's port 8080** is now on the Service `ambit-ratelimit`, and its network policy admits only
+  the public gateway pods to it (only with `frontDoor.enabled`).
+- **The metric `ambit_console_audit_send_failures_total` has a `reason` label.** An alert or a dashboard of your own
+  that matches the series exactly needs the label.
+- **No dependency changes:** agentgateway stays at v1.7.0, and `crds.yaml` is the same as in 0.5.0. The Ambit CRDs
+  change (`Server` and `ServerRequest` gain `spec.frontDoor`): upgrade `ambit-crds`, then `ambit` (`ambit upgrade` does both).
+- **A downgrade below 0.6.0 has not been tested.** Before one, turn off `oauth.enabled` and `frontDoor.enabled`, and
+  delete agents and their keys: an older release does not know the scope of an agent key.
+
 ## To the release with service accounts (0.5.0)
 
 - **Compression records name the caller.** With `evidence.enabled` and a Server with `resultCompression`, the guard's

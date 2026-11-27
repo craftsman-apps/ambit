@@ -497,6 +497,8 @@ MSG='oauth.cookieSecret' refuse "no cookie secret" --set oauth.cookieSecret.name
 MSG='limits.enabled' refuse "OAuth without shared limits" --set limits.enabled=false
 MSG='redirectHosts' refuse "dynamic registration without hosts" --set 'oauth.registration.dynamic.redirectHosts={}'
 MSG='oauth.rateLimit.bearerPerMinute must be a whole number' refuse "no bearer limit" --set oauth.rateLimit.bearerPerMinute=0
+MSG='oauth.rateLimit.bearerPerMinute must be a whole number' refuse "a bearer limit that the ratelimit service cannot hold" --set oauth.rateLimit.bearerPerMinute=4294967296
+MSG='oauth.rateLimit.bearerPerMinute must be a whole number' refuse "a fractional bearer limit" --set oauth.rateLimit.bearerPerMinute=1200.5
 MSG='lower-case host name' refuse "a wildcard registration host" --set 'oauth.registration.dynamic.redirectHosts={*.example.com}'
 MSG='lower-case host name' refuse "a registration host with a scheme" --set 'oauth.registration.dynamic.redirectHosts={https://chatgpt.com}'
 MSG='optional path' refuse "a registration path with a dot segment" --set 'oauth.registration.dynamic.redirectHosts={chatgpt.com/a/../b}'
@@ -508,8 +510,10 @@ MSG='maxClients' refuse "a client cap of 0" --set oauth.registration.dynamic.max
 MSG='globalPerHour (300) x (neverUsedClientHours (1) + 1) = 600 is more than maxClients (500)' refuse "a global registration limit that can fill the cap" --set oauth.registration.dynamic.globalPerHour=300
 MSG='globalPerHour (200) x (neverUsedClientHours (3) + 1) = 800 is more than maxClients (500)' refuse "a never-used client that stays so long that the global limit fills the cap" --set oauth.registration.dynamic.neverUsedClientHours=3
 MSG='globalPerHour (200) x (neverUsedClientHours (1) + 1) = 400 is more than maxClients (300)' refuse "a cap that the defaults can fill" --set oauth.registration.dynamic.maxClients=300
-MSG='neverUsedClientHours must be 1 to 720' refuse "a negative number of hours for a never-used client" --set oauth.registration.dynamic.neverUsedClientHours=-1
-MSG='globalPerHour must be 1 to 100000' refuse "a negative global registration limit" --set oauth.registration.dynamic.globalPerHour=-1
+MSG='neverUsedClientHours must be a whole number, 1 to 720' refuse "a negative number of hours for a never-used client" --set oauth.registration.dynamic.neverUsedClientHours=-1
+MSG='globalPerHour must be a whole number, 1 to 100000' refuse "a negative global registration limit" --set oauth.registration.dynamic.globalPerHour=-1
+MSG='globalPerHour must be a whole number, 1 to 100000' refuse "an explicit zero global registration limit (it is not replaced by the default)" --set oauth.registration.dynamic.globalPerHour=0
+MSG='globalPerHour must be a whole number, 1 to 100000' refuse "a fractional global registration limit" --set oauth.registration.dynamic.globalPerHour=150.5
 # ... and values that obey the rule render: 100 an hour x (4 + 1) = 500, and 1000 an hour with a cap of 5000 x 2
 exact=$(oat --set oauth.registration.dynamic.globalPerHour=100 --set oauth.registration.dynamic.neverUsedClientHours=4) || { echo "FAIL chart: 100 an hour x (4 + 1) = 500 = maxClients must render"; exit 1; }
 grep -q 'AMBIT_AUTH_NEVER_USED_CLIENT_HOURS, value: "4"' <<<"$exact" && grep -q 'AMBIT_AUTH_REGISTER_GLOBAL_PER_HOUR, value: "100"' <<<"$exact" || { echo "FAIL chart: the global limit and the never-used hours do not reach ambit-auth"; exit 1; }
@@ -583,13 +587,14 @@ assert got=={"mcp":("fd_source","minute",120),"discovery":("fd_source","minute",
 # The shape is the security point (the bucket is chosen before the token is checked): the key rule reads "Bearer " off the header with a replace of every occurrence,
 # so "Bearer Bearer ambit_..." is a key and must stay in the mcp bucket. The same regular expression, tried here on the cases that matter.
 import re
-rx=re.search(r"matches\(\"(\^Bearer eyJ[^\"]*)\"\)", b).group(1).replace("\\\\","\\")
+rx=re.search(r"matches\(\"(\^\(\?i:Bearer\) eyJ[^\"]*)\"\)", b).group(1).replace("\\\\","\\")
 seg=b.rsplit("\"discovery\" : ",1)[1]  # the condition of the bearer bucket: the MCP host, the path /mcp, no key header, a header in the shape
 assert seg.count("request.host")==2 and "mcp-public.localtest.me" in seg and "auth.localtest.me" not in seg.replace("mcp-public.localtest.me","") and "request.path == \"/mcp\"" in seg and "!(\"x-api-key\" in request.headers)" in seg and ".matches(" in seg and seg.rstrip().endswith("\"bearer\" : \"mcp\""), seg
 good="Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnLW5hdHVyZQ"
 for h,want in ((good,True),("Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.",True),("Bearer ambit_0123456789abcdef",False),("Bearer Bearer ambit_0123456789abcdef",False),("Bearer Bearer "+good[7:],False),("Bearer abc",False),
-               ("Bearer ",False),("bearer "+good[7:],False),(good+" x",False),(good+", Bearer ambit_k",False),("Bearer  "+good[7:],False),("Bearer xeyJ.a.b",False),("Bearer eyJ.a",False),(good[7:],False)):
+               ("Bearer ",False),("bearer "+good[7:],True),("BEARER "+good[7:],True),("bEaReR Bearer ambit_0123456789abcdef",False),(good+" x",False),(good+", Bearer ambit_k",False),("Bearer  "+good[7:],False),("Bearer xeyJ.a.b",False),("Bearer eyJ.a",False),(good[7:],False)):
     assert bool(re.search(rx,h))==want, (h,want,rx)
+assert "type(request.headers[\"authorization\"]) == string" in seg and "size(request.headers[\"authorization\"]) <= 8192" in seg, seg  # a repeated header (a list) and a huge one stay in the mcp bucket
 assert "ambit_" not in "eyJ"  # no key starts with eyJ: a header in the shape is never a key
 env={e["name"]:e["value"] for e in one("Deployment","ambit-auth")["spec"]["template"]["spec"]["containers"][0]["env"] if "value" in e}
 g=one("AgentgatewayPolicy","ambit-public-limits")["spec"]["traffic"]["rateLimit"]["global"]["descriptors"][0]["entries"][0]["expression"]

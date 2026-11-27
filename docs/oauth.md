@@ -212,7 +212,8 @@ Over a limit the Gateway answers **429**. The registration also stops at `maxCli
 consent and no refresh ever used an hour after it registered, is deleted ([Registering clients](#registering-clients)). So a flood of registrations from many networks (security review N2) is held by the
 global limit (it cannot fill the cap: at most 400 clients that were never used exist at a time) and by the clean-up (a client that is never used goes after an hour).
 **The rule** (the chart refuses values that break it, and `ambit-auth` does not start): `globalPerHour` x (`neverUsedClientHours` + 1) must be at most
-`maxClients` (200 x 2 = 400 of 500). The "+ 1" is there because the counter uses fixed clock hours: a registration at the end of one hour and one at the start of the next can be alive together.
+`maxClients` (200 x 2 = 400 of 500). The "+ 1" is there because the counter uses fixed clock hours: a registration at the end of one hour and one at the start of the next can be alive together. The clean-up looks every minute, so for at most that minute a third hour can overlap (a client that registered at the end of the first hour is deleted a minute after
+its hour is over); the cap of `maxClients` is checked again after every registration and is never passed: in that minute a registration can get 400 "limit reached", and the next minute it works.
 **The price:** while a flood uses the global limit, a real platform that registers in the same hour can get 429 (`Retry-After: 3600`);
 pre-registered clients and existing connections are not affected. To use it up, an attacker needs about 20 addresses (each may register 10 an hour) and must keep going all the time
 (it was 2 addresses at 15 an hour); recovery is automatic within the hour after the attack stops. If that is not enough for you: turn dynamic registration off

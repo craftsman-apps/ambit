@@ -162,8 +162,9 @@ func CheckRegistrationCap(globalPerHour, neverUsedHours, maxClients int) error {
 	if neverUsedHours < 1 {
 		neverUsedHours = 1
 	}
-	if n := globalPerHour * (neverUsedHours + 1); n > maxClients {
-		return fmt.Errorf("the global registration limit (%d an hour) x (never-used client hours (%d) + 1) = %d is more than the client cap (%d): a flood of registrations could fill the cap", globalPerHour, neverUsedHours, n, maxClients)
+	// compared by division: a huge limit must not overflow the product
+	if windows := neverUsedHours + 1; globalPerHour > maxClients/windows {
+		return fmt.Errorf("the global registration limit (%d an hour) x (never-used client hours (%d) + 1) is more than the client cap (%d): a flood of registrations could fill the cap", globalPerHour, neverUsedHours, maxClients)
 	}
 	return nil
 }

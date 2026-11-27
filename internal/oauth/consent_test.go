@@ -1423,6 +1423,7 @@ func TestRegistrationCapRule(t *testing.T) {
 		"200 an hour and 2 hours: 600":                      {200, 2, 500, false},
 		"a lower cap":                                       {200, 1, 300, false},
 		"hours 0 count as 1":                                {200, 0, 500, true},
+		"a limit that would overflow the product":           {1 << 62, 3, 500, false},
 	} {
 		if err := CheckRegistrationCap(tc.global, tc.hours, tc.cap); (err == nil) != tc.ok {
 			t.Errorf("%s: %v, want ok=%v", name, err, tc.ok)

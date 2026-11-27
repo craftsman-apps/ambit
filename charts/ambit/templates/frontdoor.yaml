@@ -21,7 +21,7 @@
 {{- $orl := ((.Values.oauth | default dict).rateLimit) | default dict }}
 {{- if (.Values.oauth | default dict).enabled }}
 {{- range $k := list "discoveryPerMinute" "signInPerMinute" "tokenPerMinute" "bearerPerMinute" }}
-{{- if or (lt (int (index $orl $k)) 1) (ne (toString (index $orl $k)) (toString (int (index $orl $k)))) }}{{ fail (printf "oauth.rateLimit.%s must be a whole number, 1 or more" $k) }}{{ end }}
+{{- if or (lt (int (index $orl $k)) 1) (gt (int (index $orl $k)) 1000000000) (ne (toString (index $orl $k)) (toString (int (index $orl $k)))) }}{{ fail (printf "oauth.rateLimit.%s must be a whole number, 1 to 1,000,000,000 (the ratelimit service holds a limit in 32 bits)" $k) }}{{ end }}
 {{- end }}
 {{- end }}
 {{- if lt (int $fd.replicas) 1 }}{{ fail "frontDoor.replicas must be 1 or more" }}{{ end }}

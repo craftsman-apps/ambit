@@ -161,10 +161,12 @@ an MCP request that way). The first two limits are per minute (a fixed window th
   own, 1,200 a minute per address; keys, wrong keys and everything else keep the 120, so the protection against key guessing is exactly what it was. The per-token count
   (`perCredentialPerMinute`, 600 a minute for each connection) stays. The bucket is chosen **before** the token is checked (the limit must run before authentication, or a flood
   would count against nothing), so a caller can send junk to use it. Three things keep that from making the front door weaker than before:
-  1. **Only the shape of a JWT qualifies, and a key never has it.** The key rule reads `Bearer ` off the header by removing every occurrence of it, so `Authorization: Bearer Bearer ambit_...` is a
-     valid key. The bucket test is the whole header against `^Bearer eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$`, without an `x-api-key` header: a value in that shape starts with
-     `eyJ`, so it cannot be a key, and `Bearer Bearer ambit_...`, `Bearer ambit_...`, `Bearer abc`, a key header with a token, and small-letter `bearer` stay in **mcp** at 120. The tests
-     (`test/chart.sh` for the expression, `test/oauthtest/limits.py` at the Gateway) try each of them.
+  1. **Only the shape of a JWT qualifies, and a key never has it.** The key rule reads the key out of the `Authorization` header by removing every occurrence of `Bearer ` from it, so a header
+     such as `Bearer Bearer ambit_...` is built from a key too (whether the gateway then accepts it or answers 401, the bucket must not depend on it). The bucket test is the whole header against
+     `^(?i:Bearer) eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$` (the scheme in any letter case, as the gateway reads it), a header of at most 8,192 characters, **one** `Authorization` header (a repeated
+     header is a list for the gateway, and it stays in **mcp**), and no `x-api-key` header. A value in that shape starts with `eyJ`, so it cannot be a key. `Bearer Bearer ambit_...`, `Bearer ambit_...`,
+     `Bearer abc`, a key header with a token, two `Authorization` headers and a header over 8,192 characters stay in **mcp** at 120. The tests (`test/chart.sh` for the expression on 17 headers, `test/oauthtest/limits.py`
+     at the Gateway) try each of them.
   2. **Junk does not use up anything else.** It counts in the bearer bucket of its own address only: the **mcp** limit of that address (the keys of the same address), the other addresses, and
      the other buckets are untouched (tested: after a flood of junk, 30 key calls of the same address still pass).
   3. **A junk token is cheap.** The Gateway answers it with the 401 of the JWT check, which needs a parse and one signature check, no network call and no MCP work. Measured on kind

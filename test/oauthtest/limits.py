@@ -87,9 +87,30 @@ def mcp_raw(addr, headers):
     return 429 if st == 200 and "rate limit" in body.lower() else st
 
 
+JUNK_HEADER = ["eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9"]  # replaced by the header of a real token (with its kid): the gateway then really checks the signature
+
+
 def junk_jwt(i):
     """A token in the shape of a JWT (a header that starts with eyJ, a payload, a signature) that no key signed."""
-    return "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9." + b64(json.dumps({"sub": f"junk{i}", "iss": ISS, "aud": [MCP_URL]}).encode()) + "." + b64(os.urandom(32))
+    return JUNK_HEADER[0] + "." + b64(json.dumps({"sub": f"junk{i}", "iss": ISS, "aud": [MCP_URL]}).encode()) + "." + b64(os.urandom(256))
+
+
+def mcp_dup(addr, values):
+    """One MCP initialize from addr with the Authorization header repeated on the wire (once for each value): the gateway sees a list."""
+    global CLIENT_ADDR
+    CLIENT_ADDR = addr
+    ROUTES[(MCP, 443)] = PORTS[0]
+    c = Conn(MCP, 443, timeout=20)
+    try:
+        c.putrequest("POST", "/mcp", skip_host=False)
+        for k, v in (("Content-Type", "application/json"), ("Accept", "application/json, text/event-stream"), ("Content-Length", str(len(INIT)))):
+            c.putheader(k, v)
+        for v in values: c.putheader("Authorization", v)
+        c.endheaders(INIT)
+        r = c.getresponse(); body = r.read().decode("utf-8", "replace")
+        return 429 if r.status == 200 and "rate limit" in body.lower() else r.status
+    finally:
+        c.close()
 
 
 def start_of_window(unit="minute"):
@@ -185,6 +206,7 @@ if MODE == "buckets":
         CLIENT_ADDR = "203.0.115.2"; ROUTES[(AUTH, 443)] = PORTS[0]
         _, tC = connect("person152", ("time",)); _, tD = connect("person153", ("time",))
         tk = [tC["access_token"], tD["access_token"]]
+        JUNK_HEADER[0] = tk[0].split(".")[0]  # the junk carries a real header (its key ID): the Gateway finds the key and checks the signature, as for a real token
         KEY = os.environ["KEY"]
         G = "203.0.113.70"
         nb, nk = LIM_BEARER + 6, LIM_MCP + 6
@@ -210,12 +232,25 @@ if MODE == "buckets":
             "Bearer abc (not in the shape of a JWT)": ("203.0.113.75", {"Authorization": "Bearer abc"}),
             "a key header and a token together": ("203.0.113.76", {"x-api-key": KEY, "Authorization": "Bearer " + junk_jwt(0)}),
             "a token with a space and a key behind it": ("203.0.113.77", {"Authorization": "Bearer " + junk_jwt(1) + " Bearer " + KEY}),
-            "bearer in small letters": ("203.0.113.78", {"Authorization": "bearer " + junk_jwt(2)}),
         }
         for name, (addr, hd) in cases.items():
             codes = burst(lambda i: mcp_raw(addr, hd), LIM_MCP + 6)
             check(f"19 {name}: counts in the key bucket: {allowed(codes)} of {len(codes)} passed (limit {LIM_MCP}, not the bearer limit {LIM_BEARER})", allowed(codes) == LIM_MCP and codes[LIM_MCP:] == [429] * 6, sorted(set(codes)))
             print(f"   ({name}: the first answer was {codes[0]})", flush=True)
+        # the scheme is read in any letter case (as the Gateway reads it): a platform that writes "bearer" gets the bearer bucket too
+        L = "203.0.113.78"
+        low = burst(lambda i: mcp_raw(L, {"Authorization": "bearer " + junk_jwt(i)}), LIM_BEARER + 6)
+        check(f"19 'bearer' in small letters is the same bucket as 'Bearer': {allowed(low)} of {len(low)} passed (limit {LIM_BEARER})", allowed(low) == LIM_BEARER and set(low[:LIM_BEARER]) == {401}, sorted(set(low)))
+        # a repeated Authorization header is a list for the Gateway (a method on it would be an error): it stays in the key bucket, and it is counted (not uncounted)
+        D = "203.0.113.79"
+        dup = burst(lambda i: mcp_dup(D, ["Bearer " + junk_jwt(i), "Bearer " + junk_jwt(i + 1000)]), LIM_MCP + 6)
+        check(f"19 two Authorization headers in one request: counts in the key bucket: {allowed(dup)} of {len(dup)} passed (limit {LIM_MCP}, not the bearer limit {LIM_BEARER}), and none is uncounted", allowed(dup) == LIM_MCP and dup[LIM_MCP:] == [429] * 6, sorted(set(dup)))
+        print(f"   (two Authorization headers: the first answer was {dup[0]})", flush=True)
+        # a very long header in the shape of a JWT stays in the key bucket (it is not parsed at the higher limit)
+        big = "Bearer " + JUNK_HEADER[0] + "." + "A" * 9000 + ".c2ln"
+        M = "203.0.113.80"
+        huge = burst(lambda i: mcp_raw(M, {"Authorization": big}), LIM_MCP + 6)
+        check(f"19 a header of more than 8192 characters counts in the key bucket: {allowed(huge)} of {len(huge)} passed (limit {LIM_MCP})", allowed(huge) == LIM_MCP and huge[LIM_MCP:] == [429] * 6, sorted(set(huge)))
     # N8: the bucket is chosen by the host too. Sign-in paths on the MCP host (a 404 there) stay in the mcp bucket: a flood there neither spreads over the
     # sign-in and token buckets of the same address, nor is counted as sign-in traffic.
     if LIM_MCP:
@@ -379,6 +414,7 @@ elif MODE == "nat":
         return out
     CLIENT_ADDR = "203.0.118.1"; ROUTES[(AUTH, 443)] = PORTS[0]
     toks = [connect(f"person16{i}", ("time",))[1]["access_token"] for i in range(3)]
+    JUNK_HEADER[0] = toks[0].split(".")[0]
     CLIENT_ADDR = "203.0.118.2"
     for k in COUNT: COUNT[k] = 0
     codes = interaction(toks[0])
@@ -392,7 +428,7 @@ elif MODE == "nat":
         start_of_window("minute")
         CLIENT_ADDR = addr
         t0, w0 = time.time(), minute_now()
-        st = {"allowed": 0, "limited": 0, "requests": 0, "inter": 0, "n": 0, "stop": False}
+        st = {"allowed": 0, "limited": 0, "requests": 0, "inter": 0, "n": 0, "stop": False, "bad": []}
         def mworker():
             while not st["stop"] and time.time() - t0 < 56:
                 with lock:
@@ -403,18 +439,19 @@ elif MODE == "nat":
                     for c in codes:
                         st["requests"] += 1
                         if c == 429: st["limited"] += 1; st["stop"] = True
-                        else: st["allowed"] += 1
+                        elif c in (200, 202, 204): st["allowed"] += 1
+                        else: st["bad"].append(c); st["stop"] = True  # a 401, 403 or 5xx is not a successful call: the measurement would be wrong
         ts = [threading.Thread(target=mworker) for _ in range(WORKERS)]
         [t.start() for t in ts]; [t.join() for t in ts]
         elapsed = time.time() - t0
-        if minute_now() == w0 and st["limited"]:
+        if minute_now() == w0 and st["limited"] and not st["bad"]:
             result = (dict(st), elapsed); break
         print(f"   attempt {attempt + 1} not valid (window crossed or no 429: {st['allowed']} allowed in {elapsed:.0f} s)", flush=True)
     check("19 bearer bucket: one address reaches the default limit within one minute and is then answered 429", result is not None)
     st, elapsed = result
     print(f"   MCP: one address with tokens of three agents sent {st['requests']} requests ({st['inter']} interactions of {mcp_cost}) in {elapsed:.0f} s, {WORKERS} at a time; {st['allowed']} passed and the bearer limit "
           f"({BEARER} a minute) answered 429 for the rest, which is {st['allowed'] // max(mcp_cost, 1)} whole interactions a minute from one address", flush=True)
-    check(f"19 bearer bucket: exactly {BEARER} requests of one address passed in the minute (the default limit); the rest got 429", st["allowed"] == BEARER, st)
+    check(f"19 bearer bucket: exactly {BEARER} requests of one address passed in the minute (the default limit), every one with a success status (200, 202 or 204); the rest got 429", st["allowed"] == BEARER and not st["bad"], st)
     # what a junk token costs the gateway, next to a valid call: the median time of 40 each, one address each (so that no limit is in the way)
     import statistics
     def timed(fn, n=40):

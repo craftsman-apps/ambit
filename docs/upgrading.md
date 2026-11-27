@@ -20,13 +20,17 @@ attributes (`ambit.agent`, `ambit.agent_mode`, `ambit.agent_owner_at_issue`, `am
 - The MCP access policy `ambit-mcp-access` gets one more constant clause, so **the rules version shown in Audit changes once** after the upgrade. The access of people does not change.
 - The access log gets seven more attributes. A custom access-log policy of your own is not changed.
 - With `--reuse-values` from an earlier release the new values are missing and the defaults apply.
+- **App connections can fail for a short time during the upgrade.** The token broker now gives a person's app
+  connection token only when the gateway names the calling agent (header `x-ambit-agent`, from a policy that the
+  upgraded controller writes; see [Agents](agents.md#apps-with-a-persons-own-sign-in)). Until the controller has
+  written it, MCP calls that need a person's connection fail. After the rollout, try one existing connection.
 
 ## To the release with the public front door (0.6.0)
 
 - **New and off by default (experimental).** `frontDoor.enabled: false` renders nothing new and changes nothing. With it
   on, the chart adds a second Gateway `ambit-public` (its own pods, Service and load balancer), a route, three policies,
   a ConfigMap `ambit-ratelimit-front-door` and an admission policy. Read [The public front door](front-door.md) first:
-  it needs a certificate Secret, `limits.enabled` and `evidence.enabled`.
+  it needs `frontDoor.host`, a certificate Secret, `mcp.enabled`, `apiKeys.enabled`, `limits.enabled`, `protection.enabled` and `evidence.enabled`.
 - **With the front door on**, the ratelimit service reads two ConfigMaps (the budgets' and the front door's), its network
   policy admits the public gateway pods, the controller starts with `--public-gateway=ambit-public`, and the audit
   records of both gateways carry `ambit.ingress` (`private` or `public`). Records written before the upgrade have none.
@@ -52,14 +56,16 @@ attributes (`ambit.agent`, `ambit.agent_mode`, `ambit.agent_owner_at_issue`, `am
   decimal point or an exponent keeps all its numbers as written (`12.50` stays `12.50`) and needs about 5.4 times its
   size in memory while it is checked (3 times for other results). Test a tool whose results contain long numbers
   before you upgrade production.
-- **Removing access is applied at once.** Deleting an `AccessRule`, or taking a group, a person, a model, a server or a
-  tool out of one, no longer waits for a rules change that is still in progress.
+- **Removing access no longer waits.** When you delete an `AccessRule`, or take a group, a person, a model, a server or
+  a tool out of one, the controller writes the removal at once, also while a rules change is still in progress; the
+  gateway pods refuse the access as soon as they receive it (median about 0.13 s, see [Concepts](concepts.md)).
 - **The ratelimit service's port 8080** is now on the Service `ambit-ratelimit`, and its network policy admits only
   the public gateway pods to it (only with `frontDoor.enabled`).
-- **The metric `ambit_console_audit_send_failures_total` has a `reason` label.** An alert or a dashboard of your own
-  that matches the series exactly needs the label.
-- **No dependency changes:** agentgateway stays at v1.7.0, and `crds.yaml` is the same as in 0.5.0. The Ambit CRDs
-  change (`Server` and `ServerRequest` gain `spec.frontDoor`): upgrade `ambit-crds`, then `ambit` (`ambit upgrade` does both).
+- **The metric `ambit_console_audit_send_failures_total` has a `reason` label.** A query of your own now sees one series
+  per reason; sum over `reason` to get the old number.
+- **No Helm dependency changes:** agentgateway stays at v1.7.0, and `crds.yaml` is the same as in 0.5.0 (OAuth adds Ory
+  Hydra, only when you turn it on). The Ambit CRDs change (`Server` gains `spec.frontDoor`, `ServerRequest` gains
+  `spec.server.frontDoor`): upgrade `ambit-crds`, then `ambit` (`ambit upgrade` does both).
 - **A downgrade below 0.6.0 has not been tested.** Before one, turn off `oauth.enabled` and `frontDoor.enabled`, and
   delete agents and their keys: an older release does not know the scope of an agent key.
 

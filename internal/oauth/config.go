@@ -23,7 +23,7 @@ type Config struct {
 	RegistrationHosts []string // redirect hosts that dynamic registration accepts
 	MaxClients        int      // dynamic clients (the cap)
 	UnusedClientDays  int      // a dynamic client not used for this many days is deleted
-	NeverUsedHours    int      // a dynamic client that no consent or refresh ever used is deleted this many hours after it registered (0: 24)
+	NeverUsedHours    int      // a dynamic client that no consent or refresh ever used is deleted this many hours after it registered (0: 1)
 	MaxGrantDays      int      // a grant is refreshed for at most this many days; then the person connects again (0: no limit)
 }
 
@@ -124,7 +124,7 @@ func (c *Config) Validate() error {
 		errs = append(errs, errors.New("unused client days must be 1 or more"))
 	}
 	if c.NeverUsedHours == 0 {
-		c.NeverUsedHours = 24
+		c.NeverUsedHours = 1
 	}
 	if c.NeverUsedHours < 0 || c.NeverUsedHours > 24*30 {
 		errs = append(errs, errors.New("never-used client hours must be 1 to 720"))
@@ -153,4 +153,18 @@ func inScopes(requested []string) bool {
 		}
 	}
 	return true
+}
+
+// CheckRegistrationCap refuses a global registration limit that can fill the cap of clients (security review N2, S2-1). The counter of registrations
+// uses fixed clock hours, so the clients that were never used (they stay neverUsedHours) can come from neverUsedHours + 1 of those hours:
+// globalPerHour x (neverUsedHours + 1) must be at most maxClients. The chart checks the same rule; this is the second line for a start without the chart.
+func CheckRegistrationCap(globalPerHour, neverUsedHours, maxClients int) error {
+	if neverUsedHours < 1 {
+		neverUsedHours = 1
+	}
+	// compared by division: a huge limit must not overflow the product
+	if windows := neverUsedHours + 1; globalPerHour > maxClients/windows {
+		return fmt.Errorf("the global registration limit (%d an hour) x (never-used client hours (%d) + 1) is more than the client cap (%d): a flood of registrations could fill the cap", globalPerHour, neverUsedHours, maxClients)
+	}
+	return nil
 }

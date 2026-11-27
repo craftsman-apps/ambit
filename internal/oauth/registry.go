@@ -140,7 +140,7 @@ func (s *Server) Janitor(ctx context.Context) (int, error) {
 	cutoff := s.now().Add(-time.Duration(s.Cfg.UnusedClientDays) * 24 * time.Hour)
 	neverHours := s.Cfg.NeverUsedHours
 	if neverHours < 1 {
-		neverHours = 24
+		neverHours = 1
 	}
 	neverCutoff := s.now().Add(-time.Duration(neverHours) * time.Hour)
 	began := time.Now() // the registry's own clock: a client registered after this moment may be missing from the listing

@@ -617,8 +617,8 @@ func TestJanitorDeletesUnusedClients(t *testing.T) {
 	}
 }
 
-// Security review N2: a client that registered and was never used by a consent or a refresh goes after 24 hours, not after 30 days.
-func TestJanitorDeletesNeverUsedClientsAfterADay(t *testing.T) {
+// Security review N2, S2-1: a client that registered and was never used by a consent or a refresh goes after one hour (the default), not after 30 days.
+func TestJanitorDeletesNeverUsedClientsAfterAnHour(t *testing.T) {
 	e := newEnv(t)
 	e.srv.Cfg.MaxClients = 100
 	e.lim.Rates[BucketRegister] = Rate{Limit: 1000, Window: time.Hour}
@@ -631,9 +631,9 @@ func TestJanitorDeletesNeverUsedClientsAfterADay(t *testing.T) {
 	age := func(id string, ago time.Duration) {
 		e.hydra.clients[id]["metadata"].(map[string]any)["last_used"] = e.now.Add(-ago).Format(time.RFC3339)
 	}
-	age(ids[0], 25*time.Hour) // never used, 25 hours: goes
-	age(ids[1], 23*time.Hour) // never used, 23 hours: stays
-	age(ids[2], 25*time.Hour) // 25 hours old, but a consent used it: stays
+	age(ids[0], 90*time.Minute) // never used, an hour and a half: goes
+	age(ids[1], 30*time.Minute) // never used, half an hour: stays
+	age(ids[2], 90*time.Minute) // an hour and a half old, but a consent used it: stays
 	e.hydra.clients[ids[2]]["metadata"].(map[string]any)["used"] = true
 	e.hydra.clients["admin-made"] = map[string]any{"client_id": "admin-made", "metadata": map[string]any{"registered_via": "admin", "last_used": "2020-01-01T00:00:00Z"}}
 	n, err := e.srv.Janitor(context.Background())
@@ -645,13 +645,13 @@ func TestJanitorDeletesNeverUsedClientsAfterADay(t *testing.T) {
 			t.Fatalf("client %s present=%v, want %v", id, ok, want)
 		}
 	}
-	// the use is what the consent writes: a client that a consent touched is not deleted after a day
+	// the use is what the consent writes: a client that a consent touched is not deleted after an hour
 	e.now = e.now.Add(3 * 24 * time.Hour)
 	if n, err := e.srv.Janitor(context.Background()); err != nil || n != 2 { // ids[1] and ids[3] were never used: gone; ids[2] was used: stays
 		t.Fatalf("three days later: deleted %d, %v", n, err)
 	}
 	if _, ok := e.hydra.clients[ids[2]]; !ok {
-		t.Fatal("a client that was used was deleted after a day")
+		t.Fatal("a client that was used was deleted after an hour")
 	}
 }
 
@@ -675,8 +675,8 @@ func TestJanitorKeepsAClientThatWasUsedBeforeTheUsedMark(t *testing.T) {
 	}
 }
 
-// Security review N2: the flood that fills the cap of clients (from many networks) frees itself after a day, and a real platform can register again.
-func TestFloodOfRegistrationsFreesTheCapAfterADay(t *testing.T) {
+// Security review N2, S2-1: the flood that fills the cap of clients (from many networks) frees itself after an hour, and a real platform can register again.
+func TestFloodOfRegistrationsFreesTheCapAfterAnHour(t *testing.T) {
 	e := newEnv(t)
 	e.srv.Cfg.MaxClients = 20
 	e.lim.Rates[BucketRegister] = Rate{Limit: 1000, Window: time.Hour}
@@ -693,9 +693,9 @@ func TestFloodOfRegistrationsFreesTheCapAfterADay(t *testing.T) {
 	if w, out := post(real, reg("https://claude.ai/cb"), nil); w.Code != 400 || out["error"] != "invalid_client_metadata" {
 		t.Fatalf("a real platform while the cap is full: %d %v", w.Code, out)
 	}
-	e.now = e.now.Add(25 * time.Hour)
+	e.now = e.now.Add(61 * time.Minute)
 	if n, err := e.srv.Janitor(context.Background()); err != nil || n != 20 {
-		t.Fatalf("clean-up after 25 hours: deleted %d, %v", n, err)
+		t.Fatalf("clean-up after an hour: deleted %d, %v", n, err)
 	}
 	if w, out := post(real, reg("https://claude.ai/cb"), nil); w.Code != 201 {
 		t.Fatalf("a real platform after the clean-up: %d %v", w.Code, out)
@@ -1407,5 +1407,41 @@ func TestPublicKeyIDsFollowsNoRedirect(t *testing.T) {
 	defer ok.Close()
 	if ids, err := PublicKeyIDs(context.Background(), ok.URL); err != nil || strings.Join(ids, ",") != "a,b" {
 		t.Fatalf("%v %v", ids, err)
+	}
+}
+
+// S2-1: the global registration limit times the hours that a never-used client stays (plus one: fixed clock hours overlap) must not exceed the cap of clients.
+func TestRegistrationCapRule(t *testing.T) {
+	for name, tc := range map[string]struct {
+		global, hours, cap int
+		ok                 bool
+	}{
+		"the defaults (200 an hour, 1 hour, cap 500: 400)": {200, 1, 500, true},
+		"exactly the cap":                                   {250, 1, 500, true},
+		"one more than the cap":                             {251, 1, 500, false},
+		"the old defaults (15 an hour, 24 hours: 375)":      {15, 24, 500, true},
+		"200 an hour and 2 hours: 600":                      {200, 2, 500, false},
+		"a lower cap":                                       {200, 1, 300, false},
+		"hours 0 count as 1":                                {200, 0, 500, true},
+		"a limit that would overflow the product":           {1 << 62, 3, 500, false},
+	} {
+		if err := CheckRegistrationCap(tc.global, tc.hours, tc.cap); (err == nil) != tc.ok {
+			t.Errorf("%s: %v, want ok=%v", name, err, tc.ok)
+		}
+	}
+}
+
+// S2-1: the defaults (what the chart and the binary use when nothing is set) are 200 registrations an hour and one hour for a client that was never used, and they obey the rule.
+func TestRegistrationDefaultsAreTwoHundredAnHourAndOneHour(t *testing.T) {
+	if r := DefaultRates()[BucketRegisterAll]; r.Limit != 200 || r.Window != time.Hour {
+		t.Fatalf("the global registration limit by default: %+v", r)
+	}
+	cfg := Config{PublicURL: "https://auth.example.com", Resource: "https://mcp.example.com/mcp", IdPIssuer: "https://idp.example.com", IdPClientID: "a", IdPClientSecret: "b",
+		RegistrationHosts: []string{"chatgpt.com"}, MaxClients: 500, UnusedClientDays: 30}
+	if err := cfg.Validate(); err != nil || cfg.NeverUsedHours != 1 {
+		t.Fatalf("never-used hours by default: %d (%v)", cfg.NeverUsedHours, err)
+	}
+	if err := CheckRegistrationCap(DefaultRates()[BucketRegisterAll].Limit, cfg.NeverUsedHours, cfg.MaxClients); err != nil {
+		t.Fatalf("the defaults break the rule: %v", err)
 	}
 }

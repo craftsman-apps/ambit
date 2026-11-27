@@ -19,9 +19,11 @@
 {{- if lt (int (index $rl $k)) 1 }}{{ fail (printf "frontDoor.rateLimit.%s must be 1 or more" $k) }}{{ end }}
 {{- end }}
 {{- $orl := ((.Values.oauth | default dict).rateLimit) | default dict }}
+{{- /* helm upgrade --reuse-values from a release before this value existed has no bearerPerMinute: 1200 then. A value that is there (also 0) is checked as it is. */}}
+{{- if not (hasKey $orl "bearerPerMinute") }}{{ $_ := set $orl "bearerPerMinute" 1200 }}{{ end }}
 {{- if (.Values.oauth | default dict).enabled }}
-{{- range $k := list "discoveryPerMinute" "signInPerMinute" "tokenPerMinute" }}
-{{- if or (lt (int (index $orl $k)) 1) (ne (toString (index $orl $k)) (toString (int (index $orl $k)))) }}{{ fail (printf "oauth.rateLimit.%s must be a whole number, 1 or more" $k) }}{{ end }}
+{{- range $k := list "discoveryPerMinute" "signInPerMinute" "tokenPerMinute" "bearerPerMinute" }}
+{{- if or (lt (int (index $orl $k)) 1) (gt (int (index $orl $k)) 1000000000) (ne (toString (index $orl $k)) (toString (int (index $orl $k)))) }}{{ fail (printf "oauth.rateLimit.%s must be a whole number, 1 to 1,000,000,000 (the ratelimit service holds a limit in 32 bits)" $k) }}{{ end }}
 {{- end }}
 {{- end }}
 {{- if lt (int $fd.replicas) 1 }}{{ fail "frontDoor.replicas must be 1 or more" }}{{ end }}
@@ -424,6 +426,10 @@ data:
         value: token
         descriptors:
           - { key: fd_source, rate_limit: { unit: minute, requests_per_unit: {{ $orl.tokenPerMinute }} } }
+      - key: fd_bucket
+        value: bearer
+        descriptors:
+          - { key: fd_source, rate_limit: { unit: minute, requests_per_unit: {{ $orl.bearerPerMinute }} } }
       - key: fd_bucket
         value: registration
         descriptors:

@@ -311,15 +311,18 @@ oauth:
       redirectHosts: [chatgpt.com/connector_platform_oauth_redirect, chatgpt.com/connector/oauth, claude.ai/api/mcp/auth_callback]
       # Registrations allowed per caller address and hour (counted in Valkey, shared by all replicas).
       perSourcePerHour: 10
-      # Registrations that ambit-auth accepts in an hour, all callers together (security review N2): a flood from many networks cannot fill the cap faster than this.
-      # 15 an hour: the counter uses fixed clock hours, so 25 of them can overlap the 24 hours that a client that was never used stays: 375, below maxClients. IPv6 callers count by their /48 for perSourcePerHour in ambit-auth.
-      globalPerHour: 15
+      # Registrations that ambit-auth accepts in an hour, all callers together (security review N2, S2-1): a flood from many networks cannot fill the cap faster than this.
+      # The counter uses fixed clock hours, so a client that was never used (neverUsedClientHours) can overlap neverUsedClientHours + 1 of them:
+      # globalPerHour x (neverUsedClientHours + 1) must be at most maxClients (200 x 2 = 400 of 500). The chart refuses values that break this.
+      # IPv6 callers count by their /48 for perSourcePerHour in ambit-auth.
+      globalPerHour: 200
       # At most this many registered clients; one that nobody used for unusedClientDays is deleted.
       maxClients: 500
       unusedClientDays: 30
       # A client that registered and that no consent and no refresh has ever used is deleted this many hours after it registered, so that
-      # a flood of registrations cannot fill the cap for a month (docs/oauth.md, "Unused clients").
-      neverUsedClientHours: 24
+      # a flood of registrations cannot fill the cap for a month (docs/oauth.md, "Unused clients"). A real platform asks for its first
+      # consent within minutes of registering.
+      neverUsedClientHours: 1
   # Limits per caller address on the sign-in host, in separate buckets (docs/front-door.md, "Rate limits"; docs/oauth.md, "Limits"). The
   # address is the one the Gateway sees (never a header of the caller). Every request counts, refused ones too. The same numbers
   # apply in the Gateway (shared by all Gateway pods) and, as a second line, in ambit-auth (shared by its replicas). Registration
@@ -332,6 +335,11 @@ oauth:
     signInPerMinute: 300
     # /oauth2/token and /oauth2/revoke: a code exchange, and a refresh about every 15 minutes for each connection.
     tokenPerMinute: 600
+    # The calls of hosted platforms to the MCP URL with an OAuth token (an Authorization: Bearer header with a JWT; an Ambit key is not one): a platform
+    # sends the calls of many people from a few addresses, so they have a bucket of their own, higher than perSourcePerMinute (120), which keeps limiting
+    # keys, wrong keys and everything else. A call counts here before the token is checked (junk in the shape of a JWT too: it costs the gateway a
+    # parse and a signature check). The count per token (frontDoor.rateLimit.perCredentialPerMinute, per connection) stays. docs/front-door.md, "Rate limits".
+    bearerPerMinute: 1200
   auth:
     # ambit-auth pods (stateless: a pending sign-in is in the browser, counters are in Valkey).
     replicas: 2

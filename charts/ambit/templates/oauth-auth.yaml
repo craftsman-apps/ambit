@@ -6,6 +6,9 @@ Hydra's token hook. Stateless: a pending sign-in is in the person's browser, cou
 {{- $si := $o.signIn | default dict }}
 {{- $au := $o.auth | default dict }}
 {{- $dcr := ($o.registration | default dict).dynamic | default dict }}
+{{- /* An old release that is upgraded with --reuse-values has no value for these two: the defaults then. A value that is there (also 0 or false) is checked as it is. */}}
+{{- $gph := ternary $dcr.globalPerHour 200 (hasKey $dcr "globalPerHour") }}
+{{- $nuh := ternary $dcr.neverUsedClientHours 1 (hasKey $dcr "neverUsedClientHours") }}
 {{- if not (hasPrefix "https://" ($si.issuer | default "")) }}{{ fail "oauth.signIn.issuer must be the https address of your identity provider (for example https://idp.example.com or https://idp.example.com/realms/acme)" }}{{ end }}
 {{- if hasSuffix "/" $si.issuer }}{{ fail "oauth.signIn.issuer must not end with a slash: it is compared as the provider writes it" }}{{ end }}
 {{- if not $si.clientID }}{{ fail "oauth.signIn.clientID is needed (the client you registered at your identity provider, docs/oauth.md)" }}{{ end }}
@@ -21,6 +24,12 @@ Hydra's token hook. Stateless: a pending sign-in is in the person's browser, cou
 {{- if or (lt (int $dcr.perSourcePerHour) 1) (gt (int $dcr.perSourcePerHour) 100000) }}{{ fail "oauth.registration.dynamic.perSourcePerHour must be 1 to 100000" }}{{ end }}
 {{- if or (lt (int $dcr.maxClients) 1) (gt (int $dcr.maxClients) 5000) }}{{ fail "oauth.registration.dynamic.maxClients must be 1 to 5000" }}{{ end }}
 {{- if lt (int $dcr.unusedClientDays) 1 }}{{ fail "oauth.registration.dynamic.unusedClientDays must be 1 or more" }}{{ end }}
+{{- if or (ne (toString $gph) (toString (int $gph))) (lt (int $gph) 1) (gt (int $gph) 100000) }}{{ fail "oauth.registration.dynamic.globalPerHour must be a whole number, 1 to 100000" }}{{ end }}
+{{- if or (ne (toString $nuh) (toString (int $nuh))) (lt (int $nuh) 1) (gt (int $nuh) 720) }}{{ fail "oauth.registration.dynamic.neverUsedClientHours must be a whole number, 1 to 720" }}{{ end }}
+{{- /* The counter of registrations uses fixed clock hours, so the clients that were never used can come from neverUsedClientHours + 1 of them: if that many
+registrations can be alive at once and the cap is lower, a flood of registrations can fill the cap and keep it full (security review N2, S2-1). The clean-up looks every minute: for
+at most that minute a third hour can overlap; the cap itself is checked again after every add, so it is never passed (docs/oauth.md, "Limits"). */}}
+{{- if gt (mul (int $gph) (add (int $nuh) 1)) (int $dcr.maxClients) }}{{ fail (printf "oauth.registration.dynamic: globalPerHour (%d) x (neverUsedClientHours (%d) + 1) = %d is more than maxClients (%d): a flood of registrations could fill the cap. Lower globalPerHour or neverUsedClientHours, or raise maxClients." (int $gph) (int $nuh) (mul (int $gph) (add (int $nuh) 1)) (int $dcr.maxClients)) }}{{ end }}
 {{- end }}
 {{- $img := printf "%s:%s" .Values.console.image.repository (.Values.console.image.tag | default .Chart.AppVersion) }}
 {{- $sc := dict "allowPrivilegeEscalation" false "readOnlyRootFilesystem" true "capabilities" (dict "drop" (list "ALL")) | toJson }}
@@ -103,9 +112,9 @@ spec:
             - { name: AMBIT_AUTH_REGISTRATION_HOSTS, value: {{ join "," $dcr.redirectHosts | quote }} }
             - { name: AMBIT_AUTH_MAX_CLIENTS, value: {{ $dcr.maxClients | quote }} }
             - { name: AMBIT_AUTH_REGISTER_PER_HOUR, value: {{ $dcr.perSourcePerHour | quote }} }
-            - { name: AMBIT_AUTH_REGISTER_GLOBAL_PER_HOUR, value: {{ $dcr.globalPerHour | default 15 | quote }} }
+            - { name: AMBIT_AUTH_REGISTER_GLOBAL_PER_HOUR, value: {{ $gph | quote }} }
             - { name: AMBIT_AUTH_UNUSED_CLIENT_DAYS, value: {{ $dcr.unusedClientDays | quote }} }
-            - { name: AMBIT_AUTH_NEVER_USED_CLIENT_HOURS, value: {{ $dcr.neverUsedClientHours | default 24 | quote }} }
+            - { name: AMBIT_AUTH_NEVER_USED_CLIENT_HOURS, value: {{ $nuh | quote }} }
             {{- else }}
             - { name: AMBIT_AUTH_REGISTRATION, value: "off" }
             {{- end }}

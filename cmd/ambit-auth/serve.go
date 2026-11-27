@@ -54,7 +54,7 @@ func serve(ctx context.Context) error {
 	if cfg.UnusedClientDays, err = envInt("AMBIT_AUTH_UNUSED_CLIENT_DAYS", 30); err != nil {
 		return err
 	}
-	if cfg.NeverUsedHours, err = envInt("AMBIT_AUTH_NEVER_USED_CLIENT_HOURS", 24); err != nil {
+	if cfg.NeverUsedHours, err = envInt("AMBIT_AUTH_NEVER_USED_CLIENT_HOURS", 1); err != nil {
 		return err
 	}
 	if cfg.MaxGrantDays, err = envInt("AMBIT_AUTH_MAX_GRANT_DAYS", 30); err != nil {
@@ -138,6 +138,11 @@ func serve(ctx context.Context) error {
 		return errors.New("AMBIT_AUTH_REGISTER_GLOBAL_PER_HOUR must be 1 or more")
 	}
 	rates[oauth.BucketRegisterAll] = oauth.Rate{Limit: globalPerHour, Window: time.Hour}
+	if !cfg.NoRegistration {
+		if err := oauth.CheckRegistrationCap(globalPerHour, cfg.NeverUsedHours, cfg.MaxClients); err != nil {
+			return err
+		}
+	}
 	for env, bucket := range map[string]string{"AMBIT_AUTH_DISCOVERY_PER_MINUTE": oauth.BucketDiscovery, "AMBIT_AUTH_SIGNIN_PER_MINUTE": oauth.BucketSignIn} {
 		n, err := envInt(env, rates[bucket].Limit)
 		if err != nil || n < 1 {
@@ -150,7 +155,7 @@ func serve(ctx context.Context) error {
 		Backend: &oauth.ConsoleBackend{Base: env("AMBIT_AUTH_CONSOLE_URL"), TokenFile: env("AMBIT_AUTH_CONSOLE_TOKEN_FILE")},
 		Deny:    deny, IdP: idp, Clients: &oauth.ValkeyRegistry{C: vc, Prefix: "ambit:oauth:"},
 		Limits: &oauth.Limits{Shared: &oauth.ValkeyLimiter{C: vc, Prefix: "ambit:oauth:"}, Local: local, Rates: rates}}
-	go s.RunJanitor(ctx, 10*time.Minute)
+	go s.RunJanitor(ctx, time.Minute) // every minute: a client that was never used stays at most one minute longer than neverUsedClientHours
 
 	var ready atomic.Bool
 	go func() {

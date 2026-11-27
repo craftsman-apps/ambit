@@ -1,1 +1,0 @@
-- Docs: the prompt guard webhook can run in another namespace (`llm.promptGuard.webhook.namespace`); the gateway and `ambit-router` both call it. This is now tested on every release candidate, and the docs say which connections the webhook must accept.

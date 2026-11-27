@@ -1,1 +1,0 @@
-- Fixed a rare race in a rules change: if someone deleted the access-log policy at the same moment the controller checked that step, the next step (authorization) could be written before the access log was active again. The step now waits until the policy is written again and agentgateway has accepted it.

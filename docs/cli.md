@@ -5,7 +5,7 @@ description: Every command, flag and exit code of the ambit CLI, the checks of a
 
 # CLI reference
 
-`ambit` starts a local Ambit on kind, installs, upgrades and uninstalls Ambit on any cluster, checks an install, validates Ambit objects in files, and connects coding tools to Ambit. To install it, see [Quick start](quick-start.md). This page describes release 0.5.0.
+`ambit` starts a local Ambit on kind, installs, upgrades and uninstalls Ambit on any cluster, checks an install, validates Ambit objects in files, and connects coding tools to Ambit. To install it, see [Quick start](quick-start.md). This page describes release 0.6.0.
 
 ## Global flags
 

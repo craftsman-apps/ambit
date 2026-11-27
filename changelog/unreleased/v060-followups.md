@@ -1,3 +1,0 @@
-- `ambit local up` now asks Docker a second time when `docker info` does not answer in 15 seconds, and then says "Docker did not answer (it may be busy)" with `docker info` as the next step, instead of "Docker is not running".
-- While a pod waits for its container to start, the progress line of `ambit local up` names the image and how long ago the pod was created.
-- `ambit local up --chart-dir` and `ambit install --chart-dir` now ask for `helm dependency build` when the chart has no packed dependencies (`*.tgz`), not only when the folder is missing. `docs/cli.md` describes the steps for running from a checkout.

@@ -230,7 +230,8 @@ if MODE == "buckets":
             "Bearer Bearer <key> (the key rule reads every 'Bearer ' off the header: this is a key)": ("203.0.113.73", {"Authorization": "Bearer Bearer " + KEY}),
             "Bearer <key>": ("203.0.113.74", {"Authorization": "Bearer " + KEY}),
             "Bearer abc (not in the shape of a JWT)": ("203.0.113.75", {"Authorization": "Bearer abc"}),
-            "a key header and a token together": ("203.0.113.76", {"x-api-key": KEY, "Authorization": "Bearer " + junk_jwt(0)}),
+            # (a wrong key: the valid key of this test has its own count per minute, which the key calls above have used)
+            "a key header and a token together": ("203.0.113.76", {"x-api-key": "ambit_" + "x" * 40, "Authorization": "Bearer " + junk_jwt(0)}),
             "a token with a space and a key behind it": ("203.0.113.77", {"Authorization": "Bearer " + junk_jwt(1) + " Bearer " + KEY}),
         }
         for name, (addr, hd) in cases.items():

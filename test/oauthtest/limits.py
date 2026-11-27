@@ -207,7 +207,7 @@ if MODE == "buckets":
         _, tC = connect("person152", ("time",)); _, tD = connect("person153", ("time",))
         tk = [tC["access_token"], tD["access_token"]]
         JUNK_HEADER[0] = tk[0].split(".")[0]  # the junk carries a real header (its key ID): the Gateway finds the key and checks the signature, as for a real token
-        KEY = os.environ["KEY"]
+        KEY = os.environ["KEY_B"]  # a key of its own for each block: the 60 a minute of one key (per credential) are not used up by the other blocks
         G = "203.0.113.70"
         nb, nk = LIM_BEARER + 6, LIM_MCP + 6
         # one window of the clock: bearer calls, then key calls, then bearer calls again, all from the address G
@@ -220,19 +220,19 @@ if MODE == "buckets":
         # a flood of junk in the shape of a JWT from one address: it stops at the same limit, and the key limit of that address is not used up by it
         H = "203.0.113.71"
         nj, nk2 = LIM_BEARER + 8, LIM_MCP + 6
-        res = burst(lambda i: mcp_raw(H, {"Authorization": "Bearer " + junk_jwt(i)}) if i < nj else mcp_raw(H, {"x-api-key": KEY}), nj + nk2)
+        res = burst(lambda i: mcp_raw(H, {"Authorization": "Bearer " + junk_jwt(i)}) if i < nj else mcp_raw(H, {"x-api-key": os.environ["KEY_C"]}), nj + nk2)
         junk, keys2 = res[:nj], res[nj:]
         check(f"19 junk in the shape of a JWT: {allowed(junk)} of {nj} calls from one address got the 401 of the token check, then 429 (limit {LIM_BEARER}, the same as for valid tokens)", allowed(junk) == LIM_BEARER and set(junk[:LIM_BEARER]) == {401} and junk[LIM_BEARER:] == [429] * 8, sorted(set(junk)))
         check(f"19 ... and it did not use up the key bucket of that address: {allowed(keys2)} of {nk2} key calls passed (limit {LIM_MCP})", allowed(keys2) == LIM_MCP and set(keys2[:LIM_MCP]) == {200}, keys2)
         check("19 ... and valid tokens from another address are not affected", mcp_status("203.0.113.72", token=tk[0]) == 200)
         # what is not in the shape stays in the key bucket: it must never get the higher limit
         cases = {
-            "Bearer Bearer <key> (the key rule reads every 'Bearer ' off the header: this is a key)": ("203.0.113.73", {"Authorization": "Bearer Bearer " + KEY}),
-            "Bearer <key>": ("203.0.113.74", {"Authorization": "Bearer " + KEY}),
+            "Bearer Bearer <key> (the key rule reads every 'Bearer ' off the header: this is a key)": ("203.0.113.73", {"Authorization": "Bearer Bearer " + os.environ["KEY_D"]}),
+            "Bearer <key>": ("203.0.113.74", {"Authorization": "Bearer " + os.environ["KEY_E"]}),
             "Bearer abc (not in the shape of a JWT)": ("203.0.113.75", {"Authorization": "Bearer abc"}),
-            # (a wrong key: the valid key of this test has its own count per minute, which the key calls above have used)
+            # (a wrong key: a valid key has its own count of 60 a minute, so every use of a valid key below has a key of its own)
             "a key header and a token together": ("203.0.113.76", {"x-api-key": "ambit_" + "x" * 40, "Authorization": "Bearer " + junk_jwt(0)}),
-            "a token with a space and a key behind it": ("203.0.113.77", {"Authorization": "Bearer " + junk_jwt(1) + " Bearer " + KEY}),
+            "a token with a space and a key behind it": ("203.0.113.77", {"Authorization": "Bearer " + junk_jwt(1) + " Bearer " + os.environ["KEY_F"]}),
         }
         for name, (addr, hd) in cases.items():
             codes = burst(lambda i: mcp_raw(addr, hd), LIM_MCP + 6)

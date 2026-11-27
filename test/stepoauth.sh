@@ -390,6 +390,8 @@ wait_for 120 '[[ "$(accepted ambit-mcp-public-oauth)" == *True* && "$(accepted a
 PW=$(kubectl -n "$NS" get secret ambit-initial-admin -o jsonpath='{.data.password}' | base64 -d)
 sign_in local admin@ambit.local "$PW"
 mkkey oauth-key mcp; OKEY=$KEY; OKID=$KID
+# Two more keys for the bucket checks (19): each key has its own count of 60 a minute, and the checks of one address use 30 calls of a key each.
+for L in B C D E F; do mkkey "oauth-key-$L" mcp; eval "OKEY$L=\$KEY"; done; KEY=$OKEY
 cleanup_keys() { api DELETE "/api/keys/$OKID" >/dev/null 2>&1 || true; kubectl -n "$NS" delete "accessrules.$G" oauth-time --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" patch "servers.$G" time --type json -p '[{"op":"remove","path":"/spec/frontDoor"}]' >/dev/null 2>&1 || true; }
 trap 'rc=$?; cleanup_keys; cleanup; on_exit "$rc"' EXIT
@@ -715,7 +717,7 @@ pass "18 the emergency block (ambit oauth block on) survives a Helm upgrade and 
 # --- 19 · rate limits of the sign-in host: separate buckets at the Gateway, by the address of the connection (test/oauthtest/limits.py)
 # The Gateway runs in PROXY protocol mode here, so the test can be any client address (a load balancer tells the Gateway the address in production).
 lim() { env GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
-  HTTP_TIMEOUT=60 KEY="$OKEY" ONE_TOOL=time_get_current_time "$@" "${PY[@]}" test/oauthtest/limits.py "$MODE"; }
+  HTTP_TIMEOUT=60 KEY="$OKEY" KEY_B="$OKEYB" KEY_C="$OKEYC" KEY_D="$OKEYD" KEY_E="$OKEYE" KEY_F="$OKEYF" ONE_TOOL=time_get_current_time "$@" "${PY[@]}" test/oauthtest/limits.py "$MODE"; }
 rl_phase() { # rl_phase DISCOVERY SIGNIN TOKEN REGISTRATION MCP CREDENTIAL GLOBAL-REGISTRATIONS: the buckets, the Gateway in PROXY protocol mode, the loaded limits
   oaset_real --set frontDoor.clientAddress=proxyProtocol --set frontDoor.rateLimit.perSourcePerMinute="$5" --set frontDoor.rateLimit.perCredentialPerMinute="$6" --set oauth.registration.dynamic.perSourcePerHour="$4" --set oauth.registration.dynamic.globalPerHour="$7" --set oauth.registration.dynamic.maxClients=5000 --wait --timeout 8m
   kubectl -n "$NS" rollout status deploy/ambit-public --timeout=300s >/dev/null

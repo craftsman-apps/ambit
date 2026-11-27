@@ -496,6 +496,7 @@ MSG='oauth.signIn.clientSecret' refuse "no client secret" --set oauth.signIn.cli
 MSG='oauth.cookieSecret' refuse "no cookie secret" --set oauth.cookieSecret.name=
 MSG='limits.enabled' refuse "OAuth without shared limits" --set limits.enabled=false
 MSG='redirectHosts' refuse "dynamic registration without hosts" --set 'oauth.registration.dynamic.redirectHosts={}'
+MSG='oauth.rateLimit.bearerPerMinute must be a whole number' refuse "no bearer limit" --set oauth.rateLimit.bearerPerMinute=0
 MSG='lower-case host name' refuse "a wildcard registration host" --set 'oauth.registration.dynamic.redirectHosts={*.example.com}'
 MSG='lower-case host name' refuse "a registration host with a scheme" --set 'oauth.registration.dynamic.redirectHosts={https://chatgpt.com}'
 MSG='optional path' refuse "a registration path with a dot segment" --set 'oauth.registration.dynamic.redirectHosts={chatgpt.com/a/../b}'
@@ -503,6 +504,17 @@ MSG='optional path' refuse "a registration path with a trailing slash" --set 'oa
 MSG='optional path' refuse "a registration path with a query" --set 'oauth.registration.dynamic.redirectHosts={chatgpt.com/a?b=c}'
 MSG='perSourcePerHour' refuse "a registration limit of 0" --set oauth.registration.dynamic.perSourcePerHour=0
 MSG='maxClients' refuse "a client cap of 0" --set oauth.registration.dynamic.maxClients=0
+# S2-1: the global registration limit x (hours that a never-used client stays + 1) must not exceed the cap of clients
+MSG='globalPerHour (300) x (neverUsedClientHours (1) + 1) = 600 is more than maxClients (500)' refuse "a global registration limit that can fill the cap" --set oauth.registration.dynamic.globalPerHour=300
+MSG='globalPerHour (200) x (neverUsedClientHours (3) + 1) = 800 is more than maxClients (500)' refuse "a never-used client that stays so long that the global limit fills the cap" --set oauth.registration.dynamic.neverUsedClientHours=3
+MSG='globalPerHour (200) x (neverUsedClientHours (1) + 1) = 400 is more than maxClients (300)' refuse "a cap that the defaults can fill" --set oauth.registration.dynamic.maxClients=300
+MSG='neverUsedClientHours must be 1 to 720' refuse "a negative number of hours for a never-used client" --set oauth.registration.dynamic.neverUsedClientHours=-1
+MSG='globalPerHour must be 1 to 100000' refuse "a negative global registration limit" --set oauth.registration.dynamic.globalPerHour=-1
+# ... and values that obey the rule render: 100 an hour x (4 + 1) = 500, and 1000 an hour with a cap of 5000 x 2
+exact=$(oat --set oauth.registration.dynamic.globalPerHour=100 --set oauth.registration.dynamic.neverUsedClientHours=4) || { echo "FAIL chart: 100 an hour x (4 + 1) = 500 = maxClients must render"; exit 1; }
+grep -q 'AMBIT_AUTH_NEVER_USED_CLIENT_HOURS, value: "4"' <<<"$exact" && grep -q 'AMBIT_AUTH_REGISTER_GLOBAL_PER_HOUR, value: "100"' <<<"$exact" || { echo "FAIL chart: the global limit and the never-used hours do not reach ambit-auth"; exit 1; }
+oat --set oauth.registration.dynamic.globalPerHour=1000 --set oauth.registration.dynamic.maxClients=5000 >/dev/null || { echo "FAIL chart: 1000 an hour x 2 with a cap of 5000 must render"; exit 1; }
+echo "PASS chart: the global registration limit times the hours of a never-used client must not exceed the client cap (defaults 200 an hour, 1 hour, cap 500)"
 check_oa 'r=one("HTTPRoute","ambit-mcp-public")["spec"]
 assert [x["name"] for x in r["rules"]]==["keys","oauth"], r["rules"]
 k,o=r["rules"]
@@ -559,20 +571,34 @@ check_oa 'e=one("AgentgatewayPolicy","ambit-public-source-limit")["spec"]["traff
 b=e.split("\"fd_bucket\", \"value\": ",1)[1].split("}, {\"key\": \"fd_source\"",1)[0]
 for want in ("\"/oauth2/token\"","\"/oauth2/revoke\"","\"/register\"","\"/.well-known/\"","\"/mcp\"","\"x-api-key\"","\"authorization\""):  # every other path of the sign-in host is the sign-in bucket
     assert want in b, (want, b)
-for bucket in ("token","registration","signin","discovery","mcp"):
+for bucket in ("token","registration","signin","discovery","mcp","bearer"):
     assert "\"%s\"" % bucket in b, (bucket, b)
-assert b.count("request.host")==4 and "\"auth.localtest.me\"" in b and "\"mcp-public.localtest.me\"" in b, b  # the host is part of the choice: the sign-in buckets only on the sign-in host (security review N8)
+assert b.count("request.host")==6 and "\"auth.localtest.me\"" in b and "\"mcp-public.localtest.me\"" in b, b  # the host is part of the choice: the sign-in buckets only on the sign-in host (security review N8)
 assert b.index("request.host")<b.index("\"/oauth2/token\""), b
 assert "string(source.address)" in e and "x-forwarded" not in e.lower() and "x-ambit-client-address" not in e.lower() and "forwarded" not in b.lower(), e
 c=yaml.safe_load(one("ConfigMap","ambit-ratelimit-front-door")["data"]["front-door.yaml"])
 got={d["value"]:(d["descriptors"][0]["key"],d["descriptors"][0]["rate_limit"]["unit"],d["descriptors"][0]["rate_limit"]["requests_per_unit"]) for d in c["descriptors"] if d["key"]=="fd_bucket"}
-assert got=={"mcp":("fd_source","minute",120),"discovery":("fd_source","minute",600),"signin":("fd_source","minute",300),"token":("fd_source","minute",600),"registration":("fd_source","hour",10)}, got
+assert got=={"mcp":("fd_source","minute",120),"discovery":("fd_source","minute",600),"signin":("fd_source","minute",300),"token":("fd_source","minute",600),"registration":("fd_source","hour",10),"bearer":("fd_source","minute",1200)}, got
+# #436: the bearer bucket is only for a header that is, as a whole, "Bearer" and a token in the shape of a JWT, and only without x-api-key, on the MCP host and the path /mcp.
+# The shape is the security point (the bucket is chosen before the token is checked): the key rule reads "Bearer " off the header with a replace of every occurrence,
+# so "Bearer Bearer ambit_..." is a key and must stay in the mcp bucket. The same regular expression, tried here on the cases that matter.
+import re
+rx=re.search(r"matches\(\"(\^Bearer eyJ[^\"]*)\"\)", b).group(1).replace("\\\\","\\")
+seg=b.rsplit("\"discovery\" : ",1)[1]  # the condition of the bearer bucket: the MCP host, the path /mcp, no key header, a header in the shape
+assert seg.count("request.host")==2 and "mcp-public.localtest.me" in seg and "auth.localtest.me" not in seg.replace("mcp-public.localtest.me","") and "request.path == \"/mcp\"" in seg and "!(\"x-api-key\" in request.headers)" in seg and ".matches(" in seg and seg.rstrip().endswith("\"bearer\" : \"mcp\""), seg
+good="Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnLW5hdHVyZQ"
+for h,want in ((good,True),("Bearer eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.",True),("Bearer ambit_0123456789abcdef",False),("Bearer Bearer ambit_0123456789abcdef",False),("Bearer Bearer "+good[7:],False),("Bearer abc",False),
+               ("Bearer ",False),("bearer "+good[7:],False),(good+" x",False),(good+", Bearer ambit_k",False),("Bearer  "+good[7:],False),("Bearer xeyJ.a.b",False),("Bearer eyJ.a",False),(good[7:],False)):
+    assert bool(re.search(rx,h))==want, (h,want,rx)
+assert "ambit_" not in "eyJ"  # no key starts with eyJ: a header in the shape is never a key
 env={e["name"]:e["value"] for e in one("Deployment","ambit-auth")["spec"]["template"]["spec"]["containers"][0]["env"] if "value" in e}
 g=one("AgentgatewayPolicy","ambit-public-limits")["spec"]["traffic"]["rateLimit"]["global"]["descriptors"][0]["entries"][0]["expression"]
 assert "jwt.ambit_agent" in g and "apiKey.keyId" in g and g.endswith("\"none\")"), g  # a token counts for its agent, not in one counter for every token; no credential: no counter
 assert c["descriptors"][0]=={"key":"fd_credential","value":"none","rate_limit":{"unlimited":True}} and c["descriptors"][1]["key"]=="fd_credential" and "value" not in c["descriptors"][1], c["descriptors"][:2]
-assert env["AMBIT_AUTH_DISCOVERY_PER_MINUTE"]=="600" and env["AMBIT_AUTH_SIGNIN_PER_MINUTE"]=="300" and env["AMBIT_AUTH_REGISTER_PER_HOUR"]=="10" and env["AMBIT_AUTH_REGISTER_GLOBAL_PER_HOUR"]=="15", env' "the source limit has five buckets (mcp, discovery, sign-in, token, registration): the Gateway reads the path and two header names, never a client address header; ambit-auth gets the same numbers"
+assert env["AMBIT_AUTH_DISCOVERY_PER_MINUTE"]=="600" and env["AMBIT_AUTH_SIGNIN_PER_MINUTE"]=="300" and env["AMBIT_AUTH_REGISTER_PER_HOUR"]=="10" and env["AMBIT_AUTH_REGISTER_GLOBAL_PER_HOUR"]=="200" and env["AMBIT_AUTH_NEVER_USED_CLIENT_HOURS"]=="1" and env["AMBIT_AUTH_MAX_CLIENTS"]=="500", env' "the source limit has five buckets (mcp, discovery, sign-in, token, registration): the Gateway reads the path and two header names, never a client address header; ambit-auth gets the same numbers"
 set_rl=$(oat --set oauth.rateLimit.signInPerMinute=77 --set oauth.registration.dynamic.perSourcePerHour=3)
+bearer_rl=$(oat --set oauth.rateLimit.bearerPerMinute=77)
+grep -q 'requests_per_unit: 77' <<<"$bearer_rl" && ! grep -q 'requests_per_unit: 1200' <<<"$bearer_rl" || { echo "FAIL chart: oauth.rateLimit.bearerPerMinute must reach the ratelimit config"; exit 1; }
 grep -q 'requests_per_unit: 77' <<<"$set_rl" && grep -q 'requests_per_unit: 3 }' <<<"$set_rl" && grep -q 'AMBIT_AUTH_SIGNIN_PER_MINUTE, value: "77"' <<<"$set_rl" || { echo "FAIL chart: the bucket values must reach the ratelimit config and ambit-auth"; exit 1; }
 MSG='oauth.rateLimit.signInPerMinute' refuse "a sign-in limit of 0" --set oauth.rateLimit.signInPerMinute=0
 MSG='whole number' refuse "a sign-in limit with a fraction" --set oauth.rateLimit.signInPerMinute=77.5

@@ -21,6 +21,11 @@ Hydra's token hook. Stateless: a pending sign-in is in the person's browser, cou
 {{- if or (lt (int $dcr.perSourcePerHour) 1) (gt (int $dcr.perSourcePerHour) 100000) }}{{ fail "oauth.registration.dynamic.perSourcePerHour must be 1 to 100000" }}{{ end }}
 {{- if or (lt (int $dcr.maxClients) 1) (gt (int $dcr.maxClients) 5000) }}{{ fail "oauth.registration.dynamic.maxClients must be 1 to 5000" }}{{ end }}
 {{- if lt (int $dcr.unusedClientDays) 1 }}{{ fail "oauth.registration.dynamic.unusedClientDays must be 1 or more" }}{{ end }}
+{{- if or (lt (int ($dcr.globalPerHour | default 200)) 1) (gt (int ($dcr.globalPerHour | default 200)) 100000) }}{{ fail "oauth.registration.dynamic.globalPerHour must be 1 to 100000" }}{{ end }}
+{{- if or (lt (int ($dcr.neverUsedClientHours | default 1)) 1) (gt (int ($dcr.neverUsedClientHours | default 1)) 720) }}{{ fail "oauth.registration.dynamic.neverUsedClientHours must be 1 to 720" }}{{ end }}
+{{- /* The counter of registrations uses fixed clock hours, so the clients that were never used can come from neverUsedClientHours + 1 of them: if that many
+registrations can be alive at once and the cap is lower, a flood of registrations can fill the cap and keep it full (security review N2, S2-1). */}}
+{{- if gt (mul (int ($dcr.globalPerHour | default 200)) (add (int ($dcr.neverUsedClientHours | default 1)) 1)) (int $dcr.maxClients) }}{{ fail (printf "oauth.registration.dynamic: globalPerHour (%d) x (neverUsedClientHours (%d) + 1) = %d is more than maxClients (%d): a flood of registrations could fill the cap. Lower globalPerHour or neverUsedClientHours, or raise maxClients." (int ($dcr.globalPerHour | default 200)) (int ($dcr.neverUsedClientHours | default 1)) (mul (int ($dcr.globalPerHour | default 200)) (add (int ($dcr.neverUsedClientHours | default 1)) 1)) (int $dcr.maxClients)) }}{{ end }}
 {{- end }}
 {{- $img := printf "%s:%s" .Values.console.image.repository (.Values.console.image.tag | default .Chart.AppVersion) }}
 {{- $sc := dict "allowPrivilegeEscalation" false "readOnlyRootFilesystem" true "capabilities" (dict "drop" (list "ALL")) | toJson }}
@@ -103,9 +108,9 @@ spec:
             - { name: AMBIT_AUTH_REGISTRATION_HOSTS, value: {{ join "," $dcr.redirectHosts | quote }} }
             - { name: AMBIT_AUTH_MAX_CLIENTS, value: {{ $dcr.maxClients | quote }} }
             - { name: AMBIT_AUTH_REGISTER_PER_HOUR, value: {{ $dcr.perSourcePerHour | quote }} }
-            - { name: AMBIT_AUTH_REGISTER_GLOBAL_PER_HOUR, value: {{ $dcr.globalPerHour | default 15 | quote }} }
+            - { name: AMBIT_AUTH_REGISTER_GLOBAL_PER_HOUR, value: {{ $dcr.globalPerHour | default 200 | quote }} }
             - { name: AMBIT_AUTH_UNUSED_CLIENT_DAYS, value: {{ $dcr.unusedClientDays | quote }} }
-            - { name: AMBIT_AUTH_NEVER_USED_CLIENT_HOURS, value: {{ $dcr.neverUsedClientHours | default 24 | quote }} }
+            - { name: AMBIT_AUTH_NEVER_USED_CLIENT_HOURS, value: {{ $dcr.neverUsedClientHours | default 1 | quote }} }
             {{- else }}
             - { name: AMBIT_AUTH_REGISTRATION, value: "off" }
             {{- end }}

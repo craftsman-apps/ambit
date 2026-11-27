@@ -32,7 +32,7 @@ oaset() { helm upgrade ambit charts/ambit -n "$NS" -f charts/ambit/values-kind.y
 # OAREG: from check 12 on the registration limits are high for every upgrade (the key rotation of check 15 upgrades too), because the checks register many clients
 OAREG=()
 # OARL: the sign-in buckets are far above what the checks send from one address (check 19 sets them back to the chart's values)
-OARL=(--set oauth.rateLimit.discoveryPerMinute=100000 --set oauth.rateLimit.signInPerMinute=100000 --set oauth.rateLimit.tokenPerMinute=100000)
+OARL=(--set oauth.rateLimit.discoveryPerMinute=100000 --set oauth.rateLimit.signInPerMinute=100000 --set oauth.rateLimit.tokenPerMinute=100000 --set oauth.rateLimit.bearerPerMinute=100000)
 # oaset_real: the same, with the real console behind ambit-auth (the stand-in is for the sign-in checks of step 12)
 oaset_real() { oaset --set "oauth.auth.consoleURL=" "$@"; }
 freeport() { "${PY[@]}" -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'; }
@@ -358,8 +358,8 @@ flow() { GW_PORT=$PA IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_H
 # the registration limit first, at its default of 10 per hour and address (the counter is per hour: nothing registered before)
 flow limits
 # then the limit is raised, so that the many registrations of the other checks pass
-OAREG=(--set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000)
-oaset --set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000 --wait --timeout 8m
+OAREG=(--set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000 --set oauth.registration.dynamic.maxClients=5000)
+oaset --set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000 --set oauth.registration.dynamic.maxClients=5000 --wait --timeout 8m
 wait_rl "$NS" "unit=HOUR requests_per_unit=1000"  # the Gateway counts registrations too: its limit must be the new one before the checks register
 kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
 flow
@@ -369,7 +369,7 @@ pass "12 the sign-in flow and its refusals"
 # The 401 challenge, the metadata, the consented scope and nothing else, changed and forged tokens, offboarding, the emergency block (also with
 # Hydra down), API keys on the same route, a restart of the console. A server on the front door, an AccessRule for everyone, and a key.
 G=ambitproject.dev
-oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000 --wait --timeout 8m
+oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000 --set oauth.registration.dynamic.maxClients=5000 --wait --timeout 8m
 wait_rl "$NS" "unit=HOUR requests_per_unit=1000"  # the Gateway counts registrations too: its limit must be the new one before the checks register
 kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
 kubectl -n "$NS" apply -f test/mcp/objects.yaml >/dev/null
@@ -666,7 +666,7 @@ RR1=$(cnt refresh "$JM"); AR1=$(cnt access "$JM")
 ROWS_PER_REFRESH=$(( (RR1 - RR0 + AR1 - AR0) / 5 ))
 echo "   rows of one connection: a sign-in writes $RR0 refresh token, $AR0 access token and $FR0 login and consent rows; each refresh adds $(( (RR1 - RR0) / 5 )) refresh token and $(( (AR1 - AR0) / 5 )) access token rows"
 for t in access refresh; do psq "update hydra_oauth2_$t set requested_at = now() - interval '40 days', expires_at = now() - interval '39 days' where client_id = '$JM'" >/dev/null; done
-oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000 --set oauth.janitor.limit=3 --wait --timeout 8m
+oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000 --set oauth.registration.dynamic.maxClients=5000 --set oauth.janitor.limit=3 --wait --timeout 8m
 jrun() { # jrun: one janitor job by hand
   kubectl -n "$NS" delete job ambit-hydra-janitor-e2e --ignore-not-found >/dev/null
   kubectl -n "$NS" create job ambit-hydra-janitor-e2e --from=cronjob/ambit-hydra-janitor >/dev/null
@@ -676,33 +676,33 @@ jrun; REM1=$(cnt refresh "$JM")
 (( REM1 > 0 && REM1 < RR1 )) || fail "17 a janitor run with the limit 3 must delete some of the $RR1 old refresh tokens and not all (left: $REM1)"
 for _ in 1 2 3 4; do [[ "$(cnt refresh "$JM")" == 0 ]] && break; jrun; done
 [[ "$(cnt refresh "$JM")" == 0 ]] || fail "17 repeated runs with the limit 3 must delete all old refresh tokens (left: $(cnt refresh "$JM"))"
-oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000 --wait --timeout 8m
+oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000 --set oauth.registration.dynamic.maxClients=5000 --wait --timeout 8m
 pass "17 janitor limit: a connection writes about $ROWS_PER_REFRESH rows a refresh ($RR1 refresh token rows after 5 refreshes); with the limit 3 one run deleted $(( RR1 - REM1 )) of them (left $REM1) and the next runs the rest; the default is 100,000 rows a kind every hour"
 
 # Unused clients. ambit-auth deletes a client that was registered dynamically and not used for 30 days, and one that no consent or refresh ever used
-# 24 hours after it registered (a flood of registrations must not fill the cap for a month: security review N2), when it starts and every 10 minutes.
+# an hour after it registered (a flood of registrations must not fill the cap for a month: security review N2, S2-1), when it starts and every minute.
 # A used client of 29 days stays, and a client that an admin made stays however old it is.
 IDS=($(dbo dcr 5)); [[ ${#IDS[@]} -eq 5 ]] || fail "17 five registrations"
-setused() { # setused ID HOURS [used]: the last use (for a client that never was used: the registration) in Hydra, HOURS hours ago; "used" marks a client that a consent or a refresh used
+setused() { # setused ID MINUTES [used]: the last use (for a client that never was used: the registration) in Hydra, MINUTES minutes ago; "used" marks a client that a consent or a refresh used
   [[ $(adm ambit-hydra-0 GET "/admin/clients/$1") == 200 ]] || fail "17 client $1 is not in Hydra"
-  local body; body=$("${PY[@]}" -c 'import json,sys,datetime as d;c=json.load(open(sys.argv[1]));m=c.setdefault("metadata",{});m["last_used"]=(d.datetime.now(d.timezone.utc)-d.timedelta(hours=int(sys.argv[2]))).strftime("%Y-%m-%dT%H:%M:%SZ")
+  local body; body=$("${PY[@]}" -c 'import json,sys,datetime as d;c=json.load(open(sys.argv[1]));m=c.setdefault("metadata",{});m["last_used"]=(d.datetime.now(d.timezone.utc)-d.timedelta(minutes=int(sys.argv[2]))).strftime("%Y-%m-%dT%H:%M:%SZ")
 if len(sys.argv)>3: m["used"]=True
 print(json.dumps(c))' "$W/adm" "$2" ${3:+used})
   [[ $(adm ambit-hydra-0 PUT "/admin/clients/$1" "$body") == 200 ]] || fail "17 could not change client $1: $(head -c 200 "$W/adm")"
 }
-setused "${IDS[0]}" 744 used   # used, last 31 days ago: goes
-setused "${IDS[1]}" 696 used   # used 29 days ago: stays
-setused "${IDS[2]}" 25         # never used, registered 25 hours ago: goes
-setused "${IDS[3]}" 2          # never used, registered 2 hours ago: stays
-setused "${IDS[4]}" 25 used    # 25 hours old but used by a consent: stays
+setused "${IDS[0]}" 44640 used   # used, last 31 days ago: goes
+setused "${IDS[1]}" 41760 used   # used 29 days ago: stays
+setused "${IDS[2]}" 90         # never used, registered an hour and a half ago: goes
+setused "${IDS[3]}" 30         # never used, registered half an hour ago: stays
+setused "${IDS[4]}" 90 used    # an hour and a half old but used by a consent: stays
 [[ $(adm ambit-hydra-0 POST /admin/clients '{"client_id":"admin-made-e2e","redirect_uris":["https://chatgpt.com/cb"],"grant_types":["authorization_code"],"response_types":["code"],"token_endpoint_auth_method":"none","metadata":{"registered_via":"admin","last_used":"2020-01-01T00:00:00Z"}}') == 201 ]] || fail "17 could not make the admin client: $(head -c 200 "$W/adm")"
 kubectl -n "$NS" rollout restart deploy/ambit-auth >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
-wait_for 120 '[[ $(adm ambit-hydra-0 GET "/admin/clients/${IDS[0]}") == 404 && $(adm ambit-hydra-0 GET "/admin/clients/${IDS[2]}") == 404 ]]' || fail "17 a client that was not used for 31 days, or one that never was used and registered 25 hours ago, is still there after ambit-auth started"
-for i in 1 3 4; do [[ $(adm ambit-hydra-0 GET "/admin/clients/${IDS[$i]}") == 200 ]] || fail "17 client $i (used 29 days ago, never used 2 hours old, or used and 25 hours old) was deleted"; done
+wait_for 120 '[[ $(adm ambit-hydra-0 GET "/admin/clients/${IDS[0]}") == 404 && $(adm ambit-hydra-0 GET "/admin/clients/${IDS[2]}") == 404 ]]' || fail "17 a client that was not used for 31 days, or one that never was used and registered 90 minutes ago, is still there after ambit-auth started"
+for i in 1 3 4; do [[ $(adm ambit-hydra-0 GET "/admin/clients/${IDS[$i]}") == 200 ]] || fail "17 client $i (used 29 days ago, never used and 30 minutes old, or used and 90 minutes old) was deleted"; done
 [[ $(adm ambit-hydra-0 GET /admin/clients/admin-made-e2e) == 200 ]] || fail "17 a client that an admin made was deleted"
 adm ambit-hydra-0 DELETE /admin/clients/admin-made-e2e >/dev/null; for i in 1 3 4; do adm ambit-hydra-0 DELETE "/admin/clients/${IDS[$i]}" >/dev/null; done
-pass "17 ambit-auth deletes a registered client that was not used for 31 days, and one that was never used 25 hours after it registered; it keeps one used 29 days ago, one that registered 2 hours ago, one that a consent used and a client that an admin made (clean-up on start and every 10 minutes)"
+pass "17 ambit-auth deletes a registered client that was not used for 31 days, and one that was never used an hour after it registered (90 minutes here); it keeps one used 29 days ago, one that registered 30 minutes ago, one that a consent used and a client that an admin made (clean-up on start and every minute)"
 # --- 18 · the emergency block as an object of its own (test/oauthtest/block.py): `ambit oauth block on` survives a Helm upgrade and an Argo CD-style re-apply of the chart
 # (the old kind of block, an edit of the chart's policy, does not: the test shows that first)
 # (--force-conflicts: Helm 4 applies server-side, and the test's Argo CD-style re-apply has taken some fields of the chart's policies; Argo CD users do not run helm upgrade)
@@ -717,14 +717,14 @@ pass "18 the emergency block (ambit oauth block on) survives a Helm upgrade and 
 lim() { env GW_PORT=$PA GW_PORTS="$PA,$PB" IDP_PORT=$IDPP CA_FILE="$W/allca.pem" AUTH_HOST=$AUTH MCP_HOST=$PUB IDP_HOST=$IDPH CONSOLE_URL="http://127.0.0.1:$CONP" KUBECTL="kubectl -n $NS" \
   HTTP_TIMEOUT=60 KEY="$OKEY" ONE_TOOL=time_get_current_time "$@" "${PY[@]}" test/oauthtest/limits.py "$MODE"; }
 rl_phase() { # rl_phase DISCOVERY SIGNIN TOKEN REGISTRATION MCP CREDENTIAL GLOBAL-REGISTRATIONS: the buckets, the Gateway in PROXY protocol mode, the loaded limits
-  oaset_real --set frontDoor.clientAddress=proxyProtocol --set frontDoor.rateLimit.perSourcePerMinute="$5" --set frontDoor.rateLimit.perCredentialPerMinute="$6" --set oauth.registration.dynamic.perSourcePerHour="$4" --set oauth.registration.dynamic.globalPerHour="$7" --wait --timeout 8m
+  oaset_real --set frontDoor.clientAddress=proxyProtocol --set frontDoor.rateLimit.perSourcePerMinute="$5" --set frontDoor.rateLimit.perCredentialPerMinute="$6" --set oauth.registration.dynamic.perSourcePerHour="$4" --set oauth.registration.dynamic.globalPerHour="$7" --set oauth.registration.dynamic.maxClients=5000 --wait --timeout 8m
   kubectl -n "$NS" rollout status deploy/ambit-public --timeout=300s >/dev/null
   kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null
   reforward
   wait_rl "$NS" "requests_per_unit=$2"
   wait_for 60 '[[ $("${PY[@]}" test/frontdoor/request.py "$PA" "$W/ca.pem" "$AUTH" /.well-known/jwks.json --proxy 203.0.113.1) == 200 ]]' || fail "19 the Gateway does not answer with a PROXY header"
 }
-OARL=(--set oauth.rateLimit.discoveryPerMinute=30 --set oauth.rateLimit.signInPerMinute=40 --set oauth.rateLimit.tokenPerMinute=50)
+OARL=(--set oauth.rateLimit.discoveryPerMinute=30 --set oauth.rateLimit.signInPerMinute=40 --set oauth.rateLimit.tokenPerMinute=50 --set oauth.rateLimit.bearerPerMinute=100)
 rl_phase 30 40 50 5 30 60 8
 # The counters of the hour hold every registration of the checks before (the global limit is per hour): start the bucket checks with empty counters.
 # Valkey has no volume in this test install; the ratelimit service and ambit-auth reconnect by themselves (their readiness follows Valkey).
@@ -736,8 +736,8 @@ kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=180s >/dev/null
 wait_for 120 '[[ $(kubectl -n "$NS" get deploy ambit-auth -o jsonpath="{.status.readyReplicas}") == 2 ]]' || fail "19 ambit-auth is not ready after Valkey was restarted"
 wait_rl "$NS" "requests_per_unit=40"
 wait_for 60 '[[ $("${PY[@]}" test/frontdoor/request.py "$PA" "$W/ca.pem" "$AUTH" /.well-known/jwks.json --proxy 203.0.113.1) == 200 ]]' || fail "19 the Gateway does not answer after the counters were emptied"
-MODE=buckets lim LIM_DISCOVERY=30 LIM_SIGNIN=40 LIM_TOKEN=50 LIM_REGISTRATION=5 LIM_MCP=30 LIM_CRED=60 LIM_GLOBAL=8 || fail "19 the bucket checks failed (see FAIL lines above)"
-pass "19 five buckets (mcp, discovery, sign-in, token, registration): each stops at its own limit and leaves the others open; headers that name an address change nothing; two Gateway pods count together; the 401 for a call without a credential is in the discovery bucket"
+MODE=buckets lim LIM_DISCOVERY=30 LIM_SIGNIN=40 LIM_TOKEN=50 LIM_REGISTRATION=5 LIM_MCP=30 LIM_CRED=60 LIM_GLOBAL=8 LIM_BEARER=100 || fail "19 the bucket checks failed (see FAIL lines above)"
+pass "19 six buckets (mcp, bearer, discovery, sign-in, token, registration): each stops at its own limit and leaves the others open; headers that name an address change nothing; two Gateway pods count together; the 401 for a call without a credential is in the discovery bucket"
 # the second line: with the ratelimit service stopped (FailOpen) ambit-auth's own counter is what limits the sign-in pages
 kubectl -n "$NS" scale deploy/ambit-ratelimit --replicas=0 >/dev/null
 kubectl -n "$NS" wait --for=delete pod -l app.kubernetes.io/name=ambit-ratelimit --timeout=120s >/dev/null 2>&1 || true
@@ -748,11 +748,11 @@ pass "19 with the ratelimit service stopped, ambit-auth's own counter stops the 
 # the chart's own values: the NAT measurement
 OARL=()
 rl_phase 600 300 600 10 1000 600 1000
-MODE=nat lim LIM_DISCOVERY=600 LIM_SIGNIN=300 LIM_TOKEN=600 LIM_REGISTRATION=10 || { kubectl -n "$NS" logs deploy/ambit-auth --tail=12 2>&1 | cut -c1-300; fail "19 the NAT measurement failed (see FAIL lines above)"; }
+MODE=nat lim LIM_DISCOVERY=600 LIM_SIGNIN=300 LIM_TOKEN=600 LIM_REGISTRATION=10 LIM_BEARER=1200 || { kubectl -n "$NS" logs deploy/ambit-auth --tail=12 2>&1 | cut -c1-300; fail "19 the NAT measurement failed (see FAIL lines above)"; }
 pass "19 many people behind one address: measured with the chart's default limits (the numbers are printed above)"
 # back to the other mode and the high limits of the other checks
-OARL=(--set oauth.rateLimit.discoveryPerMinute=100000 --set oauth.rateLimit.signInPerMinute=100000 --set oauth.rateLimit.tokenPerMinute=100000)
-oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000 --wait --timeout 8m
+OARL=(--set oauth.rateLimit.discoveryPerMinute=100000 --set oauth.rateLimit.signInPerMinute=100000 --set oauth.rateLimit.tokenPerMinute=100000 --set oauth.rateLimit.bearerPerMinute=100000)
+oaset_real --set oauth.registration.dynamic.perSourcePerHour=1000 --set oauth.registration.dynamic.globalPerHour=1000 --set oauth.registration.dynamic.maxClients=5000 --wait --timeout 8m
 wait_rl "$NS" "unit=HOUR requests_per_unit=1000"  # the Gateway counts registrations too: its limit must be the new one before the checks register
 kubectl -n "$NS" rollout status deploy/ambit-public --timeout=300s >/dev/null
 kubectl -n "$NS" rollout status deploy/ambit-auth --timeout=300s >/dev/null

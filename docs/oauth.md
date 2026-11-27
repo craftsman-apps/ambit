@@ -171,10 +171,11 @@ A native client that needs a changing port registers `http://127.0.0.1` or `http
 loopback IP addresses only; for `http://localhost` the port must be exactly the registered one).
 
 The cap of `maxClients` is counted in Valkey and is approximate for up to ten minutes (the clean-up compares it with Hydra every
-ten minutes). Each registration is limited per caller address (`perSourcePerHour`, 10 by default), and at most `maxClients` clients exist (500). A client
+ten minutes; it looks for clients to delete every minute). Each registration is limited per caller address (`perSourcePerHour`, 10 by default), and at most `maxClients` clients exist (500). A client
 that nobody used for `unusedClientDays` (30) is deleted; every consent and every refresh counts as use, written at most
-once a day. A client that **no consent and no refresh ever used** is deleted `neverUsedClientHours` (24) after it registered, so that a flood of
-registrations (many networks, a few registrations each) cannot fill the cap of `maxClients` for a month; a platform whose client went that way gets
+once a day. A client that **no consent and no refresh ever used** is deleted `neverUsedClientHours` (1, so within an hour and a minute) after it registered, so that a flood of
+registrations (many networks, a few registrations each) cannot fill the cap of `maxClients` for a month; a real platform asks for its first consent within
+minutes of registering. A platform whose client went that way (nobody gave a consent within the hour) gets
 `invalid_client` and registers again. Clients that an admin creates in Hydra by hand are never touched.
 
 **Which address is "the caller".** The public Gateway writes the caller's address from the connection (or the PROXY
@@ -203,13 +204,20 @@ Two places count, with the same numbers:
 | discovery | `/.well-known/*`, and `POST /mcp` without a credential | `oauth.rateLimit.discoveryPerMinute` | 600 per minute |
 | sign-in | `/oauth2/auth`, `/login`, `/callback`, `/consent`, `/error` | `oauth.rateLimit.signInPerMinute` | 300 per minute |
 | token | `/oauth2/token`, `/oauth2/revoke` | `oauth.rateLimit.tokenPerMinute` | 600 per minute |
+| bearer | `POST`, `GET` and `DELETE` `/mcp` with a bearer token in the shape of a JWT and no `x-api-key` (the calls of a platform's people) | `oauth.rateLimit.bearerPerMinute` | 1,200 per minute per address (keys and every other call to the MCP URL keep 120, `frontDoor.rateLimit.perSourcePerMinute`; the count per token, 600, stays: [Rate limits](front-door.md#rate-limits)) |
 | registration | `/register` | `oauth.registration.dynamic.perSourcePerHour` | 10 per hour per address (per **/48** for an IPv6 caller, in `ambit-auth`) |
-| registrations, all callers | `/register`, only a request that passed the checks | `oauth.registration.dynamic.globalPerHour` | 15 per hour in all (at most 375 in any 24 hours, below the cap of 500), counted in `ambit-auth` |
+| registrations, all callers | `/register`, only a request that passed the checks | `oauth.registration.dynamic.globalPerHour` | 200 per hour in all (at most 400 clients that were never used at any time: 2 fixed clock hours of 200, below the cap of 500), counted in `ambit-auth` |
 
 Over a limit the Gateway answers **429**. The registration also stops at `maxClients` (500); a client that nobody used for `unusedClientDays` (30), and a client that no
-consent and no refresh ever used 24 hours after it registered, is deleted ([Registering clients](#registering-clients)). So a flood of registrations from many networks (security review N2) is held by the
-global limit (it cannot fill the cap: at most 375 in any 24 hours) and by the clean-up (a client that is never used goes after a day). **The price:** while a flood uses the global limit, a real platform
-that registers in the same hour can get 429 (`Retry-After: 3600`); pre-registered clients and existing connections are not affected. Raise `globalPerHour` if your platforms register often.
+consent and no refresh ever used an hour after it registered, is deleted ([Registering clients](#registering-clients)). So a flood of registrations from many networks (security review N2) is held by the
+global limit (it cannot fill the cap: at most 400 clients that were never used exist at a time) and by the clean-up (a client that is never used goes after an hour).
+**The rule** (the chart refuses values that break it, and `ambit-auth` does not start): `globalPerHour` x (`neverUsedClientHours` + 1) must be at most
+`maxClients` (200 x 2 = 400 of 500). The "+ 1" is there because the counter uses fixed clock hours: a registration at the end of one hour and one at the start of the next can be alive together.
+**The price:** while a flood uses the global limit, a real platform that registers in the same hour can get 429 (`Retry-After: 3600`);
+pre-registered clients and existing connections are not affected. To use it up, an attacker needs about 20 addresses (each may register 10 an hour) and must keep going all the time
+(it was 2 addresses at 15 an hour); recovery is automatic within the hour after the attack stops. If that is not enough for you: turn dynamic registration off
+(`oauth.registration.dynamic.enabled: false`) and register the clients of the platforms you accept yourself, or raise `globalPerHour` together with `maxClients`
+(up to 5000) so that the rule holds.
 
 ### How many people can sign in from one company address
 
@@ -577,8 +585,7 @@ and `AmbitHydraJanitorStale` ([Alerts](alerts.md)). *Measured (kind):* 12 rows o
 
 ### Unused clients (registered dynamically)
 
-`ambit-auth` deletes a client that registered itself and was not used for `oauth.registration.dynamic.unusedClientDays` (30), and one that no consent and no refresh ever used `oauth.registration.dynamic.neverUsedClientHours` (24) hours after it registered (security review N2: otherwise a flood of registrations from many networks fills the cap of 500 for a month). It runs when `ambit-auth` starts and every 10
-minutes; a consent and a refresh count as use. A client that an admin created in Hydra is never deleted. A platform whose client was deleted gets `invalid_client` and registers
+`ambit-auth` deletes a client that registered itself and was not used for `oauth.registration.dynamic.unusedClientDays` (30), and one that no consent and no refresh ever used `oauth.registration.dynamic.neverUsedClientHours` (1) hour after it registered (security review N2: otherwise a flood of registrations from many networks fills the cap of 500 for a month). It runs when `ambit-auth` starts and every minute; a consent and a refresh count as use. A client that an admin created in Hydra is never deleted. A platform whose client was deleted gets `invalid_client` and registers
 again (`POST /register`). Tested in CI (check 17 and the unit tests).
 
 ### Rotating the password and the CA
@@ -703,6 +710,8 @@ registered, last use) and deletes one with `DELETE /api/admin/oauth/clients/{id}
 - The console endpoints `GET /api/admin/oauth/clients`, `DELETE /api/admin/oauth/clients/{id}`, `GET /api/admin/oauth/signing-key`,
   `POST /api/admin/oauth/signing-key/emergency-rotation` (body `{"confirm":"every connection must connect again"}`), and the internal API above.
 - The ConfigMap `ambit-oauth-rotation` (key `since`: the time of the last emergency rotation; only the console writes it).
+- Helm values `oauth.rateLimit.bearerPerMinute` (new: 1,200) and the changed defaults `oauth.registration.dynamic.globalPerHour` (200, was 15) and
+  `oauth.registration.dynamic.neverUsedClientHours` (1, was 24); the rule that `globalPerHour` x (`neverUsedClientHours` + 1) is at most `maxClients`, which the chart enforces.
 - The routes rule names `keys` and `oauth` of `HTTPRoute ambit-mcp-public`, the policy `ambit-mcp-public-oauth`, and `oauth.emergencyBlock`, `oauth.maxGrantDays`.
 - The access token claims `email`, `groups`, `ambit_agent`, `ambit_agent_mode`, `ambit_agent_owner_at_issue`,
   `ambit_platform_declared`, `ambit_grant`, `ambit_scope`.

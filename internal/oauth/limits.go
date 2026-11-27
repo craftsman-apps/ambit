@@ -157,8 +157,9 @@ func DefaultRates() map[string]Rate {
 		BucketDiscovery: {Limit: 600, Window: time.Minute},
 		BucketSignIn:    {Limit: 300, Window: time.Minute},
 		BucketRegister:  {Limit: 10, Window: time.Hour},
-		// 15 an hour: the windows are fixed clock hours, so 25 of them overlap the 24 hours that a client that was never used stays: at most 375, below the cap of 500
-		BucketRegisterAll: {Limit: 15, Window: time.Hour},
+		// 200 an hour: the windows are fixed clock hours, so 2 of them overlap the 1 hour that a client that was never used stays: at most 400, below the cap of 500
+		// (security review S2-1: a lower number is a cheaper way to stop every new registration; a client that is never used goes after an hour instead)
+		BucketRegisterAll: {Limit: 200, Window: time.Hour},
 	}
 }
 

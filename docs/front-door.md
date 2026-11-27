@@ -135,11 +135,11 @@ Limits protect the gateway and the keys. They are on by default. Values are in `
 
 | Limit | Default | Counted | Counts |
 |---|---|---|---|
-| `perSourcePerMinute` (bucket **mcp**) | 120 | by the ratelimit service and Valkey, **shared by all gateway pods**, **before** the route is matched and before the key is checked | **every** request from one source address that is not in a bucket below: a valid key, a wrong key, an unknown path, a call with a token |
+| `perSourcePerMinute` (bucket **mcp**) | 120 | by the ratelimit service and Valkey, **shared by all gateway pods**, **before** the route is matched and before the key is checked | **every** request from one source address that is not in a bucket below: a valid key, a wrong key, an unknown path, and (with OAuth) everything that carries an `Authorization` header that is not a plain JWT: it is the limit of key guessing, and it does not change |
 | `perCredentialPerMinute` | 600 | by the same service, shared, after authentication | requests with one valid key (by key ID), or with one token (by its agent: one connection of one person to one platform), so that tokens do not share one counter |
 | `perPodPerSecond` | 200 | in each gateway pod, after authentication | every request that reaches the limit check. A second line: it still works when the ratelimit service is down. |
 
-With `oauth.enabled` there are four more **buckets of the source limit**, on the same address, counted the same way (before the route and
+With `oauth.enabled` there are five more **buckets of the source limit**, on the same address, counted the same way (before the route and
 the credential, refused requests included, shared by all gateway pods). A flood of one kind never uses up another kind:
 
 | Bucket | Default | Which requests |
@@ -148,13 +148,37 @@ the credential, refused requests included, shared by all gateway pods). A flood 
 | **sign-in** (`oauth.rateLimit.signInPerMinute`) | 300 a minute | on the sign-in host: `/oauth2/auth`, `/login`, `/callback`, `/consent`, `/error`, and every other path of that host that is not one of the three above or below (an unknown path) |
 | **token** (`oauth.rateLimit.tokenPerMinute`) | 600 a minute | on the sign-in host: `/oauth2/token`, `/oauth2/revoke` |
 | **registration** (`oauth.registration.dynamic.perSourcePerHour`) | 10 an hour | on the sign-in host: `/register` |
+| **bearer** (`oauth.rateLimit.bearerPerMinute`) | 1,200 a minute | on the MCP host, `/mcp`: a call with **no** `x-api-key` header and an `Authorization` header that is, as a whole, `Bearer` and a token in the shape of a JWT (three parts of base64url characters, the first starting with `eyJ`). The calls of a hosted platform, which sends the calls of many people from a few addresses (see below) |
 
-The bucket is chosen by the **host name**, the path, and whether a credential header is present, nothing else. The buckets of the sign-in host exist only on that host, and the discovery of the MCP host only there: a flood on the MCP host that uses sign-in paths (they are 404 there) stays in **mcp** and cannot spread over the other buckets. A request to any other host name is in **mcp**. The host is compared as the client wrote it, with or without a port.
+The bucket is chosen by the **host name**, the path, and the credential headers (whether they are there, and for **bearer** their shape), nothing else. The buckets of the sign-in host exist only on that host, and the discovery of the MCP host only there: a flood on the MCP host that uses sign-in paths (they are 404 there) stays in **mcp** and cannot spread over the other buckets. A request to any other host name is in **mcp**. The host is compared as the client wrote it, with or without a port.
 `ambit-auth` counts the first two buckets and the registration again with the same numbers, as a second line when the ratelimit service is down.
 
 A request over a limit gets **429** (or, for an MCP request, `200` with a JSON-RPC error: agentgateway reports some errors of
 an MCP request that way). The first two limits are per minute (a fixed window that starts at each full minute).
 
+- **The bearer bucket, and why junk tokens do not weaken the front door** (issue #436). A hosted platform calls from a few egress addresses for all of its people, so
+  the 120 a minute of the **mcp** bucket (made for keys) would give a whole company on one platform a 429 in normal use. Calls with an OAuth token therefore have a bucket of their
+  own, 1,200 a minute per address; keys, wrong keys and everything else keep the 120, so the protection against key guessing is exactly what it was. The per-token count
+  (`perCredentialPerMinute`, 600 a minute for each connection) stays. The bucket is chosen **before** the token is checked (the limit must run before authentication, or a flood
+  would count against nothing), so a caller can send junk to use it. Three things keep that from making the front door weaker than before:
+  1. **Only the shape of a JWT qualifies, and a key never has it.** The key rule reads `Bearer ` off the header by removing every occurrence of it, so `Authorization: Bearer Bearer ambit_...` is a
+     valid key. The bucket test is the whole header against `^Bearer eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*$`, without an `x-api-key` header: a value in that shape starts with
+     `eyJ`, so it cannot be a key, and `Bearer Bearer ambit_...`, `Bearer ambit_...`, `Bearer abc`, a key header with a token, and small-letter `bearer` stay in **mcp** at 120. The tests
+     (`test/chart.sh` for the expression, `test/oauthtest/limits.py` at the Gateway) try each of them.
+  2. **Junk does not use up anything else.** It counts in the bearer bucket of its own address only: the **mcp** limit of that address (the keys of the same address), the other addresses, and
+     the other buckets are untouched (tested: after a flood of junk, 30 key calls of the same address still pass).
+  3. **A junk token is cheap.** The Gateway answers it with the 401 of the JWT check, which needs a parse and one signature check, no network call and no MCP work. Measured on kind
+     (`limits.py`, mode `nat`): a token in the shape of a JWT that no key signed is answered in BEARER_JUNK_MS ms, a valid call in BEARER_VALID_MS ms (median of 40 each, measured by the client).
+     The per-pod limit (200 a second) counts after authentication, so it does not cover the 401 path; the per-address limit of 1,200 a minute (20 a second) does. An attacker with one
+     address could send 120 junk requests a minute before; now 1,200. To reach the same load on a gateway pod needs ten times fewer addresses. If that matters to you, lower
+     `oauth.rateLimit.bearerPerMinute`, and use the edge limits below (they see the connection before the Gateway does).
+- **Why 1,200 a minute (the default of the bearer bucket).** *Measured on kind:* one interaction of a person with a platform's MCP client (`initialize`, `notifications/initialized`, `tools/list`, three
+  tool calls, the end of the session) is **7 requests**; a client that also opens the event stream sends one more. With the default limit one address made 171 whole interactions a minute
+  before the 429 (the exact count in `limits.py` mode `nat`). The number comes from this: 1,200 a minute is 20 a second, 171 interactions a minute. A person who works with a platform starts an interaction about every 20 seconds at
+  most (three a minute, 21 requests: this is the one assumption in the number); so one address serves about **57 people who work at the same time**, and a platform that calls from four addresses serves four times as many. It is 10 times the key limit, which is
+  the smallest step that is not a guess about one customer; it is 10 % of what one gateway pod handles after authentication (200 a second), so one address cannot take a pod. Raise it
+  when your largest platform group is bigger: the count to compare is **(people at the same time) x 3 interactions x 7 requests, divided by the platform's addresses**. The number of addresses of a platform is in its documentation
+  (ask for it: the front door sees only the address of the connection, `frontDoor.clientAddress`).
 - **How the source limit works before authentication.** agentgateway v1.7.0 runs its rate limits after it matches the route
   and checks the key, and it allows no rate limit earlier. So a flood of wrong keys (403) or unknown paths (404) would
   count against nothing ([issue #390](https://github.com/craftsman-apps/ambit/issues/390)). The chart therefore adds the
@@ -191,8 +215,8 @@ an MCP request that way). The first two limits are per minute (a fixed window th
   requests in the sign-in bucket (`/oauth2/auth` three times, `/login`, `/callback`, `/consent` twice), and one request in the token bucket.
   Measured on kind with the default limits: one shared address made 40 whole sign-ins in one minute before the sign-in bucket answered 429, and
   another address was not affected (docs/oauth.md, "Limits"). That is the number to compare with your largest group that connects at the same time
-  (an announcement, a training); raise `oauth.rateLimit.signInPerMinute` for it. 120 MCP calls a minute (bucket **mcp**) are a starting value for a small number of hosted agents, not for
-  a company office or a platform that serves many people from a few addresses: raise `perSourcePerMinute`, or put your own limit at the edge, where you know the traffic.
+  (an announcement, a training); raise `oauth.rateLimit.signInPerMinute` for it. 120 MCP calls a minute (bucket **mcp**) are the limit for **keys** (a small number of agents per address); the calls of a platform's people have
+  the bearer bucket, 1,200 a minute (above). For a company office whose people use **keys** from one address, raise `perSourcePerMinute`, or put your own limit at the edge, where you know the traffic.
 - **When the ratelimit service is down.** `frontDoor.rateLimit.failureMode: FailOpen` (default) lets requests through
   uncounted, and the per-pod limit still applies. `FailClosed` refuses requests until the service is back. When you first
   turn the front door on, an old ratelimit pod can still lack the new limits for a moment (it answers "allowed" even with

@@ -8,6 +8,9 @@ balancer would tell the Gateway. What is checked (MINOR 3 of the design review, 
             address (X-Forwarded-For, X-Real-IP, Forwarded, X-Ambit-Client-Address) change nothing, and a caller behind another address that writes
             the limited address into them is not limited; two Gateway pods count together (the limit is not doubled)
   second    (low limits, the ratelimit service stopped) ambit-auth's own counter stops the sign-in pages at the same limit
+  bearer    (low limits) #436: the calls of a hosted platform (a bearer token in the shape of a JWT) have a bucket of their own, above the key limit: many valid tokens from
+            one address pass at that limit while the keys of the same address stop at their own; a flood of junk in the shape of a JWT stops at the same limit and never
+            uses up the key bucket; what is not in the shape (a key written as "Bearer Bearer ambit_...", "Bearer abc", a key header with a token) stays in the key bucket
   nat       (default limits) one shared address: how many whole sign-ins it makes in one minute before the limit, how many requests a sign-in
             costs in each bucket, and that another address is not affected
 
@@ -22,6 +25,7 @@ MODE = ARGV[1]
 LIM_MCP = int(os.environ.get("LIM_MCP", "0"))
 LIM_GLOBAL = int(os.environ.get("LIM_GLOBAL", "0"))
 LIM_CRED = int(os.environ.get("LIM_CRED", "0"))
+LIM_BEARER = int(os.environ.get("LIM_BEARER", "0"))
 OPEN = {200, 201, 400, 401, 403}  # what a request that is not limited gets here: never 404 (a route is missing) or 5xx
 LIM = {"discovery": int(os.environ["LIM_DISCOVERY"]), "signin": int(os.environ["LIM_SIGNIN"]), "token": int(os.environ["LIM_TOKEN"]), "registration": int(os.environ["LIM_REGISTRATION"])}
 
@@ -68,6 +72,24 @@ def mcp_status(addr, key=None, token=None):
     if token: hd["Authorization"] = "Bearer " + token
     st, h, body = Browser().req("POST", f"https://{MCP}/mcp", json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "limits", "version": "1"}}}).encode(), hd)
     return 429 if st == 200 and "rate limit" in body.lower() else st
+
+
+INIT = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "limits", "version": "1"}}}).encode()
+
+
+def mcp_raw(addr, headers):
+    """One MCP initialize from addr with exactly these extra headers (a header may name a key, a token, or junk). 429 when limited (also the 200 with a rate limit error)."""
+    global CLIENT_ADDR
+    CLIENT_ADDR = addr
+    ROUTES[(MCP, 443)] = PORTS[0]
+    hd = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", **headers}
+    st, h, body = Browser().req("POST", f"https://{MCP}/mcp", INIT, hd)
+    return 429 if st == 200 and "rate limit" in body.lower() else st
+
+
+def junk_jwt(i):
+    """A token in the shape of a JWT (a header that starts with eyJ, a payload, a signature) that no key signed."""
+    return "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9." + b64(json.dumps({"sub": f"junk{i}", "iss": ISS, "aud": [MCP_URL]}).encode()) + "." + b64(os.urandom(32))
 
 
 def start_of_window(unit="minute"):
@@ -157,6 +179,43 @@ if MODE == "buckets":
         res = [calls[0::2], calls[1::2]]
         check(f"19 per credential: a token's calls stop at the limit of {LIM_CRED} a minute for its agent, and another agent's token has its own count ({allowed(res[0])} and {allowed(res[1])} passed)",
               all(allowed(c) == LIM_CRED for c in res), [sorted(set(c)) for c in res])
+    # #436: the bearer bucket
+    if LIM_BEARER and LIM_CRED and LIM_MCP:
+        check(f"19 bearer bucket: its limit ({LIM_BEARER} a minute) is above the key limit ({LIM_MCP}) in this test", LIM_BEARER > LIM_MCP)
+        CLIENT_ADDR = "203.0.115.2"; ROUTES[(AUTH, 443)] = PORTS[0]
+        _, tC = connect("person152", ("time",)); _, tD = connect("person153", ("time",))
+        tk = [tC["access_token"], tD["access_token"]]
+        KEY = os.environ["KEY"]
+        G = "203.0.113.70"
+        nb, nk = LIM_BEARER + 6, LIM_MCP + 6
+        # one window of the clock: bearer calls, then key calls, then bearer calls again, all from the address G
+        plan = [("t", i) for i in range(nb)] + [("k", i) for i in range(nk)] + [("t", nb + i) for i in range(4)]
+        res = burst(lambda i: mcp_status(G, token=tk[plan[i][1] % 2]) if plan[i][0] == "t" else mcp_status(G, key=KEY), len(plan))
+        tcodes = [c for (kind, _), c in zip(plan, res) if kind == "t"]
+        kcodes = [c for (kind, _), c in zip(plan, res) if kind == "k"]
+        check(f"19 bearer bucket: {len(tcodes)} calls with valid tokens (of two agents) from one address, {allowed(tcodes)} passed (limit {LIM_BEARER}), then 429", allowed(tcodes) == LIM_BEARER and set(tcodes[:LIM_BEARER]) == {200}, tcodes)
+        check(f"19 ... and keys from the same address, in the same minute, stop at their own limit: {allowed(kcodes)} of {len(kcodes)} passed (limit {LIM_MCP}), not 0 (the bearer bucket is used up) and not {LIM_BEARER}", allowed(kcodes) == LIM_MCP and set(kcodes[:LIM_MCP]) == {200}, kcodes)
+        # a flood of junk in the shape of a JWT from one address: it stops at the same limit, and the key limit of that address is not used up by it
+        H = "203.0.113.71"
+        nj, nk2 = LIM_BEARER + 8, LIM_MCP + 6
+        res = burst(lambda i: mcp_raw(H, {"Authorization": "Bearer " + junk_jwt(i)}) if i < nj else mcp_raw(H, {"x-api-key": KEY}), nj + nk2)
+        junk, keys2 = res[:nj], res[nj:]
+        check(f"19 junk in the shape of a JWT: {allowed(junk)} of {nj} calls from one address got the 401 of the token check, then 429 (limit {LIM_BEARER}, the same as for valid tokens)", allowed(junk) == LIM_BEARER and set(junk[:LIM_BEARER]) == {401} and junk[LIM_BEARER:] == [429] * 8, sorted(set(junk)))
+        check(f"19 ... and it did not use up the key bucket of that address: {allowed(keys2)} of {nk2} key calls passed (limit {LIM_MCP})", allowed(keys2) == LIM_MCP and set(keys2[:LIM_MCP]) == {200}, keys2)
+        check("19 ... and valid tokens from another address are not affected", mcp_status("203.0.113.72", token=tk[0]) == 200)
+        # what is not in the shape stays in the key bucket: it must never get the higher limit
+        cases = {
+            "Bearer Bearer <key> (the key rule reads every 'Bearer ' off the header: this is a key)": ("203.0.113.73", {"Authorization": "Bearer Bearer " + KEY}),
+            "Bearer <key>": ("203.0.113.74", {"Authorization": "Bearer " + KEY}),
+            "Bearer abc (not in the shape of a JWT)": ("203.0.113.75", {"Authorization": "Bearer abc"}),
+            "a key header and a token together": ("203.0.113.76", {"x-api-key": KEY, "Authorization": "Bearer " + junk_jwt(0)}),
+            "a token with a space and a key behind it": ("203.0.113.77", {"Authorization": "Bearer " + junk_jwt(1) + " Bearer " + KEY}),
+            "bearer in small letters": ("203.0.113.78", {"Authorization": "bearer " + junk_jwt(2)}),
+        }
+        for name, (addr, hd) in cases.items():
+            codes = burst(lambda i: mcp_raw(addr, hd), LIM_MCP + 6)
+            check(f"19 {name}: counts in the key bucket: {allowed(codes)} of {len(codes)} passed (limit {LIM_MCP}, not the bearer limit {LIM_BEARER})", allowed(codes) == LIM_MCP and codes[LIM_MCP:] == [429] * 6, sorted(set(codes)))
+            print(f"   ({name}: the first answer was {codes[0]})", flush=True)
     # N8: the bucket is chosen by the host too. Sign-in paths on the MCP host (a 404 there) stay in the mcp bucket: a flood there neither spreads over the
     # sign-in and token buckets of the same address, nor is counted as sign-in traffic.
     if LIM_MCP:
@@ -216,7 +275,7 @@ elif MODE == "nat":
     # The people sign in at the same time (WORKERS at once): that is what an announcement does, and a sign-in takes seconds on a small cluster.
     import threading
     WORKERS = 4
-    COUNT = {"signin": 0, "token": 0, "discovery": 0}
+    COUNT = {"signin": 0, "token": 0, "discovery": 0, "mcp": 0}
     lock = threading.Lock()
     orig = Browser.req
 
@@ -227,6 +286,8 @@ elif MODE == "nat":
                 if p.path in ("/oauth2/auth", "/login", "/callback", "/consent", "/error"): COUNT["signin"] += 1
                 elif p.path in ("/oauth2/token", "/oauth2/revoke"): COUNT["token"] += 1
                 elif p.path.startswith("/.well-known/"): COUNT["discovery"] += 1
+        elif p.hostname == MCP:
+            with lock: COUNT["mcp"] += 1
         return orig(self, method, url, data, headers)
     Browser.req = counted
 
@@ -296,6 +357,75 @@ elif MODE == "nat":
     CLIENT_ADDR = other
     kind, res = sign_in(Browser(), cid, "person199", tick=("time",))
     check("19 NAT: another address signs in while the first one is limited", kind == "code", (kind, res if kind != "code" else ""))
+
+    # ---- #436: the calls of a hosted platform with tokens, from one address (the bearer bucket)
+    # What one interaction of a person costs: initialize, notifications/initialized, tools/list, three tool calls, and the end of the session: 7 requests.
+    def interaction(token, k=3):
+        """One interaction of a person with the platform's MCP client; returns the statuses of its requests (429 for a request that the limit refused)."""
+        out = []
+        def post(body, sid=None):
+            st, hd, data, t = mcp_post(PORTS[0], body, token, None, sid)
+            return (429 if st == 200 and "rate limit" in t.lower() else st), hd
+        st, hd = post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "nat", "version": "1"}}}); out.append(st)
+        if st != 200: return out
+        sid = hd.get("mcp-session-id")
+        out.append(post({"jsonrpc": "2.0", "method": "notifications/initialized"}, sid)[0])
+        out.append(post({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, sid)[0])
+        for j in range(k):
+            out.append(post({"jsonrpc": "2.0", "id": 3 + j, "method": "tools/call", "params": {"name": TOOL, "arguments": {"timezone": "UTC"}}}, sid)[0])
+        ROUTES[(MCP, 443)] = PORTS[0]
+        st, h, t = Browser().req("DELETE", MCP_URL, None, {"Authorization": "Bearer " + token, "Mcp-Session-Id": sid or ""})
+        out.append(429 if st == 429 else st)
+        return out
+    CLIENT_ADDR = "203.0.118.1"; ROUTES[(AUTH, 443)] = PORTS[0]
+    toks = [connect(f"person16{i}", ("time",))[1]["access_token"] for i in range(3)]
+    CLIENT_ADDR = "203.0.118.2"
+    for k in COUNT: COUNT[k] = 0
+    codes = interaction(toks[0])
+    mcp_cost = COUNT["mcp"]
+    check(f"19 bearer bucket: one interaction of a person (initialize, initialized, tools/list, 3 tool calls, end of the session) costs {mcp_cost} requests", mcp_cost == 7 and all(c in (200, 202, 204) for c in codes), (mcp_cost, codes))
+    # many people at once from one address, until the bearer limit answers 429 (three agents, so that the count per token, 600 a minute, is not the limit)
+    BEARER = LIM_BEARER or 1200
+    result = None
+    for attempt in range(3):
+        addr = f"203.0.118.{10 + attempt}"
+        start_of_window("minute")
+        CLIENT_ADDR = addr
+        t0, w0 = time.time(), minute_now()
+        st = {"allowed": 0, "limited": 0, "requests": 0, "inter": 0, "n": 0, "stop": False}
+        def mworker():
+            while not st["stop"] and time.time() - t0 < 56:
+                with lock:
+                    tok = toks[st["n"] % 3]; st["n"] += 1
+                codes = interaction(tok)
+                with lock:
+                    st["inter"] += 1
+                    for c in codes:
+                        st["requests"] += 1
+                        if c == 429: st["limited"] += 1; st["stop"] = True
+                        else: st["allowed"] += 1
+        ts = [threading.Thread(target=mworker) for _ in range(WORKERS)]
+        [t.start() for t in ts]; [t.join() for t in ts]
+        elapsed = time.time() - t0
+        if minute_now() == w0 and st["limited"]:
+            result = (dict(st), elapsed); break
+        print(f"   attempt {attempt + 1} not valid (window crossed or no 429: {st['allowed']} allowed in {elapsed:.0f} s)", flush=True)
+    check("19 bearer bucket: one address reaches the default limit within one minute and is then answered 429", result is not None)
+    st, elapsed = result
+    print(f"   MCP: one address with tokens of three agents sent {st['requests']} requests ({st['inter']} interactions of {mcp_cost}) in {elapsed:.0f} s, {WORKERS} at a time; {st['allowed']} passed and the bearer limit "
+          f"({BEARER} a minute) answered 429 for the rest, which is {st['allowed'] // max(mcp_cost, 1)} whole interactions a minute from one address", flush=True)
+    check(f"19 bearer bucket: exactly {BEARER} requests of one address passed in the minute (the default limit); the rest got 429", st["allowed"] == BEARER, st)
+    # what a junk token costs the gateway, next to a valid call: the median time of 40 each, one address each (so that no limit is in the way)
+    import statistics
+    def timed(fn, n=40):
+        out = []
+        for i in range(n):
+            t = time.time(); r = fn(i); out.append((time.time() - t) * 1000)
+        return statistics.median(out), r
+    junk_ms, jr = timed(lambda i: mcp_raw(f"203.0.119.{i + 1}", {"Authorization": "Bearer " + junk_jwt(i)}))
+    valid_ms, vr = timed(lambda i: mcp_raw(f"203.0.120.{i + 1}", {"Authorization": "Bearer " + toks[i % 3]}))
+    print(f"   cost of one request through the Gateway (median of 40, measured by the client, one address each): a token in the shape of a JWT that no key signed {junk_ms:.0f} ms (HTTP {jr}); a valid token {valid_ms:.0f} ms (HTTP {vr})", flush=True)
+    check("19 bearer bucket: a junk token (401) is not slower than a valid call: the 401 path is the cheap one", jr == 401 and vr == 200 and junk_ms <= valid_ms * 1.5 + 5, (junk_ms, valid_ms))
 
 else:
     sys.exit("unknown mode " + MODE)

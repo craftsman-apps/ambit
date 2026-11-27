@@ -9,10 +9,10 @@ Some hosted AI platforms cannot send a fixed API key. They ask the person to sig
 token. This page is about the part of Ambit that makes that possible: **Ory Hydra**, which issues the tokens, and the
 PostgreSQL database it needs. You run the database.
 
-> **What is in this release series so far:** Hydra and its database; **`ambit-auth`**, the sign-in host; and the **check of
-> tokens at the public MCP route**, so that a token opens exactly the tools its person ticked. Still to come in this series: the
-> stop of one connection (together with the stop state machine of [Agents](agents.md)), key rotation, the database
-> operations (backup, clean-up, alerts) and the guide for a platform.
+> **What 0.6.0 contains:** Hydra and its database; **`ambit-auth`**, the sign-in host; the **check of tokens at the public MCP
+> route**, so that a token opens exactly the tools its person ticked; stopping a connection; the emergency rotation of the
+> signing keys (no scheduled rotation); the database operations (backup, clean-up, alerts); and the guide
+> [Connect an OAuth MCP client](guides/oauth-mcp-client.md).
 
 It is **off by default** (`oauth.enabled: false`).
 

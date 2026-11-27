@@ -390,8 +390,8 @@ wait_for 120 '[[ "$(accepted ambit-mcp-public-oauth)" == *True* && "$(accepted a
 PW=$(kubectl -n "$NS" get secret ambit-initial-admin -o jsonpath='{.data.password}' | base64 -d)
 sign_in local admin@ambit.local "$PW"
 mkkey oauth-key mcp; OKEY=$KEY; OKID=$KID
-# Two more keys for the bucket checks (19): each key has its own count of 60 a minute, and the checks of one address use 30 calls of a key each.
-for L in B C D E F; do mkkey "oauth-key-$L" mcp; eval "OKEY$L=\$KEY"; done; KEY=$OKEY
+# Five more keys for the bucket checks (19): a key has its own count of 60 a minute, and a check of one address uses up to 36 calls: every use of a valid key has a key of its own.
+for kl in B C D E F; do mkkey "oauth-key-$kl" mcp; eval "OKEY$kl=\$KEY"; done; KEY=$OKEY
 cleanup_keys() { api DELETE "/api/keys/$OKID" >/dev/null 2>&1 || true; kubectl -n "$NS" delete "accessrules.$G" oauth-time --ignore-not-found >/dev/null 2>&1 || true
   kubectl -n "$NS" patch "servers.$G" time --type json -p '[{"op":"remove","path":"/spec/frontDoor"}]' >/dev/null 2>&1 || true; }
 trap 'rc=$?; cleanup_keys; cleanup; on_exit "$rc"' EXIT
